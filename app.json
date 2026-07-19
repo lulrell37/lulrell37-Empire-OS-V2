@@ -1,0 +1,20 @@
+{
+  "expo": {
+    "name": "Empire OS",
+    "slug": "EmpireOSV2",
+    "version": "2.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "android": {
+      "package": "com.lulrell37.empireos",
+      "adaptiveIcon": {
+        "backgroundColor": "#000000"
+      }
+    },
+    "extra": {
+      "eas": {
+        "projectId": "3f241a38-1ea1-4046-8eee-16dece02697b"
+      }
+    }
+  }
+}

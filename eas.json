@@ -1,0 +1,18 @@
+{
+  "cli": { "version": ">= 7.0.0" },
+  "build": {
+    "preview": {
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk",
+        "gradleCommand": ":app:assembleRelease"
+      },
+      "env": {
+        "KOTLIN_VERSION": "1.9.25"
+      }
+    },
+    "production": {
+      "android": { "buildType": "apk" }
+    }
+  }
+}
