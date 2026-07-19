@@ -1,11 +1,12 @@
 import React,{useState,useEffect,useRef}from 'react';
 import{View,Text,StyleSheet,TextInput,TouchableOpacity,FlatList,KeyboardAvoidingView,Platform,ActivityIndicator,ScrollView,Modal,Animated}from 'react-native';
 import{SafeAreaView}from 'react-native-safe-area-context';
+import{Audio}from 'expo-av';
 import*as Speech from 'expo-speech';
 import{PERSONAS,PERSONA_LIST,COUNCIL_PERSONAS,EMPIRE_PERSONAS,getPersona}from '../personas/personas';
-import{callPersona}from '../services/aiService';
+import{callPersona,textToSpeech}from '../services/aiService';
 import{handleCommands,stripCommands}from '../services/commandHandler';
-import{getMessages,saveMessage}from '../services/database';
+import{getMessages,saveMessage,loadKeys}from '../services/database';
 import useEmpireStore from '../store/useEmpireStore';
 
 export default function CommandScreen({navigation}){
@@ -23,14 +24,41 @@ export default function CommandScreen({navigation}){
   const flatRef=useRef(null);
   const abortRef=useRef(null);
   const contRef=useRef(false);
+  const soundRef=useRef(null);
   const{addRelay}=useEmpireStore();
 
   useEffect(()=>{contRef.current=continuous;},[continuous]);
   useEffect(()=>{if(mode==='direct')loadHistory(activePersona);},[activePersona,mode]);
+  useEffect(()=>{
+    Audio.setAudioModeAsync({allowsRecordingIOS:false,playsInSilentModeIOS:true,staysActiveInBackground:false});
+  },[]);
 
   async function loadHistory(persona){
     const h=await getMessages(persona,40);
     setMessages(h.reverse().map(m=>({id:m.id.toString(),role:m.role,content:m.content,persona:m.persona})));
+  }
+
+  async function speakResponse(text,persona){
+    if(!voiceOn||!text)return;
+    try{
+      if(soundRef.current){try{await soundRef.current.stopAsync();await soundRef.current.unloadAsync();}catch{}}
+      soundRef.current=null;
+      if(persona.elevenlabsVoiceId){
+        const url=await textToSpeech(text,persona.elevenlabsVoiceId);
+        if(url){
+          await Audio.setAudioModeAsync({playsInSilentModeIOS:true,allowsRecordingIOS:false});
+          const{sound}=await Audio.Sound.createAsync({uri:url},{shouldPlay:true});
+          soundRef.current=sound;
+          return;
+        }
+      }
+      Speech.speak(text.substring(0,500),{language:'en-US',rate:0.95});
+    }catch(e){Speech.speak(text.substring(0,500),{language:'en-US',rate:0.95});}
+  }
+
+  function stopAudio(){
+    if(soundRef.current){try{soundRef.current.stopAsync();}catch{}}
+    Speech.stop();
   }
 
   function getTargets(){
@@ -49,6 +77,7 @@ export default function CommandScreen({navigation}){
   async function send(){
     const text=input.trim();if(!text||loading)return;
     setInput('');
+    stopAudio();
     const isGroup=mode!=='direct';
     const userMsg={id:Date.now().toString(),role:'user',content:text,persona:'user'};
     if(isGroup)setGroupMessages(prev=>[...prev,userMsg]);
@@ -74,7 +103,7 @@ export default function CommandScreen({navigation}){
         else{setMessages(prev=>[...prev,aiMsg]);await saveMessage(pid,'assistant',display||response,'direct');}
         if(display)replies.push({name:p.name,text:display});
         await handleCommands(response,pid,{onRelay:({target,message})=>addRelay(target,`[From ${p.name}]: ${message}`)});
-        if(voiceOn&&display)Speech.speak(display.substring(0,400),{language:'en-US',rate:0.95});
+        await speakResponse(display||response,p);
       }
     }catch(e){
       if(e.name!=='AbortError'){
@@ -85,7 +114,7 @@ export default function CommandScreen({navigation}){
     if(contRef.current&&!abortRef.current?.signal.aborted)setTimeout(()=>{if(contRef.current)runRound('[Continue. Build on what was said. Be brief.]',true);},1200);
   }
 
-  function interject(){abortRef.current?.abort();setContinuous(false);contRef.current=false;Speech.stop();setLoading(false);setGroupMessages(prev=>[...prev,{id:Date.now().toString(),role:'system',content:'— YOU HAVE THE FLOOR —',persona:'system'}]);}
+  function interject(){abortRef.current?.abort();setContinuous(false);contRef.current=false;stopAudio();setLoading(false);setGroupMessages(prev=>[...prev,{id:Date.now().toString(),role:'system',content:'— YOU HAVE THE FLOOR —',persona:'system'}]);}
 
   function renderMsg({item}){
     const p=item.persona&&item.persona!=='user'&&item.persona!=='system'?getPersona(item.persona):null;
@@ -104,21 +133,25 @@ export default function CommandScreen({navigation}){
 
   return(
     <SafeAreaView style={s.container} edges={['top','bottom']}>
-      {/* Header */}
       <View style={[s.header,{borderBottomColor:mode==='direct'?cp.color+'55':'#E8C98A44'}]}>
-        <TouchableOpacity onPress={()=>navigation.goBack()}><Text style={s.back}>←</Text></TouchableOpacity>
+        <TouchableOpacity onPress={()=>{stopAudio();navigation.goBack();}}><Text style={s.back}>←</Text></TouchableOpacity>
         <View style={s.headerCenter}>
           {mode==='direct'?(<><Text style={[s.headerName,{color:cp.color}]}>{cp.name}</Text><Text style={s.headerRole}>{cp.role}</Text></>)
           :(<><Text style={[s.headerName,{color:'#E8C98A'}]}>{mode==='council'?'COUNCIL':mode==='empire'?'EMPIRE':'CUSTOM'}</Text><Text style={s.headerRole}>{mode==='council'?'JARVIS · ARA · SELENE':mode==='empire'?'ALL 11 PERSONAS':customPersonas.map(id=>getPersona(id).name.split('.')[0]).join(' · ')}</Text></>)}
         </View>
         <View style={{flexDirection:'row',gap:8,alignItems:'center'}}>
-          <TouchableOpacity onPress={()=>setVoiceOn(v=>!v)}><Text style={{fontSize:18,color:voiceOn?'#E8C98A':'#333'}}>{voiceOn?'🔊':'🔇'}</Text></TouchableOpacity>
-          {loading&&<TouchableOpacity onPress={()=>{abortRef.current?.abort();Speech.stop();setLoading(false);}}><Text style={{fontSize:14,color:'#E05555'}}>■</Text></TouchableOpacity>}
-          <TouchableOpacity onPress={()=>navigation.navigate('Settings')}><Text style={{fontSize:16,color:'#333'}}>⚙</Text></TouchableOpacity>
+          <TouchableOpacity onPress={()=>{if(voiceOn)stopAudio();setVoiceOn(v=>!v);}}>
+            <Text style={{fontSize:18,color:voiceOn?'#E8C98A':'#333'}}>{voiceOn?'🔊':'🔇'}</Text>
+          </TouchableOpacity>
+          {loading&&<TouchableOpacity onPress={()=>{abortRef.current?.abort();stopAudio();setLoading(false);}}>
+            <Text style={{fontSize:14,color:'#E05555'}}>■</Text>
+          </TouchableOpacity>}
+          <TouchableOpacity onPress={()=>navigation.navigate('Settings')}>
+            <Text style={{fontSize:16,color:'#333'}}>⚙</Text>
+          </TouchableOpacity>
         </View>
       </View>
 
-      {/* Mode bar */}
       <View style={s.modeBar}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{gap:6,padding:8}}>
           {['direct','council','empire','custom'].map(m=>(
@@ -137,7 +170,6 @@ export default function CommandScreen({navigation}){
         </ScrollView>
       </View>
 
-      {/* Persona tabs - direct mode only */}
       {mode==='direct'&&(
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.tabsBar} contentContainerStyle={{paddingHorizontal:8,paddingVertical:6,gap:4}}>
           {PERSONA_LIST.map(p=>(
@@ -151,7 +183,6 @@ export default function CommandScreen({navigation}){
         </ScrollView>
       )}
 
-      {/* Messages */}
       <FlatList ref={flatRef} data={displayMessages} keyExtractor={i=>i.id} renderItem={renderMsg} contentContainerStyle={s.msgList} style={{flex:1}} onContentSizeChange={()=>flatRef.current?.scrollToEnd({animated:true})}/>
 
       {loading&&(<View style={s.thinking}>
@@ -159,7 +190,6 @@ export default function CommandScreen({navigation}){
         <Text style={[s.thinkT,{color:mode==='direct'?cp.color:'#E8C98A'}]}>{mode==='direct'?`${cp.name} is responding...`:'Council speaking...'}</Text>
       </View>)}
 
-      {/* Input */}
       <KeyboardAvoidingView behavior={Platform.OS==='ios'?'padding':'height'}>
         <View style={[s.inputRow,{borderTopColor:mode==='direct'?cp.color+'22':'#E8C98A22'}]}>
           <TextInput style={s.input} value={input} onChangeText={setInput} placeholder={mode==='direct'?`Message ${cp.name}...`:'Speak to the council...'} placeholderTextColor="#222" multiline maxLength={2000}/>
@@ -169,7 +199,6 @@ export default function CommandScreen({navigation}){
         </View>
       </KeyboardAvoidingView>
 
-      {/* Custom picker */}
       <Modal visible={showCustomPicker} transparent animationType="slide">
         <View style={s.modalOver}><View style={s.modalContent}>
           <Text style={s.modalTitle}>SELECT YOUR TEAM</Text>
@@ -233,7 +262,6 @@ const s=StyleSheet.create({
   pCheck:{width:18,height:18,borderRadius:3,borderWidth:1,borderColor:'#333',alignItems:'center',justifyContent:'center'},
   pName:{fontFamily:'monospace',fontSize:10,fontWeight:'700',flex:1},
   pRole:{fontFamily:'monospace',fontSize:8,color:'#333'},
-  modalBtns:{flexDirection:'row',gap:10,marginTop:16},
   modalBtn:{flex:1,padding:14,borderRadius:8,alignItems:'center'},
   modalBtnT:{fontFamily:'monospace',fontSize:11,fontWeight:'700',letterSpacing:2},
 });
