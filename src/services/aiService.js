@@ -1,5 +1,6 @@
 import{loadKeys}from './keyStore';
 import{getPersonaMemory,savePersonaMemory,getHudState,getTasks,trackApiUsage,getCustomPrompt}from './database';
+import*as FileSystem from 'expo-file-system';
 let keys=null;
 async function ensureKeys(){if(!keys)keys=await loadKeys();return keys;}
 async function buildSys(personaId,persona){
@@ -60,8 +61,28 @@ export async function textToSpeech(text,voiceId){
   if(!k?.elevenlabs||!voiceId)return null;
   const clean=text.replace(/\[[^\]]*\]/g,'').replace(/[*#`]/g,'').trim().substring(0,2000);
   if(!clean)return null;
-  const res=await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,{method:'POST',headers:{'Content-Type':'application/json','xi-api-key':k.elevenlabs},body:JSON.stringify({text:clean,model_id:'eleven_monolingual_v1',voice_settings:{stability:0.5,similarity_boost:0.8}})});
-  if(!res.ok)return null;
-  const blob=await res.blob();
-  return URL.createObjectURL(blob);
+  try{
+    const res=await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,{method:'POST',headers:{'Content-Type':'application/json','xi-api-key':k.elevenlabs},body:JSON.stringify({text:clean,model_id:'eleven_monolingual_v1',voice_settings:{stability:0.5,similarity_boost:0.8}})});
+    if(!res.ok)return null;
+    const arrayBuffer=await res.arrayBuffer();
+    const bytes=new Uint8Array(arrayBuffer);
+    let binary='';
+    for(let i=0;i<bytes.length;i+=8192)binary+=String.fromCharCode.apply(null,bytes.subarray(i,i+8192));
+    const base64=btoa(binary);
+    const uri=FileSystem.cacheDirectory+'tts_'+Date.now()+'.mp3';
+    await FileSystem.writeAsStringAsync(uri,base64,{encoding:FileSystem.EncodingType.Base64});
+    return uri;
+  }catch{return null;}
+}
+export async function transcribeAudio(audioUri){
+  const k=await ensureKeys();
+  if(!k?.openai)throw new Error('OpenAI API key needed for voice transcription. Add it in Settings.');
+  const formData=new FormData();
+  formData.append('file',{uri:audioUri,type:'audio/m4a',name:'voice.m4a'});
+  formData.append('model','whisper-1');
+  formData.append('language','en');
+  const res=await fetch('https://api.openai.com/v1/audio/transcriptions',{method:'POST',headers:{'Authorization':'Bearer '+k.openai},body:formData});
+  if(!res.ok){const e=await res.text();throw new Error('Whisper: '+e.substring(0,100));}
+  const d=await res.json();
+  return d.text?.trim()||'';
 }
