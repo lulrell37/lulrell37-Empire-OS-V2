@@ -1,6 +1,7 @@
 import{loadKeys}from './keyStore';
 import{getPersonaMemory,savePersonaMemory,getHudState,getTasks,trackApiUsage,getCustomPrompt}from './database';
 import*as FileSystem from 'expo-file-system';
+import{reportError}from '../../ErrorBanner';
 let keys=null;
 async function ensureKeys(){if(!keys)keys=await loadKeys();return keys;}
 async function buildSys(personaId,persona){
@@ -58,12 +59,13 @@ export async function callPersona(personaId,messages,signal=null){
 }
 export async function textToSpeech(text,voiceId){
   const k=await ensureKeys();
-  if(!k?.elevenlabs||!voiceId)return null;
+  if(!k?.elevenlabs){reportError('ElevenLabs: no API key found');return null;}
+  if(!voiceId){reportError('ElevenLabs: no voiceId provided for this persona');return null;}
   const clean=text.replace(/\[[^\]]*\]/g,'').replace(/[*#`]/g,'').trim().substring(0,2000);
   if(!clean)return null;
   try{
     const res=await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,{method:'POST',headers:{'Content-Type':'application/json','xi-api-key':k.elevenlabs},body:JSON.stringify({text:clean,model_id:'eleven_monolingual_v1',voice_settings:{stability:0.5,similarity_boost:0.8}})});
-    if(!res.ok)return null;
+    if(!res.ok){const e=await res.text();reportError(`ElevenLabs API error (${res.status}): ${e.substring(0,150)}`);return null;}
     const arrayBuffer=await res.arrayBuffer();
     const bytes=new Uint8Array(arrayBuffer);
     let binary='';
@@ -72,7 +74,7 @@ export async function textToSpeech(text,voiceId){
     const uri=FileSystem.cacheDirectory+'tts_'+Date.now()+'.mp3';
     await FileSystem.writeAsStringAsync(uri,base64,{encoding:FileSystem.EncodingType.Base64});
     return uri;
-  }catch{return null;}
+  }catch(err){reportError('ElevenLabs exception: '+err.message);return null;}
 }
 export async function transcribeAudio(audioUri){
   const k=await ensureKeys();
