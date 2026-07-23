@@ -1,3 +1,6 @@
+import ErrorBanner from './ErrorBanner';
+// inside your root render, as the first/topmost child:
+<ErrorBanner />
 import React,{useEffect,useState}from 'react';
 import{StatusBar}from 'expo-status-bar';
 import{NavigationContainer}from '@react-navigation/native';
