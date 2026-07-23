@@ -1,6 +1,6 @@
 import './errorHandler';
 import ErrorBoundary from './ErrorBoundary';
-import ErrorBanner from './ErrorBanner';
+import ErrorBanner, { reportError } from './ErrorBanner';
 import React,{useEffect,useState}from 'react';
 import{StatusBar}from 'expo-status-bar';
 import{NavigationContainer}from '@react-navigation/native';
@@ -27,13 +27,15 @@ export default function App(){
   useEffect(()=>{
     async function prepare(){
       try{await initDatabase();const keys=await loadKeys();setHasKeys(!!(keys?.claude));const pics=await getAllPersonaPics();setPersonaPics(pics);}
-      catch(e){console.warn('Init error:',e);}
+      catch(e){console.warn('Init error:',e);reportError('Init error: '+e.message);}
       finally{setIsReady(true);await SplashScreen.hideAsync();}
     }
     prepare();
   },[]);
   if(!isReady)return null;
   return(
+    <ErrorBoundary>
+    <ErrorBanner />
     <GestureHandlerRootView style={{flex:1}}>
       <SafeAreaProvider>
         <NavigationContainer>
@@ -49,5 +51,6 @@ export default function App(){
         </NavigationContainer>
       </SafeAreaProvider>
     </GestureHandlerRootView>
+    </ErrorBoundary>
   );
 }
