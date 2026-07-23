@@ -13,6 +13,7 @@ import{handleCommands,stripCommands}from '../services/commandHandler';
 import{getMessages,saveMessage,getAllPersonaPics}from '../services/database';
 import{loadKeys}from '../services/keyStore';
 import useEmpireStore from '../store/useEmpireStore';
+import{reportError}from '../../ErrorBanner';
 
 const COUNCIL=['jarvis','ara','selene'];
 const SPECIALISTS=['stephanie','rogue','atlas','haven','aisha','abraham','batman'];
@@ -158,9 +159,14 @@ export default function CommandScreen({navigation}){
           await Audio.setAudioModeAsync({playsInSilentModeIOS:true,allowsRecordingIOS:false});
           const{sound}=await Audio.Sound.createAsync({uri},{shouldPlay:true});
           soundRef.current=sound;
+        }else{
+          reportError('speakResponse: textToSpeech returned null for '+persona.name);
         }
       }else{Speech.speak(text.substring(0,500),{language:'en-US',rate:0.95});}
-    }catch{Speech.speak(text.substring(0,500),{language:'en-US',rate:0.95});}
+    }catch(err){
+      reportError('speakResponse failed for '+persona.name+': '+err.message);
+      Speech.speak(text.substring(0,500),{language:'en-US',rate:0.95});
+    }
   }
 
   function stopAudio(){
@@ -370,13 +376,11 @@ export default function CommandScreen({navigation}){
 
   return(
     <SafeAreaView style={s.container} edges={['top','bottom']}>
-      {/* Header */}
       <View style={s.header}>
         <Text style={s.empireOS}>♔ EMPIRE OS</Text>
         <View style={s.onlinePill}><View style={s.onlineDot}/><Text style={s.onlineText}>ONLINE</Text></View>
       </View>
 
-      {/* Team photo */}
       <View style={s.teamPanel}>
         <View style={s.teamLabels}>
           <Text style={s.teamLabel}>THE EMPIRE</Text>
@@ -385,7 +389,6 @@ export default function CommandScreen({navigation}){
         <Image source={TEAM_PHOTO} style={s.teamPhoto} resizeMode="cover"/>
       </View>
 
-      {/* Council tabs */}
       <View style={s.councilRow}>
         {COUNCIL.map(id=>{
           const p=getPersona(id);const active=mode==='direct'&&activePersona===id;const pic=personaPics[id];
@@ -400,7 +403,6 @@ export default function CommandScreen({navigation}){
         })}
       </View>
 
-      {/* Specialists */}
       <Text style={s.specLabel}>SPECIALISTS</Text>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.specsScroll} contentContainerStyle={s.specialistsRow}>
         {SPECIALISTS.map(id=>{
@@ -416,7 +418,6 @@ export default function CommandScreen({navigation}){
         })}
       </ScrollView>
 
-      {/* Mode bar */}
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.modeBarScroll} contentContainerStyle={s.modeBar}>
         {['direct','council','empire','custom'].map(m=>(
           <TouchableOpacity key={m} style={[s.modeBtn,mode===m&&{borderColor:'#E8C98A',backgroundColor:'#E8C98A11'}]} onPress={()=>{setMode(m);if(m==='custom')setShowCustomPicker(true);}}>
@@ -447,13 +448,11 @@ export default function CommandScreen({navigation}){
         </TouchableOpacity>}
       </ScrollView>
 
-      {/* Memory bar */}
       <View style={s.memBar}>
         <Text style={s.memLabel}>MEMORY</Text>
         <Text style={s.memStatus}>{mode==='direct'?`${cp.name} memory active`:'All persona memory loaded ✓'}</Text>
       </View>
 
-      {/* Messages */}
       <FlatList ref={flatRef} data={displayMessages} keyExtractor={i=>i.id} renderItem={renderMsg} contentContainerStyle={s.msgList} style={{flex:1}} onContentSizeChange={()=>flatRef.current?.scrollToEnd({animated:true})}/>
 
       {loading&&(<View style={s.thinking}>
@@ -461,7 +460,6 @@ export default function CommandScreen({navigation}){
         <Text style={[s.thinkT,{color:mode==='direct'?cp.color:'#E8C98A'}]}>{mode==='direct'?`${cp.name} is responding...`:'Council speaking...'}</Text>
       </View>)}
 
-      {/* Input */}
       <KeyboardAvoidingView behavior={Platform.OS==='ios'?'padding':'height'}>
         <View style={s.inputArea}>
           <View style={s.inputRow}>
@@ -488,7 +486,6 @@ export default function CommandScreen({navigation}){
         </View>
       </KeyboardAvoidingView>
 
-      {/* Bottom nav */}
       <View style={s.bottomNav}>
         <TouchableOpacity style={s.navItem} onPress={()=>{}}>
           <Text style={[s.navIcon,{color:'#E8C98A'}]}>✕</Text>
@@ -508,7 +505,6 @@ export default function CommandScreen({navigation}){
         </TouchableOpacity>
       </View>
 
-      {/* Custom picker */}
       <Modal visible={showCustomPicker} transparent animationType="slide">
         <View style={s.modalOver}><View style={s.modalContent}>
           <Text style={s.modalTitle}>SELECT YOUR TEAM</Text>
