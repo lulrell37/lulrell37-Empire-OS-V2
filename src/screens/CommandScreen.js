@@ -197,7 +197,7 @@ export default function CommandScreen({navigation}){
         if(soundRef.current)soundRef.current.setOnPlaybackStatusUpdate(st=>{if(st.didJustFinish)maybeAutoListen();});
         else maybeAutoListen();
       }else if(persona.elevenlabsVoiceId){
-        const uri=await textToSpeech(text,persona.elevenlabsVoiceId);
+        const uri=await textToSpeech(text,persona.elevenlabsVoiceId,persona.name);
         if(uri){
           await Audio.setAudioModeAsync({playsInSilentModeIOS:true,allowsRecordingIOS:false});
           const{sound}=await Audio.Sound.createAsync({uri},{shouldPlay:true});
@@ -507,23 +507,6 @@ export default function CommandScreen({navigation}){
             <Text style={[s.modeBtnT,{color:'#E05555'}]}>✋ INTERJECT</Text>
           </TouchableOpacity>
         </>}
-        <TouchableOpacity style={[s.modeBtn,handsFree&&{borderColor:'#4CAF50',backgroundColor:'#4CAF5011'}]} onPress={toggleHandsFree}>
-          <Text style={[s.modeBtnT,handsFree&&{color:'#4CAF50'}]}>{handsFree?'🎙️ AUTO ON':'🎙️ AUTO OFF'}</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={[s.modeBtn,voiceOn&&!voiceMuted&&{borderColor:'#E8C98A',backgroundColor:'#E8C98A11'}]} onPress={()=>{if(voiceOn)stopAudio();setVoiceOn(v=>!v);setVoicePaused(false);}}>
-          <Text style={[s.modeBtnT,voiceOn&&!voiceMuted&&{color:'#E8C98A'}]}>{voiceOn?'🔊 VOICE ON':'🔇 VOICE OFF'}</Text>
-        </TouchableOpacity>
-        {voiceOn&&<>
-          <TouchableOpacity style={[s.modeBtn,voicePaused&&{borderColor:'#FFB300',backgroundColor:'#FFB30011'}]} onPress={()=>{voicePaused?resumeAudio():pauseAudio();}}>
-            <Text style={[s.modeBtnT,voicePaused&&{color:'#FFB300'}]}>{voicePaused?'▶ RESUME':'⏸ PAUSE'}</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={[s.modeBtn,voiceMuted&&{borderColor:'#E05555',backgroundColor:'#E0555511'}]} onPress={()=>{setVoiceMuted(v=>!v);if(!voiceMuted)stopAudio();}}>
-            <Text style={[s.modeBtnT,voiceMuted&&{color:'#E05555'}]}>{voiceMuted?'🔕 MUTED':'🔕 MUTE'}</Text>
-          </TouchableOpacity>
-        </>}
-        {loading&&<TouchableOpacity style={[s.modeBtn,{borderColor:'#E05555'}]} onPress={()=>{abortRef.current?.abort();stopAudio();setLoading(false);}}>
-          <Text style={[s.modeBtnT,{color:'#E05555'}]}>■ STOP</Text>
-        </TouchableOpacity>}
       </ScrollView>
 
       <View style={s.memBar}>
@@ -551,11 +534,33 @@ export default function CommandScreen({navigation}){
               <Text style={s.sendT}>SEND</Text>
             </TouchableOpacity>
           </View>
-          <View style={s.inputActions}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.inputActions}>
             <TouchableOpacity style={[s.iact,recording&&{borderColor:'#E05555',backgroundColor:'#E0555511'}]} onPress={recording?stopRecording:startRecording}>
               <View style={[s.iactDot,recording&&{backgroundColor:'#E05555'}]}/>
               <Text style={[s.iactT,recording&&{color:'#E05555'}]}>{recording?'STOP REC':'SPEAK'}</Text>
             </TouchableOpacity>
+            <TouchableOpacity style={[s.iact,handsFree&&{borderColor:'#4CAF50',backgroundColor:'#4CAF5011'}]} onPress={toggleHandsFree}>
+              <View style={[s.iactDot,handsFree&&{backgroundColor:'#4CAF50'}]}/>
+              <Text style={[s.iactT,handsFree&&{color:'#4CAF50'}]}>{handsFree?'AUTO ON':'AUTO OFF'}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[s.iact,voiceOn&&!voiceMuted&&{borderColor:'#E8C98A',backgroundColor:'#E8C98A11'}]} onPress={()=>{if(voiceOn)stopAudio();setVoiceOn(v=>!v);setVoicePaused(false);}}>
+              <View style={[s.iactDot,voiceOn&&!voiceMuted&&{backgroundColor:'#E8C98A'}]}/>
+              <Text style={[s.iactT,voiceOn&&!voiceMuted&&{color:'#E8C98A'}]}>{voiceOn?'VOICE ON':'VOICE OFF'}</Text>
+            </TouchableOpacity>
+            {voiceOn&&<>
+              <TouchableOpacity style={[s.iact,voicePaused&&{borderColor:'#FFB300',backgroundColor:'#FFB30011'}]} onPress={()=>{voicePaused?resumeAudio():pauseAudio();}}>
+                <View style={[s.iactDot,voicePaused&&{backgroundColor:'#FFB300'}]}/>
+                <Text style={[s.iactT,voicePaused&&{color:'#FFB300'}]}>{voicePaused?'RESUME':'PAUSE'}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[s.iact,voiceMuted&&{borderColor:'#E05555',backgroundColor:'#E0555511'}]} onPress={()=>{setVoiceMuted(v=>!v);if(!voiceMuted)stopAudio();}}>
+                <View style={[s.iactDot,voiceMuted&&{backgroundColor:'#E05555'}]}/>
+                <Text style={[s.iactT,voiceMuted&&{color:'#E05555'}]}>{voiceMuted?'MUTED':'MUTE'}</Text>
+              </TouchableOpacity>
+            </>}
+            {loading&&<TouchableOpacity style={[s.iact,{borderColor:'#E05555'}]} onPress={()=>{abortRef.current?.abort();stopAudio();setLoading(false);}}>
+              <View style={[s.iactDot,{backgroundColor:'#E05555'}]}/>
+              <Text style={[s.iactT,{color:'#E05555'}]}>STOP</Text>
+            </TouchableOpacity>}
             <TouchableOpacity style={s.iact} onPress={pickImage}>
               <View style={s.iactDot}/><Text style={s.iactT}>IMAGE</Text>
             </TouchableOpacity>
@@ -565,7 +570,7 @@ export default function CommandScreen({navigation}){
             <TouchableOpacity style={s.iact} onPress={openCamera}>
               <View style={s.iactDot}/><Text style={s.iactT}>CAMERA</Text>
             </TouchableOpacity>
-          </View>
+          </ScrollView>
         </View>
       </KeyboardAvoidingView>
 
