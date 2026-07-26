@@ -17,6 +17,8 @@ import useEmpireStore from '../store/useEmpireStore';
 const COUNCIL=['jarvis','ara','selene'];
 const SPECIALISTS=['stephanie','rogue','atlas','haven','aisha','abraham','batman'];
 const TEAM_PHOTO=require('../../assets/teamphoto.png');
+const HANDS_FREE_SILENCE_MS=1500;
+const HANDS_FREE_VOICE_DB=-35;
 
 export default function CommandScreen({navigation}){
   const[activePersona,setActivePersona]=useState('jarvis');
@@ -30,6 +32,7 @@ export default function CommandScreen({navigation}){
   const[voiceMuted,setVoiceMuted]=useState(false);
   const[continuous,setContinuous]=useState(false);
   const[recording,setRecording]=useState(false);
+  const[handsFree,setHandsFree]=useState(false);
   const[customPersonas,setCustomPersonas]=useState([]);
   const[showCustomPicker,setShowCustomPicker]=useState(false);
   const[selectedCustom,setSelectedCustom]=useState([]);
@@ -43,13 +46,25 @@ export default function CommandScreen({navigation}){
   const recordingRef=useRef(null);
   const araWsRef=useRef(null);
   const araChunksRef=useRef([]);
+  const handsFreeRef=useRef(false);
+  const loadingRef=useRef(false);
+  const voicePausedRef=useRef(false);
+  const silenceTimerRef=useRef(null);
+  const hasVoicedRef=useRef(false);
   const{addRelay}=useEmpireStore();
 
   useEffect(()=>{contRef.current=continuous;},[continuous]);
+  useEffect(()=>{handsFreeRef.current=handsFree;},[handsFree]);
+  useEffect(()=>{loadingRef.current=loading;},[loading]);
+  useEffect(()=>{voicePausedRef.current=voicePaused;},[voicePaused]);
   useEffect(()=>{if(mode==='direct')loadHistory(activePersona);},[activePersona,mode]);
   useEffect(()=>{
     Audio.setAudioModeAsync({allowsRecordingIOS:true,playsInSilentModeIOS:true});
     loadPics();
+    return()=>{
+      clearSilenceTimer();
+      if(recordingRef.current){try{recordingRef.current.stopAndUnloadAsync();}catch{}}
+    };
   },[]);
 
   async function loadPics(){try{const pics=await getAllPersonaPics();setPersonaPics(pics);}catch{}}
@@ -57,6 +72,33 @@ export default function CommandScreen({navigation}){
   async function loadHistory(persona){
     const h=await getMessages(persona,40);
     setMessages(h.reverse().map(m=>({id:m.id.toString(),role:m.role,content:m.content,persona:m.persona})));
+  }
+
+  function clearSilenceTimer(){
+    if(silenceTimerRef.current){clearTimeout(silenceTimerRef.current);silenceTimerRef.current=null;}
+  }
+
+  function onRecordingStatus(status){
+    if(!status.isRecording||status.metering===undefined)return;
+    if(status.metering>HANDS_FREE_VOICE_DB){
+      hasVoicedRef.current=true;
+      clearSilenceTimer();
+    }else if(hasVoicedRef.current){
+      if(!silenceTimerRef.current){
+        silenceTimerRef.current=setTimeout(()=>{
+          silenceTimerRef.current=null;
+          if(recordingRef.current)stopRecording();
+        },HANDS_FREE_SILENCE_MS);
+      }
+    }
+  }
+
+  function maybeAutoListen(){
+    if(!handsFreeRef.current)return;
+    if(loadingRef.current)return;
+    if(voicePausedRef.current)return;
+    if(recordingRef.current)return;
+    startRecording();
   }
 
   async function buildAndPlayGrokAudio(chunks){
@@ -145,29 +187,33 @@ export default function CommandScreen({navigation}){
   }
 
   async function speakResponse(text,persona){
-    if(!voiceOn||voiceMuted||!text)return;
+    if(!voiceOn||voiceMuted||!text){maybeAutoListen();return;}
     if(voicePaused)return;
     try{
       if(soundRef.current){try{await soundRef.current.stopAsync();await soundRef.current.unloadAsync();}catch{}soundRef.current=null;}
       if(persona.id==='ara'){
         const result=await araGrokVoice(text);
         soundRef.current=result?.sound||null;
+        if(soundRef.current)soundRef.current.setOnPlaybackStatusUpdate(st=>{if(st.didJustFinish)maybeAutoListen();});
+        else maybeAutoListen();
       }else if(persona.elevenlabsVoiceId){
         const uri=await textToSpeech(text,persona.elevenlabsVoiceId);
         if(uri){
           await Audio.setAudioModeAsync({playsInSilentModeIOS:true,allowsRecordingIOS:false});
           const{sound}=await Audio.Sound.createAsync({uri},{shouldPlay:true});
           soundRef.current=sound;
+          sound.setOnPlaybackStatusUpdate(st=>{if(st.didJustFinish)maybeAutoListen();});
         }else{
           Alert.alert('Voice Debug','textToSpeech returned null for '+persona.name);
+          maybeAutoListen();
         }
       }else{
         Alert.alert('Voice Debug','No elevenlabsVoiceId for '+persona.name+' — falling back to native speech');
-        Speech.speak(text.substring(0,500),{language:'en-US',rate:0.95});
+        Speech.speak(text.substring(0,500),{language:'en-US',rate:0.95,onDone:()=>maybeAutoListen(),onStopped:()=>maybeAutoListen()});
       }
     }catch(err){
       Alert.alert('Voice Debug — Exception',persona.name+': '+err.message);
-      Speech.speak(text.substring(0,500),{language:'en-US',rate:0.95});
+      Speech.speak(text.substring(0,500),{language:'en-US',rate:0.95,onDone:()=>maybeAutoListen(),onStopped:()=>maybeAutoListen()});
     }
   }
 
@@ -182,7 +228,24 @@ export default function CommandScreen({navigation}){
     Speech.stop();setVoicePaused(true);
   }
 
-  function resumeAudio(){setVoicePaused(false);}
+  function resumeAudio(){
+    if(soundRef.current){try{soundRef.current.playAsync();}catch{}}
+    setVoicePaused(false);
+  }
+
+  function toggleHandsFree(){
+    setHandsFree(v=>{
+      const next=!v;
+      handsFreeRef.current=next;
+      if(next){
+        setTimeout(()=>maybeAutoListen(),200);
+      }else{
+        clearSilenceTimer();
+        if(recordingRef.current)stopRecording();
+      }
+      return next;
+    });
+  }
 
   async function startRecording(){
     try{
@@ -190,7 +253,11 @@ export default function CommandScreen({navigation}){
       if(status!=='granted'){Alert.alert('Permission','Microphone access required.');return;}
       await Audio.setAudioModeAsync({allowsRecordingIOS:true,playsInSilentModeIOS:true});
       const rec=new Audio.Recording();
-      await rec.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
+      hasVoicedRef.current=false;
+      clearSilenceTimer();
+      await rec.prepareToRecordAsync({...Audio.RecordingOptionsPresets.HIGH_QUALITY,isMeteringEnabled:true});
+      rec.setProgressUpdateInterval(150);
+      rec.setOnRecordingStatusUpdate(onRecordingStatus);
       await rec.startAsync();
       recordingRef.current=rec;
       setRecording(true);
@@ -199,11 +266,13 @@ export default function CommandScreen({navigation}){
 
   async function stopRecording(){
     try{
+      clearSilenceTimer();
       setRecording(false);
       if(!recordingRef.current)return;
-      await recordingRef.current.stopAndUnloadAsync();
-      const uri=recordingRef.current.getURI();
+      const rec=recordingRef.current;
       recordingRef.current=null;
+      await rec.stopAndUnloadAsync();
+      const uri=rec.getURI();
       if(!uri)return;
       setLoading(true);
       try{
@@ -214,8 +283,11 @@ export default function CommandScreen({navigation}){
           if(isGroup)setGroupMessages(prev=>[...prev,userMsg]);
           else{setMessages(prev=>[...prev,userMsg]);await saveMessage(activePersona,'user',transcript,'direct');}
           await runRound(transcript,isGroup);
+        }else{
+          setLoading(false);
+          maybeAutoListen();
         }
-      }catch(e){Alert.alert('Voice Error',e.message);setLoading(false);}
+      }catch(e){Alert.alert('Voice Error',e.message);setLoading(false);maybeAutoListen();}
     }catch(e){setLoading(false);Alert.alert('Error',e.message);}
   }
 
@@ -315,6 +387,7 @@ export default function CommandScreen({navigation}){
         const err={id:Date.now().toString(),role:'system',content:`Error: ${e.message}`,persona:'system'};
         if(isGroup)setGroupMessages(prev=>[...prev,err]);else setMessages(prev=>[...prev,err]);
       }
+      maybeAutoListen();
     }finally{setLoading(false);setTimeout(()=>flatRef.current?.scrollToEnd({animated:true}),100);}
     if(contRef.current&&!abortRef.current?.signal.aborted)setTimeout(()=>{if(contRef.current)runRound('[Continue. Be brief.]',true);},1200);
   }
@@ -434,6 +507,9 @@ export default function CommandScreen({navigation}){
             <Text style={[s.modeBtnT,{color:'#E05555'}]}>✋ INTERJECT</Text>
           </TouchableOpacity>
         </>}
+        <TouchableOpacity style={[s.modeBtn,handsFree&&{borderColor:'#4CAF50',backgroundColor:'#4CAF5011'}]} onPress={toggleHandsFree}>
+          <Text style={[s.modeBtnT,handsFree&&{color:'#4CAF50'}]}>{handsFree?'🎙️ AUTO ON':'🎙️ AUTO OFF'}</Text>
+        </TouchableOpacity>
         <TouchableOpacity style={[s.modeBtn,voiceOn&&!voiceMuted&&{borderColor:'#E8C98A',backgroundColor:'#E8C98A11'}]} onPress={()=>{if(voiceOn)stopAudio();setVoiceOn(v=>!v);setVoicePaused(false);}}>
           <Text style={[s.modeBtnT,voiceOn&&!voiceMuted&&{color:'#E8C98A'}]}>{voiceOn?'🔊 VOICE ON':'🔇 VOICE OFF'}</Text>
         </TouchableOpacity>
@@ -460,6 +536,11 @@ export default function CommandScreen({navigation}){
       {loading&&(<View style={s.thinking}>
         <ActivityIndicator size="small" color={mode==='direct'?cp.color:'#E8C98A'}/>
         <Text style={[s.thinkT,{color:mode==='direct'?cp.color:'#E8C98A'}]}>{mode==='direct'?`${cp.name} is responding...`:'Council speaking...'}</Text>
+      </View>)}
+
+      {recording&&(<View style={s.thinking}>
+        <View style={[s.iactDot,{backgroundColor:'#E05555'}]}/>
+        <Text style={[s.thinkT,{color:'#E05555'}]}>Listening...</Text>
       </View>)}
 
       <KeyboardAvoidingView behavior={Platform.OS==='ios'?'padding':'height'}>
@@ -502,7 +583,7 @@ export default function CommandScreen({navigation}){
         <TouchableOpacity style={s.navItem} onPress={()=>navigation.navigate('Settings')}>
           <Text style={s.navIcon}>⚙</Text><Text style={s.navLabel}>SETTINGS</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={s.navItem} onPress={()=>{stopAudio();navigation.navigate('Map');}}>
+        <TouchableOpacity style={s.navItem} onPress={()=>{setHandsFree(false);handsFreeRef.current=false;clearSilenceTimer();if(recordingRef.current)stopRecording();stopAudio();navigation.navigate('Map');}}>
           <Text style={s.navIcon}>🗺</Text><Text style={s.navLabel}>MAP</Text>
         </TouchableOpacity>
       </View>
