@@ -64,7 +64,7 @@ export async function textToSpeech(text,voiceId){
   const clean=text.replace(/\[[^\]]*\]/g,'').replace(/[*#`]/g,'').trim().substring(0,2000);
   if(!clean)return null;
   try{
-    const res=await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,{method:'POST',headers:{'Content-Type':'application/json','xi-api-key':k.elevenlabs},body:JSON.stringify({text:clean,model_id:'eleven_monolingual_v1',voice_settings:{stability:0.5,similarity_boost:0.8}})});
+    const res=await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,{method:'POST',headers:{'Content-Type':'application/json','xi-api-key':k.elevenlabs},body:JSON.stringify({text:clean,model_id:'eleven_turbo_v2_5',voice_settings:{stability:0.5,similarity_boost:0.8}})});
     if(!res.ok){const e=await res.text();Alert.alert('ElevenLabs API Error',`Status ${res.status}: ${e.substring(0,150)}`);return null;}
     const arrayBuffer=await res.arrayBuffer();
     const bytes=new Uint8Array(arrayBuffer);
