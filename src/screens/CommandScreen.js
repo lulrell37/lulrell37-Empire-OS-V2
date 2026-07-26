@@ -15,7 +15,7 @@ import{loadKeys}from '../services/keyStore';
 import useEmpireStore from '../store/useEmpireStore';
 
 const COUNCIL=['jarvis','ara','selene'];
-const SPECIALISTS=['stephanie','rogue','atlas','haven','aisha','abraham','batman'];
+const SPECIALISTS=['stephanie','rogue','atlas','haven','aisha','abraham','batman','ghost'];
 const TEAM_PHOTO=require('../../assets/teamphoto.png');
 const HANDS_FREE_SILENCE_MS=1500;
 const HANDS_FREE_VOICE_DB=-35;
