@@ -381,6 +381,10 @@ export default function CommandScreen({navigation}){
         <View style={s.onlinePill}><View style={s.onlineDot}/><Text style={s.onlineText}>ONLINE</Text></View>
       </View>
 
+      <TouchableOpacity onPress={()=>reportError('TEST BANNER WORKS')} style={{padding:8,alignSelf:'flex-start',marginLeft:14}}>
+        <Text style={{color:'#fff',fontFamily:'monospace',fontSize:10}}>TEST BANNER</Text>
+      </TouchableOpacity>
+
       <View style={s.teamPanel}>
         <View style={s.teamLabels}>
           <Text style={s.teamLabel}>THE EMPIRE</Text>
