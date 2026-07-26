@@ -57,7 +57,7 @@ export async function callPersona(personaId,messages,signal=null){
   if(lastUser&&response){await savePersonaMemory(personaId,`YOU: ${lastUser.content.substring(0,400)}\n${persona.name}: ${response.substring(0,600)}`).catch(()=>{});}
   return response;
 }
-export async function textToSpeech(text,voiceId){
+export async function textToSpeech(text,voiceId,personaName){
   const k=await ensureKeys();
   if(!k?.elevenlabs){Alert.alert('ElevenLabs Error','No API key found');return null;}
   if(!voiceId){Alert.alert('ElevenLabs Error','No voiceId provided for this persona');return null;}
@@ -67,6 +67,7 @@ export async function textToSpeech(text,voiceId){
     const res=await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,{method:'POST',headers:{'Content-Type':'application/json','xi-api-key':k.elevenlabs},body:JSON.stringify({text:clean,model_id:'eleven_turbo_v2_5',voice_settings:{stability:0.5,similarity_boost:0.8}})});
     if(!res.ok){const e=await res.text();Alert.alert('ElevenLabs API Error',`Status ${res.status}: ${e.substring(0,150)}`);return null;}
     const arrayBuffer=await res.arrayBuffer();
+    Alert.alert('Voice Debug — Audio Size',(personaName||'Unknown')+' ('+voiceId+'): '+arrayBuffer.byteLength+' bytes');
     const bytes=new Uint8Array(arrayBuffer);
     let binary='';
     for(let i=0;i<bytes.length;i+=8192)binary+=String.fromCharCode.apply(null,bytes.subarray(i,i+8192));
