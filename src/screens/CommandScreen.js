@@ -13,7 +13,6 @@ import{handleCommands,stripCommands}from '../services/commandHandler';
 import{getMessages,saveMessage,getAllPersonaPics}from '../services/database';
 import{loadKeys}from '../services/keyStore';
 import useEmpireStore from '../store/useEmpireStore';
-import{reportError}from '../../ErrorBanner';
 
 const COUNCIL=['jarvis','ara','selene'];
 const SPECIALISTS=['stephanie','rogue','atlas','haven','aisha','abraham','batman'];
@@ -160,11 +159,14 @@ export default function CommandScreen({navigation}){
           const{sound}=await Audio.Sound.createAsync({uri},{shouldPlay:true});
           soundRef.current=sound;
         }else{
-          reportError('speakResponse: textToSpeech returned null for '+persona.name);
+          Alert.alert('Voice Debug','textToSpeech returned null for '+persona.name);
         }
-      }else{Speech.speak(text.substring(0,500),{language:'en-US',rate:0.95});}
+      }else{
+        Alert.alert('Voice Debug','No elevenlabsVoiceId for '+persona.name+' — falling back to native speech');
+        Speech.speak(text.substring(0,500),{language:'en-US',rate:0.95});
+      }
     }catch(err){
-      reportError('speakResponse failed for '+persona.name+': '+err.message);
+      Alert.alert('Voice Debug — Exception',persona.name+': '+err.message);
       Speech.speak(text.substring(0,500),{language:'en-US',rate:0.95});
     }
   }
@@ -380,10 +382,6 @@ export default function CommandScreen({navigation}){
         <Text style={s.empireOS}>♔ EMPIRE OS</Text>
         <View style={s.onlinePill}><View style={s.onlineDot}/><Text style={s.onlineText}>ONLINE</Text></View>
       </View>
-
-      <TouchableOpacity onPress={()=>reportError('TEST BANNER WORKS')} style={{padding:8,alignSelf:'flex-start',marginLeft:14}}>
-        <Text style={{color:'#fff',fontFamily:'monospace',fontSize:10}}>TEST BANNER</Text>
-      </TouchableOpacity>
 
       <View style={s.teamPanel}>
         <View style={s.teamLabels}>
