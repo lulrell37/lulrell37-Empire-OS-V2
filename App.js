@@ -1,6 +1,6 @@
 import './errorHandler';
 import ErrorBoundary from './ErrorBoundary';
-import ErrorBanner, { reportError } from './ErrorBanner';
+import ErrorBanner,{reportError}from './ErrorBanner';
 import React,{useEffect,useState}from 'react';
 import{StatusBar}from 'expo-status-bar';
 import{NavigationContainer}from '@react-navigation/native';
@@ -8,6 +8,7 @@ import{createNativeStackNavigator}from '@react-navigation/native-stack';
 import*as SplashScreen from 'expo-splash-screen';
 import{GestureHandlerRootView}from 'react-native-gesture-handler';
 import{SafeAreaProvider}from 'react-native-safe-area-context';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import SplashScreenComponent from './src/screens/SplashScreen';
 import MapScreen from './src/screens/MapScreen';
 import CommandScreen from './src/screens/CommandScreen';
@@ -20,9 +21,12 @@ import{getAllPersonaPics}from './src/services/database';
 import useEmpireStore from './src/store/useEmpireStore';
 SplashScreen.preventAutoHideAsync();
 const Stack=createNativeStackNavigator();
+const NAV_STATE_KEY='EMPIRE_OS_NAV_STATE_V1';
 export default function App(){
   const[isReady,setIsReady]=useState(false);
   const[hasKeys,setHasKeys]=useState(false);
+  const[navReady,setNavReady]=useState(false);
+  const[initialNavState,setInitialNavState]=useState();
   const{setPersonaPics}=useEmpireStore();
   useEffect(()=>{
     async function prepare(){
@@ -32,13 +36,26 @@ export default function App(){
     }
     prepare();
   },[]);
-  if(!isReady)return null;
+  useEffect(()=>{
+    async function restoreNavState(){
+      try{
+        const saved=await AsyncStorage.getItem(NAV_STATE_KEY);
+        if(saved)setInitialNavState(JSON.parse(saved));
+      }catch(e){}
+      finally{setNavReady(true);}
+    }
+    restoreNavState();
+  },[]);
+  if(!isReady||!navReady)return null;
   return(
     <ErrorBoundary>
     <ErrorBanner />
     <GestureHandlerRootView style={{flex:1}}>
       <SafeAreaProvider>
-        <NavigationContainer>
+        <NavigationContainer
+          initialState={initialNavState}
+          onStateChange={(state)=>{AsyncStorage.setItem(NAV_STATE_KEY,JSON.stringify(state)).catch(()=>{});}}
+        >
           <StatusBar style="light" backgroundColor="#000"/>
           <Stack.Navigator initialRouteName={hasKeys?'Map':'Splash'} screenOptions={{headerShown:false,animation:'fade',contentStyle:{backgroundColor:'#000'}}}>
             <Stack.Screen name="Splash" component={SplashScreenComponent}/>
