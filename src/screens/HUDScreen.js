@@ -94,6 +94,7 @@ export default function HUDScreen({navigation}){
   function onScrollEnd(e){
     const idx=Math.round(e.nativeEvent.contentOffset.x/width);
     setPanelIndex(idx);
+    scrollRef.current?.scrollTo({x:idx*width,animated:true});
   }
 
   const score=hud?.empire_score||0;
@@ -135,6 +136,10 @@ export default function HUDScreen({navigation}){
         ref={scrollRef}
         horizontal
         pagingEnabled
+        snapToInterval={width}
+        snapToAlignment="start"
+        decelerationRate="fast"
+        disableIntervalMomentum
         showsHorizontalScrollIndicator={false}
         onMomentumScrollEnd={onScrollEnd}
         style={{flex:1}}
