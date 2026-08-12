@@ -4,50 +4,20 @@ import{SafeAreaView}from 'react-native-safe-area-context';
 import{saveKeys,loadKeys,saveGoogleToken,loadGoogleToken,clearGoogleToken}from '../services/keyStore';
 import{saveCustomPrompt,getCustomPrompt,getApiUsage,getAllPersonaPics}from '../services/database';
 import{PERSONA_LIST,getPersona}from '../personas/personas';
-import{useGoogleAuth}from '../services/googleAuth';
 import useEmpireStore from '../store/useEmpireStore';
-const TABS=['KEYS','GOOGLE','PROFILES','PROMPTS','USAGE'];
+const TABS=['KEYS','PROFILES','PROMPTS','USAGE'];
 export default function SettingsScreen({navigation}){
   const[tab,setTab]=useState('KEYS');
   const[claude,setClaude]=useState('');const[grok,setGrok]=useState('');const[openai,setOpenai]=useState('');const[elevenlabs,setElevenlabs]=useState('');
   const[showKey,setShowKey]=useState({});
   const[promptPersona,setPromptPersona]=useState('jarvis');const[promptText,setPromptText]=useState('');
   const[usage,setUsage]=useState([]);const[saved,setSaved]=useState(false);
-  const[googleConnected,setGoogleConnected]=useState(false);
-  const[googleConnecting,setGoogleConnecting]=useState(false);
   const{setPersonaPics}=useEmpireStore();
-  const[request,response,promptAsync]=useGoogleAuth();
   useEffect(()=>{loadAll();},[]);
-  useEffect(()=>{
-    if(response?.type==='success'&&response.authentication?.accessToken){
-      handleGoogleSuccess(response.authentication.accessToken);
-    }else if(response?.type==='error'){
-      setGoogleConnecting(false);
-      Alert.alert('Google Sign-In Error',response.error?.message||'Unknown error');
-    }else if(response?.type==='cancel'||response?.type==='dismiss'){
-      setGoogleConnecting(false);
-    }
-  },[response]);
   async function loadAll(){
     const k=await loadKeys();if(k){setClaude(k.claude||'');setGrok(k.grok||'');setOpenai(k.openai||'');setElevenlabs(k.elevenlabs||'');}
     const u=await getApiUsage();setUsage(u);
     const p=await getAllPersonaPics();setPersonaPics(p);
-    const g=await loadGoogleToken();setGoogleConnected(!!g?.accessToken);
-  }
-  async function handleGoogleSuccess(accessToken){
-    await saveGoogleToken(accessToken);
-    setGoogleConnected(true);
-    setGoogleConnecting(false);
-    Alert.alert('Connected','Google account connected successfully.');
-  }
-  async function connectGoogle(){
-    setGoogleConnecting(true);
-    try{await promptAsync();}catch(e){setGoogleConnecting(false);Alert.alert('Error',e.message);}
-  }
-  async function disconnectGoogle(){
-    await clearGoogleToken();
-    setGoogleConnected(false);
-    Alert.alert('Disconnected','Google account disconnected.');
   }
   async function saveApiKeys(){
     if(!claude.trim()){Alert.alert('Required','Claude API key is required.');return;}
@@ -70,9 +40,9 @@ export default function SettingsScreen({navigation}){
         <Text style={s.title}>SETTINGS</Text>
         <View style={{width:30}}/>
       </View>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.tabsScroll} contentContainerStyle={s.tabs}>
+      <View style={s.tabs}>
         {TABS.map(t=>(<TouchableOpacity key={t} style={[s.tab,tab===t&&s.tabA]} onPress={()=>setTab(t)}><Text style={[s.tabT,tab===t&&s.tabTA]}>{t}</Text></TouchableOpacity>))}
-      </ScrollView>
+      </View>
       <KeyboardAvoidingView style={{flex:1}} behavior={Platform.OS==='ios'?'padding':'height'}>
         <ScrollView contentContainerStyle={s.content}>
           {tab==='KEYS'&&<View>
@@ -96,26 +66,6 @@ export default function SettingsScreen({navigation}){
               </View>
             ))}
             <TouchableOpacity style={s.saveBtn} onPress={saveApiKeys}><Text style={s.saveBtnT}>{saved?'✓ SAVED':'SAVE KEYS'}</Text></TouchableOpacity>
-          </View>}
-          {tab==='GOOGLE'&&<View>
-            <Text style={s.secTitle}>GOOGLE ACCOUNT</Text>
-            <Text style={s.secSub}>Connects Drive, Gmail, Calendar, and Tasks. Required for cross-device memory sync and email/calendar access.</Text>
-            <View style={s.googleStatusCard}>
-              <View style={s.googleStatusRow}>
-                <View style={[s.googleDot,googleConnected&&s.googleDotOn]}/>
-                <Text style={s.googleStatusText}>{googleConnected?'CONNECTED':'NOT CONNECTED'}</Text>
-              </View>
-              {googleConnected?(
-                <TouchableOpacity style={[s.saveBtn,{backgroundColor:'#111',borderWidth:1,borderColor:'#333',marginTop:16}]} onPress={disconnectGoogle}>
-                  <Text style={[s.saveBtnT,{color:'#E05555'}]}>DISCONNECT</Text>
-                </TouchableOpacity>
-              ):(
-                <TouchableOpacity style={[s.saveBtn,{marginTop:16}]} onPress={connectGoogle} disabled={!request||googleConnecting}>
-                  <Text style={s.saveBtnT}>{googleConnecting?'CONNECTING...':'CONNECT GOOGLE'}</Text>
-                </TouchableOpacity>
-              )}
-            </View>
-            <Text style={s.googleNote}>Note: the access token currently lasts about 1 hour. If Drive/Gmail/Calendar features stop responding, reconnect here. Automatic token refresh requires a backend and is planned for a later update.</Text>
           </View>}
           {tab==='PROFILES'&&<View>
             <Text style={s.secTitle}>PERSONA PROFILES</Text>
@@ -170,8 +120,7 @@ const s=StyleSheet.create({
   c:{flex:1,backgroundColor:'#000'},
   hdr:{flexDirection:'row',alignItems:'center',justifyContent:'space-between',paddingHorizontal:16,paddingVertical:12,borderBottomWidth:1,borderBottomColor:'#0D0D0D'},
   back:{fontSize:20,color:'#E8C98A'},title:{fontFamily:'monospace',fontSize:13,color:'#E8C98A',fontWeight:'700',letterSpacing:3},
-  tabsScroll:{borderBottomWidth:1,borderBottomColor:'#0D0D0D'},
-  tabs:{flexDirection:'row',paddingHorizontal:12,paddingTop:8,gap:6},
+  tabs:{flexDirection:'row',borderBottomWidth:1,borderBottomColor:'#0D0D0D',paddingHorizontal:12,paddingTop:8,gap:6},
   tab:{paddingHorizontal:14,paddingVertical:6,borderRadius:4,borderWidth:1,borderColor:'#111',marginBottom:8},
   tabA:{borderColor:'#E8C98A',backgroundColor:'#E8C98A11'},tabT:{fontFamily:'monospace',fontSize:9,color:'#333',letterSpacing:1},tabTA:{color:'#E8C98A'},
   content:{padding:18,paddingBottom:40},
@@ -185,12 +134,6 @@ const s=StyleSheet.create({
   keyInput:{backgroundColor:'#060606',borderWidth:1,borderColor:'#111',borderRadius:6,paddingHorizontal:12,paddingVertical:10,color:'#CCC',fontSize:12,fontFamily:'monospace'},
   saveBtn:{backgroundColor:'#E8C98A',padding:14,borderRadius:6,alignItems:'center',marginTop:20},
   saveBtnT:{fontFamily:'monospace',fontWeight:'700',color:'#000',fontSize:11,letterSpacing:3},
-  googleStatusCard:{backgroundColor:'#060606',borderWidth:1,borderColor:'#111',borderRadius:8,padding:18},
-  googleStatusRow:{flexDirection:'row',alignItems:'center',gap:8},
-  googleDot:{width:8,height:8,borderRadius:4,backgroundColor:'#E05555'},
-  googleDotOn:{backgroundColor:'#4CAF50'},
-  googleStatusText:{fontFamily:'monospace',fontSize:10,color:'#888',letterSpacing:2},
-  googleNote:{fontFamily:'monospace',fontSize:8,color:'#333',letterSpacing:1,marginTop:16,lineHeight:14},
   picsGrid:{flexDirection:'row',flexWrap:'wrap',gap:16},
   picItem:{width:'28%',alignItems:'center'},
   picAvatar:{width:56,height:56,borderRadius:28,borderWidth:2,alignItems:'center',justifyContent:'center',marginBottom:6},
