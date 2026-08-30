@@ -24,7 +24,8 @@ export function useGoogleAuth(){
     // Always show the Google account picker instead of silently reusing the
     // device's default signed-in account. `selectAccount` is the provider's
     // canonical option and also sets `prompt=select_account` explicitly.
+    // `login_hint` tells Google which account this app expects.
     selectAccount:true,
-    extraParams:{prompt:'select_account'},
+    extraParams:{prompt:'select_account',login_hint:'tarellburrus@gmail.com'},
   });
 }
