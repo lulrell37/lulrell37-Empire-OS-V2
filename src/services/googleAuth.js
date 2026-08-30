@@ -21,5 +21,8 @@ export function useGoogleAuth(){
     androidClientId:ANDROID_CLIENT_ID,
     webClientId:WEB_CLIENT_ID,
     scopes:SCOPES,
+    // Always show the Google account picker instead of silently reusing the
+    // device's default signed-in account.
+    extraParams:{prompt:'select_account'},
   });
 }
