@@ -1,6 +1,5 @@
 import*as Google from 'expo-auth-session/providers/google';
 import*as WebBrowser from 'expo-web-browser';
-import*as AuthSession from 'expo-auth-session';
 WebBrowser.maybeCompleteAuthSession();
 
 const ANDROID_CLIENT_ID='766739048614-4af9ehee2qnrfj6suf1khehfoun7628v.apps.googleusercontent.com';
@@ -14,13 +13,13 @@ const SCOPES=[
 ];
 
 export function useGoogleAuth(){
-  const redirectUri=AuthSession.makeRedirectUri({
-    scheme:'com.googleusercontent.apps.766739048614-4af9ehee2qnrfj6suf1khehfoun7628v',
-  });
+  // Let the Google provider derive the native redirect URI itself
+  // (`com.lulrell37.empireos:/oauthredirect`). Do not override it with a
+  // reversed-client-ID scheme — that is the iOS convention and Google rejects
+  // it against an Android client ID with "Error 400: invalid_request".
   return Google.useAuthRequest({
     androidClientId:ANDROID_CLIENT_ID,
     webClientId:WEB_CLIENT_ID,
     scopes:SCOPES,
-    redirectUri,
   });
 }
