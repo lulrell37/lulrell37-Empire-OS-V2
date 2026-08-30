@@ -6,6 +6,8 @@ import{StatusBar}from 'expo-status-bar';
 import{NavigationContainer}from '@react-navigation/native';
 import{createNativeStackNavigator}from '@react-navigation/native-stack';
 import*as SplashScreen from 'expo-splash-screen';
+import*as Font from 'expo-font';
+import{FONT_MAP}from './src/theme';
 import{GestureHandlerRootView}from 'react-native-gesture-handler';
 import{SafeAreaProvider}from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -30,7 +32,10 @@ export default function App(){
   const{setPersonaPics}=useEmpireStore();
   useEffect(()=>{
     async function prepare(){
-      try{await initDatabase();const keys=await loadKeys();setHasKeys(!!(keys?.claude));const pics=await getAllPersonaPics();setPersonaPics(pics);}
+      try{
+        await Font.loadAsync(FONT_MAP).catch(e=>{console.warn('Font load failed, using fallback:',e.message);});
+        await initDatabase();const keys=await loadKeys();setHasKeys(!!(keys?.claude));const pics=await getAllPersonaPics();setPersonaPics(pics);
+      }
       catch(e){console.warn('Init error:',e);reportError('Init error: '+e.message);}
       finally{setIsReady(true);await SplashScreen.hideAsync();}
     }
