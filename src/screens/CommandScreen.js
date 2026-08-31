@@ -43,6 +43,7 @@ export default function CommandScreen({navigation}){
   const abortRef=useRef(null);
   const contRef=useRef(false);
   const soundRef=useRef(null);
+  const speakCancelRef=useRef(null); // stops the in-progress voice+text reveal
   const recordingRef=useRef(null);
   const araWsRef=useRef(null);
   const araChunksRef=useRef([]);
@@ -123,7 +124,7 @@ export default function CommandScreen({navigation}){
     const uri=FileSystem.cacheDirectory+'ara_'+Date.now()+'.wav';
     await FileSystem.writeAsStringAsync(uri,base64,{encoding:FileSystem.EncodingType.Base64});
     await Audio.setAudioModeAsync({playsInSilentModeIOS:true,allowsRecordingIOS:false});
-    const{sound}=await Audio.Sound.createAsync({uri},{shouldPlay:true});
+    const{sound}=await Audio.Sound.createAsync({uri},{shouldPlay:true,progressUpdateIntervalMillis:80});
     return sound;
   }
 
@@ -139,6 +140,8 @@ export default function CommandScreen({navigation}){
       araWsRef.current=ws;
       let sessionReady=false;
       let transcript='';
+      let audioMs=0;              // running duration of audio received (16-bit mono 24kHz)
+      const timeline=[];          // [{atMs, chars}] — text position vs. spoken time
       ws.onopen=()=>{
         ws.send(JSON.stringify({
           type:'session.update',
@@ -168,16 +171,20 @@ export default function CommandScreen({navigation}){
             const bytes=new Uint8Array(binary.length);
             for(let i=0;i<binary.length;i++)bytes[i]=binary.charCodeAt(i);
             araChunksRef.current.push(bytes);
+            audioMs+=(bytes.length/2)/24000*1000;
           }catch{}
         }
-        if(event.type==='response.output_audio_transcript.delta'){transcript+=event.delta;}
+        if(event.type==='response.output_audio_transcript.delta'){
+          transcript+=event.delta;
+          timeline.push({atMs:audioMs,chars:transcript.length});
+        }
         if(event.type==='response.done'){
           try{
             const sound=await buildAndPlayGrokAudio(araChunksRef.current);
             araChunksRef.current=[];
             try{ws.close();}catch{}
             araWsRef.current=null;
-            resolve({sound,transcript});
+            resolve({sound,transcript,timeline});
           }catch(err){reject(err);}
         }
         if(event.type==='error'){try{ws.close();}catch{}araWsRef.current=null;reject(new Error(event.message||'Ara voice error'));}
@@ -189,6 +196,7 @@ export default function CommandScreen({navigation}){
   async function speakResponse(text,persona){
     if(!voiceOn||voiceMuted||!text){maybeAutoListen();return;}
     if(voicePaused)return;
+    speakCancelRef.current?.();
     try{
       if(soundRef.current){try{await soundRef.current.stopAsync();await soundRef.current.unloadAsync();}catch{}soundRef.current=null;}
       if(persona.id==='ara'){
@@ -217,7 +225,92 @@ export default function CommandScreen({navigation}){
     }
   }
 
+  // Speaks `text` and reveals it in the chat bubble (id=msgId) in step with
+  // playback. Resolves { revealed, completed } — how many characters were
+  // actually voiced before it finished or was interrupted.
+  async function speakWithReveal(text,persona,msgId,isGroup){
+    const setMsgs=isGroup?setGroupMessages:setMessages;
+    const patch=(fn)=>setMsgs(prev=>prev.map(m=>m.id===msgId?fn(m):m));
+
+    if(!voiceOn||voiceMuted||!text){
+      patch(m=>({...m,content:text,revealed:text.length,streaming:false}));
+      maybeAutoListen();
+      return{revealed:text.length,completed:true,finalText:text};
+    }
+    if(soundRef.current){try{await soundRef.current.stopAsync();await soundRef.current.unloadAsync();}catch{}soundRef.current=null;}
+
+    return new Promise((resolve)=>{
+      let settled=false,cancelled=false,timer=null,safety=null,lastRevealed=0,fullText=text;
+      const cleanup=()=>{if(timer){clearInterval(timer);timer=null;}if(safety){clearTimeout(safety);safety=null;}speakCancelRef.current=null;};
+      const done=(completed)=>{
+        if(settled)return;settled=true;cleanup();
+        if(soundRef.current){try{soundRef.current.stopAsync();}catch{}}
+        const revealed=completed?fullText.length:lastRevealed;
+        const finalText=completed?fullText:(fullText.slice(0,revealed).trim()+(revealed<fullText.length?' …':''));
+        patch(m=>({...m,content:finalText,revealed:finalText.length,streaming:false}));
+        maybeAutoListen();
+        resolve({revealed,completed,finalText});
+      };
+      speakCancelRef.current=()=>{cancelled=true;done(false);};
+
+      const startTimer=(sound,timeline)=>{
+        timer=setInterval(async()=>{
+          if(cancelled)return;
+          if(abortRef.current?.signal.aborted){done(false);return;}
+          let st;try{st=await sound.getStatusAsync();}catch{return;}
+          if(!st?.isLoaded)return;
+          const pos=st.positionMillis||0,dur=st.durationMillis||0;
+          if(!safety&&dur>0)safety=setTimeout(()=>done(true),dur+2500);
+          let target;
+          if(timeline&&timeline.length){
+            let c=0;for(const e of timeline){if(e.atMs<=pos)c=e.chars;else break;}
+            target=c||(dur?Math.ceil(fullText.length*Math.min(1,pos/dur)):lastRevealed);
+          }else{
+            target=dur?Math.ceil(fullText.length*Math.min(1,pos/dur)):lastRevealed;
+          }
+          if(target>lastRevealed){lastRevealed=Math.min(fullText.length,target);patch(m=>({...m,revealed:lastRevealed}));}
+          if(st.didJustFinish)done(true);
+        },80);
+      };
+      const nativeFallback=()=>{
+        try{Speech.speak(fullText.slice(0,700),{language:'en-US',rate:0.95,onDone:()=>done(true),onStopped:()=>done(false)});}catch{done(false);return;}
+        safety=setTimeout(()=>done(true),Math.min(60000,(fullText.length/11)*1000+4000));
+        timer=setInterval(()=>{
+          if(cancelled)return;
+          lastRevealed=Math.min(fullText.length,lastRevealed+2);
+          patch(m=>({...m,revealed:lastRevealed}));
+          if(lastRevealed>=fullText.length){clearInterval(timer);timer=null;}
+        },90);
+      };
+
+      (async()=>{
+        try{
+          let sound=null,timeline=null;
+          if(persona.id==='ara'){
+            const r=await araGrokVoice(fullText);
+            sound=r?.sound||null;timeline=r?.timeline||null;
+            if(r?.transcript&&r.transcript.length>fullText.length){fullText=r.transcript;patch(m=>({...m,content:fullText}));}
+          }else if(persona.elevenlabsVoiceId){
+            const uri=await textToSpeech(fullText,persona.elevenlabsVoiceId,persona.name);
+            if(uri){
+              await Audio.setAudioModeAsync({playsInSilentModeIOS:true,allowsRecordingIOS:false});
+              const created=await Audio.Sound.createAsync({uri},{shouldPlay:true,progressUpdateIntervalMillis:80});
+              sound=created.sound;
+            }
+          }
+          if(cancelled||settled){if(sound){try{await sound.stopAsync();await sound.unloadAsync();}catch{}}return;}
+          if(!sound){nativeFallback();return;}
+          soundRef.current=sound;
+          startTimer(sound,timeline);
+        }catch(err){
+          if(!settled)nativeFallback();
+        }
+      })();
+    });
+  }
+
   function stopAudio(){
+    speakCancelRef.current?.();
     if(soundRef.current){try{soundRef.current.stopAsync();}catch{}soundRef.current=null;}
     if(araWsRef.current){try{araWsRef.current.close();}catch{}araWsRef.current=null;}
     Speech.stop();
@@ -354,7 +447,7 @@ export default function CommandScreen({navigation}){
 
   async function send(){
     const text=input.trim();if(!text||loading)return;
-    setInput('');stopAudio();
+    setInput('');abortRef.current?.abort();stopAudio();
     const isGroup=mode!=='direct';
     const userMsg={id:Date.now().toString(),role:'user',content:text,persona:'user'};
     if(isGroup)setGroupMessages(prev=>[...prev,userMsg]);
@@ -364,23 +457,27 @@ export default function CommandScreen({navigation}){
 
   async function runRound(text,isGroup){
     setLoading(true);abortRef.current=new AbortController();
+    const myAbort=abortRef.current;
     const targets=isGroup?getTargets():[activePersona];
     const replies=[];
     try{
       for(const pid of targets){
-        if(abortRef.current?.signal.aborted)break;
+        if(myAbort.signal.aborted)break;
         const p=getPersona(pid);
         const hist=(isGroup?groupMessages:messages).slice(-20).map(m=>({role:m.role==='user'||m.role==='assistant'?m.role:'user',content:m.content}));
         hist.push({role:'user',content:text});
         if(isGroup&&replies.length>0)hist.push({role:'user',content:`[PRIOR:\n${replies.map(r=>`${r.name}: ${r.text}`).join('\n\n')}\nAcknowledge and be brief.]`});
-        const response=await callPersona(pid,hist,abortRef.current?.signal);
-        const display=stripCommands(response);
-        const aiMsg={id:`${Date.now()}-${pid}`,role:'assistant',content:display||response,persona:pid};
-        if(isGroup)setGroupMessages(prev=>[...prev,aiMsg]);
-        else{setMessages(prev=>[...prev,aiMsg]);await saveMessage(pid,'assistant',display||response,'direct');}
+        const response=await callPersona(pid,hist,myAbort.signal);
+        const display=stripCommands(response)||response;
+        const willVoice=voiceOn&&!voiceMuted;
+        const msgId=`${Date.now()}-${pid}`;
+        const aiMsg={id:msgId,role:'assistant',content:display,persona:pid,revealed:willVoice?0:display.length,streaming:willVoice};
+        if(isGroup)setGroupMessages(prev=>[...prev,aiMsg]);else setMessages(prev=>[...prev,aiMsg]);
         if(display)replies.push({name:p.name,text:display});
         await handleCommands(response,pid,{onRelay:({target,message})=>addRelay(target,`[From ${p.name}]: ${message}`)});
-        await speakResponse(display||response,p);
+        const{finalText}=await speakWithReveal(display,p,msgId,isGroup);
+        if(!isGroup)await saveMessage(pid,'assistant',finalText,'direct');
+        if(myAbort.signal.aborted)break;
       }
     }catch(e){
       if(e.name!=='AbortError'){
@@ -388,8 +485,11 @@ export default function CommandScreen({navigation}){
         if(isGroup)setGroupMessages(prev=>[...prev,err]);else setMessages(prev=>[...prev,err]);
       }
       maybeAutoListen();
-    }finally{setLoading(false);setTimeout(()=>flatRef.current?.scrollToEnd({animated:true}),100);}
-    if(contRef.current&&!abortRef.current?.signal.aborted)setTimeout(()=>{if(contRef.current)runRound('[Continue. Be brief.]',true);},1200);
+    }finally{
+      if(abortRef.current===myAbort)setLoading(false);
+      setTimeout(()=>flatRef.current?.scrollToEnd({animated:true}),100);
+    }
+    if(contRef.current&&abortRef.current===myAbort&&!myAbort.signal.aborted)setTimeout(()=>{if(contRef.current)runRound('[Continue. Be brief.]',true);},1200);
   }
 
   function interject(){
@@ -407,6 +507,7 @@ export default function CommandScreen({navigation}){
     );
     if(item.role==='system')return(<View style={s.sysBubble}><Text style={s.sysText}>{item.content}</Text></View>);
     const pic=personaPics[p?.id];
+    const shown=item.streaming?String(item.content||'').slice(0,item.revealed||0):item.content;
     return(
       <View style={s.aiBubble}>
         <View style={s.aiHeader}>
@@ -417,12 +518,12 @@ export default function CommandScreen({navigation}){
             <Text style={[s.aiName,{color:p?.color||'#E8C98A'}]}>{p?.name||'SYSTEM'}</Text>
             <Text style={s.aiRole}>{p?.role||''}</Text>
           </View>
-          <TouchableOpacity style={s.replayBtn} onPress={()=>speakResponse(item.content,p||{})}>
+          {!item.streaming&&<TouchableOpacity style={s.replayBtn} onPress={()=>speakResponse(item.content,p||{})}>
             <Text style={s.replayBtnT}>↻ REPLAY</Text>
-          </TouchableOpacity>
+          </TouchableOpacity>}
         </View>
         <View style={[s.aiDivider,{backgroundColor:p?.color||'#E8C98A'}]}/>
-        <Text style={s.aiText}>{item.content}</Text>
+        <Text style={s.aiText}>{shown}{item.streaming&&<Text style={[s.caret,{color:p?.color||'#E8C98A'}]}>▍</Text>}</Text>
       </View>
     );
   }
@@ -670,6 +771,7 @@ const s=StyleSheet.create({
   replayBtnT:{fontFamily:'monospace',fontSize:7,color:'#444',letterSpacing:1},
   aiDivider:{height:1,marginBottom:8,opacity:0.3},
   aiText:{color:'#CCC',fontSize:14,lineHeight:21},
+  caret:{opacity:0.7},
   sysBubble:{alignSelf:'center',backgroundColor:'#0A0A0A',borderRadius:6,padding:6},
   sysText:{color:'#333',fontSize:9,fontFamily:'monospace',textAlign:'center',letterSpacing:2},
   thinking:{flexDirection:'row',alignItems:'center',gap:6,paddingHorizontal:14,paddingVertical:5},
