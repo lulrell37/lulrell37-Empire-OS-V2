@@ -8,9 +8,9 @@ import*as DocumentPicker from 'expo-document-picker';
 import{Camera}from 'expo-camera';
 import*as FileSystem from 'expo-file-system';
 import{PERSONAS,PERSONA_LIST,COUNCIL_PERSONAS,EMPIRE_PERSONAS,getPersona}from '../personas/personas';
-import{callPersona,textToSpeech,transcribeAudio}from '../services/aiService';
+import{callPersona,textToSpeech,transcribeAudio,queryMemory}from '../services/aiService';
 import{handleCommands,stripCommands}from '../services/commandHandler';
-import{getMessages,saveMessage,getAllPersonaPics}from '../services/database';
+import{getMessages,saveMessage,getAllPersonaPics,savePersonaMemory,getSetting}from '../services/database';
 import{loadKeys}from '../services/keyStore';
 import useEmpireStore from '../store/useEmpireStore';
 import{useIsFocused}from '@react-navigation/native';
@@ -512,7 +512,27 @@ export default function CommandScreen({navigation}){
           const shown=(stripCommands(raw)||'').replace(/\[[A-Z_]+:?[^\]]*$/,'').trimEnd();
           patch(m=>({...m,content:shown,revealed:shown.length}));
         };
-        const response=await callPersona(pid,hist,myAbort.signal,onDelta);
+        let response=await callPersona(pid,hist,myAbort.signal,onDelta);
+        // [MEMORY_QUERY:…] — persona asked its Claude memory index something. Run
+        // the recall, then re-answer with the result in hand. One pass only.
+        const mq=[...response.matchAll(/\[MEMORY_QUERY:\s*([^\]]+)\]/gi)].map(x=>x[1].trim()).filter(Boolean);
+        if(mq.length&&!myAbort.signal.aborted&&(await getSetting('memory_recall','1'))==='1'){
+          await handleCommands(response,pid,{onRelay:({target,message})=>addRelay(target,`[From ${p.name}]: ${message}`)});
+          patch(m=>({...m,content:'◇ recalling…',revealed:11,streaming:false}));
+          vizRef.speaking=true;
+          let recall='';
+          for(const q of mq.slice(0,2)){
+            try{recall+=(recall?'\n\n':'')+`Q: ${q}\nA: ${await queryMemory(pid,q,myAbort.signal)}`;}
+            catch(e){recall+=(recall?'\n\n':'')+`Q: ${q}\nA: (recall failed: ${e.message})`;}
+          }
+          const hist2=[...hist,{role:'assistant',content:response},{role:'user',content:`[MEMORY INDEX RESULTS — answer my previous message using this. Do not mention the lookup.\n${recall}\n]`}];
+          raw='';lastPatch=0;
+          patch(m=>({...m,content:'',revealed:0,streaming:!willVoice}));
+          // both passes skip the auto-save; we store one clean exchange below
+          response=await callPersona(pid,hist2,myAbort.signal,willVoice?null:onDelta,{skipSave:true});
+          const cleanDisplay=stripCommands(response)||response;
+          savePersonaMemory(pid,`YOU: ${text}\n${p.name}: ${cleanDisplay}`).catch(()=>{});
+        }
         const display=stripCommands(response)||response;
         if(display)replies.push({name:p.name,text:display});
         await handleCommands(response,pid,{onRelay:({target,message})=>addRelay(target,`[From ${p.name}]: ${message}`)});

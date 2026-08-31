@@ -15,6 +15,7 @@ export async function initDatabase(){
     CREATE TABLE IF NOT EXISTS custom_prompts(id INTEGER PRIMARY KEY AUTOINCREMENT,persona TEXT UNIQUE,prompt TEXT);
     CREATE TABLE IF NOT EXISTS api_usage(id INTEGER PRIMARY KEY AUTOINCREMENT,provider TEXT,tokens_in INTEGER DEFAULT 0,tokens_out INTEGER DEFAULT 0,date TEXT,created_at INTEGER);
     CREATE TABLE IF NOT EXISTS hud_layout(panel TEXT PRIMARY KEY,detached INTEGER DEFAULT 0,x REAL DEFAULT 0,y REAL DEFAULT 0,scale REAL DEFAULT 1,z INTEGER DEFAULT 0);
+    CREATE TABLE IF NOT EXISTS app_settings(key TEXT PRIMARY KEY,value TEXT);
   `);
   await migrateHudColumns();
   await migratePersonaMemory();
@@ -304,6 +305,9 @@ export async function getAllPersonaMemory(){return await db.getAllAsync('SELECT 
 export async function getMemoriesByPersona(persona){return await db.getAllAsync('SELECT * FROM persona_memory WHERE persona=? ORDER BY created_at DESC',[persona]);}
 // User prunes memory by hand — swipe a memory away to remove it permanently.
 export async function deletePersonaMemory(id){await db.runAsync('DELETE FROM persona_memory WHERE id=?',[id]);}
+// Simple app-wide key/value settings (feature toggles, etc.).
+export async function getSetting(key,fallback=null){const r=await db.getFirstAsync('SELECT value FROM app_settings WHERE key=?',[key]);return r?r.value:fallback;}
+export async function setSetting(key,value){await db.runAsync('INSERT OR REPLACE INTO app_settings(key,value) VALUES(?,?)',[key,String(value)]);}
 export async function saveNote(title,content,persona=null){const now=Date.now();const ex=await db.getFirstAsync('SELECT * FROM notes WHERE title=?',[title]);if(ex){await db.runAsync('UPDATE notes SET content=?,updated_at=? WHERE id=?',[content,now,ex.id]);return ex.id;}const r=await db.runAsync('INSERT INTO notes(title,content,persona,created_at,updated_at) VALUES(?,?,?,?,?)',[title,content,persona,now,now]);return r.lastInsertRowId;}
 export async function getNote(title){return await db.getFirstAsync('SELECT * FROM notes WHERE title LIKE ?',['%'+title+'%']);}
 export async function getAllNotes(){return await db.getAllAsync('SELECT * FROM notes ORDER BY updated_at DESC');}

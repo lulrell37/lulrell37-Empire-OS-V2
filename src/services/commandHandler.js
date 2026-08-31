@@ -115,5 +115,6 @@ export function stripCommands(text){
     .replace(/\[HUD_DETACH:[^\]]*\]/gi,'').replace(/\[HUD_DOCK:[^\]]*\]/gi,'').replace(/\[DIAGRAM_SHOW:[^\]]*\]/gi,'')
     .replace(/\[RELAY_TO:[^\]]*\]/gi,'').replace(/\[SEARCH_WEB:[^\]]*\]/gi,'')
     .replace(/\[READ_CALENDAR\]/gi,'').replace(/\[READ_EMAIL\]/gi,'')
+    .replace(/\[MEMORY_QUERY:[^\]]*\]/gi,'').replace(/\[DEEP_RESEARCH:[^\]]*\]/gi,'')
     .replace(/\[SEND_SMS:[^\]]*\]/gi,'').trim();
 }

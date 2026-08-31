@@ -1,5 +1,5 @@
 import{loadKeys}from './keyStore';
-import{getPersonaMemory,savePersonaMemory,getHudState,getTasks,trackApiUsage,getCustomPrompt}from './database';
+import{getPersonaMemory,getMemoriesByPersona,savePersonaMemory,getHudState,getTasks,trackApiUsage,getCustomPrompt}from './database';
 import*as FileSystem from 'expo-file-system';
 import{Alert}from 'react-native';
 let keys=null;
@@ -13,6 +13,7 @@ async function buildSys(personaId,persona,convo=[]){
   const customPrompt=await getCustomPrompt(personaId);
   let sys=customPrompt||persona.system;
   sys+=`\n\n[RESPONSE STYLE: Reply directly to what Mr. Burrus just said. Do not open with a status briefing, HUD summary, morning-routine readout, or any unprompted overview unless he explicitly asks for one. Skip "here is where things stand" preambles — answer the message and stop.]`;
+  sys+=`\n\n[MEMORY RECALL: The memory block below holds what is most relevant right now. If you need to recall something specific from past conversations that is NOT shown there, emit [MEMORY_QUERY: your precise question] and your memory index will answer it before you reply. Use it sparingly, only when it matters. Never mention this mechanism to Mr. Burrus — just recall.]`;
   sys+=`\n\n[CURRENT DATE & TIME: ${timeStr} ${tz} | LOCATION: Waldorf, MD]`;
   const hud=await getHudState();const tasks=await getTasks();
   if(hud){
@@ -79,7 +80,7 @@ function xhrStream({url,headers,body,signal,onEvent}){
   });
 }
 
-export async function callPersona(personaId,messages,signal=null,onDelta=null){
+export async function callPersona(personaId,messages,signal=null,onDelta=null,opts={}){
   const k=await ensureKeys();
   const{getPersona}=await import('../personas/personas');
   const persona=getPersona(personaId);
@@ -145,8 +146,30 @@ export async function callPersona(personaId,messages,signal=null,onDelta=null){
     }
   }
   const lastUser=messages.filter(m=>m.role==='user').slice(-1)[0];
-  if(lastUser&&response){await savePersonaMemory(personaId,`YOU: ${lastUser.content}\n${persona.name}: ${response}`).catch(()=>{});}
+  if(lastUser&&response&&!opts.skipSave){await savePersonaMemory(personaId,`YOU: ${lastUser.content}\n${persona.name}: ${response}`).catch(()=>{});}
   return response;
+}
+
+// The Claude-backed memory index. Reasons over a persona's raw stored exchanges
+// and answers a recall question in plain language — this is what a persona
+// reaches for via [MEMORY_QUERY:...] when it needs to remember something
+// specific beyond the recent context already in its prompt. Always Claude,
+// regardless of which model runs the persona's conversation.
+export async function queryMemory(personaId,question,signal=null){
+  const k=await ensureKeys();
+  if(!k?.claude)throw new Error('Claude key needed for memory recall');
+  const{getPersona}=await import('../personas/personas');
+  const persona=getPersona(personaId);
+  let rows=[];
+  try{rows=await getPersonaMemory(personaId,{query:question,limit:60});}catch{}
+  if(!rows.length){try{rows=(await getMemoriesByPersona(personaId)).slice(0,60);}catch{}}
+  const corpus=rows.map(r=>`[${r.date}${r.category?' · '+r.category:''}]\n${r.content}`).join('\n\n').slice(0,14000);
+  const sys=`You are the private memory index for ${persona.name}, the assistant to Mr. Burrus. Below are stored exchanges between Mr. Burrus and ${persona.name}, newest first. Answer the recall question using ONLY what is in these memories. Be specific — quote dates and details. If the memories do not cover it, say so in one sentence. No preamble.\n\n=== STORED MEMORIES ===\n${corpus||'(none)'}\n=== END ===`;
+  const res=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':k.claude,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:700,system:sys,messages:[{role:'user',content:question}]}),signal});
+  if(!res.ok){const e=await res.text();throw new Error(`memory recall: ${e.substring(0,80)}`);}
+  const d=await res.json();
+  if(d.usage)await trackApiUsage('claude',d.usage.input_tokens||0,d.usage.output_tokens||0).catch(()=>{});
+  return d.content?.[0]?.text?.trim()||'(no recall)';
 }
 export async function textToSpeech(text,voiceId,personaName){
   const k=await ensureKeys();

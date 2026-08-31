@@ -3,11 +3,11 @@ import{View,Text,StyleSheet,TextInput,TouchableOpacity,ScrollView,Alert,Keyboard
 import{SafeAreaView}from 'react-native-safe-area-context';
 import*as ImagePicker from 'expo-image-picker';
 import{saveKeys,loadKeys,saveGoogleToken,loadGoogleToken,clearGoogleToken}from '../services/keyStore';
-import{saveCustomPrompt,getCustomPrompt,getApiUsage,getAllPersonaPics,savePersonaPic}from '../services/database';
+import{saveCustomPrompt,getCustomPrompt,getApiUsage,getAllPersonaPics,savePersonaPic,getSetting,setSetting}from '../services/database';
 import{PERSONA_LIST,getPersona}from '../personas/personas';
 import{useGoogleAuth}from '../services/googleAuth';
 import useEmpireStore from '../store/useEmpireStore';
-const TABS=['KEYS','GOOGLE','PROFILES','PROMPTS','USAGE'];
+const TABS=['KEYS','GOOGLE','AI','PROFILES','PROMPTS','USAGE'];
 export default function SettingsScreen({navigation}){
   const[tab,setTab]=useState('KEYS');
   const[claude,setClaude]=useState('');const[grok,setGrok]=useState('');const[openai,setOpenai]=useState('');const[elevenlabs,setElevenlabs]=useState('');const[meshy,setMeshy]=useState('');
@@ -16,6 +16,8 @@ export default function SettingsScreen({navigation}){
   const[usage,setUsage]=useState([]);const[saved,setSaved]=useState(false);
   const[googleConnected,setGoogleConnected]=useState(false);
   const[googleConnecting,setGoogleConnecting]=useState(false);
+  const[memoryRecall,setMemoryRecall]=useState(true);
+  const[deepConfirm,setDeepConfirm]=useState(true);
   const{personaPics,setPersonaPics}=useEmpireStore();
   const[request,response,promptAsync]=useGoogleAuth();
   useEffect(()=>{loadAll();},[]);
@@ -34,7 +36,11 @@ export default function SettingsScreen({navigation}){
     const u=await getApiUsage();setUsage(u);
     const p=await getAllPersonaPics();setPersonaPics(p);
     const g=await loadGoogleToken();setGoogleConnected(!!g?.accessToken);
+    setMemoryRecall((await getSetting('memory_recall','1'))==='1');
+    setDeepConfirm((await getSetting('deep_research_confirm','1'))==='1');
   }
+  async function toggleMemoryRecall(){const nv=!memoryRecall;setMemoryRecall(nv);await setSetting('memory_recall',nv?'1':'0');}
+  async function toggleDeepConfirm(){const nv=!deepConfirm;setDeepConfirm(nv);await setSetting('deep_research_confirm',nv?'1':'0');}
   async function pickPersonaPic(id){
     try{
       const perm=await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -139,6 +145,24 @@ export default function SettingsScreen({navigation}){
             </View>
             <Text style={s.googleNote}>Note: the access token currently lasts about 1 hour. If Drive/Gmail/Calendar features stop responding, reconnect here. Automatic token refresh requires a backend and is planned for a later update.</Text>
           </View>}
+          {tab==='AI'&&<View>
+            <Text style={s.secTitle}>AI BEHAVIOR</Text>
+            <Text style={s.secSub}>Controls for the memory and research subsystems. Calls bill to your own API keys.</Text>
+            <TouchableOpacity style={s.toggleRow} onPress={toggleMemoryRecall} activeOpacity={0.7}>
+              <View style={{flex:1,paddingRight:12}}>
+                <Text style={s.toggleLabel}>MEMORY RECALL</Text>
+                <Text style={s.toggleSub}>Lets any persona ask Claude to reason over its full stored memory when it needs deep recall. One extra Claude call on those turns only.</Text>
+              </View>
+              <View style={[s.switch,memoryRecall&&s.switchOn]}><View style={[s.knob,memoryRecall&&s.knobOn]}/></View>
+            </TouchableOpacity>
+            <TouchableOpacity style={s.toggleRow} onPress={toggleDeepConfirm} activeOpacity={0.7}>
+              <View style={{flex:1,paddingRight:12}}>
+                <Text style={s.toggleLabel}>CONFIRM DEEP RESEARCH</Text>
+                <Text style={s.toggleSub}>Ask before every Deep Research run (OpenAI, minutes long, dollars per run).</Text>
+              </View>
+              <View style={[s.switch,deepConfirm&&s.switchOn]}><View style={[s.knob,deepConfirm&&s.knobOn]}/></View>
+            </TouchableOpacity>
+          </View>}
           {tab==='PROFILES'&&<View>
             <Text style={s.secTitle}>PERSONA PROFILES</Text>
             <Text style={s.secSub}>Tap to set a photo. Used on the Command screen and, for the persona visualization, inside the glow.</Text>
@@ -200,6 +224,13 @@ const s=StyleSheet.create({
   tab:{paddingHorizontal:14,paddingVertical:6,borderRadius:4,borderWidth:1,borderColor:'#111',marginBottom:8},
   tabA:{borderColor:'#E8C98A',backgroundColor:'#E8C98A11'},tabT:{fontFamily:'monospace',fontSize:9,color:'#333',letterSpacing:1},tabTA:{color:'#E8C98A'},
   content:{padding:18,paddingBottom:40},
+  toggleRow:{flexDirection:'row',alignItems:'center',paddingVertical:14,borderBottomWidth:1,borderBottomColor:'#0D0D0D'},
+  toggleLabel:{fontFamily:'monospace',fontSize:10,color:'#E8C98A',letterSpacing:2,marginBottom:4},
+  toggleSub:{fontFamily:'monospace',fontSize:8,color:'#444',lineHeight:13},
+  switch:{width:40,height:22,borderRadius:11,backgroundColor:'#1A1A1A',borderWidth:1,borderColor:'#2A2A2A',padding:2,justifyContent:'center'},
+  switchOn:{backgroundColor:'#E8C98A33',borderColor:'#E8C98A'},
+  knob:{width:16,height:16,borderRadius:8,backgroundColor:'#444'},
+  knobOn:{backgroundColor:'#E8C98A',alignSelf:'flex-end'},
   secTitle:{fontFamily:'monospace',fontSize:11,color:'#E8C98A',letterSpacing:3,marginBottom:4},
   secSub:{fontFamily:'monospace',fontSize:8,color:'#333',letterSpacing:1,marginBottom:18,lineHeight:14},
   keyField:{marginBottom:18},
