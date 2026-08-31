@@ -3,6 +3,7 @@ import{View,Text,StyleSheet,ScrollView,TouchableOpacity,Alert}from 'react-native
 import{SafeAreaView}from 'react-native-safe-area-context';
 import{getAllPersonaMemory,getAllNotes,deleteNote}from '../services/database';
 import{getPersona}from '../personas/personas';
+import{categoryMeta}from '../services/memoryCategories';
 export default function MemoryScreen({navigation}){
   const[memories,setMemories]=useState([]);const[notes,setNotes]=useState([]);const[tab,setTab]=useState('MEMORY');
   useEffect(()=>{load();},[]);
@@ -15,9 +16,9 @@ export default function MemoryScreen({navigation}){
       <ScrollView style={{flex:1}}>
         {tab==='MEMORY'&&<View style={s.sec}>
           <Text style={s.secTitle}>CONVERSATION MEMORY</Text>
-          <Text style={s.secSub}>LAST 14 DAYS PER PERSONA</Text>
+          <Text style={s.secSub}>EVERY EXCHANGE, KEPT IN FULL · TAP INTO A BRAIN FOR THE MAP</Text>
           {memories.length===0&&<Text style={s.empty}>No memory yet. Start talking to your personas.</Text>}
-          {memories.map(m=>{const p=getPersona(m.persona);return(<View key={m.id} style={s.memCard}><View style={s.memHdr}><Text style={[s.memPersona,{color:p.color}]}>{p.name}</Text><Text style={s.memDate}>{m.date}</Text></View><Text style={s.memContent} numberOfLines={4}>{m.content}</Text></View>);})}
+          {memories.map(m=>{const p=getPersona(m.persona);const cat=m.category?categoryMeta(m.category):null;return(<View key={m.id} style={s.memCard}><View style={s.memHdr}><Text style={[s.memPersona,{color:p.color}]}>{p.name}</Text><View style={{flexDirection:'row',alignItems:'center',gap:8}}>{cat&&<Text style={[s.memCat,{color:cat.color,borderColor:cat.color+'55'}]}>{cat.label.toUpperCase()}</Text>}<Text style={s.memDate}>{m.date}</Text></View></View><Text style={s.memContent} numberOfLines={5}>{m.content}</Text></View>);})}
         </View>}
         {tab==='NOTES'&&<View style={s.sec}>
           <Text style={s.secTitle}>SAVED NOTES</Text>
@@ -41,6 +42,7 @@ const s=StyleSheet.create({
   memCard:{backgroundColor:'#060606',borderWidth:1,borderColor:'#111',borderRadius:6,padding:14,marginBottom:10},
   memHdr:{flexDirection:'row',justifyContent:'space-between',alignItems:'center',marginBottom:8},
   memPersona:{fontFamily:'monospace',fontSize:9,fontWeight:'700',letterSpacing:2},memDate:{fontFamily:'monospace',fontSize:8,color:'#222'},
+  memCat:{fontFamily:'monospace',fontSize:7,letterSpacing:1,borderWidth:1,borderRadius:3,paddingHorizontal:4,paddingVertical:1},
   memContent:{color:'#444',fontSize:12,lineHeight:18},
   noteCard:{backgroundColor:'#060606',borderWidth:1,borderColor:'#111',borderRadius:6,padding:14,marginBottom:10},
   noteHdr:{flexDirection:'row',justifyContent:'space-between',alignItems:'center',marginBottom:4},

@@ -1,4 +1,5 @@
 import*as SQLite from 'expo-sqlite';
+import{classifyMemory,memoryRelevance}from './memoryCategories';
 let db;
 export async function initDatabase(){
   db=await SQLite.openDatabaseAsync('empire_os.db');
@@ -8,7 +9,7 @@ export async function initDatabase(){
     CREATE TABLE IF NOT EXISTS hud_state(id INTEGER PRIMARY KEY DEFAULT 1,date TEXT,empire_score INTEGER DEFAULT 0,streak INTEGER DEFAULT 0,batman_protocol TEXT DEFAULT '{}',batman_template TEXT DEFAULT '[]',morning_routine TEXT DEFAULT '[]',morning_routine_done TEXT DEFAULT '{}',word_of_day TEXT,word_phonetic TEXT,word_def TEXT,verse_of_day TEXT,verse_ref TEXT,fact_of_day TEXT,updated_at INTEGER);
     CREATE TABLE IF NOT EXISTS revenue(id INTEGER PRIMARY KEY AUTOINCREMENT,business TEXT,amount REAL,type TEXT DEFAULT 'income',note TEXT,date TEXT,created_at INTEGER);
     CREATE TABLE IF NOT EXISTS business_targets(business TEXT PRIMARY KEY,target REAL DEFAULT 0,week_goal REAL DEFAULT 0,sort_order INTEGER DEFAULT 0);
-    CREATE TABLE IF NOT EXISTS persona_memory(id INTEGER PRIMARY KEY AUTOINCREMENT,persona TEXT,content TEXT,date TEXT,created_at INTEGER);
+    CREATE TABLE IF NOT EXISTS persona_memory(id INTEGER PRIMARY KEY AUTOINCREMENT,persona TEXT,content TEXT,category TEXT,keywords TEXT,date TEXT,created_at INTEGER);
     CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT,content TEXT,persona TEXT,created_at INTEGER,updated_at INTEGER);
     CREATE TABLE IF NOT EXISTS persona_pics(id INTEGER PRIMARY KEY AUTOINCREMENT,persona TEXT UNIQUE,pic_data TEXT);
     CREATE TABLE IF NOT EXISTS custom_prompts(id INTEGER PRIMARY KEY AUTOINCREMENT,persona TEXT UNIQUE,prompt TEXT);
@@ -16,6 +17,7 @@ export async function initDatabase(){
     CREATE TABLE IF NOT EXISTS hud_layout(panel TEXT PRIMARY KEY,detached INTEGER DEFAULT 0,x REAL DEFAULT 0,y REAL DEFAULT 0,scale REAL DEFAULT 1,z INTEGER DEFAULT 0);
   `);
   await migrateHudColumns();
+  await migratePersonaMemory();
   await ensureHudState();
   await ensureBusinessTargets();
 }
@@ -24,6 +26,31 @@ async function migrateHudColumns(){
   const names=cols.map(c=>c.name);
   if(!names.includes('batman_template')){
     await db.execAsync("ALTER TABLE hud_state ADD COLUMN batman_template TEXT DEFAULT '[]'");
+  }
+}
+// persona_memory moved from one blob-per-day to one row per exchange, each tagged
+// with a keyword category. Add the columns, then split any legacy day-blobs into
+// individual rows and classify everything that isn't categorized yet.
+async function migratePersonaMemory(){
+  const cols=(await db.getAllAsync('PRAGMA table_info(persona_memory)')).map(c=>c.name);
+  if(!cols.includes('category'))await db.execAsync('ALTER TABLE persona_memory ADD COLUMN category TEXT');
+  if(!cols.includes('keywords'))await db.execAsync('ALTER TABLE persona_memory ADD COLUMN keywords TEXT');
+  const legacy=await db.getAllAsync('SELECT * FROM persona_memory WHERE category IS NULL OR category=""');
+  for(const row of legacy){
+    const parts=String(row.content||'').split(/\n\n+/).map(s=>s.trim()).filter(Boolean);
+    if(parts.length<=1){
+      const c=classifyMemory(row.content||'');
+      await db.runAsync('UPDATE persona_memory SET category=?,keywords=? WHERE id=?',[c.category,JSON.stringify(c.keywords),row.id]);
+      continue;
+    }
+    const[first,...rest]=parts;
+    const c0=classifyMemory(first);
+    await db.runAsync('UPDATE persona_memory SET content=?,category=?,keywords=? WHERE id=?',[first,c0.category,JSON.stringify(c0.keywords),row.id]);
+    let i=0;
+    for(const p of rest){
+      const c=classifyMemory(p);
+      await db.runAsync('INSERT INTO persona_memory(persona,content,category,keywords,date,created_at) VALUES(?,?,?,?,?,?)',[row.persona,p,c.category,JSON.stringify(c.keywords),row.date,(row.created_at||Date.now())+(++i)]);
+    }
   }
 }
 export function getTodayStr(){return new Date().toISOString().split('T')[0];}
@@ -244,9 +271,37 @@ export async function getBusinessesWithRevenue(){
   const revMap={};revenue.forEach(r=>{revMap[r.business]=r.total;});
   return targets.map(t=>({name:t.business,target:t.target,weekGoal:t.week_goal,rev:revMap[t.business]||0}));
 }
-export async function savePersonaMemory(persona,content){const today=getTodayStr();const ex=await db.getFirstAsync('SELECT * FROM persona_memory WHERE persona=? AND date=?',[persona,today]);if(ex){await db.runAsync('UPDATE persona_memory SET content=? WHERE id=?',[ex.content+'\n\n'+content,ex.id]);}else{await db.runAsync('INSERT INTO persona_memory(persona,content,date,created_at) VALUES(?,?,?,?)',[persona,content,today,Date.now()]);}}
-export async function getPersonaMemory(persona,days=14){const cutoff=new Date();cutoff.setDate(cutoff.getDate()-days);return await db.getAllAsync('SELECT * FROM persona_memory WHERE persona=? AND date>=? ORDER BY date DESC',[persona,cutoff.toISOString().split('T')[0]]);}
-export async function getAllPersonaMemory(){return await db.getAllAsync('SELECT * FROM persona_memory ORDER BY date DESC LIMIT 100');}
+// One row per exchange, stored verbatim (no truncation), tagged with a category.
+export async function savePersonaMemory(persona,content){
+  const text=String(content||'').trim();
+  if(!text)return;
+  const{category,keywords}=classifyMemory(text);
+  await db.runAsync('INSERT INTO persona_memory(persona,content,category,keywords,date,created_at) VALUES(?,?,?,?,?,?)',[persona,text,category,JSON.stringify(keywords),getTodayStr(),Date.now()]);
+}
+// Retrieval for a persona's system prompt. With a `query`, returns the most
+// relevant full exchanges (category + keyword match) plus the 3 most recent for
+// continuity; without one, plain recency. `opts` may be a number (limit only)
+// for backward compatibility.
+export async function getPersonaMemory(persona,opts={}){
+  const{query='',limit=14}=(typeof opts==='number')?{limit:opts}:opts;
+  const rows=await db.getAllAsync('SELECT * FROM persona_memory WHERE persona=? ORDER BY created_at DESC LIMIT 400',[persona]);
+  if(!rows.length)return[];
+  if(!query)return rows.slice(0,limit);
+  const{category,keywords}=classifyMemory(query);
+  const recent=rows.slice(0,3);
+  const seen=new Set(recent.map(r=>r.id));
+  const out=[...recent];
+  const relevant=rows
+    .map(r=>({r,s:memoryRelevance(r,category,keywords)}))
+    .filter(x=>x.s>0&&!seen.has(x.r.id))
+    .sort((a,b)=>b.s-a.s);
+  for(const x of relevant){if(out.length>=limit)break;seen.add(x.r.id);out.push(x.r);}
+  for(const r of rows){if(out.length>=limit)break;if(!seen.has(r.id)){seen.add(r.id);out.push(r);}}
+  return out;
+}
+export async function getAllPersonaMemory(){return await db.getAllAsync('SELECT * FROM persona_memory ORDER BY created_at DESC LIMIT 100');}
+// Every memory for one persona — for the Brain network view.
+export async function getMemoriesByPersona(persona){return await db.getAllAsync('SELECT * FROM persona_memory WHERE persona=? ORDER BY created_at DESC',[persona]);}
 export async function saveNote(title,content,persona=null){const now=Date.now();const ex=await db.getFirstAsync('SELECT * FROM notes WHERE title=?',[title]);if(ex){await db.runAsync('UPDATE notes SET content=?,updated_at=? WHERE id=?',[content,now,ex.id]);return ex.id;}const r=await db.runAsync('INSERT INTO notes(title,content,persona,created_at,updated_at) VALUES(?,?,?,?,?)',[title,content,persona,now,now]);return r.lastInsertRowId;}
 export async function getNote(title){return await db.getFirstAsync('SELECT * FROM notes WHERE title LIKE ?',['%'+title+'%']);}
 export async function getAllNotes(){return await db.getAllAsync('SELECT * FROM notes ORDER BY updated_at DESC');}

@@ -4,7 +4,7 @@ import*as FileSystem from 'expo-file-system';
 import{Alert}from 'react-native';
 let keys=null;
 async function ensureKeys(){if(!keys)keys=await loadKeys();return keys;}
-async function buildSys(personaId,persona){
+async function buildSys(personaId,persona,convo=[]){
   const now=new Date();
   const timeStr=now.toLocaleString('en-US',{timeZone:'America/New_York',weekday:'long',month:'long',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit',hour12:true});
   const jan=new Date(now.getFullYear(),0,1).getTimezoneOffset();
@@ -27,8 +27,12 @@ async function buildSys(personaId,persona){
     const openTasks=tasks.map(t=>t.title).slice(0,15).join(', ');
     sys+=`\n\n[LIVE HUD DATA:\nEmpire Score: ${hud.empire_score}%\nStreak: ${hud.streak} days\nWord of Day: ${hud.word_of_day||'Not set'}\nVerse of Day: ${hud.verse_of_day||'Not set'}\nFact of Day: ${hud.fact_of_day||'Not set'}\nMorning Routine (${routineCount}/${routineItems.length}): ${routineList}\nBatman Protocol Today: ${todayBat?`${todayBat.label} — ${todayBat.desc}`:'Not set'}\nOpen Tasks (${tasks.length}): ${openTasks||'none'}\n]`;
   }
-  const mem=await getPersonaMemory(personaId,14);
-  if(mem?.length){sys+=`\n\n[MEMORY FROM RECENT SESSIONS:\n${mem.map(m=>`[${m.date}]\n${m.content}`).join('\n\n').substring(0,3000)}\n]`;}
+  const lastUser=[...convo].reverse().find(m=>m?.role==='user'&&m?.content);
+  const mem=await getPersonaMemory(personaId,{query:lastUser?.content||'',limit:16});
+  if(mem?.length){
+    const body=mem.map(m=>`[${m.date}${m.category?' · '+m.category:''}]\n${m.content}`).join('\n\n');
+    sys+=`\n\n[MEMORY — past exchanges kept in full, most relevant to the current message first. Reference naturally; never claim you don't remember:\n${body.substring(0,6000)}\n]`;
+  }
   return sys;
 }
 // SSE over XHR — React Native's fetch can't expose a streaming response body,
@@ -79,7 +83,7 @@ export async function callPersona(personaId,messages,signal=null,onDelta=null){
   const k=await ensureKeys();
   const{getPersona}=await import('../personas/personas');
   const persona=getPersona(personaId);
-  const sys=await buildSys(personaId,persona);
+  const sys=await buildSys(personaId,persona,messages);
   const hist=messages.slice(-20).map(m=>({role:m.role==='system'?'user':m.role,content:m.content}));
   const stream=typeof onDelta==='function';
   let response='';
@@ -141,7 +145,7 @@ export async function callPersona(personaId,messages,signal=null,onDelta=null){
     }
   }
   const lastUser=messages.filter(m=>m.role==='user').slice(-1)[0];
-  if(lastUser&&response){await savePersonaMemory(personaId,`YOU: ${lastUser.content.substring(0,400)}\n${persona.name}: ${response.substring(0,600)}`).catch(()=>{});}
+  if(lastUser&&response){await savePersonaMemory(personaId,`YOU: ${lastUser.content}\n${persona.name}: ${response}`).catch(()=>{});}
   return response;
 }
 export async function textToSpeech(text,voiceId,personaName){
