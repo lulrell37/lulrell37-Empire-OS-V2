@@ -13,12 +13,20 @@ import{handleCommands,stripCommands}from '../services/commandHandler';
 import{getMessages,saveMessage,getAllPersonaPics}from '../services/database';
 import{loadKeys}from '../services/keyStore';
 import useEmpireStore from '../store/useEmpireStore';
+import{useIsFocused}from '@react-navigation/native';
+import PersonaOrb from './command/PersonaOrb';
+import Boundary from './hud/Boundary';
 
 const COUNCIL=['jarvis','ara','selene'];
 const SPECIALISTS=['stephanie','rogue','atlas','haven','aisha','abraham','batman','ghost'];
 const TEAM_PHOTO=require('../../assets/teamphoto.png');
 const HANDS_FREE_SILENCE_MS=1500;
 const HANDS_FREE_VOICE_DB=-35;
+// Synthetic speech-loudness envelope for the persona orb (no real FFT in Expo).
+function synthAmp(){
+  const t=Date.now()/1000;
+  return Math.max(0.18,Math.min(1,0.32+0.34*(0.5+0.5*Math.sin(t*6.3))+0.22*Math.sin(t*15.1)+0.12*Math.sin(t*27.7)));
+}
 
 export default function CommandScreen({navigation}){
   const[activePersona,setActivePersona]=useState('jarvis');
@@ -39,6 +47,8 @@ export default function CommandScreen({navigation}){
   const[personaPics,setPersonaPics]=useState({});
   const[showCamera,setShowCamera]=useState(false);
   const[cameraRef,setCameraRef]=useState(null);
+  const[view,setView]=useState('viz'); // viz | text
+  const vizRef=useRef({speaking:false,amplitude:0,color:'#E8C98A',personaId:'jarvis'}).current;
   const flatRef=useRef(null);
   const abortRef=useRef(null);
   const contRef=useRef(false);
@@ -53,9 +63,11 @@ export default function CommandScreen({navigation}){
   const silenceTimerRef=useRef(null);
   const hasVoicedRef=useRef(false);
   const{addRelay}=useEmpireStore();
+  const isFocused=useIsFocused();
 
   useEffect(()=>{contRef.current=continuous;},[continuous]);
   useEffect(()=>{handsFreeRef.current=handsFree;},[handsFree]);
+  useEffect(()=>{if(!vizRef.speaking){vizRef.personaId=activePersona;vizRef.color=getPersona(activePersona).color;}},[activePersona]);// eslint-disable-line react-hooks/exhaustive-deps
   useEffect(()=>{loadingRef.current=loading;},[loading]);
   useEffect(()=>{voicePausedRef.current=voicePaused;},[voicePaused]);
   useEffect(()=>{if(mode==='direct')loadHistory(activePersona);},[activePersona,mode]);
@@ -244,6 +256,7 @@ export default function CommandScreen({navigation}){
       const cleanup=()=>{if(timer){clearInterval(timer);timer=null;}if(safety){clearTimeout(safety);safety=null;}speakCancelRef.current=null;};
       const done=(completed)=>{
         if(settled)return;settled=true;cleanup();
+        vizRef.speaking=false;
         if(soundRef.current){try{soundRef.current.stopAsync();}catch{}}
         const revealed=completed?fullText.length:lastRevealed;
         const finalText=completed?fullText:(fullText.slice(0,revealed).trim()+(revealed<fullText.length?' …':''));
@@ -254,11 +267,13 @@ export default function CommandScreen({navigation}){
       speakCancelRef.current=()=>{cancelled=true;done(false);};
 
       const startTimer=(sound,timeline)=>{
+        vizRef.speaking=true;
         timer=setInterval(async()=>{
           if(cancelled)return;
           if(abortRef.current?.signal.aborted){done(false);return;}
           let st;try{st=await sound.getStatusAsync();}catch{return;}
           if(!st?.isLoaded)return;
+          if(st.isPlaying)vizRef.amplitude=synthAmp();
           const pos=st.positionMillis||0,dur=st.durationMillis||0;
           if(!safety&&dur>0)safety=setTimeout(()=>done(true),dur+2500);
           let target;
@@ -274,9 +289,11 @@ export default function CommandScreen({navigation}){
       };
       const nativeFallback=()=>{
         try{Speech.speak(fullText.slice(0,700),{language:'en-US',rate:0.95,onDone:()=>done(true),onStopped:()=>done(false)});}catch{done(false);return;}
+        vizRef.speaking=true;
         safety=setTimeout(()=>done(true),Math.min(60000,(fullText.length/11)*1000+4000));
         timer=setInterval(()=>{
           if(cancelled)return;
+          vizRef.amplitude=synthAmp();
           lastRevealed=Math.min(fullText.length,lastRevealed+2);
           patch(m=>({...m,revealed:lastRevealed}));
           if(lastRevealed>=fullText.length){clearInterval(timer);timer=null;}
@@ -474,6 +491,7 @@ export default function CommandScreen({navigation}){
         const aiMsg={id:msgId,role:'assistant',content:display,persona:pid,revealed:willVoice?0:display.length,streaming:willVoice};
         if(isGroup)setGroupMessages(prev=>[...prev,aiMsg]);else setMessages(prev=>[...prev,aiMsg]);
         if(display)replies.push({name:p.name,text:display});
+        vizRef.personaId=pid;vizRef.color=p.color;
         await handleCommands(response,pid,{onRelay:({target,message})=>addRelay(target,`[From ${p.name}]: ${message}`)});
         const{finalText}=await speakWithReveal(display,p,msgId,isGroup);
         if(!isGroup)await saveMessage(pid,'assistant',finalText,'direct');
@@ -530,6 +548,12 @@ export default function CommandScreen({navigation}){
 
   const cp=getPersona(activePersona);
   const displayMessages=mode==='direct'?messages:groupMessages;
+  const streamingMsg=displayMessages.find(m=>m.streaming);
+  const lastAi=[...displayMessages].reverse().find(m=>m.role==='assistant');
+  const captionStreaming=!!streamingMsg;
+  const captionFull=streamingMsg?String(streamingMsg.content||'').slice(0,streamingMsg.revealed||0):(lastAi?.content||'');
+  const captionText=captionFull.length>230?'… '+captionFull.slice(-230):captionFull;
+  const orbColor=vizRef.color||cp.color;
 
   if(showCamera){
     return(
@@ -554,16 +578,25 @@ export default function CommandScreen({navigation}){
     <SafeAreaView style={s.container} edges={['top','bottom']}>
       <View style={s.header}>
         <Text style={s.empireOS}>♔ EMPIRE OS</Text>
-        <View style={s.onlinePill}><View style={s.onlineDot}/><Text style={s.onlineText}>ONLINE</Text></View>
+        <View style={s.headerRight}>
+          <View style={s.viewToggle}>
+            {[['viz','◉'],['text','≣']].map(([v,ic])=>(
+              <TouchableOpacity key={v} style={[s.viewTab,view===v&&{backgroundColor:cp.color+'22',borderColor:cp.color}]} onPress={()=>setView(v)}>
+                <Text style={[s.viewTabT,view===v&&{color:cp.color}]}>{ic}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          <View style={s.onlinePill}><View style={s.onlineDot}/><Text style={s.onlineText}>ONLINE</Text></View>
+        </View>
       </View>
 
-      <View style={s.teamPanel}>
+      {view==='text'&&<View style={s.teamPanel}>
         <View style={s.teamLabels}>
           <Text style={s.teamLabel}>THE EMPIRE</Text>
           <Text style={s.councilLabel}>THE COUNCIL</Text>
         </View>
         <Image source={TEAM_PHOTO} style={s.teamPhoto} resizeMode="cover"/>
-      </View>
+      </View>}
 
       <View style={s.councilRow}>
         {COUNCIL.map(id=>{
@@ -615,7 +648,19 @@ export default function CommandScreen({navigation}){
         <Text style={s.memStatus}>{mode==='direct'?`${cp.name} memory active`:'All persona memory loaded ✓'}</Text>
       </View>
 
-      <FlatList ref={flatRef} data={displayMessages} keyExtractor={i=>i.id} renderItem={renderMsg} contentContainerStyle={s.msgList} style={{flex:1}} onContentSizeChange={()=>flatRef.current?.scrollToEnd({animated:true})}/>
+      {view==='viz'?(
+        <View style={{flex:1}}>
+          <Boundary label="The visualization"><PersonaOrb viz={vizRef} color={cp.color} active={isFocused}/></Boundary>
+          <View style={s.orbLabelWrap} pointerEvents="none">
+            <Text style={[s.orbLabel,{color:orbColor}]}>{getPersona(vizRef.personaId||activePersona).name}</Text>
+          </View>
+          {!!captionText&&<View style={s.orbCaptionWrap} pointerEvents="none">
+            <Text style={s.orbCaptionText}>{captionText}{captionStreaming&&<Text style={[s.caret,{color:orbColor}]}>▍</Text>}</Text>
+          </View>}
+        </View>
+      ):(
+        <FlatList ref={flatRef} data={displayMessages} keyExtractor={i=>i.id} renderItem={renderMsg} contentContainerStyle={s.msgList} style={{flex:1}} onContentSizeChange={()=>flatRef.current?.scrollToEnd({animated:true})}/>
+      )}
 
       {loading&&(<View style={s.thinking}>
         <ActivityIndicator size="small" color={mode==='direct'?cp.color:'#E8C98A'}/>
@@ -729,6 +774,14 @@ const s=StyleSheet.create({
   header:{flexDirection:'row',justifyContent:'space-between',alignItems:'center',paddingHorizontal:16,paddingVertical:8,borderBottomWidth:1,borderBottomColor:'#111'},
   empireOS:{fontFamily:'monospace',fontSize:14,fontWeight:'700',color:'#E8C98A',letterSpacing:2},
   onlinePill:{flexDirection:'row',alignItems:'center',gap:5,borderWidth:1,borderColor:'#4CAF5055',borderRadius:12,paddingHorizontal:8,paddingVertical:3},
+  headerRight:{flexDirection:'row',alignItems:'center',gap:8},
+  viewToggle:{flexDirection:'row',gap:4},
+  viewTab:{width:26,height:22,borderRadius:5,borderWidth:1,borderColor:'#222',alignItems:'center',justifyContent:'center'},
+  viewTabT:{fontFamily:'monospace',fontSize:11,color:'#444'},
+  orbLabelWrap:{position:'absolute',top:14,left:0,right:0,alignItems:'center'},
+  orbLabel:{fontFamily:'monospace',fontSize:11,fontWeight:'700',letterSpacing:3},
+  orbCaptionWrap:{position:'absolute',left:16,right:16,bottom:14,backgroundColor:'rgba(0,0,0,0.55)',borderRadius:10,paddingHorizontal:14,paddingVertical:10},
+  orbCaptionText:{color:'#DDD',fontSize:13,lineHeight:20,textAlign:'center'},
   onlineDot:{width:6,height:6,borderRadius:3,backgroundColor:'#4CAF50'},
   onlineText:{fontFamily:'monospace',fontSize:8,color:'#4CAF50',letterSpacing:2},
   teamPanel:{marginHorizontal:14,marginTop:6,marginBottom:4,borderWidth:1,borderColor:'#1A1A1A',borderRadius:6,overflow:'hidden'},
