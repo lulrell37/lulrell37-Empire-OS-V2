@@ -302,6 +302,8 @@ export async function getPersonaMemory(persona,opts={}){
 export async function getAllPersonaMemory(){return await db.getAllAsync('SELECT * FROM persona_memory ORDER BY created_at DESC LIMIT 100');}
 // Every memory for one persona — for the Brain network view.
 export async function getMemoriesByPersona(persona){return await db.getAllAsync('SELECT * FROM persona_memory WHERE persona=? ORDER BY created_at DESC',[persona]);}
+// User prunes memory by hand — swipe a memory away to remove it permanently.
+export async function deletePersonaMemory(id){await db.runAsync('DELETE FROM persona_memory WHERE id=?',[id]);}
 export async function saveNote(title,content,persona=null){const now=Date.now();const ex=await db.getFirstAsync('SELECT * FROM notes WHERE title=?',[title]);if(ex){await db.runAsync('UPDATE notes SET content=?,updated_at=? WHERE id=?',[content,now,ex.id]);return ex.id;}const r=await db.runAsync('INSERT INTO notes(title,content,persona,created_at,updated_at) VALUES(?,?,?,?,?)',[title,content,persona,now,now]);return r.lastInsertRowId;}
 export async function getNote(title){return await db.getFirstAsync('SELECT * FROM notes WHERE title LIKE ?',['%'+title+'%']);}
 export async function getAllNotes(){return await db.getAllAsync('SELECT * FROM notes ORDER BY updated_at DESC');}

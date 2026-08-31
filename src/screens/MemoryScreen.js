@@ -1,14 +1,39 @@
-import React,{useState,useEffect}from 'react';
+import React,{useState,useEffect,useRef}from 'react';
 import{View,Text,StyleSheet,ScrollView,TouchableOpacity,Alert}from 'react-native';
 import{SafeAreaView}from 'react-native-safe-area-context';
-import{getAllPersonaMemory,getAllNotes,deleteNote}from '../services/database';
+import{Swipeable}from 'react-native-gesture-handler';
+import{getAllPersonaMemory,getAllNotes,deleteNote,deletePersonaMemory}from '../services/database';
 import{getPersona}from '../personas/personas';
 import{categoryMeta}from '../services/memoryCategories';
+
 export default function MemoryScreen({navigation}){
   const[memories,setMemories]=useState([]);const[notes,setNotes]=useState([]);const[tab,setTab]=useState('MEMORY');
-  useEffect(()=>{load();},[]);
+  const[undo,setUndo]=useState(null); // {mem} — a just-swiped memory, restorable for a few seconds
+  const undoTimer=useRef(null);
+  const pendingRef=useRef(null); // memory awaiting the hard delete
+  useEffect(()=>{load();return()=>{
+    if(undoTimer.current){clearTimeout(undoTimer.current);if(pendingRef.current)deletePersonaMemory(pendingRef.current.id).catch(()=>{});}
+  };},[]);
   async function load(){const m=await getAllPersonaMemory();const n=await getAllNotes();setMemories(m);setNotes(n);}
   async function handleDeleteNote(id){Alert.alert('Delete Note','Remove this note?',[{text:'Cancel'},{text:'Delete',style:'destructive',onPress:async()=>{await deleteNote(id);const n=await getAllNotes();setNotes(n);}}]);}
+
+  // Swipe a memory away: drop it from the list immediately, commit the DB delete
+  // after a short grace period unless the user taps UNDO.
+  function swipeAwayMemory(mem){
+    if(pendingRef.current){clearTimeout(undoTimer.current);deletePersonaMemory(pendingRef.current.id).catch(()=>{});}
+    setMemories(prev=>prev.filter(x=>x.id!==mem.id));
+    pendingRef.current=mem;
+    setUndo({mem});
+    undoTimer.current=setTimeout(()=>{deletePersonaMemory(mem.id).catch(()=>{});pendingRef.current=null;setUndo(null);undoTimer.current=null;},4500);
+  }
+  function undoMemory(){
+    if(!undo)return;
+    if(undoTimer.current){clearTimeout(undoTimer.current);undoTimer.current=null;}
+    pendingRef.current=null;
+    setMemories(prev=>[undo.mem,...prev].sort((a,b)=>(b.created_at||0)-(a.created_at||0)));
+    setUndo(null);
+  }
+
   return(
     <SafeAreaView style={s.c} edges={['top','bottom']}>
       <View style={s.hdr}><TouchableOpacity onPress={()=>navigation.goBack()}><Text style={s.back}>←</Text></TouchableOpacity><Text style={s.title}>THE LIBRARY</Text><View style={{width:30}}/></View>
@@ -16,9 +41,24 @@ export default function MemoryScreen({navigation}){
       <ScrollView style={{flex:1}}>
         {tab==='MEMORY'&&<View style={s.sec}>
           <Text style={s.secTitle}>CONVERSATION MEMORY</Text>
-          <Text style={s.secSub}>EVERY EXCHANGE, KEPT IN FULL · TAP INTO A BRAIN FOR THE MAP</Text>
+          <Text style={s.secSub}>EVERY EXCHANGE, KEPT RAW · SWIPE A MEMORY AWAY TO DELETE · TAP FOR THE MAP</Text>
           {memories.length===0&&<Text style={s.empty}>No memory yet. Start talking to your personas.</Text>}
-          {memories.map(m=>{const p=getPersona(m.persona);const cat=m.category?categoryMeta(m.category):null;return(<TouchableOpacity key={m.id} style={s.memCard} activeOpacity={0.7} onPress={()=>navigation.navigate('Brain',{persona:m.persona})}><View style={s.memHdr}><Text style={[s.memPersona,{color:p.color}]}>{p.name}</Text><View style={{flexDirection:'row',alignItems:'center',gap:8}}>{cat&&<Text style={[s.memCat,{color:cat.color,borderColor:cat.color+'55'}]}>{cat.label.toUpperCase()}</Text>}<Text style={s.memDate}>{m.date}</Text></View></View><Text style={s.memContent} numberOfLines={5}>{m.content}</Text></TouchableOpacity>);})}
+          {memories.map(m=>{const p=getPersona(m.persona);const cat=m.category?categoryMeta(m.category):null;return(
+            <Swipeable key={m.id} friction={1.6} rightThreshold={44}
+              renderRightActions={()=>(<View style={s.swipeDel}><Text style={s.swipeDelT}>DELETE</Text></View>)}
+              onSwipeableOpen={()=>swipeAwayMemory(m)}>
+              <TouchableOpacity style={s.memCard} activeOpacity={0.7} onPress={()=>navigation.navigate('Brain',{persona:m.persona})}>
+                <View style={s.memHdr}>
+                  <Text style={[s.memPersona,{color:p.color}]}>{p.name}</Text>
+                  <View style={{flexDirection:'row',alignItems:'center',gap:8}}>
+                    {cat&&<Text style={[s.memCat,{color:cat.color,borderColor:cat.color+'55'}]}>{cat.label.toUpperCase()}</Text>}
+                    <Text style={s.memDate}>{m.date}</Text>
+                  </View>
+                </View>
+                <Text style={s.memContent} numberOfLines={5}>{m.content}</Text>
+              </TouchableOpacity>
+            </Swipeable>
+          );})}
         </View>}
         {tab==='NOTES'&&<View style={s.sec}>
           <Text style={s.secTitle}>SAVED NOTES</Text>
@@ -27,6 +67,10 @@ export default function MemoryScreen({navigation}){
           {notes.map(n=>(<View key={n.id} style={s.noteCard}><View style={s.noteHdr}><Text style={s.noteTitle}>{n.title}</Text><TouchableOpacity onPress={()=>handleDeleteNote(n.id)}><Text style={{color:'#333',fontSize:16}}>×</Text></TouchableOpacity></View>{n.persona&&<Text style={s.notePersona}>{getPersona(n.persona)?.name||n.persona}</Text>}<Text style={s.noteContent} numberOfLines={5}>{n.content}</Text></View>))}
         </View>}
       </ScrollView>
+      {undo&&<TouchableOpacity style={s.undoBar} activeOpacity={0.8} onPress={undoMemory}>
+        <Text style={s.undoT}>Memory deleted</Text>
+        <Text style={s.undoAction}>UNDO</Text>
+      </TouchableOpacity>}
     </SafeAreaView>
   );
 }
@@ -44,8 +88,13 @@ const s=StyleSheet.create({
   memPersona:{fontFamily:'monospace',fontSize:9,fontWeight:'700',letterSpacing:2},memDate:{fontFamily:'monospace',fontSize:8,color:'#222'},
   memCat:{fontFamily:'monospace',fontSize:7,letterSpacing:1,borderWidth:1,borderRadius:3,paddingHorizontal:4,paddingVertical:1},
   memContent:{color:'#444',fontSize:12,lineHeight:18},
+  swipeDel:{backgroundColor:'#C7614B',justifyContent:'center',alignItems:'flex-end',paddingHorizontal:22,marginBottom:10,borderRadius:6,flex:1},
+  swipeDelT:{fontFamily:'monospace',fontSize:10,color:'#000',fontWeight:'700',letterSpacing:2},
   noteCard:{backgroundColor:'#060606',borderWidth:1,borderColor:'#111',borderRadius:6,padding:14,marginBottom:10},
   noteHdr:{flexDirection:'row',justifyContent:'space-between',alignItems:'center',marginBottom:4},
   noteTitle:{fontFamily:'monospace',fontSize:10,color:'#E8C98A',fontWeight:'700',flex:1},
   notePersona:{fontFamily:'monospace',fontSize:8,color:'#333',letterSpacing:1,marginBottom:8},noteContent:{color:'#555',fontSize:12,lineHeight:18},
+  undoBar:{position:'absolute',left:16,right:16,bottom:16,backgroundColor:'#161616',borderWidth:1,borderColor:'#2A2A2A',borderRadius:8,flexDirection:'row',alignItems:'center',justifyContent:'space-between',paddingHorizontal:16,paddingVertical:12},
+  undoT:{fontFamily:'monospace',fontSize:10,color:'#999',letterSpacing:1},
+  undoAction:{fontFamily:'monospace',fontSize:10,color:'#E8C98A',fontWeight:'700',letterSpacing:2},
 });
