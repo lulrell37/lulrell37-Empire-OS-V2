@@ -1,5 +1,5 @@
 import React,{useState,useEffect,useRef}from 'react';
-import{View,Text,StyleSheet,ScrollView,TouchableOpacity,Alert}from 'react-native';
+import{View,Text,StyleSheet,ScrollView,TouchableOpacity,Alert,Modal}from 'react-native';
 import{SafeAreaView}from 'react-native-safe-area-context';
 import{Swipeable}from 'react-native-gesture-handler';
 import{getAllPersonaMemory,getAllNotes,deleteNote,deletePersonaMemory}from '../services/database';
@@ -8,6 +8,7 @@ import{categoryMeta}from '../services/memoryCategories';
 
 export default function MemoryScreen({navigation}){
   const[memories,setMemories]=useState([]);const[notes,setNotes]=useState([]);const[tab,setTab]=useState('MEMORY');
+  const[open,setOpen]=useState(null); // memory being read in full
   const[undo,setUndo]=useState(null); // {mem} — a just-swiped memory, restorable for a few seconds
   const undoTimer=useRef(null);
   const pendingRef=useRef(null); // memory awaiting the hard delete
@@ -47,7 +48,7 @@ export default function MemoryScreen({navigation}){
             <Swipeable key={m.id} friction={1.6} rightThreshold={44}
               renderRightActions={()=>(<View style={s.swipeDel}><Text style={s.swipeDelT}>DELETE</Text></View>)}
               onSwipeableOpen={()=>swipeAwayMemory(m)}>
-              <TouchableOpacity style={s.memCard} activeOpacity={0.7} onPress={()=>navigation.navigate('Brain',{persona:m.persona})}>
+              <TouchableOpacity style={s.memCard} activeOpacity={0.7} onPress={()=>setOpen(m)}>
                 <View style={s.memHdr}>
                   <Text style={[s.memPersona,{color:p.color}]}>{p.name}</Text>
                   <View style={{flexDirection:'row',alignItems:'center',gap:8}}>
@@ -71,6 +72,20 @@ export default function MemoryScreen({navigation}){
         <Text style={s.undoT}>Memory deleted</Text>
         <Text style={s.undoAction}>UNDO</Text>
       </TouchableOpacity>}
+
+      <Modal visible={!!open} transparent animationType="fade" onRequestClose={()=>setOpen(null)}>
+        <View style={s.modalOver}><View style={s.modalCard}>
+          <View style={s.modalHdr}>
+            <Text style={[s.memPersona,{color:getPersona(open?.persona)?.color||'#E8C98A',flex:1}]}>{getPersona(open?.persona)?.name}</Text>
+            <Text style={s.memDate}>{open?.date}</Text>
+            <TouchableOpacity onPress={()=>setOpen(null)}><Text style={{color:'#666',fontSize:20}}>×</Text></TouchableOpacity>
+          </View>
+          <ScrollView style={{maxHeight:'72%'}} contentContainerStyle={{padding:16}}><Text style={s.modalBody} selectable>{open?.content}</Text></ScrollView>
+          <TouchableOpacity style={s.modalDel} onPress={()=>{if(open){deletePersonaMemory(open.id).catch(()=>{});setMemories(prev=>prev.filter(x=>x.id!==open.id));setOpen(null);}}}>
+            <Text style={s.modalDelT}>DELETE THIS MEMORY</Text>
+          </TouchableOpacity>
+        </View></View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -97,4 +112,10 @@ const s=StyleSheet.create({
   undoBar:{position:'absolute',left:16,right:16,bottom:16,backgroundColor:'#161616',borderWidth:1,borderColor:'#2A2A2A',borderRadius:8,flexDirection:'row',alignItems:'center',justifyContent:'space-between',paddingHorizontal:16,paddingVertical:12},
   undoT:{fontFamily:'monospace',fontSize:10,color:'#999',letterSpacing:1},
   undoAction:{fontFamily:'monospace',fontSize:10,color:'#E8C98A',fontWeight:'700',letterSpacing:2},
+  modalOver:{flex:1,backgroundColor:'rgba(0,0,0,0.9)',justifyContent:'center',padding:20},
+  modalCard:{backgroundColor:'#0A0A0A',borderWidth:1,borderColor:'#1A1A1A',borderRadius:12,overflow:'hidden'},
+  modalHdr:{flexDirection:'row',alignItems:'center',gap:10,padding:12,borderBottomWidth:1,borderBottomColor:'#141414'},
+  modalBody:{color:'#CCC',fontSize:14,lineHeight:22},
+  modalDel:{borderTopWidth:1,borderTopColor:'#141414',paddingVertical:13,alignItems:'center'},
+  modalDelT:{fontFamily:'monospace',fontSize:9,color:'#C7614B',letterSpacing:2},
 });

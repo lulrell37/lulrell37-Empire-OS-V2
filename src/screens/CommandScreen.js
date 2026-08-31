@@ -15,10 +15,9 @@ import{tlSnapshot,tlFormatSnapshot,tlPlaceOrder,tlClosePosition,tlPositions,MAX_
 import{loadKeys}from '../services/keyStore';
 import useEmpireStore from '../store/useEmpireStore';
 import{useIsFocused}from '@react-navigation/native';
-import PersonaOrb from './command/PersonaOrb';
+import OrbZoom from './command/OrbZoom';
 import TradePanel from './command/TradePanel';
 import NudgeBar from './command/NudgeBar';
-import Boundary from './hud/Boundary';
 
 const COUNCIL=['jarvis','ara','selene'];
 const SPECIALISTS=['stephanie','rogue','atlas','haven','aisha','abraham','batman','ghost'];
@@ -704,7 +703,6 @@ export default function CommandScreen({navigation}){
 
   const cp=getPersona(activePersona);
   const displayMessages=mode==='direct'?messages:groupMessages;
-  const orbColor=vizRef.color||cp.color;
 
   if(showCamera){
     return(
@@ -812,16 +810,14 @@ export default function CommandScreen({navigation}){
       </View>}
 
       {view==='viz'?(
-        <View style={{flex:1}}>
-          <Boundary label="The visualization"><PersonaOrb viz={vizRef} color={cp.color} active={isFocused}/></Boundary>
-          <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={0.85} onPress={()=>navigation.navigate('Brain',{persona:vizRef.personaId||activePersona})}/>
-          <View style={s.orbLabelWrap} pointerEvents="none">
-            <Text style={[s.orbLabel,{color:orbColor}]}>{getPersona(vizRef.personaId||activePersona).name}</Text>
-          </View>
-          <View style={s.orbHintWrap} pointerEvents="none">
-            <Text style={[s.orbHint,{color:orbColor}]}>◈ TAP TO ENTER BRAIN</Text>
-          </View>
-        </View>
+        <OrbZoom
+          personaId={activePersona}
+          color={cp.color}
+          active={isFocused}
+          vizRef={vizRef}
+          personaPics={personaPics}
+          onPickPersona={id=>{setMode('direct');setActivePersona(id);}}
+        />
       ):(
         <FlatList ref={flatRef} data={displayMessages} keyExtractor={i=>i.id} renderItem={renderMsg} contentContainerStyle={s.msgList} style={{flex:1}} onContentSizeChange={()=>flatRef.current?.scrollToEnd({animated:true})}/>
       )}
@@ -966,10 +962,6 @@ const s=StyleSheet.create({
   viewToggle:{flexDirection:'row',gap:4},
   viewTab:{width:26,height:22,borderRadius:5,borderWidth:1,borderColor:'#222',alignItems:'center',justifyContent:'center'},
   viewTabT:{fontFamily:'monospace',fontSize:11,color:'#444'},
-  orbLabelWrap:{position:'absolute',top:14,left:0,right:0,alignItems:'center'},
-  orbLabel:{fontFamily:'monospace',fontSize:11,fontWeight:'700',letterSpacing:3},
-  orbHintWrap:{position:'absolute',left:0,right:0,bottom:14,alignItems:'center'},
-  orbHint:{fontFamily:'monospace',fontSize:8,letterSpacing:2,opacity:0.5},
   onlineDot:{width:6,height:6,borderRadius:3,backgroundColor:'#4CAF50'},
   onlineText:{fontFamily:'monospace',fontSize:8,color:'#4CAF50',letterSpacing:2},
   teamPanel:{marginHorizontal:14,marginTop:6,marginBottom:4,borderWidth:1,borderColor:'#1A1A1A',borderRadius:6,overflow:'hidden'},

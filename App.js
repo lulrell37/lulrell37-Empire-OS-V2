@@ -16,7 +16,6 @@ import MapScreen from './src/screens/MapScreen';
 import CommandScreen from './src/screens/CommandScreen';
 import HUDScreen from './src/screens/HUDScreen';
 import MemoryScreen from './src/screens/MemoryScreen';
-import BrainScreen from './src/screens/BrainScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
 import{initDatabase}from './src/services/database';
 import{loadKeys}from './src/services/keyStore';
@@ -69,7 +68,6 @@ export default function App(){
             <Stack.Screen name="Command" component={CommandScreen} options={{animation:'slide_from_right'}}/>
             <Stack.Screen name="HUD" component={HUDScreen} options={{animation:'slide_from_bottom'}}/>
             <Stack.Screen name="Memory" component={MemoryScreen} options={{animation:'slide_from_right'}}/>
-            <Stack.Screen name="Brain" component={BrainScreen} options={{animation:'slide_from_right'}}/>
             <Stack.Screen name="Settings" component={SettingsScreen} options={{animation:'slide_from_right'}}/>
           </Stack.Navigator>
         </NavigationContainer>
