@@ -8,9 +8,11 @@ import{getHudState,updateHudState,getTasks,addTask,updateTask,deleteTask,complet
 import{colors,space,radius,type,FONTS}from '../theme';
 import{PANEL_META,BriefingPanel,BusinessPanel,TasksPanel,RoutinePanel,BatmanPanel,DailyPanel}from './hud/panels';
 import FloatingCard from './hud/FloatingCard';
+import DiagramPanel from './hud/DiagramPanel';
+import Boundary from './hud/Boundary';
 const{width}=Dimensions.get('window');
 const RS=196,ST=6,CI=2*Math.PI*((RS-ST)/2);
-const PANELS=['briefing','businesses','tasks','routine','batman','daily'];
+const PANELS=['briefing','businesses','tasks','routine','batman','daily','diagram'];
 const NAV=[
   {key:'Command',icon:'terminal',label:'COMMAND'},
   {key:'HUD',icon:'target',label:'HUD'},
@@ -201,6 +203,7 @@ export default function HUDScreen({navigation}){
       case 'routine':return <RoutinePanel items={routineItems} done={routine} onToggle={toggleRoutine} onSave={handleSaveRoutine} onEditingChange={setPanelEditing}/>;
       case 'batman':return <BatmanPanel template={batmanTemplate} done={batman} today={todayBatman} onToggleDay={toggleBatman} onSaveTemplate={handleSaveBatman} onEditingChange={setPanelEditing}/>;
       case 'daily':return <DailyPanel hud={hud}/>;
+      case 'diagram':return <Boundary label="The diagram card"><DiagramPanel/></Boundary>;
       default:return null;
     }
   }

@@ -16,6 +16,7 @@ export const PANEL_META={
   routine:{title:'MORNING ROUTINE'},
   batman:{title:'BATMAN PROTOCOL'},
   daily:{title:'DAILY'},
+  diagram:{title:'DIAGRAM'},
 };
 export const newRoutineId=()=>'r_'+Date.now().toString(36)+Math.random().toString(36).slice(2,6);
 
