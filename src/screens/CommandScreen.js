@@ -17,6 +17,7 @@ import useEmpireStore from '../store/useEmpireStore';
 import{useIsFocused}from '@react-navigation/native';
 import PersonaOrb from './command/PersonaOrb';
 import TradePanel from './command/TradePanel';
+import NudgeBar from './command/NudgeBar';
 import Boundary from './hud/Boundary';
 
 const COUNCIL=['jarvis','ara','selene'];
@@ -739,6 +740,8 @@ export default function CommandScreen({navigation}){
           <View style={s.onlinePill}><View style={s.onlineDot}/><Text style={s.onlineText}>ONLINE</Text></View>
         </View>
       </View>
+
+      <NudgeBar active={isFocused}/>
 
       {view==='text'&&<View style={s.teamPanel}>
         <View style={s.teamLabels}>

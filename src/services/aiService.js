@@ -41,6 +41,11 @@ async function buildSys(personaId,persona,convo=[]){
     }catch{}
     sys+=`\n\n[LIVE HUD DATA:\nEmpire Score: ${hud.empire_score}%\nStreak: ${hud.streak} days\nWord of Day: ${hud.word_of_day||'Not set'}\nVerse of Day: ${hud.verse_of_day||'Not set'}\nFact of Day: ${hud.fact_of_day||'Not set'}\nMorning Routine (${routineCount}/${routineItems.length}): ${routineList}\nBatman Protocol Today: ${todayBat?`${todayBat.label} — ${todayBat.desc}`:'Not set'}\nOpen Tasks (${tasks.length}): ${openTasks||'none'}${upcoming}\n]`;
   }
+  try{
+    const{computeNudges}=await import('./nudges');
+    const nudges=await computeNudges();
+    if(nudges.length)sys+=`\n\n[PROACTIVE NUDGES — raise any of these yourself if it fits the conversation, don't wait to be asked: ${nudges.map(n=>n.text).join(' · ')}]`;
+  }catch{}
   const lastUser=[...convo].reverse().find(m=>m?.role==='user'&&m?.content);
   const mem=await getPersonaMemory(personaId,{query:lastUser?.content||'',limit:16});
   if(mem?.length){
