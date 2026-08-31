@@ -6,7 +6,7 @@ import React,{useState,useEffect,useMemo,useCallback}from 'react';
 import{View,Text,StyleSheet,TouchableOpacity,Modal,ScrollView,ActivityIndicator}from 'react-native';
 import{SafeAreaView}from 'react-native-safe-area-context';
 import Svg,{Circle,Line,G,Text as SvgText}from 'react-native-svg';
-import{getMemoriesByPersona}from '../services/database';
+import{getMemoriesByPersona,deletePersonaMemory}from '../services/database';
 import{CATEGORIES,categoryMeta}from '../services/memoryCategories';
 import{getPersona}from '../personas/personas';
 
@@ -62,6 +62,11 @@ export default function BrainScreen({navigation,route}){
   },[groups,total]);
 
   const onNode=useCallback((m)=>setSelected(m),[]);
+  const removeMemory=useCallback((id)=>{
+    deletePersonaMemory(id).catch(()=>{});
+    setMemories(prev=>(prev||[]).filter(m=>m.id!==id));
+    setSelected(null);
+  },[]);
 
   if(memories===null)return(
     <SafeAreaView style={s.c} edges={['top','bottom']}>
@@ -153,9 +158,12 @@ export default function BrainScreen({navigation,route}){
               <Text style={s.modalDate}>{selected?.date}</Text>
               <TouchableOpacity onPress={()=>setSelected(null)}><Text style={s.modalX}>×</Text></TouchableOpacity>
             </View>
-            <ScrollView style={{maxHeight:'80%'}} contentContainerStyle={{padding:16}}>
+            <ScrollView style={{maxHeight:'70%'}} contentContainerStyle={{padding:16}}>
               <Text style={s.modalBody} selectable>{selected?.content}</Text>
             </ScrollView>
+            <TouchableOpacity style={s.modalDel} onPress={()=>selected&&removeMemory(selected.id)}>
+              <Text style={s.modalDelT}>DELETE THIS MEMORY</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </Modal>
@@ -199,4 +207,6 @@ const s=StyleSheet.create({
   modalDate:{fontFamily:'monospace',fontSize:9,color:'#444',flex:1},
   modalX:{color:'#666',fontSize:22,lineHeight:22},
   modalBody:{color:'#CCC',fontSize:14,lineHeight:22},
+  modalDel:{borderTopWidth:1,borderTopColor:'#141414',paddingVertical:13,alignItems:'center'},
+  modalDelT:{fontFamily:'monospace',fontSize:9,color:'#C7614B',letterSpacing:2},
 });
