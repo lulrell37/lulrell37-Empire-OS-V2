@@ -9,7 +9,7 @@ import useEmpireStore from '../store/useEmpireStore';
 const TABS=['KEYS','GOOGLE','PROFILES','PROMPTS','USAGE'];
 export default function SettingsScreen({navigation}){
   const[tab,setTab]=useState('KEYS');
-  const[claude,setClaude]=useState('');const[grok,setGrok]=useState('');const[openai,setOpenai]=useState('');const[elevenlabs,setElevenlabs]=useState('');
+  const[claude,setClaude]=useState('');const[grok,setGrok]=useState('');const[openai,setOpenai]=useState('');const[elevenlabs,setElevenlabs]=useState('');const[meshy,setMeshy]=useState('');
   const[showKey,setShowKey]=useState({});
   const[promptPersona,setPromptPersona]=useState('jarvis');const[promptText,setPromptText]=useState('');
   const[usage,setUsage]=useState([]);const[saved,setSaved]=useState(false);
@@ -29,7 +29,7 @@ export default function SettingsScreen({navigation}){
     }
   },[response]);
   async function loadAll(){
-    const k=await loadKeys();if(k){setClaude(k.claude||'');setGrok(k.grok||'');setOpenai(k.openai||'');setElevenlabs(k.elevenlabs||'');}
+    const k=await loadKeys();if(k){setClaude(k.claude||'');setGrok(k.grok||'');setOpenai(k.openai||'');setElevenlabs(k.elevenlabs||'');setMeshy(k.meshy||'');}
     const u=await getApiUsage();setUsage(u);
     const p=await getAllPersonaPics();setPersonaPics(p);
     const g=await loadGoogleToken();setGoogleConnected(!!g?.accessToken);
@@ -51,7 +51,7 @@ export default function SettingsScreen({navigation}){
   }
   async function saveApiKeys(){
     if(!claude.trim()){Alert.alert('Required','Claude API key is required.');return;}
-    await saveKeys({claude:claude.trim(),grok:grok.trim(),openai:openai.trim(),elevenlabs:elevenlabs.trim()});
+    await saveKeys({claude:claude.trim(),grok:grok.trim(),openai:openai.trim(),elevenlabs:elevenlabs.trim(),meshy:meshy.trim()});
     setSaved(true);setTimeout(()=>setSaved(false),2000);
   }
   async function loadPrompt(personaId){
@@ -82,7 +82,8 @@ export default function SettingsScreen({navigation}){
               ['ANTHROPIC (CLAUDE)','Required · Jarvis, Stephanie, Atlas, Haven, Aisha, Abraham, Batman',claude,setClaude,'sk-ant-...'],
               ['XAI (GROK)','Required · Ara, Rogue',grok,setGrok,'xai-...'],
               ['OPENAI','Optional · Selene',openai,setOpenai,'sk-...'],
-              ['ELEVENLABS','Optional · Voice synthesis',elevenlabs,setElevenlabs,'...']
+              ['ELEVENLABS','Optional · Voice synthesis',elevenlabs,setElevenlabs,'...'],
+              ['MESHY','Optional · 3D model generation for the HUD diagram card',meshy,setMeshy,'msy_...']
             ].map(([label,sub,val,setter,ph])=>(
               <View key={label} style={s.keyField}>
                 <View style={s.keyHdr}>

@@ -16,5 +16,6 @@ const useEmpireStore=create((set,get)=>({
   relayInbox:{},
   addRelay:(personaId,message)=>set(s=>({relayInbox:{...s.relayInbox,[personaId]:[...(s.relayInbox[personaId]||[]),message]}})),
   clearRelay:(personaId)=>set(s=>({relayInbox:{...s.relayInbox,[personaId]:[]}})),
+  diagramPrompt:'',setDiagramPrompt:(p)=>set({diagramPrompt:p||''}),
 }));
 export default useEmpireStore;

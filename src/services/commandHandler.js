@@ -1,4 +1,5 @@
 import{addTask,updateTask,completeTask,deleteTask,saveNote,getNote,addRevenue,getTasks,getHudState,updateHudState,setRoutineDone,addRoutineItem,removeRoutineItem,renameRoutineItem,setBatmanDay,getBusinessTargets,setBusinessTarget,setPanelLayout}from './database';
+import useEmpireStore from '../store/useEmpireStore';
 const HUD_PANELS=['briefing','businesses','tasks','routine','batman','daily'];
 const PANEL_ALIASES=[['brief','briefing'],['business','businesses'],['revenue','businesses'],['empire','businesses'],['task','tasks'],['routine','routine'],['morning','routine'],['batman','batman'],['protocol','batman'],['training','batman'],['daily','daily'],['word','daily'],['verse','daily'],['fact','daily']];
 function resolvePanel(s){
@@ -80,6 +81,14 @@ export async function handleCommands(response,personaId,callbacks={}){
     const p=resolvePanel(m[1]);
     if(p){await setPanelLayout(p,{detached:0});hudChanged();}
   }
+  for(const m of response.matchAll(/\[DIAGRAM_SHOW:\s*([^\]]+)\]/gi)){
+    const subject=m[1].trim();
+    if(subject){
+      useEmpireStore.getState().setDiagramPrompt(subject);
+      await setPanelLayout('diagram',{detached:1,x:24,y:24,z:Math.floor(Date.now()/1000)%100000});
+      hudChanged();
+    }
+  }
   for(const m of response.matchAll(/\[SET_TARGET:\s*([^|\]]+)\|([^|\]]+)(?:\|([^\]]+))?\]/gi)){
     const targets=await getBusinessTargets();
     const b=targets.find(x=>x.business.toLowerCase().includes(m[1].trim().toLowerCase()));
@@ -103,7 +112,7 @@ export function stripCommands(text){
     .replace(/\[ROUTINE_RENAME:[^\]]*\]/gi,'').replace(/\[BATMAN_SET:[^\]]*\]/gi,'')
     .replace(/\[SET_WORD:[^\]]*\]/gi,'').replace(/\[SET_VERSE:[^\]]*\]/gi,'')
     .replace(/\[SET_FACT:[^\]]*\]/gi,'').replace(/\[SET_TARGET:[^\]]*\]/gi,'')
-    .replace(/\[HUD_DETACH:[^\]]*\]/gi,'').replace(/\[HUD_DOCK:[^\]]*\]/gi,'')
+    .replace(/\[HUD_DETACH:[^\]]*\]/gi,'').replace(/\[HUD_DOCK:[^\]]*\]/gi,'').replace(/\[DIAGRAM_SHOW:[^\]]*\]/gi,'')
     .replace(/\[RELAY_TO:[^\]]*\]/gi,'').replace(/\[SEARCH_WEB:[^\]]*\]/gi,'')
     .replace(/\[READ_CALENDAR\]/gi,'').replace(/\[READ_EMAIL\]/gi,'')
     .replace(/\[SEND_SMS:[^\]]*\]/gi,'').trim();
