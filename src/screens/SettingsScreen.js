@@ -1,8 +1,9 @@
 import React,{useState,useEffect}from 'react';
-import{View,Text,StyleSheet,TextInput,TouchableOpacity,ScrollView,Alert,KeyboardAvoidingView,Platform}from 'react-native';
+import{View,Text,StyleSheet,TextInput,TouchableOpacity,ScrollView,Alert,KeyboardAvoidingView,Platform,Image}from 'react-native';
 import{SafeAreaView}from 'react-native-safe-area-context';
+import*as ImagePicker from 'expo-image-picker';
 import{saveKeys,loadKeys,saveGoogleToken,loadGoogleToken,clearGoogleToken}from '../services/keyStore';
-import{saveCustomPrompt,getCustomPrompt,getApiUsage,getAllPersonaPics}from '../services/database';
+import{saveCustomPrompt,getCustomPrompt,getApiUsage,getAllPersonaPics,savePersonaPic}from '../services/database';
 import{PERSONA_LIST,getPersona}from '../personas/personas';
 import{useGoogleAuth}from '../services/googleAuth';
 import useEmpireStore from '../store/useEmpireStore';
@@ -15,7 +16,7 @@ export default function SettingsScreen({navigation}){
   const[usage,setUsage]=useState([]);const[saved,setSaved]=useState(false);
   const[googleConnected,setGoogleConnected]=useState(false);
   const[googleConnecting,setGoogleConnecting]=useState(false);
-  const{setPersonaPics}=useEmpireStore();
+  const{personaPics,setPersonaPics}=useEmpireStore();
   const[request,response,promptAsync]=useGoogleAuth();
   useEffect(()=>{loadAll();},[]);
   useEffect(()=>{
@@ -33,6 +34,26 @@ export default function SettingsScreen({navigation}){
     const u=await getApiUsage();setUsage(u);
     const p=await getAllPersonaPics();setPersonaPics(p);
     const g=await loadGoogleToken();setGoogleConnected(!!g?.accessToken);
+  }
+  async function pickPersonaPic(id){
+    try{
+      const perm=await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if(perm.status!=='granted'){Alert.alert('Permission','Photo library access is required.');return;}
+      const res=await ImagePicker.launchImageLibraryAsync({
+        mediaTypes:ImagePicker.MediaTypeOptions.Images,
+        allowsEditing:true,aspect:[1,1],quality:0.6,base64:true,
+      });
+      if(res.canceled||!res.assets?.[0]?.base64)return;
+      const dataUri='data:image/jpeg;base64,'+res.assets[0].base64;
+      await savePersonaPic(id,dataUri);
+      const p=await getAllPersonaPics();setPersonaPics(p);
+    }catch(e){Alert.alert('Error',e.message);}
+  }
+  function clearPersonaPic(id){
+    Alert.alert('Remove photo','Remove this persona photo?',[
+      {text:'Cancel'},
+      {text:'Remove',style:'destructive',onPress:async()=>{await savePersonaPic(id,'');const p=await getAllPersonaPics();setPersonaPics(p);}},
+    ]);
   }
   async function handleGoogleSuccess(accessToken){
     await saveGoogleToken(accessToken);
@@ -120,17 +141,20 @@ export default function SettingsScreen({navigation}){
           </View>}
           {tab==='PROFILES'&&<View>
             <Text style={s.secTitle}>PERSONA PROFILES</Text>
-            <Text style={s.secSub}>Profile pictures for each persona. Photo upload coming soon.</Text>
+            <Text style={s.secSub}>Tap to set a photo. Used on the Command screen and, for the persona visualization, inside the glow.</Text>
             <View style={s.picsGrid}>
-              {PERSONA_LIST.map(p=>(
-                <TouchableOpacity key={p.id} style={s.picItem} onPress={()=>Alert.alert('Coming Soon','Photo upload coming in next update.')}>
-                  <View style={[s.picAvatar,{borderColor:p.color}]}>
-                    <Text style={[s.picInitial,{color:p.color}]}>{p.icon}</Text>
-                  </View>
-                  <Text style={[s.picName,{color:p.color}]}>{p.name.replace(/\./g,'').substring(0,6)}</Text>
-                  <Text style={s.picRole} numberOfLines={1}>{p.role}</Text>
-                </TouchableOpacity>
-              ))}
+              {PERSONA_LIST.map(p=>{
+                const pic=personaPics?.[p.id];
+                return(
+                  <TouchableOpacity key={p.id} style={s.picItem} onPress={()=>pickPersonaPic(p.id)} onLongPress={()=>pic&&clearPersonaPic(p.id)}>
+                    <View style={[s.picAvatar,{borderColor:p.color}]}>
+                      {pic?<Image source={{uri:pic}} style={{width:'100%',height:'100%'}}/>:<Text style={[s.picInitial,{color:p.color}]}>{p.icon}</Text>}
+                    </View>
+                    <Text style={[s.picName,{color:p.color}]}>{p.name.replace(/\./g,'').substring(0,6)}</Text>
+                    <Text style={s.picRole} numberOfLines={1}>{pic?'Long-press to remove':p.role}</Text>
+                  </TouchableOpacity>
+                );
+              })}
             </View>
           </View>}
           {tab==='PROMPTS'&&<View>
@@ -194,7 +218,7 @@ const s=StyleSheet.create({
   googleNote:{fontFamily:'monospace',fontSize:8,color:'#333',letterSpacing:1,marginTop:16,lineHeight:14},
   picsGrid:{flexDirection:'row',flexWrap:'wrap',gap:16},
   picItem:{width:'28%',alignItems:'center'},
-  picAvatar:{width:56,height:56,borderRadius:28,borderWidth:2,alignItems:'center',justifyContent:'center',marginBottom:6},
+  picAvatar:{width:56,height:56,borderRadius:28,borderWidth:2,alignItems:'center',justifyContent:'center',marginBottom:6,overflow:'hidden'},
   picInitial:{fontFamily:'monospace',fontSize:16,fontWeight:'700'},
   picName:{fontFamily:'monospace',fontSize:7,letterSpacing:1,textAlign:'center'},
   picRole:{fontFamily:'monospace',fontSize:6,color:'#222',textAlign:'center',marginTop:2},
