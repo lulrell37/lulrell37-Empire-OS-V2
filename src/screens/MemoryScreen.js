@@ -18,7 +18,7 @@ export default function MemoryScreen({navigation}){
           <Text style={s.secTitle}>CONVERSATION MEMORY</Text>
           <Text style={s.secSub}>EVERY EXCHANGE, KEPT IN FULL · TAP INTO A BRAIN FOR THE MAP</Text>
           {memories.length===0&&<Text style={s.empty}>No memory yet. Start talking to your personas.</Text>}
-          {memories.map(m=>{const p=getPersona(m.persona);const cat=m.category?categoryMeta(m.category):null;return(<View key={m.id} style={s.memCard}><View style={s.memHdr}><Text style={[s.memPersona,{color:p.color}]}>{p.name}</Text><View style={{flexDirection:'row',alignItems:'center',gap:8}}>{cat&&<Text style={[s.memCat,{color:cat.color,borderColor:cat.color+'55'}]}>{cat.label.toUpperCase()}</Text>}<Text style={s.memDate}>{m.date}</Text></View></View><Text style={s.memContent} numberOfLines={5}>{m.content}</Text></View>);})}
+          {memories.map(m=>{const p=getPersona(m.persona);const cat=m.category?categoryMeta(m.category):null;return(<TouchableOpacity key={m.id} style={s.memCard} activeOpacity={0.7} onPress={()=>navigation.navigate('Brain',{persona:m.persona})}><View style={s.memHdr}><Text style={[s.memPersona,{color:p.color}]}>{p.name}</Text><View style={{flexDirection:'row',alignItems:'center',gap:8}}>{cat&&<Text style={[s.memCat,{color:cat.color,borderColor:cat.color+'55'}]}>{cat.label.toUpperCase()}</Text>}<Text style={s.memDate}>{m.date}</Text></View></View><Text style={s.memContent} numberOfLines={5}>{m.content}</Text></TouchableOpacity>);})}
         </View>}
         {tab==='NOTES'&&<View style={s.sec}>
           <Text style={s.secTitle}>SAVED NOTES</Text>

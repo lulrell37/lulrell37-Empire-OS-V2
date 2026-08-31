@@ -680,8 +680,12 @@ export default function CommandScreen({navigation}){
       {view==='viz'?(
         <View style={{flex:1}}>
           <Boundary label="The visualization"><PersonaOrb viz={vizRef} color={cp.color} active={isFocused}/></Boundary>
+          <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={0.85} onPress={()=>navigation.navigate('Brain',{persona:vizRef.personaId||activePersona})}/>
           <View style={s.orbLabelWrap} pointerEvents="none">
             <Text style={[s.orbLabel,{color:orbColor}]}>{getPersona(vizRef.personaId||activePersona).name}</Text>
+          </View>
+          <View style={s.orbHintWrap} pointerEvents="none">
+            <Text style={[s.orbHint,{color:orbColor}]}>◈ TAP TO ENTER BRAIN</Text>
           </View>
         </View>
       ):(
@@ -806,6 +810,8 @@ const s=StyleSheet.create({
   viewTabT:{fontFamily:'monospace',fontSize:11,color:'#444'},
   orbLabelWrap:{position:'absolute',top:14,left:0,right:0,alignItems:'center'},
   orbLabel:{fontFamily:'monospace',fontSize:11,fontWeight:'700',letterSpacing:3},
+  orbHintWrap:{position:'absolute',left:0,right:0,bottom:14,alignItems:'center'},
+  orbHint:{fontFamily:'monospace',fontSize:8,letterSpacing:2,opacity:0.5},
   onlineDot:{width:6,height:6,borderRadius:3,backgroundColor:'#4CAF50'},
   onlineText:{fontFamily:'monospace',fontSize:8,color:'#4CAF50',letterSpacing:2},
   teamPanel:{marginHorizontal:14,marginTop:6,marginBottom:4,borderWidth:1,borderColor:'#1A1A1A',borderRadius:6,overflow:'hidden'},
