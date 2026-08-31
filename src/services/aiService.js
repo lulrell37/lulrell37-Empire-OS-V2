@@ -31,34 +31,114 @@ async function buildSys(personaId,persona){
   if(mem?.length){sys+=`\n\n[MEMORY FROM RECENT SESSIONS:\n${mem.map(m=>`[${m.date}]\n${m.content}`).join('\n\n').substring(0,3000)}\n]`;}
   return sys;
 }
-export async function callPersona(personaId,messages,signal=null){
+// SSE over XHR — React Native's fetch can't expose a streaming response body,
+// but XMLHttpRequest fires `onprogress` with the partial `responseText`, so we
+// parse newline-delimited `data:` frames out of it as they arrive. Resolves
+// once the response completes; rejects on non-2xx, network error, abort, or an
+// error thrown by `onEvent`.
+function xhrStream({url,headers,body,signal,onEvent}){
+  return new Promise((resolve,reject)=>{
+    const xhr=new XMLHttpRequest();
+    xhr.open('POST',url);
+    xhr.setRequestHeader('Accept','text/event-stream');
+    for(const key in headers)xhr.setRequestHeader(key,headers[key]);
+    let seen=0,failed=null;
+    const pump=()=>{
+      if(failed)return;
+      const buf=xhr.responseText||'';
+      let nl;
+      while((nl=buf.indexOf('\n',seen))>=0){
+        const line=buf.slice(seen,nl).trim();
+        seen=nl+1;
+        if(!line.startsWith('data:'))continue;
+        const payload=line.slice(5).trim();
+        if(!payload||payload==='[DONE]')continue;
+        let json;try{json=JSON.parse(payload);}catch{continue;}
+        try{onEvent(json);}catch(err){failed=err;try{xhr.abort();}catch{}return;}
+      }
+    };
+    xhr.onprogress=pump;
+    xhr.onreadystatechange=()=>{if(xhr.readyState===3)pump();}; // RN delivers partial text here
+    xhr.onload=()=>{
+      pump();
+      if(failed)return reject(failed);
+      if(xhr.status>=200&&xhr.status<300)resolve();
+      else reject(new Error(`HTTP ${xhr.status}: ${String(xhr.responseText||'').substring(0,160)}`));
+    };
+    xhr.onerror=()=>reject(new Error('Network request failed'));
+    xhr.onabort=()=>reject(failed||Object.assign(new Error('Aborted'),{name:'AbortError'}));
+    if(signal){
+      if(signal.aborted){xhr.abort();return;}
+      if(typeof signal.addEventListener==='function')signal.addEventListener('abort',()=>{try{xhr.abort();}catch{}});
+    }
+    xhr.send(body);
+  });
+}
+
+export async function callPersona(personaId,messages,signal=null,onDelta=null){
   const k=await ensureKeys();
   const{getPersona}=await import('../personas/personas');
   const persona=getPersona(personaId);
   const sys=await buildSys(personaId,persona);
   const hist=messages.slice(-20).map(m=>({role:m.role==='system'?'user':m.role,content:m.content}));
+  const stream=typeof onDelta==='function';
   let response='';
+  const emit=(t)=>{if(t){response+=t;if(stream){try{onDelta(t);}catch{}}}};
   if(persona.api==='claude'){
     if(!k?.claude)throw new Error('No Claude API key. Go to Settings.');
-    const res=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':k.claude,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},body:JSON.stringify({model:persona.model||'claude-sonnet-4-6',max_tokens:1500,system:sys,messages:hist}),signal});
-    if(!res.ok){const e=await res.text();throw new Error(`Claude error: ${e.substring(0,100)}`);}
-    const d=await res.json();
-    response=d.content?.[0]?.text||'';
-    if(d.usage)await trackApiUsage('claude',d.usage.input_tokens||0,d.usage.output_tokens||0).catch(()=>{});
+    const url='https://api.anthropic.com/v1/messages';
+    const headers={'Content-Type':'application/json','x-api-key':k.claude,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'};
+    const body=JSON.stringify({model:persona.model||'claude-sonnet-4-6',max_tokens:1500,system:sys,messages:hist,stream});
+    if(stream){
+      let tin=0,tout=0;
+      await xhrStream({url,headers,body,signal,onEvent:(e)=>{
+        if(e.type==='content_block_delta'&&e.delta?.text)emit(e.delta.text);
+        else if(e.type==='message_start')tin=e.message?.usage?.input_tokens||0;
+        else if(e.type==='message_delta')tout=e.usage?.output_tokens||tout;
+        else if(e.type==='error')throw new Error(e.error?.message||'Claude stream error');
+      }});
+      if(tin||tout)await trackApiUsage('claude',tin,tout).catch(()=>{});
+    }else{
+      const res=await fetch(url,{method:'POST',headers,body,signal});
+      if(!res.ok){const e=await res.text();throw new Error(`Claude error: ${e.substring(0,100)}`);}
+      const d=await res.json();
+      emit(d.content?.[0]?.text||'');
+      if(d.usage)await trackApiUsage('claude',d.usage.input_tokens||0,d.usage.output_tokens||0).catch(()=>{});
+    }
   }else if(persona.api==='grok'){
     if(!k?.grok)throw new Error('No Grok API key. Go to Settings.');
-    const res=await fetch('https://api.x.ai/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+k.grok},body:JSON.stringify({model:persona.model||'grok-3-latest',max_tokens:1500,messages:[{role:'system',content:sys},...hist]}),signal});
-    if(!res.ok){const e=await res.text();throw new Error(`Grok error: ${e.substring(0,100)}`);}
-    const d=await res.json();
-    response=d.choices?.[0]?.message?.content||'';
-    if(d.usage)await trackApiUsage('grok',d.usage.prompt_tokens||0,d.usage.completion_tokens||0).catch(()=>{});
+    const url='https://api.x.ai/v1/chat/completions';
+    const headers={'Content-Type':'application/json','Authorization':'Bearer '+k.grok};
+    const body=JSON.stringify({model:persona.model||'grok-3-latest',max_tokens:1500,messages:[{role:'system',content:sys},...hist],stream});
+    if(stream){
+      await xhrStream({url,headers,body,signal,onEvent:(e)=>{
+        const c=e.choices?.[0]?.delta?.content;if(c)emit(c);
+        if(e.usage)trackApiUsage('grok',e.usage.prompt_tokens||0,e.usage.completion_tokens||0).catch(()=>{});
+      }});
+    }else{
+      const res=await fetch(url,{method:'POST',headers,body,signal});
+      if(!res.ok){const e=await res.text();throw new Error(`Grok error: ${e.substring(0,100)}`);}
+      const d=await res.json();
+      emit(d.choices?.[0]?.message?.content||'');
+      if(d.usage)await trackApiUsage('grok',d.usage.prompt_tokens||0,d.usage.completion_tokens||0).catch(()=>{});
+    }
   }else if(persona.api==='openai'){
     if(!k?.openai)throw new Error('No OpenAI API key. Go to Settings.');
-    const res=await fetch('https://api.openai.com/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+k.openai},body:JSON.stringify({model:persona.model||'gpt-4o',max_tokens:1500,messages:[{role:'system',content:sys},...hist]}),signal});
-    if(!res.ok){const e=await res.text();throw new Error(`OpenAI error: ${e.substring(0,100)}`);}
-    const d=await res.json();
-    response=d.choices?.[0]?.message?.content||'';
-    if(d.usage)await trackApiUsage('openai',d.usage.prompt_tokens||0,d.usage.completion_tokens||0).catch(()=>{});
+    const url='https://api.openai.com/v1/chat/completions';
+    const headers={'Content-Type':'application/json','Authorization':'Bearer '+k.openai};
+    const body=JSON.stringify({model:persona.model||'gpt-4o',max_tokens:1500,messages:[{role:'system',content:sys},...hist],stream,...(stream?{stream_options:{include_usage:true}}:{})});
+    if(stream){
+      await xhrStream({url,headers,body,signal,onEvent:(e)=>{
+        const c=e.choices?.[0]?.delta?.content;if(c)emit(c);
+        if(e.usage)trackApiUsage('openai',e.usage.prompt_tokens||0,e.usage.completion_tokens||0).catch(()=>{});
+      }});
+    }else{
+      const res=await fetch(url,{method:'POST',headers,body,signal});
+      if(!res.ok){const e=await res.text();throw new Error(`OpenAI error: ${e.substring(0,100)}`);}
+      const d=await res.json();
+      emit(d.choices?.[0]?.message?.content||'');
+      if(d.usage)await trackApiUsage('openai',d.usage.prompt_tokens||0,d.usage.completion_tokens||0).catch(()=>{});
+    }
   }
   const lastUser=messages.filter(m=>m.role==='user').slice(-1)[0];
   if(lastUser&&response){await savePersonaMemory(personaId,`YOU: ${lastUser.content.substring(0,400)}\n${persona.name}: ${response.substring(0,600)}`).catch(()=>{});}

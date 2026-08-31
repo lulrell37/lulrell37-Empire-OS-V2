@@ -246,6 +246,7 @@ export default function CommandScreen({navigation}){
 
     if(!voiceOn||voiceMuted||!text){
       // No voice — still light the orb up briefly so every reply registers visually.
+      if(!text)vizRef.speaking=false;
       if(text){
         vizRef.speaking=true;
         const until=Date.now()+Math.min(4500,900+text.length*11);
@@ -493,17 +494,37 @@ export default function CommandScreen({navigation}){
         const hist=(isGroup?groupMessages:messages).slice(-20).map(m=>({role:m.role==='user'||m.role==='assistant'?m.role:'user',content:m.content}));
         hist.push({role:'user',content:text});
         if(isGroup&&replies.length>0)hist.push({role:'user',content:`[PRIOR:\n${replies.map(r=>`${r.name}: ${r.text}`).join('\n\n')}\nAcknowledge and be brief.]`});
-        const response=await callPersona(pid,hist,myAbort.signal);
-        const display=stripCommands(response)||response;
         const willVoice=voiceOn&&!voiceMuted;
         const msgId=`${Date.now()}-${pid}`;
-        const aiMsg={id:msgId,role:'assistant',content:display,persona:pid,revealed:willVoice?0:display.length,streaming:willVoice};
-        if(isGroup)setGroupMessages(prev=>[...prev,aiMsg]);else setMessages(prev=>[...prev,aiMsg]);
+        const setMsgs=isGroup?setGroupMessages:setMessages;
+        const patch=(fn)=>setMsgs(prev=>prev.map(m=>m.id===msgId?fn(m):m));
+        setMsgs(prev=>[...prev,{id:msgId,role:'assistant',content:'',persona:pid,revealed:0,streaming:true}]);
+        vizRef.personaId=pid;vizRef.color=p.color;vizRef.speaking=true; // orb lights up the moment tokens start
+        // When not voicing, type the reply into the bubble live as tokens arrive.
+        // When voicing, hold the text hidden and let speakWithReveal sync it to speech.
+        let raw='',lastPatch=0;
+        const onDelta=willVoice?null:(t)=>{
+          raw+=t;
+          vizRef.amplitude=synthAmp();
+          const now=Date.now();
+          if(now-lastPatch<45)return; // throttle re-renders; the post-await patch flushes the tail
+          lastPatch=now;
+          const shown=(stripCommands(raw)||'').replace(/\[[A-Z_]+:?[^\]]*$/,'').trimEnd();
+          patch(m=>({...m,content:shown,revealed:shown.length}));
+        };
+        const response=await callPersona(pid,hist,myAbort.signal,onDelta);
+        const display=stripCommands(response)||response;
         if(display)replies.push({name:p.name,text:display});
-        vizRef.personaId=pid;vizRef.color=p.color;
         await handleCommands(response,pid,{onRelay:({target,message})=>addRelay(target,`[From ${p.name}]: ${message}`)});
-        const{finalText}=await speakWithReveal(display,p,msgId,isGroup);
-        if(!isGroup)await saveMessage(pid,'assistant',finalText,'direct');
+        if(willVoice){
+          patch(m=>({...m,content:display,revealed:0,streaming:true}));
+          const{finalText}=await speakWithReveal(display,p,msgId,isGroup);
+          if(!isGroup)await saveMessage(pid,'assistant',finalText,'direct');
+        }else{
+          vizRef.speaking=false;vizRef.amplitude=0;
+          patch(m=>({...m,content:display,revealed:display.length,streaming:false}));
+          if(!isGroup)await saveMessage(pid,'assistant',display,'direct');
+        }
         if(myAbort.signal.aborted)break;
       }
     }catch(e){
@@ -514,6 +535,10 @@ export default function CommandScreen({navigation}){
       maybeAutoListen();
     }finally{
       if(abortRef.current===myAbort)setLoading(false);
+      // Freeze any bubble left mid-stream by an abort/error so its caret stops.
+      const freeze=(m)=>m.streaming?{...m,streaming:false,revealed:(m.content||'').length}:m;
+      setMessages(prev=>prev.map(freeze));setGroupMessages(prev=>prev.map(freeze));
+      vizRef.speaking=false;vizRef.amplitude=0;
       setTimeout(()=>flatRef.current?.scrollToEnd({animated:true}),100);
     }
     if(contRef.current&&abortRef.current===myAbort&&!myAbort.signal.aborted)setTimeout(()=>{if(contRef.current)runRound('[Continue. Be brief.]',true);},1200);
