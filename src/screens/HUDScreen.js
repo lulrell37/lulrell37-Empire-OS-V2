@@ -6,6 +6,7 @@ import Svg,{Circle,Defs,LinearGradient,Stop}from 'react-native-svg';
 import{Feather}from '@expo/vector-icons';
 import{getHudState,updateHudState,getTasks,addTask,updateTask,deleteTask,completeTask,getBusinessesWithRevenue,setBusinessTarget,addRevenue,updateEmpireScore,getMorningRoutine,saveMorningRoutine,getBatmanTemplate,saveBatmanTemplate,DEFAULT_BATMAN}from '../services/database';
 import{colors,space,radius,type,FONTS}from '../theme';
+import{PANEL_META,BriefingPanel,BusinessPanel,TasksPanel,RoutinePanel,BatmanPanel,DailyPanel}from './hud/panels';
 const{width}=Dimensions.get('window');
 const RS=196,ST=6,CI=2*Math.PI*((RS-ST)/2);
 const PANELS=['briefing','businesses','tasks','routine','batman','daily'];
@@ -16,7 +17,6 @@ const NAV=[
   {key:'Settings',icon:'settings',label:'SETTINGS'},
   {key:'Map',icon:'map',label:'MAP'},
 ];
-const newId=()=>'r_'+Date.now().toString(36)+Math.random().toString(36).slice(2,6);
 
 export default function HUDScreen({navigation}){
   const[hud,setHud]=useState(null);
@@ -29,21 +29,18 @@ export default function HUDScreen({navigation}){
   const[newTask,setNewTask]=useState('');
   const[showAddTask,setShowAddTask]=useState(false);
   const[panelIndex,setPanelIndex]=useState(0);
+  const[panelEditing,setPanelEditing]=useState(false);
   const[bizModal,setBizModal]=useState(null);
   const[bizTargetInput,setBizTargetInput]=useState('');
   const[bizWeekGoalInput,setBizWeekGoalInput]=useState('');
   const[bizLogInput,setBizLogInput]=useState('');
-  const[editRoutine,setEditRoutine]=useState(false);
-  const[routineDraft,setRoutineDraft]=useState([]);
-  const[editBatman,setEditBatman]=useState(false);
-  const[batmanDraft,setBatmanDraft]=useState([]);
   const[taskEdit,setTaskEdit]=useState(null);
   const[taskEditInput,setTaskEditInput]=useState('');
   const scrollRef=useRef(null);
-  const editingRef=useRef(false);
-  editingRef.current=editRoutine||editBatman||!!taskEdit||showAddTask||!!bizModal;
+  const busyRef=useRef(false);
+  busyRef.current=panelEditing||showAddTask||!!taskEdit||!!bizModal;
 
-  useFocusEffect(useCallback(()=>{if(!editingRef.current)load();},[]));
+  useFocusEffect(useCallback(()=>{if(!busyRef.current)load();},[]));
 
   async function load(){
     const h=await getHudState();
@@ -107,28 +104,16 @@ export default function HUDScreen({navigation}){
     const t=await getTasks();setTasks(t);
     recalcScore(routine,batman,t);
   }
-
-  function startEditRoutine(){setRoutineDraft(routineItems.map(i=>({...i})));setEditRoutine(true);}
-  function draftSetLabel(idx,val){setRoutineDraft(d=>d.map((it,i)=>i===idx?{...it,label:val}:it));}
-  function draftMove(idx,dir){setRoutineDraft(d=>{const n=[...d];const j=idx+dir;if(j<0||j>=n.length)return n;[n[idx],n[j]]=[n[j],n[idx]];return n;});}
-  function draftRemove(idx){setRoutineDraft(d=>d.filter((_,i)=>i!==idx));}
-  function draftAdd(){setRoutineDraft(d=>[...d,{id:newId(),label:''}]);}
-  async function saveRoutine(){
-    const clean=routineDraft.map(it=>({id:it.id,label:it.label.trim()})).filter(it=>it.label);
+  async function handleSaveRoutine(clean){
     await saveMorningRoutine(clean);
     const validIds=new Set(clean.map(i=>i.id));
     const prunedDone={};Object.keys(routine).forEach(k=>{if(validIds.has(k))prunedDone[k]=routine[k];});
     await updateHudState({morning_routine_done:JSON.stringify(prunedDone)});
-    setEditRoutine(false);
     await load();
     recalcScore(prunedDone,batman,tasks,clean.length);
   }
-
-  function startEditBatman(){setBatmanDraft(batmanTemplate.map(d=>({...d})));setEditBatman(true);}
-  function batmanDraftSet(idx,field,val){setBatmanDraft(d=>d.map((it,i)=>i===idx?{...it,[field]:val}:it));}
-  async function saveBatman(){
-    await saveBatmanTemplate(batmanDraft);
-    setEditBatman(false);
+  async function handleSaveBatman(draft){
+    await saveBatmanTemplate(draft);
     await load();
   }
 
@@ -172,6 +157,18 @@ export default function HUDScreen({navigation}){
   const openTasks=tasks.filter(t=>!t.completed);
   const statusIcon=score>=75?'trending-up':score>=50?'minus':'trending-down';
   const statusText=score>=75?`${streak} DAY STREAK`:score>=50?'BUILDING TODAY':'STREAK AT RISK';
+
+  function renderPanel(key){
+    switch(key){
+      case 'briefing':return <BriefingPanel tasksDone={tasksDone} tasksTotal={tasks.length} routineDone={routineDone} routineTotal={routineItems.length} todayBatman={todayBatman}/>;
+      case 'businesses':return <BusinessPanel businesses={businesses} onOpenBiz={openBizModal}/>;
+      case 'tasks':return <TasksPanel tasks={openTasks} onComplete={doneTask} onEdit={openTaskEdit} onAdd={()=>setShowAddTask(true)}/>;
+      case 'routine':return <RoutinePanel items={routineItems} done={routine} onToggle={toggleRoutine} onSave={handleSaveRoutine} onEditingChange={setPanelEditing}/>;
+      case 'batman':return <BatmanPanel template={batmanTemplate} done={batman} today={todayBatman} onToggleDay={toggleBatman} onSaveTemplate={handleSaveBatman} onEditingChange={setPanelEditing}/>;
+      case 'daily':return <DailyPanel hud={hud}/>;
+      default:return null;
+    }
+  }
 
   return(
     <SafeAreaView style={s.container} edges={['top','bottom']}>
@@ -222,182 +219,18 @@ export default function HUDScreen({navigation}){
         decelerationRate="fast"
         disableIntervalMomentum
         showsHorizontalScrollIndicator={false}
-        scrollEnabled={!editRoutine&&!editBatman}
+        scrollEnabled={!panelEditing}
         onMomentumScrollEnd={onScrollEnd}
         style={{flex:1}}
       >
-        {/* BRIEFING */}
-        <ScrollView style={{width}} contentContainerStyle={s.panelContent}>
-          <Text style={s.panelLabel}>BRIEFING</Text>
-          <View style={s.briefRow}>
-            <View style={s.briefIcon}><Feather name="check-square" size={15} color={colors.brass}/></View>
-            <View style={{flex:1}}>
-              <Text style={s.briefMain}>{tasksDone} of {tasks.length} tasks complete</Text>
-              <Text style={s.briefSub}>{tasks.length-tasksDone} remaining</Text>
+        {PANELS.map(key=>(
+          <ScrollView key={key} style={{width}} contentContainerStyle={s.panelContent} keyboardShouldPersistTaps="handled">
+            <View style={s.panelTopBar}>
+              <Text style={s.panelLabel}>{PANEL_META[key].title}</Text>
             </View>
-          </View>
-          <View style={s.briefRow}>
-            <View style={s.briefIcon}><Feather name="sunrise" size={15} color={colors.brass}/></View>
-            <View style={{flex:1}}>
-              <Text style={s.briefMain}>{routineDone} of {routineItems.length} routine done</Text>
-              <Text style={s.briefSub}>{routineItems.length>0&&routineDone>=routineItems.length?'Fully complete':'Keep going'}</Text>
-            </View>
-          </View>
-          <View style={s.briefRow}>
-            <View style={s.briefIcon}><Feather name="activity" size={15} color={colors.brass}/></View>
-            <View style={{flex:1}}>
-              <Text style={s.briefMain}>{todayBatman?.label}</Text>
-              <Text style={s.briefSub}>{todayBatman?.desc}</Text>
-            </View>
-          </View>
-          <Text style={s.briefNote}>Calendar and email require Google Sign-In — not yet connected on this device.</Text>
-        </ScrollView>
-
-        {/* BUSINESS RINGS */}
-        <ScrollView style={{width}} contentContainerStyle={s.panelContent}>
-          <Text style={s.panelLabel}>THE EMPIRE · REVENUE / TARGET</Text>
-          <View style={s.bizGrid}>
-            {businesses.map((b)=>{
-              const pct=b.target>0?Math.min(100,Math.round((b.rev/b.target)*100)):0;
-              const bizCI=2*Math.PI*25;
-              const bizOffset=bizCI-(bizCI*pct/100);
-              const color=pct>=66?colors.ringHigh:pct>=33?colors.ringMid:pct>0?colors.ringLow:colors.ringTrack;
-              return(
-                <TouchableOpacity key={b.name} style={s.bizItem} onPress={()=>openBizModal(b)} activeOpacity={0.7}>
-                  <View style={s.bizRing}>
-                    <Svg width={62} height={62}>
-                      <Circle cx={31} cy={31} r={25} stroke={colors.ringTrack} strokeWidth={3.5} fill="none"/>
-                      <Circle cx={31} cy={31} r={25} stroke={color} strokeWidth={3.5} fill="none" strokeDasharray={bizCI} strokeDashoffset={bizOffset} strokeLinecap="round" rotation="-90" origin="31,31"/>
-                    </Svg>
-                    <View style={s.bizRingCore}><Text style={s.bizPct}>{b.target>0?pct:'—'}</Text></View>
-                  </View>
-                  <Text style={s.bizName} numberOfLines={2}>{b.name}</Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        </ScrollView>
-
-        {/* TASKS */}
-        <ScrollView style={{width}} contentContainerStyle={s.panelContent}>
-          <View style={s.panelHeadRow}>
-            <Text style={s.panelLabel}>GOOGLE TASKS · LOCAL</Text>
-            <TouchableOpacity style={s.addBtn} onPress={()=>setShowAddTask(true)} activeOpacity={0.7}>
-              <Feather name="plus" size={11} color={colors.bg}/>
-              <Text style={s.addBtnT}>ADD</Text>
-            </TouchableOpacity>
-          </View>
-          {openTasks.map(t=>(
-            <TouchableOpacity key={t.id} style={s.taskRow} onPress={()=>doneTask(t.id)} onLongPress={()=>openTaskEdit(t)} delayLongPress={300} activeOpacity={0.6}>
-              <Feather name="circle" size={17} color={colors.textDim}/>
-              <Text style={s.taskName}>{t.title}</Text>
-              <Feather name="more-vertical" size={13} color={colors.textFaint}/>
-            </TouchableOpacity>
-          ))}
-          {!openTasks.length&&<Text style={s.emptyText}>No open tasks.</Text>}
-          {!!openTasks.length&&<Text style={s.hintText}>Long-press a task to edit or delete.</Text>}
-        </ScrollView>
-
-        {/* MORNING ROUTINE */}
-        <ScrollView style={{width}} contentContainerStyle={s.panelContent} keyboardShouldPersistTaps="handled">
-          <View style={s.panelHeadRow}>
-            <Text style={s.panelLabel}>MORNING ROUTINE</Text>
-            {editRoutine?(
-              <View style={s.editHeadBtns}>
-                <TouchableOpacity style={s.ghostBtn} onPress={()=>setEditRoutine(false)}><Text style={s.ghostBtnT}>CANCEL</Text></TouchableOpacity>
-                <TouchableOpacity style={s.addBtn} onPress={saveRoutine} activeOpacity={0.7}><Feather name="check" size={11} color={colors.bg}/><Text style={s.addBtnT}>DONE</Text></TouchableOpacity>
-              </View>
-            ):(
-              <View style={s.editHeadBtns}>
-                <Text style={s.panelMeta}>{routineDone} / {routineItems.length}</Text>
-                <TouchableOpacity style={s.ghostBtn} onPress={startEditRoutine} activeOpacity={0.7}><Feather name="edit-2" size={10} color={colors.gold}/><Text style={s.ghostBtnT}>EDIT</Text></TouchableOpacity>
-              </View>
-            )}
-          </View>
-
-          {!editRoutine&&routineItems.map(item=>(
-            <TouchableOpacity key={item.id} style={s.taskRow} onPress={()=>toggleRoutine(item.id)} activeOpacity={0.6}>
-              <Feather name={routine[item.id]?'check-circle':'circle'} size={17} color={routine[item.id]?colors.gold:colors.textDim}/>
-              <Text style={[s.taskName,routine[item.id]&&s.taskNameDone]}>{item.label}</Text>
-            </TouchableOpacity>
-          ))}
-          {!editRoutine&&!routineItems.length&&<Text style={s.emptyText}>No routine items. Tap EDIT to add some.</Text>}
-
-          {editRoutine&&routineDraft.map((item,idx)=>(
-            <View key={item.id} style={s.editRow}>
-              <View style={s.reorderCol}>
-                <TouchableOpacity onPress={()=>draftMove(idx,-1)} hitSlop={{top:6,bottom:6,left:6,right:6}}><Feather name="chevron-up" size={16} color={idx===0?colors.textFaint:colors.textDim}/></TouchableOpacity>
-                <TouchableOpacity onPress={()=>draftMove(idx,1)} hitSlop={{top:6,bottom:6,left:6,right:6}}><Feather name="chevron-down" size={16} color={idx===routineDraft.length-1?colors.textFaint:colors.textDim}/></TouchableOpacity>
-              </View>
-              <TextInput style={s.editInput} value={item.label} onChangeText={v=>draftSetLabel(idx,v)} placeholder="Routine item…" placeholderTextColor={colors.textFaint}/>
-              <TouchableOpacity onPress={()=>draftRemove(idx)} hitSlop={{top:8,bottom:8,left:8,right:8}}><Feather name="trash-2" size={15} color={colors.danger}/></TouchableOpacity>
-            </View>
-          ))}
-          {editRoutine&&(
-            <TouchableOpacity style={s.addItemRow} onPress={draftAdd} activeOpacity={0.7}>
-              <Feather name="plus" size={15} color={colors.gold}/>
-              <Text style={s.addItemT}>Add item</Text>
-            </TouchableOpacity>
-          )}
-        </ScrollView>
-
-        {/* BATMAN PROTOCOL */}
-        <ScrollView style={{width}} contentContainerStyle={s.panelContent} keyboardShouldPersistTaps="handled">
-          <View style={s.panelHeadRow}>
-            <Text style={s.panelLabel}>BATMAN PROTOCOL{editBatman?' · TEMPLATE':' · TODAY'}</Text>
-            {editBatman?(
-              <View style={s.editHeadBtns}>
-                <TouchableOpacity style={s.ghostBtn} onPress={()=>setEditBatman(false)}><Text style={s.ghostBtnT}>CANCEL</Text></TouchableOpacity>
-                <TouchableOpacity style={s.addBtn} onPress={saveBatman} activeOpacity={0.7}><Feather name="check" size={11} color={colors.bg}/><Text style={s.addBtnT}>DONE</Text></TouchableOpacity>
-              </View>
-            ):(
-              <TouchableOpacity style={s.ghostBtn} onPress={startEditBatman} activeOpacity={0.7}><Feather name="edit-2" size={10} color={colors.gold}/><Text style={s.ghostBtnT}>EDIT</Text></TouchableOpacity>
-            )}
-          </View>
-
-          {!editBatman&&<>
-            <Text style={s.batTitle}>{todayBatman?.label}</Text>
-            <Text style={s.batDesc}>{todayBatman?.desc}</Text>
-            <View style={s.batWeek}>
-              {batmanTemplate.map(b=>(
-                <TouchableOpacity key={b.day} style={[s.batDay,b.day===todayBatman?.day&&s.batDayToday]} onPress={()=>toggleBatman(b.day)} activeOpacity={0.7}>
-                  <Text style={[s.batDayT,b.day===todayBatman?.day&&s.batDayTToday]}>{b.day}</Text>
-                  <Feather name="check" size={11} color={batman[b.day]?colors.online:'transparent'} style={{marginTop:3}}/>
-                </TouchableOpacity>
-              ))}
-            </View>
-          </>}
-
-          {editBatman&&batmanDraft.map((d,idx)=>(
-            <View key={d.day} style={s.batEditRow}>
-              <Text style={s.batEditDay}>{d.day}</Text>
-              <View style={{flex:1,gap:6}}>
-                <TextInput style={s.editInput} value={d.label} onChangeText={v=>batmanDraftSet(idx,'label',v)} placeholder="Focus" placeholderTextColor={colors.textFaint}/>
-                <TextInput style={[s.editInput,s.editInputMulti]} value={d.desc} onChangeText={v=>batmanDraftSet(idx,'desc',v)} placeholder="Description" placeholderTextColor={colors.textFaint} multiline/>
-              </View>
-            </View>
-          ))}
-        </ScrollView>
-
-        {/* WORD / VERSE / FACT */}
-        <ScrollView style={{width}} contentContainerStyle={s.panelContent}>
-          <Text style={s.panelLabel}>DAILY</Text>
-          <View style={s.wvfSection}>
-            <Text style={s.wvfLabel}>WORD OF THE DAY</Text>
-            <Text style={s.wordMain}>{hud?.word_of_day||'—'}</Text>
-            <Text style={s.wordPhon}>{hud?.word_phonetic||''}</Text>
-            <Text style={s.wvfText}>{hud?.word_def||''}</Text>
-          </View>
-          <View style={s.wvfSection}>
-            <Text style={s.wvfLabel}>VERSE OF THE DAY</Text>
-            <Text style={s.verseText}>“{hud?.verse_of_day||'—'}”</Text>
-            <Text style={s.verseRef}>{hud?.verse_ref||''}</Text>
-          </View>
-          <View style={[s.wvfSection,s.wvfSectionLast]}>
-            <Text style={s.wvfLabel}>FACT OF THE DAY</Text>
-            <Text style={s.wvfText}>{hud?.fact_of_day||'—'}</Text>
-          </View>
-        </ScrollView>
+            {renderPanel(key)}
+          </ScrollView>
+        ))}
       </ScrollView>
 
       <View style={s.bottomNav}>
@@ -481,59 +314,8 @@ const s=StyleSheet.create({
   dotActive:{backgroundColor:colors.gold,width:18,borderRadius:2.5},
 
   panelContent:{paddingHorizontal:space.xl,paddingTop:space.xs,paddingBottom:space.xxxl},
-  panelLabel:{...type.label,marginBottom:space.lg},
-  panelMeta:{fontFamily:FONTS.monoMed,fontSize:9,color:colors.gold,letterSpacing:2},
-  panelHeadRow:{flexDirection:'row',justifyContent:'space-between',alignItems:'center',marginBottom:space.lg},
-  editHeadBtns:{flexDirection:'row',alignItems:'center',gap:space.md},
-  addBtn:{flexDirection:'row',alignItems:'center',gap:4,paddingHorizontal:space.md,paddingVertical:6,backgroundColor:colors.gold,borderRadius:radius.sm},
-  addBtnT:{fontFamily:FONTS.monoMed,fontSize:9,color:colors.bg,letterSpacing:2},
-  ghostBtn:{flexDirection:'row',alignItems:'center',gap:4,paddingHorizontal:space.sm,paddingVertical:5,borderWidth:1,borderColor:colors.hairlineGold,borderRadius:radius.sm},
-  ghostBtnT:{fontFamily:FONTS.monoMed,fontSize:9,color:colors.gold,letterSpacing:2},
-
-  briefRow:{flexDirection:'row',alignItems:'center',gap:space.lg,paddingVertical:space.md,borderBottomWidth:1,borderBottomColor:colors.hairline},
-  briefIcon:{width:26,alignItems:'center'},
-  briefMain:{fontFamily:FONTS.mono,fontSize:13,color:colors.text,letterSpacing:0.2},
-  briefSub:{fontFamily:FONTS.mono,fontSize:8,color:colors.textDim,marginTop:3,letterSpacing:0.5,lineHeight:13},
-  briefNote:{...type.meta,color:colors.textFaint,marginTop:space.xl,lineHeight:15},
-
-  bizGrid:{flexDirection:'row',flexWrap:'wrap',rowGap:space.md,columnGap:space.sm},
-  bizItem:{width:(width-space.xl*2-space.sm*2)/3,alignItems:'center',paddingVertical:space.sm},
-  bizRing:{width:62,height:62,alignItems:'center',justifyContent:'center'},
-  bizRingCore:{position:'absolute',alignItems:'center',justifyContent:'center'},
-  bizPct:{fontFamily:FONTS.monoMed,fontSize:12,color:colors.text},
-  bizName:{fontFamily:FONTS.mono,fontSize:7,color:colors.textMuted,textAlign:'center',marginTop:space.sm,letterSpacing:0.5,lineHeight:11},
-
-  taskRow:{flexDirection:'row',alignItems:'center',gap:space.md,paddingVertical:space.md,borderBottomWidth:1,borderBottomColor:colors.hairline},
-  taskName:{fontFamily:FONTS.mono,fontSize:13,color:colors.text,flex:1,letterSpacing:0.2},
-  taskNameDone:{color:colors.textFaint,textDecorationLine:'line-through'},
-  emptyText:{...type.meta,color:colors.textFaint,marginTop:space.md},
-  hintText:{...type.meta,color:colors.textFaint,marginTop:space.md,letterSpacing:0.5},
-
-  editRow:{flexDirection:'row',alignItems:'center',gap:space.sm,paddingVertical:6,borderBottomWidth:1,borderBottomColor:colors.hairline},
-  reorderCol:{alignItems:'center'},
-  editInput:{flex:1,backgroundColor:colors.surface,borderWidth:1,borderColor:colors.hairline,borderRadius:radius.sm,paddingHorizontal:space.md,paddingVertical:8,color:colors.text,fontFamily:FONTS.mono,fontSize:13},
-  editInputMulti:{minHeight:38,textAlignVertical:'top'},
-  addItemRow:{flexDirection:'row',alignItems:'center',gap:space.sm,paddingVertical:space.md,marginTop:space.sm},
-  addItemT:{fontFamily:FONTS.monoMed,fontSize:11,color:colors.gold,letterSpacing:1},
-
-  batTitle:{fontFamily:FONTS.displayMed,fontSize:32,color:colors.text,letterSpacing:0.5,marginBottom:space.xs},
-  batDesc:{fontFamily:FONTS.mono,fontSize:9,color:colors.textMuted,lineHeight:16,marginBottom:space.xl},
-  batWeek:{flexDirection:'row',gap:6,flexWrap:'wrap'},
-  batDay:{flex:1,minWidth:64,alignItems:'center',paddingVertical:space.md,borderWidth:1,borderColor:colors.hairline,borderRadius:radius.sm},
-  batDayToday:{borderColor:colors.hairlineGold,backgroundColor:'rgba(232,201,138,0.06)'},
-  batDayT:{fontFamily:FONTS.mono,fontSize:9,color:colors.textDim,letterSpacing:1.5},
-  batDayTToday:{color:colors.gold},
-  batEditRow:{flexDirection:'row',gap:space.md,paddingVertical:space.md,borderBottomWidth:1,borderBottomColor:colors.hairline},
-  batEditDay:{fontFamily:FONTS.monoMed,fontSize:10,color:colors.gold,letterSpacing:1.5,width:34,paddingTop:10},
-
-  wvfSection:{paddingVertical:space.lg,borderBottomWidth:1,borderBottomColor:colors.hairline},
-  wvfSectionLast:{borderBottomWidth:0},
-  wvfLabel:{fontFamily:FONTS.mono,fontSize:8,letterSpacing:2.5,color:colors.textDim,marginBottom:space.md},
-  wordMain:{...type.word},
-  wordPhon:{fontFamily:FONTS.mono,fontSize:10,color:colors.textDim,marginTop:4,marginBottom:space.sm,letterSpacing:0.5},
-  wvfText:{fontFamily:FONTS.mono,fontSize:12,color:colors.textMuted,lineHeight:19,letterSpacing:0.2},
-  verseText:{...type.verse,marginBottom:space.sm},
-  verseRef:{fontFamily:FONTS.mono,fontSize:9,color:colors.textDim,letterSpacing:2},
+  panelTopBar:{flexDirection:'row',justifyContent:'space-between',alignItems:'center',marginBottom:space.lg},
+  panelLabel:{...type.label},
 
   bottomNav:{flexDirection:'row',borderTopWidth:1,borderTopColor:colors.hairline,paddingVertical:space.sm,backgroundColor:colors.bg},
   navItem:{flex:1,alignItems:'center',gap:4,paddingVertical:3},
