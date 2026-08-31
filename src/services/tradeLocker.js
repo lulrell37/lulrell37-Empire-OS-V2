@@ -168,3 +168,53 @@ export async function tlModifyPosition(positionId,{stopLoss,takeProfit}={}){
 }
 
 export function tlReset(){session.token=null;session.refresh=null;session.exp=0;session.accountId=null;session.accNum=null;session.instruments={};}
+
+// --- Analysis snapshot: everything Atlas needs to form a view on gold ---
+
+function summarizeBars(bars){
+  if(!bars||bars.length<3)return null;
+  const c=bars.map(b=>b.c);
+  const last=c[c.length-1],first=c[0];
+  const smaN=Math.min(20,c.length);
+  const sma=c.slice(-smaN).reduce((a,x)=>a+x,0)/smaN;
+  const hi=Math.max(...bars.map(b=>b.h)),lo=Math.min(...bars.map(b=>b.l));
+  const px=n=>+n.toFixed(2);
+  return{
+    last:px(last),changePct:+(((last-first)/first)*100).toFixed(2),
+    sma20:px(sma),trend:last>sma?'up':'down',
+    rangeHigh:px(hi),rangeLow:px(lo),
+    recent:bars.slice(-6).map(b=>({o:px(b.o),h:px(b.h),l:px(b.l),c:px(b.c)})),
+  };
+}
+
+export async function tlSnapshot(symbol='XAUUSD'){
+  const[quote,state,positions]=await Promise.all([
+    tlQuote(symbol),
+    tlAccountState().catch(()=>null),
+    tlPositions().catch(()=>[]),
+  ]);
+  const candles={};
+  for(const tf of['1D','4H','1H','15m']){
+    try{candles[tf]=summarizeBars(await tlHistory(symbol,tf,60));}catch{candles[tf]=null;}
+  }
+  const usd={};
+  for(const s of['EURUSD','USDJPY','GBPUSD']){
+    try{const q=await tlQuote(s);if(q.mid!=null)usd[s]=+q.mid.toFixed(5);}catch{}
+  }
+  return{symbol,quote,state,positions,candles,usd,ts:Date.now()};
+}
+
+export function tlFormatSnapshot(snap){
+  if(!snap)return '(market snapshot unavailable)';
+  const{quote,state,positions,candles,usd}=snap;
+  const L=[];
+  L.push(`Price ${snap.symbol}: bid ${quote.bid} / ask ${quote.ask} (mid ${quote.mid?.toFixed?.(2)})`);
+  if(state)L.push(`Account: balance ${state.balance}, available ${state.availableFunds}, open P/L ${state.openNetPnL}, open positions ${state.positionsCount}`);
+  for(const tf of Object.keys(candles)){
+    const c=candles[tf];if(!c){L.push(`${tf}: no data`);continue;}
+    L.push(`${tf}: last ${c.last}, ${c.changePct>=0?'+':''}${c.changePct}% over window, trend ${c.trend} (SMA20 ${c.sma20}), range ${c.rangeLow}–${c.rangeHigh}; recent bars ${c.recent.map(b=>`${b.o}/${b.h}/${b.l}/${b.c}`).join('  ')}`);
+  }
+  if(Object.keys(usd).length)L.push(`USD proxy: ${Object.entries(usd).map(([k,v])=>`${k} ${v}`).join(', ')} (gold moves inverse to USD strength)`);
+  if(positions?.length)L.push(`Open positions: ${positions.map(p=>`#${p.id} ${p.side} ${p.qty} @ ${p.avgPrice} (uP/L ${p.unrealizedPl})`).join('; ')}`);
+  return L.join('\n');
+}

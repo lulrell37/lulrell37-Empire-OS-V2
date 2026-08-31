@@ -11,6 +11,7 @@ import{PERSONAS,PERSONA_LIST,COUNCIL_PERSONAS,EMPIRE_PERSONAS,getPersona}from '.
 import{callPersona,textToSpeech,transcribeAudio,queryMemory}from '../services/aiService';
 import{handleCommands,stripCommands}from '../services/commandHandler';
 import{getMessages,saveMessage,getAllPersonaPics,savePersonaMemory,getSetting}from '../services/database';
+import{tlSnapshot,tlFormatSnapshot,tlPlaceOrder,tlClosePosition,tlPositions,MAX_QTY}from '../services/tradeLocker';
 import{loadKeys}from '../services/keyStore';
 import useEmpireStore from '../store/useEmpireStore';
 import{useIsFocused}from '@react-navigation/native';
@@ -48,6 +49,8 @@ export default function CommandScreen({navigation}){
   const[showCamera,setShowCamera]=useState(false);
   const[cameraRef,setCameraRef]=useState(null);
   const[view,setView]=useState('viz'); // viz | text
+  const[tradeProposal,setTradeProposal]=useState(null); // {side,entry,stopLoss,takeProfit,qty,rationale,pid}
+  const[tradeBusy,setTradeBusy]=useState(false);
   const vizRef=useRef({speaking:false,amplitude:0,color:'#E8C98A',personaId:'jarvis'}).current;
   const flatRef=useRef(null);
   const abortRef=useRef(null);
@@ -513,29 +516,41 @@ export default function CommandScreen({navigation}){
           patch(m=>({...m,content:shown,revealed:shown.length}));
         };
         let response=await callPersona(pid,hist,myAbort.signal,onDelta);
-        // [MEMORY_QUERY:…] — persona asked its Claude memory index something. Run
-        // the recall, then re-answer with the result in hand. One pass only.
+        // Second-pass tools: the persona emits a lookup tag on pass 1, we gather
+        // the data, then it re-answers with everything in hand. One pass only.
+        const injections=[];
+        let toolLabel='◇ working…';
         const mq=[...response.matchAll(/\[MEMORY_QUERY:\s*([^\]]+)\]/gi)].map(x=>x[1].trim()).filter(Boolean);
-        if(mq.length&&!myAbort.signal.aborted&&(await getSetting('memory_recall','1'))==='1'){
-          await handleCommands(response,pid,{onRelay:({target,message})=>addRelay(target,`[From ${p.name}]: ${message}`)});
-          patch(m=>({...m,content:'◇ recalling…',revealed:11,streaming:false}));
-          vizRef.speaking=true;
-          let recall='';
+        if(mq.length&&(await getSetting('memory_recall','1'))==='1'){
+          toolLabel='◇ recalling…';
           for(const q of mq.slice(0,2)){
-            try{recall+=(recall?'\n\n':'')+`Q: ${q}\nA: ${await queryMemory(pid,q,myAbort.signal)}`;}
-            catch(e){recall+=(recall?'\n\n':'')+`Q: ${q}\nA: (recall failed: ${e.message})`;}
+            try{injections.push(`MEMORY RECALL — Q: ${q}\nA: ${await queryMemory(pid,q,myAbort.signal)}`);}
+            catch(e){injections.push(`MEMORY RECALL — Q: ${q}\nA: (failed: ${e.message})`);}
           }
-          const hist2=[...hist,{role:'assistant',content:response},{role:'user',content:`[MEMORY INDEX RESULTS — answer my previous message using this. Do not mention the lookup.\n${recall}\n]`}];
+        }
+        if(/\[TRADE_SCAN\]/i.test(response)&&!myAbort.signal.aborted){
+          toolLabel='◇ reading the market…';
+          try{injections.push('MARKET SNAPSHOT XAUUSD:\n'+tlFormatSnapshot(await tlSnapshot('XAUUSD')));}
+          catch(e){injections.push('MARKET SNAPSHOT: failed — '+e.message);}
+        }
+        const cmdCallbacks={
+          onRelay:({target,message})=>addRelay(target,`[From ${p.name}]: ${message}`),
+          onTradePropose:(prop)=>setTradeProposal({...prop,pid}),
+          onTradeClose:(id)=>closePosition(id),
+        };
+        if(injections.length&&!myAbort.signal.aborted){
+          await handleCommands(response,pid,cmdCallbacks);
+          patch(m=>({...m,content:toolLabel,revealed:toolLabel.length,streaming:false}));
+          vizRef.speaking=true;
+          const hist2=[...hist,{role:'assistant',content:response},{role:'user',content:`[TOOL RESULTS — answer my previous message using this. Do not mention the lookup mechanism.\n\n${injections.join('\n\n---\n\n')}\n]`}];
           raw='';lastPatch=0;
           patch(m=>({...m,content:'',revealed:0,streaming:!willVoice}));
-          // both passes skip the auto-save; we store one clean exchange below
           response=await callPersona(pid,hist2,myAbort.signal,willVoice?null:onDelta,{skipSave:true});
-          const cleanDisplay=stripCommands(response)||response;
-          savePersonaMemory(pid,`YOU: ${text}\n${p.name}: ${cleanDisplay}`).catch(()=>{});
+          savePersonaMemory(pid,`YOU: ${text}\n${p.name}: ${stripCommands(response)||response}`).catch(()=>{});
         }
         const display=stripCommands(response)||response;
         if(display)replies.push({name:p.name,text:display});
-        await handleCommands(response,pid,{onRelay:({target,message})=>addRelay(target,`[From ${p.name}]: ${message}`)});
+        await handleCommands(response,pid,cmdCallbacks);
         if(willVoice){
           patch(m=>({...m,content:display,revealed:0,streaming:true}));
           const{finalText}=await speakWithReveal(display,p,msgId,isGroup);
@@ -562,6 +577,34 @@ export default function CommandScreen({navigation}){
       setTimeout(()=>flatRef.current?.scrollToEnd({animated:true}),100);
     }
     if(contRef.current&&abortRef.current===myAbort&&!myAbort.signal.aborted)setTimeout(()=>{if(contRef.current)runRound('[Continue. Be brief.]',true);},1200);
+  }
+
+  function pushSystemMsg(content){
+    const msg={id:Date.now().toString()+Math.random().toString(36).slice(2,5),role:'system',content,persona:'system'};
+    if(mode==='direct')setMessages(prev=>[...prev,msg]);else setGroupMessages(prev=>[...prev,msg]);
+  }
+  async function closePosition(id){
+    try{
+      if(String(id).toLowerCase()==='all'){
+        const ps=await tlPositions();
+        for(const pos of ps)await tlClosePosition(pos.id);
+        pushSystemMsg(`— CLOSE ORDER SENT · ${ps.length} position(s) —`);
+      }else{
+        await tlClosePosition(id);
+        pushSystemMsg(`— CLOSE ORDER SENT · position ${id} —`);
+      }
+    }catch(e){pushSystemMsg(`Close failed: ${e.message}`);}
+  }
+  async function confirmTrade(){
+    if(!tradeProposal||tradeBusy)return;
+    setTradeBusy(true);
+    const{side,stopLoss,takeProfit,qty,pid}=tradeProposal;
+    try{
+      const r=await tlPlaceOrder({symbol:'XAUUSD',side,qty:Math.min(qty||MAX_QTY,MAX_QTY),stopLoss,takeProfit});
+      pushSystemMsg(`— ORDER SENT · ${r.side.toUpperCase()} ${r.qty} XAUUSD · SL ${r.stopLoss??'—'} · TP ${r.takeProfit??'—'} · #${r.orderId||'?'} —`);
+      savePersonaMemory(pid||'atlas',`YOU: [confirmed trade]\nA.T.L.A.S.: order sent ${r.side} ${r.qty} XAUUSD SL ${r.stopLoss} TP ${r.takeProfit}`).catch(()=>{});
+    }catch(e){pushSystemMsg(`Order failed: ${e.message}`);}
+    finally{setTradeBusy(false);setTradeProposal(null);}
   }
 
   function interject(){
@@ -815,6 +858,30 @@ export default function CommandScreen({navigation}){
           </View>
         </View></View>
       </Modal>
+
+      <Modal visible={!!tradeProposal} transparent animationType="fade" onRequestClose={()=>setTradeProposal(null)}>
+        <View style={s.modalOver}><View style={s.tradeCard}>
+          <Text style={s.tradeTitle}>CONFIRM TRADE · XAUUSD</Text>
+          {tradeProposal&&<>
+            <View style={[s.tradeSideChip,{backgroundColor:(tradeProposal.side==='buy'?'#5FA779':'#C7614B')+'22',borderColor:tradeProposal.side==='buy'?'#5FA779':'#C7614B'}]}>
+              <Text style={[s.tradeSideT,{color:tradeProposal.side==='buy'?'#5FA779':'#C7614B'}]}>{tradeProposal.side==='buy'?'▲ BUY':'▼ SELL'} {Math.min(tradeProposal.qty||1,MAX_QTY)} LOT</Text>
+            </View>
+            <View style={s.tradeRow}><Text style={s.tradeK}>Entry (ref)</Text><Text style={s.tradeV}>{tradeProposal.entry??'market'}</Text></View>
+            <View style={s.tradeRow}><Text style={s.tradeK}>Stop loss</Text><Text style={[s.tradeV,{color:'#C7614B'}]}>{tradeProposal.stopLoss??'—'}</Text></View>
+            <View style={s.tradeRow}><Text style={s.tradeK}>Take profit</Text><Text style={[s.tradeV,{color:'#5FA779'}]}>{tradeProposal.takeProfit??'—'}</Text></View>
+            {!!tradeProposal.rationale&&<Text style={s.tradeRationale}>{tradeProposal.rationale}</Text>}
+            <Text style={s.tradeNote}>Sends a market order now — fill may differ from the reference entry.</Text>
+            <View style={{flexDirection:'row',gap:10,marginTop:16}}>
+              <TouchableOpacity style={[s.modalBtn,{backgroundColor:tradeProposal.side==='buy'?'#5FA779':'#C7614B'}]} disabled={tradeBusy} onPress={confirmTrade}>
+                <Text style={[s.modalBtnT,{color:'#000'}]}>{tradeBusy?'SENDING…':'CONFIRM & SEND'}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[s.modalBtn,{backgroundColor:'#111',borderWidth:1,borderColor:'#333'}]} onPress={()=>setTradeProposal(null)}>
+                <Text style={[s.modalBtnT,{color:'#555'}]}>CANCEL</Text>
+              </TouchableOpacity>
+            </View>
+          </>}
+        </View></View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -903,4 +970,13 @@ const s=StyleSheet.create({
   pRole:{fontFamily:'monospace',fontSize:7,color:'#333'},
   modalBtn:{flex:1,padding:12,borderRadius:8,alignItems:'center'},
   modalBtnT:{fontFamily:'monospace',fontSize:10,fontWeight:'700',letterSpacing:2},
+  tradeCard:{backgroundColor:'#0A0A0A',borderTopWidth:1,borderColor:'#1A1A1A',borderRadius:14,padding:20,margin:16,alignSelf:'stretch'},
+  tradeTitle:{fontFamily:'monospace',fontSize:11,color:'#E8C98A',letterSpacing:3,marginBottom:14},
+  tradeSideChip:{alignSelf:'flex-start',borderWidth:1,borderRadius:5,paddingHorizontal:10,paddingVertical:5,marginBottom:14},
+  tradeSideT:{fontFamily:'monospace',fontSize:11,fontWeight:'700',letterSpacing:1},
+  tradeRow:{flexDirection:'row',justifyContent:'space-between',paddingVertical:6,borderBottomWidth:1,borderBottomColor:'#111'},
+  tradeK:{fontFamily:'monospace',fontSize:10,color:'#555',letterSpacing:1},
+  tradeV:{fontFamily:'monospace',fontSize:12,color:'#DDD',fontWeight:'700'},
+  tradeRationale:{fontFamily:'monospace',fontSize:11,color:'#999',lineHeight:17,marginTop:12},
+  tradeNote:{fontFamily:'monospace',fontSize:8,color:'#444',marginTop:10,letterSpacing:0.5},
 });

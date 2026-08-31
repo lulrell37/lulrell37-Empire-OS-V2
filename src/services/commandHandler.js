@@ -40,6 +40,16 @@ export async function handleCommands(response,personaId,callbacks={}){
   for(const m of response.matchAll(/\[RELAY_TO:\s*([^|\]]+)\|([^\]]+)\]/gi)){
     callbacks.onRelay?.({target:m[1].trim().toLowerCase(),message:m[2].trim()});
   }
+  for(const m of response.matchAll(/\[TRADE_PROPOSE:\s*([^|\]]+)\|([^|\]]+)\|([^|\]]+)\|([^|\]]+)\|([^|\]]+)\|([^\]]+)\]/gi)){
+    const num=s=>{const v=parseFloat(String(s).replace(/[^0-9.\-]/g,''));return isNaN(v)?null:v;};
+    callbacks.onTradePropose?.({
+      side:m[1].trim().toLowerCase(),entry:num(m[2]),stopLoss:num(m[3]),
+      takeProfit:num(m[4]),qty:num(m[5])||1,rationale:m[6].trim(),
+    });
+  }
+  for(const m of response.matchAll(/\[TRADE_CLOSE:\s*([^\]]+)\]/gi)){
+    callbacks.onTradeClose?.(m[1].trim());
+  }
   if(/\[READ_HUD\]/i.test(response)){const hud=await getHudState();callbacks.onHudRead?.(hud);}
   for(const m of response.matchAll(/\[UPDATE_HUD:\s*([^|\]]+)\|([^\]]+)\]/gi)){
     await updateHudState({[m[1].trim()]:m[2].trim()});hudChanged();callbacks.onHudUpdated?.({field:m[1].trim(),value:m[2].trim()});
@@ -116,5 +126,6 @@ export function stripCommands(text){
     .replace(/\[RELAY_TO:[^\]]*\]/gi,'').replace(/\[SEARCH_WEB:[^\]]*\]/gi,'')
     .replace(/\[READ_CALENDAR\]/gi,'').replace(/\[READ_EMAIL\]/gi,'')
     .replace(/\[MEMORY_QUERY:[^\]]*\]/gi,'').replace(/\[DEEP_RESEARCH:[^\]]*\]/gi,'')
+    .replace(/\[TRADE_SCAN\]/gi,'').replace(/\[TRADE_PROPOSE:[^\]]*\]/gi,'').replace(/\[TRADE_CLOSE:[^\]]*\]/gi,'')
     .replace(/\[SEND_SMS:[^\]]*\]/gi,'').trim();
 }
