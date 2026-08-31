@@ -53,6 +53,9 @@ export async function handleCommands(response,personaId,callbacks={}){
   for(const m of response.matchAll(/\[DEEP_RESEARCH:\s*([^\]]+)\]/gi)){
     if(m[1]?.trim())callbacks.onDeepResearch?.(m[1].trim());
   }
+  for(const m of response.matchAll(/\[SHOW_CHART:\s*([^\]]+)\]/gi)){
+    if(m[1]?.trim())callbacks.onShowChart?.(m[1].trim());
+  }
   for(const m of response.matchAll(/\[ADD_EXPENSE:\s*([^|\]]+)(?:\|([^|\]]+))?(?:\|([^\]]+))?\]/gi)){
     await addExpense(m[1],m[2]?.trim()||'general',m[3]?.trim()||'');
   }
@@ -137,5 +140,6 @@ export function stripCommands(text){
     .replace(/\[MEMORY_QUERY:[^\]]*\]/gi,'').replace(/\[DEEP_RESEARCH:[^\]]*\]/gi,'')
     .replace(/\[TRADE_SCAN\]/gi,'').replace(/\[TRADE_PROPOSE:[^\]]*\]/gi,'').replace(/\[TRADE_CLOSE:[^\]]*\]/gi,'')
     .replace(/\[ADD_EXPENSE:[^\]]*\]/gi,'').replace(/\[ADD_DATE:[^\]]*\]/gi,'').replace(/\[EXPENSE_SUMMARY\]/gi,'')
+    .replace(/\[SHOW_CHART:[^\]]*\]/gi,'')
     .replace(/\[SEND_SMS:[^\]]*\]/gi,'').trim();
 }

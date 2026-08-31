@@ -16,8 +16,10 @@ import{loadKeys}from '../services/keyStore';
 import useEmpireStore from '../store/useEmpireStore';
 import{useIsFocused}from '@react-navigation/native';
 import OrbZoom from './command/OrbZoom';
+import ChartOverlay from './command/ChartOverlay';
 import TradePanel from './command/TradePanel';
 import NudgeBar from './command/NudgeBar';
+import{parseChartSpec}from '../services/chartSpec';
 
 const COUNCIL=['jarvis','ara','selene'];
 const SPECIALISTS=['stephanie','rogue','atlas','haven','aisha','abraham','batman','ghost'];
@@ -53,6 +55,7 @@ export default function CommandScreen({navigation}){
   const[tradeProposal,setTradeProposal]=useState(null); // {side,entry,stopLoss,takeProfit,qty,rationale,pid}
   const[tradeBusy,setTradeBusy]=useState(false);
   const[deepResearch,setDeepResearch]=useState(null); // {id,topic,pid,status}
+  const[chartOverlay,setChartOverlay]=useState(null); // parsed chart spec shown over the orb
   const vizRef=useRef({speaking:false,amplitude:0,color:'#E8C98A',personaId:'jarvis'}).current;
   const flatRef=useRef(null);
   const abortRef=useRef(null);
@@ -555,6 +558,7 @@ export default function CommandScreen({navigation}){
           onTradePropose:(prop)=>setTradeProposal({...prop,pid}),
           onTradeClose:(id)=>closePosition(id),
           onDeepResearch:(topic)=>startDeepResearch(topic,pid),
+          onShowChart:(raw)=>{const spec=parseChartSpec(raw);if(spec.valid){setChartOverlay(spec);setView('viz');}},
         };
         if(injections.length&&!myAbort.signal.aborted){
           await handleCommands(response,pid,cmdCallbacks);
@@ -810,6 +814,9 @@ export default function CommandScreen({navigation}){
       </View>}
 
       {view==='viz'?(
+        chartOverlay?(
+          <ChartOverlay spec={chartOverlay} accent={cp.color} onClose={()=>setChartOverlay(null)}/>
+        ):(
         <OrbZoom
           personaId={activePersona}
           color={cp.color}
@@ -819,6 +826,7 @@ export default function CommandScreen({navigation}){
           onPickPersona={id=>{setMode('direct');setActivePersona(id);}}
           onLaunchGroup={ids=>{setCustomPersonas(ids);setMode('custom');setView('text');}}
         />
+        )
       ):(
         <FlatList ref={flatRef} data={displayMessages} keyExtractor={i=>i.id} renderItem={renderMsg} contentContainerStyle={s.msgList} style={{flex:1}} onContentSizeChange={()=>flatRef.current?.scrollToEnd({animated:true})}/>
       )}
