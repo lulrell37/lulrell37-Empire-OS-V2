@@ -5,7 +5,7 @@
 import React,{useState,useEffect,useMemo,useCallback,useRef}from 'react';
 import{View,Text,StyleSheet,TouchableOpacity,ScrollView,ActivityIndicator,Dimensions}from 'react-native';
 import{Gesture,GestureDetector}from 'react-native-gesture-handler';
-import Animated,{useSharedValue,useAnimatedStyle,withTiming,withSpring,runOnJS}from 'react-native-reanimated';
+import Animated,{useSharedValue,useAnimatedStyle,withTiming,withSpring,runOnJS,Easing}from 'react-native-reanimated';
 import PersonaOrb from './PersonaOrb';
 import Boundary from '../hud/Boundary';
 import{getMemoriesByPersona,deletePersonaMemory}from '../../services/database';
@@ -21,6 +21,15 @@ export default function OrbZoom({personaId,color,active,vizRef,personaPics={},on
   const[regionKey,setRegionKey]=useState(null);
   const[memory,setMemory]=useState(null);
   const pinch=useSharedValue(1);
+  const enter=useSharedValue(1); // 0 -> 1 on every level change
+  const dir=useSharedValue(1);   // 1 = went deeper, -1 = went shallower
+
+  // Zoom-morph each time the level changes: incoming content starts scaled
+  // (small when drilling in, large when backing out) and settles to 1x.
+  useEffect(()=>{
+    enter.value=0;
+    enter.value=withTiming(1,{duration:260,easing:Easing.out(Easing.cubic)});
+  },[level,regionKey,memory?.id]);// eslint-disable-line react-hooks/exhaustive-deps
 
   const reload=useCallback(()=>{getMemoriesByPersona(personaId).then(m=>setMemories(m||[])).catch(()=>setMemories([]));},[personaId]);
   useEffect(()=>{setLevel('orb');setRegionKey(null);setMemory(null);setMemories(null);reload();},[personaId,reload]);
@@ -35,6 +44,7 @@ export default function OrbZoom({personaId,color,active,vizRef,personaPics={},on
   const regionMemories=useMemo(()=>groups.find(g=>g.key===regionKey)?.memories||[],[groups,regionKey]);
 
   const deeper=useCallback(()=>{
+    dir.value=1;
     setLevel(cur=>{
       if(cur==='group')return 'orb';
       if(cur==='orb')return groups.length?'regions':'orb';
@@ -53,6 +63,7 @@ export default function OrbZoom({personaId,color,active,vizRef,personaPics={},on
   },[groups,regionKey]);
 
   const shallower=useCallback(()=>{
+    dir.value=-1;
     setLevel(cur=>{
       if(cur==='memory')return 'region';
       if(cur==='region')return 'regions';
@@ -71,9 +82,16 @@ export default function OrbZoom({personaId,color,active,vizRef,personaPics={},on
       else if(sc<0.78)runOnJS(shallower)();
     }),[deeper,shallower]);// eslint-disable-line react-hooks/exhaustive-deps
 
+  // live pinch scale on the whole stage
   const animStyle=useAnimatedStyle(()=>({transform:[{scale:Math.min(1.6,Math.max(0.6,pinch.value))}]}));
+  // per-level zoom-morph
+  const layerStyle=useAnimatedStyle(()=>{
+    const from=dir.value>0?0.66:1.34;
+    return{opacity:0.1+0.9*enter.value,transform:[{scale:from+(1-from)*enter.value}]};
+  });
 
   function removeMemory(id){
+    dir.value=-1;
     deletePersonaMemory(id).catch(()=>{});
     setMemories(prev=>(prev||[]).filter(m=>m.id!==id));
     setMemory(null);setLevel('region');
@@ -85,28 +103,30 @@ export default function OrbZoom({personaId,color,active,vizRef,personaPics={},on
     <View style={s.wrap}>
       <GestureDetector gesture={gesture}>
         <Animated.View style={[{flex:1},animStyle]}>
-          {level==='group'&&(
-            <GroupView activeId={personaId} pics={personaPics}
-              onPick={id=>{onPickPersona?.(id);setLevel('orb');}}
-              onLaunch={ids=>{onLaunchGroup?.(ids);}}/>
-          )}
+          <Animated.View key={level+':'+(regionKey||'')+':'+(memory?.id||'')} style={[{flex:1},layerStyle]}>
+            {level==='group'&&(
+              <GroupView activeId={personaId} pics={personaPics}
+                onPick={id=>{dir.value=1;onPickPersona?.(id);setLevel('orb');}}
+                onLaunch={ids=>{onLaunchGroup?.(ids);}}/>
+            )}
 
-          {level==='orb'&&(
-            <Boundary label="The visualization"><PersonaOrb viz={vizRef} color={color} active={active}/></Boundary>
-          )}
+            {level==='orb'&&(
+              <Boundary label="The visualization"><PersonaOrb viz={vizRef} color={color} active={active}/></Boundary>
+            )}
 
-          {level==='regions'&&(
-            <RegionsView persona={persona} groups={groups} onPick={k=>{setRegionKey(k);setLevel('region');}}/>
-          )}
+            {level==='regions'&&(
+              <RegionsView persona={persona} groups={groups} onPick={k=>{dir.value=1;setRegionKey(k);setLevel('region');}}/>
+            )}
 
-          {level==='region'&&(
-            <RegionView persona={persona} group={groups.find(g=>g.key===regionKey)} memories={regionMemories}
-              onPick={m=>{setMemory(m);setLevel('memory');}}/>
-          )}
+            {level==='region'&&(
+              <RegionView persona={persona} group={groups.find(g=>g.key===regionKey)} memories={regionMemories}
+                onPick={m=>{dir.value=1;setMemory(m);setLevel('memory');}}/>
+            )}
 
-          {level==='memory'&&memory&&(
-            <MemoryView persona={persona} memory={memory} onDelete={()=>removeMemory(memory.id)}/>
-          )}
+            {level==='memory'&&memory&&(
+              <MemoryView persona={persona} memory={memory} onDelete={()=>removeMemory(memory.id)}/>
+            )}
+          </Animated.View>
 
           {memories===null&&level!=='orb'&&level!=='group'&&<View style={s.loading}><ActivityIndicator color={color}/></View>}
         </Animated.View>
