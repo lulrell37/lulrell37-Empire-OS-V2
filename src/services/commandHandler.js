@@ -1,4 +1,12 @@
-import{addTask,updateTask,completeTask,deleteTask,saveNote,getNote,addRevenue,getTasks,getHudState,updateHudState,setRoutineDone,addRoutineItem,removeRoutineItem,renameRoutineItem,setBatmanDay,getBusinessTargets,setBusinessTarget}from './database';
+import{addTask,updateTask,completeTask,deleteTask,saveNote,getNote,addRevenue,getTasks,getHudState,updateHudState,setRoutineDone,addRoutineItem,removeRoutineItem,renameRoutineItem,setBatmanDay,getBusinessTargets,setBusinessTarget,setPanelLayout}from './database';
+const HUD_PANELS=['briefing','businesses','tasks','routine','batman','daily'];
+const PANEL_ALIASES=[['brief','briefing'],['business','businesses'],['revenue','businesses'],['empire','businesses'],['task','tasks'],['routine','routine'],['morning','routine'],['batman','batman'],['protocol','batman'],['training','batman'],['daily','daily'],['word','daily'],['verse','daily'],['fact','daily']];
+function resolvePanel(s){
+  const q=String(s||'').toLowerCase().trim();
+  if(HUD_PANELS.includes(q))return q;
+  for(const[k,v]of PANEL_ALIASES){if(q.includes(k))return v;}
+  return null;
+}
 export async function handleCommands(response,personaId,callbacks={}){
   const hudChanged=()=>callbacks.onHudMutated?.();
   for(const m of response.matchAll(/\[ADD_TASK:\s*([^|\]]+?)(?:\|([^|\]]+))?(?:\|([^\]]+))?\]/gi)){
@@ -64,6 +72,14 @@ export async function handleCommands(response,personaId,callbacks={}){
   for(const m of response.matchAll(/\[SET_FACT:\s*([^\]]+)\]/gi)){
     await updateHudState({fact_of_day:m[1].trim()});hudChanged();
   }
+  for(const m of response.matchAll(/\[HUD_DETACH:\s*([^\]]+)\]/gi)){
+    const p=resolvePanel(m[1]);
+    if(p){await setPanelLayout(p,{detached:1,x:24,y:24,z:Math.floor(Date.now()/1000)%100000});hudChanged();}
+  }
+  for(const m of response.matchAll(/\[HUD_DOCK:\s*([^\]]+)\]/gi)){
+    const p=resolvePanel(m[1]);
+    if(p){await setPanelLayout(p,{detached:0});hudChanged();}
+  }
   for(const m of response.matchAll(/\[SET_TARGET:\s*([^|\]]+)\|([^|\]]+)(?:\|([^\]]+))?\]/gi)){
     const targets=await getBusinessTargets();
     const b=targets.find(x=>x.business.toLowerCase().includes(m[1].trim().toLowerCase()));
@@ -87,6 +103,7 @@ export function stripCommands(text){
     .replace(/\[ROUTINE_RENAME:[^\]]*\]/gi,'').replace(/\[BATMAN_SET:[^\]]*\]/gi,'')
     .replace(/\[SET_WORD:[^\]]*\]/gi,'').replace(/\[SET_VERSE:[^\]]*\]/gi,'')
     .replace(/\[SET_FACT:[^\]]*\]/gi,'').replace(/\[SET_TARGET:[^\]]*\]/gi,'')
+    .replace(/\[HUD_DETACH:[^\]]*\]/gi,'').replace(/\[HUD_DOCK:[^\]]*\]/gi,'')
     .replace(/\[RELAY_TO:[^\]]*\]/gi,'').replace(/\[SEARCH_WEB:[^\]]*\]/gi,'')
     .replace(/\[READ_CALENDAR\]/gi,'').replace(/\[READ_EMAIL\]/gi,'')
     .replace(/\[SEND_SMS:[^\]]*\]/gi,'').trim();

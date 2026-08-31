@@ -13,6 +13,7 @@ export async function initDatabase(){
     CREATE TABLE IF NOT EXISTS persona_pics(id INTEGER PRIMARY KEY AUTOINCREMENT,persona TEXT UNIQUE,pic_data TEXT);
     CREATE TABLE IF NOT EXISTS custom_prompts(id INTEGER PRIMARY KEY AUTOINCREMENT,persona TEXT UNIQUE,prompt TEXT);
     CREATE TABLE IF NOT EXISTS api_usage(id INTEGER PRIMARY KEY AUTOINCREMENT,provider TEXT,tokens_in INTEGER DEFAULT 0,tokens_out INTEGER DEFAULT 0,date TEXT,created_at INTEGER);
+    CREATE TABLE IF NOT EXISTS hud_layout(panel TEXT PRIMARY KEY,detached INTEGER DEFAULT 0,x REAL DEFAULT 0,y REAL DEFAULT 0,scale REAL DEFAULT 1,z INTEGER DEFAULT 0);
   `);
   await migrateHudColumns();
   await ensureHudState();
@@ -198,6 +199,28 @@ export async function getBatmanTemplate(){
 export async function saveBatmanTemplate(days){
   const t=(Array.isArray(days)?days:[]).slice(0,7).map((d,i)=>({day:d.day||DEFAULT_BATMAN[i].day,label:(d.label||'').trim(),desc:(d.desc||'').trim()}));
   if(t.length===7)await updateHudState({batman_template:JSON.stringify(t)});
+}
+// --- HUD holographic layout: which panels float, and where ---
+export async function getHudLayout(){
+  const rows=await db.getAllAsync('SELECT * FROM hud_layout');
+  const map={};
+  rows.forEach(r=>{map[r.panel]={detached:!!r.detached,x:r.x,y:r.y,scale:r.scale||1,z:r.z||0};});
+  return map;
+}
+export async function setPanelLayout(panel,patch){
+  const cur=await db.getFirstAsync('SELECT * FROM hud_layout WHERE panel=?',[panel]);
+  const base=cur||{detached:0,x:0,y:0,scale:1,z:0};
+  const next={
+    detached:patch.detached!=null?(patch.detached?1:0):(base.detached?1:0),
+    x:patch.x!=null?patch.x:base.x,
+    y:patch.y!=null?patch.y:base.y,
+    scale:patch.scale!=null?patch.scale:(base.scale||1),
+    z:patch.z!=null?patch.z:(base.z||0),
+  };
+  await db.runAsync(
+    'INSERT INTO hud_layout(panel,detached,x,y,scale,z) VALUES(?,?,?,?,?,?) ON CONFLICT(panel) DO UPDATE SET detached=excluded.detached,x=excluded.x,y=excluded.y,scale=excluded.scale,z=excluded.z',
+    [panel,next.detached,next.x,next.y,next.scale,next.z]
+  );
 }
 export async function setBatmanDay(day,label,desc){
   const t=await getBatmanTemplate();

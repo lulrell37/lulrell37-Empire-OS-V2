@@ -1,12 +1,13 @@
-import React,{useState,useCallback,useRef}from 'react';
+import React,{useState,useEffect,useCallback,useRef}from 'react';
 import{View,Text,StyleSheet,ScrollView,TouchableOpacity,TextInput,Modal,Dimensions}from 'react-native';
 import{SafeAreaView}from 'react-native-safe-area-context';
 import{useFocusEffect}from '@react-navigation/native';
 import Svg,{Circle,Defs,LinearGradient,Stop}from 'react-native-svg';
 import{Feather}from '@expo/vector-icons';
-import{getHudState,updateHudState,getTasks,addTask,updateTask,deleteTask,completeTask,getBusinessesWithRevenue,setBusinessTarget,addRevenue,updateEmpireScore,getMorningRoutine,saveMorningRoutine,getBatmanTemplate,saveBatmanTemplate,DEFAULT_BATMAN}from '../services/database';
+import{getHudState,updateHudState,getTasks,addTask,updateTask,deleteTask,completeTask,getBusinessesWithRevenue,setBusinessTarget,addRevenue,updateEmpireScore,getMorningRoutine,saveMorningRoutine,getBatmanTemplate,saveBatmanTemplate,getHudLayout,setPanelLayout,DEFAULT_BATMAN}from '../services/database';
 import{colors,space,radius,type,FONTS}from '../theme';
 import{PANEL_META,BriefingPanel,BusinessPanel,TasksPanel,RoutinePanel,BatmanPanel,DailyPanel}from './hud/panels';
+import FloatingCard from './hud/FloatingCard';
 const{width}=Dimensions.get('window');
 const RS=196,ST=6,CI=2*Math.PI*((RS-ST)/2);
 const PANELS=['briefing','businesses','tasks','routine','batman','daily'];
@@ -36,6 +37,7 @@ export default function HUDScreen({navigation}){
   const[bizLogInput,setBizLogInput]=useState('');
   const[taskEdit,setTaskEdit]=useState(null);
   const[taskEditInput,setTaskEditInput]=useState('');
+  const[layout,setLayout]=useState({});            // { [panel]: {detached,x,y,scale,z} }
   const scrollRef=useRef(null);
   const busyRef=useRef(false);
   busyRef.current=panelEditing||showAddTask||!!taskEdit||!!bizModal;
@@ -48,10 +50,34 @@ export default function HUDScreen({navigation}){
     const b=await getBusinessesWithRevenue();
     const{items,done}=await getMorningRoutine();
     const bt=await getBatmanTemplate();
+    const lay=await getHudLayout();
     setHud(h);setTasks(t);setBusinesses(b);
     setRoutineItems(items);setRoutine(done);
-    setBatmanTemplate(bt);
+    setBatmanTemplate(bt);setLayout(lay);
     try{setBatman(JSON.parse(h?.batman_protocol||'{}'));}catch{setBatman({});}
+  }
+
+  const maxZ=()=>Math.max(0,...PANELS.map(p=>layout[p]?.z||0));
+  async function detachPanel(key){
+    const n=PANELS.filter(p=>layout[p]?.detached).length;
+    const patch={detached:true,x:20+n*16,y:20+n*16,scale:layout[key]?.scale||1,z:maxZ()+1};
+    setLayout(l=>({...l,[key]:{...l[key],...patch}}));
+    await setPanelLayout(key,{detached:1,x:patch.x,y:patch.y,scale:patch.scale,z:patch.z});
+  }
+  async function dockPanel(key){
+    setLayout(l=>({...l,[key]:{...l[key],detached:false}}));
+    await setPanelLayout(key,{detached:0});
+  }
+  async function bringFront(key){
+    const top=maxZ();
+    if((layout[key]?.z||0)>=top)return;
+    const z=top+1;
+    setLayout(l=>({...l,[key]:{...l[key],z}}));
+    await setPanelLayout(key,{z});
+  }
+  async function persistPanel(key,patch){
+    setLayout(l=>({...l,[key]:{...l[key],...patch}}));
+    await setPanelLayout(key,patch);
   }
 
   async function recalcScore(r,b,t,routineLen=routineItems.length){
@@ -135,13 +161,22 @@ export default function HUDScreen({navigation}){
     setBizModal(null);
     const b=await getBusinessesWithRevenue();setBusinesses(b);
   }
+  const visiblePanels=PANELS.filter(p=>!layout[p]?.detached);
+  const detachedPanels=PANELS.filter(p=>layout[p]?.detached);
+  useEffect(()=>{
+    if(panelIndex>visiblePanels.length-1){
+      const ni=Math.max(0,visiblePanels.length-1);
+      setPanelIndex(ni);
+      scrollRef.current?.scrollTo({x:ni*width,animated:false});
+    }
+  },[visiblePanels.length]); // eslint-disable-line react-hooks/exhaustive-deps
   function goToPanel(i){
-    const idx=Math.max(0,Math.min(PANELS.length-1,i));
+    const idx=Math.max(0,Math.min(visiblePanels.length-1,i));
     setPanelIndex(idx);
     scrollRef.current?.scrollTo({x:idx*width,animated:true});
   }
   function onScrollEnd(e){
-    const idx=Math.round(e.nativeEvent.contentOffset.x/width);
+    const idx=Math.max(0,Math.min(visiblePanels.length-1,Math.round(e.nativeEvent.contentOffset.x/width)));
     setPanelIndex(idx);
     scrollRef.current?.scrollTo({x:idx*width,animated:true});
   }
@@ -205,33 +240,60 @@ export default function HUDScreen({navigation}){
       </View>
 
       <View style={s.dots}>
-        {PANELS.map((p,i)=>(
+        {visiblePanels.map((p,i)=>(
           <TouchableOpacity key={p} onPress={()=>goToPanel(i)} style={[s.dot,panelIndex===i&&s.dotActive]}/>
         ))}
       </View>
 
-      <ScrollView
-        ref={scrollRef}
-        horizontal
-        pagingEnabled
-        snapToInterval={width}
-        snapToAlignment="start"
-        decelerationRate="fast"
-        disableIntervalMomentum
-        showsHorizontalScrollIndicator={false}
-        scrollEnabled={!panelEditing}
-        onMomentumScrollEnd={onScrollEnd}
-        style={{flex:1}}
-      >
-        {PANELS.map(key=>(
-          <ScrollView key={key} style={{width}} contentContainerStyle={s.panelContent} keyboardShouldPersistTaps="handled">
-            <View style={s.panelTopBar}>
-              <Text style={s.panelLabel}>{PANEL_META[key].title}</Text>
+      <View style={{flex:1}}>
+        <ScrollView
+          ref={scrollRef}
+          horizontal
+          pagingEnabled
+          snapToInterval={width}
+          snapToAlignment="start"
+          decelerationRate="fast"
+          disableIntervalMomentum
+          showsHorizontalScrollIndicator={false}
+          scrollEnabled={!panelEditing}
+          onMomentumScrollEnd={onScrollEnd}
+          style={{flex:1}}
+        >
+          {visiblePanels.map(key=>(
+            <ScrollView key={key} style={{width}} contentContainerStyle={s.panelContent} keyboardShouldPersistTaps="handled">
+              <View style={s.panelTopBar}>
+                <Text style={s.panelLabel}>{PANEL_META[key].title}</Text>
+                <TouchableOpacity onPress={()=>detachPanel(key)} hitSlop={{top:10,bottom:10,left:10,right:10}} activeOpacity={0.6}>
+                  <Feather name="maximize-2" size={13} color={colors.textDim}/>
+                </TouchableOpacity>
+              </View>
+              {renderPanel(key)}
+            </ScrollView>
+          ))}
+          {!visiblePanels.length&&(
+            <View style={[s.panelContent,{width,alignItems:'center',justifyContent:'center',flex:1}]}>
+              <Feather name="layout" size={22} color={colors.textFaint}/>
+              <Text style={s.allDetached}>Every panel is floating.{'\n'}Dock one to browse the carousel.</Text>
             </View>
-            {renderPanel(key)}
-          </ScrollView>
-        ))}
-      </ScrollView>
+          )}
+        </ScrollView>
+
+        <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
+          {detachedPanels.map(key=>(
+            <FloatingCard
+              key={key}
+              title={PANEL_META[key].title}
+              initial={layout[key]}
+              z={layout[key]?.z||0}
+              onFront={()=>bringFront(key)}
+              onPersist={(patch)=>persistPanel(key,patch)}
+              onDock={()=>dockPanel(key)}
+            >
+              {renderPanel(key)}
+            </FloatingCard>
+          ))}
+        </View>
+      </View>
 
       <View style={s.bottomNav}>
         {NAV.map(n=>{
@@ -316,6 +378,7 @@ const s=StyleSheet.create({
   panelContent:{paddingHorizontal:space.xl,paddingTop:space.xs,paddingBottom:space.xxxl},
   panelTopBar:{flexDirection:'row',justifyContent:'space-between',alignItems:'center',marginBottom:space.lg},
   panelLabel:{...type.label},
+  allDetached:{...type.meta,color:colors.textFaint,textAlign:'center',marginTop:space.md,lineHeight:16},
 
   bottomNav:{flexDirection:'row',borderTopWidth:1,borderTopColor:colors.hairline,paddingVertical:space.sm,backgroundColor:colors.bg},
   navItem:{flex:1,alignItems:'center',gap:4,paddingVertical:3},
