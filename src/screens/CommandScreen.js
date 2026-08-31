@@ -16,6 +16,7 @@ import{loadKeys}from '../services/keyStore';
 import useEmpireStore from '../store/useEmpireStore';
 import{useIsFocused}from '@react-navigation/native';
 import PersonaOrb from './command/PersonaOrb';
+import TradePanel from './command/TradePanel';
 import Boundary from './hud/Boundary';
 
 const COUNCIL=['jarvis','ara','selene'];
@@ -739,6 +740,8 @@ export default function CommandScreen({navigation}){
         <Text style={s.memLabel}>MEMORY</Text>
         <Text style={s.memStatus}>{mode==='direct'?`${cp.name} memory active`:'All persona memory loaded ✓'}</Text>
       </View>
+
+      <TradePanel active={isFocused} onEvent={pushSystemMsg}/>
 
       {view==='viz'?(
         <View style={{flex:1}}>
