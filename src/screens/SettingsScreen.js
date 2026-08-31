@@ -2,12 +2,13 @@ import React,{useState,useEffect}from 'react';
 import{View,Text,StyleSheet,TextInput,TouchableOpacity,ScrollView,Alert,KeyboardAvoidingView,Platform,Image}from 'react-native';
 import{SafeAreaView}from 'react-native-safe-area-context';
 import*as ImagePicker from 'expo-image-picker';
-import{saveKeys,loadKeys,saveGoogleToken,loadGoogleToken,clearGoogleToken}from '../services/keyStore';
+import{saveKeys,loadKeys,saveGoogleToken,loadGoogleToken,clearGoogleToken,saveTradeCreds,loadTradeCreds,clearTradeCreds}from '../services/keyStore';
+import{tlConnect}from '../services/tradeLocker';
 import{saveCustomPrompt,getCustomPrompt,getApiUsage,getAllPersonaPics,savePersonaPic,getSetting,setSetting}from '../services/database';
 import{PERSONA_LIST,getPersona}from '../personas/personas';
 import{useGoogleAuth}from '../services/googleAuth';
 import useEmpireStore from '../store/useEmpireStore';
-const TABS=['KEYS','GOOGLE','AI','PROFILES','PROMPTS','USAGE'];
+const TABS=['KEYS','GOOGLE','TRADING','AI','PROFILES','PROMPTS','USAGE'];
 export default function SettingsScreen({navigation}){
   const[tab,setTab]=useState('KEYS');
   const[claude,setClaude]=useState('');const[grok,setGrok]=useState('');const[openai,setOpenai]=useState('');const[elevenlabs,setElevenlabs]=useState('');const[meshy,setMeshy]=useState('');
@@ -18,6 +19,9 @@ export default function SettingsScreen({navigation}){
   const[googleConnecting,setGoogleConnecting]=useState(false);
   const[memoryRecall,setMemoryRecall]=useState(true);
   const[deepConfirm,setDeepConfirm]=useState(true);
+  const[tl,setTl]=useState({email:'',password:'',server:'',env:'demo'});
+  const[tlBusy,setTlBusy]=useState(false);
+  const[tlAccount,setTlAccount]=useState(null);
   const{personaPics,setPersonaPics}=useEmpireStore();
   const[request,response,promptAsync]=useGoogleAuth();
   useEffect(()=>{loadAll();},[]);
@@ -38,6 +42,23 @@ export default function SettingsScreen({navigation}){
     const g=await loadGoogleToken();setGoogleConnected(!!g?.accessToken);
     setMemoryRecall((await getSetting('memory_recall','1'))==='1');
     setDeepConfirm((await getSetting('deep_research_confirm','1'))==='1');
+    const tc=await loadTradeCreds();if(tc)setTl({email:tc.email||'',password:tc.password||'',server:tc.server||'',env:tc.env||'demo'});
+  }
+  async function connectTradeLocker(){
+    if(!tl.email.trim()||!tl.password||!tl.server.trim()){Alert.alert('Required','Email, password and server are all required.');return;}
+    setTlBusy(true);
+    try{
+      const creds={email:tl.email.trim(),password:tl.password,server:tl.server.trim(),env:tl.env};
+      await saveTradeCreds(creds);
+      const acct=await tlConnect();
+      setTlAccount(acct);
+      Alert.alert('Connected',`${acct.env.toUpperCase()} · ${acct.currency} ${Number(acct.balance||0).toLocaleString()} · acct ${acct.accountId}`);
+    }catch(e){Alert.alert('TradeLocker',e.message);}
+    finally{setTlBusy(false);}
+  }
+  async function disconnectTradeLocker(){
+    await clearTradeCreds();setTlAccount(null);setTl({email:'',password:'',server:'',env:'demo'});
+    Alert.alert('Disconnected','TradeLocker login removed.');
   }
   async function toggleMemoryRecall(){const nv=!memoryRecall;setMemoryRecall(nv);await setSetting('memory_recall',nv?'1':'0');}
   async function toggleDeepConfirm(){const nv=!deepConfirm;setDeepConfirm(nv);await setSetting('deep_research_confirm',nv?'1':'0');}
@@ -145,6 +166,33 @@ export default function SettingsScreen({navigation}){
             </View>
             <Text style={s.googleNote}>Note: the access token currently lasts about 1 hour. If Drive/Gmail/Calendar features stop responding, reconnect here. Automatic token refresh requires a backend and is planned for a later update.</Text>
           </View>}
+          {tab==='TRADING'&&<View>
+            <Text style={s.secTitle}>TRADELOCKER</Text>
+            <Text style={s.secSub}>Atlas trades XAUUSD through this login while the app is open. Max 1 lot per order. Demo account recommended until proven. Stored securely on device.</Text>
+            <View style={s.tlEnvRow}>
+              {['demo','live'].map(e=>(
+                <TouchableOpacity key={e} style={[s.tlEnvBtn,tl.env===e&&s.tlEnvBtnA]} onPress={()=>setTl(v=>({...v,env:e}))}>
+                  <Text style={[s.tlEnvT,tl.env===e&&s.tlEnvTA]}>{e.toUpperCase()}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            {[['Email','email',false,'you@example.com'],['Password','password',true,'••••••••'],['Server','server',false,'e.g. OSP-DEMO']].map(([label,key,secure,ph])=>(
+              <View key={key} style={s.keyField}>
+                <Text style={s.keyLabel}>{label.toUpperCase()}</Text>
+                <TextInput style={s.keyInput} value={tl[key]} onChangeText={t=>setTl(v=>({...v,[key]:t}))} placeholder={ph} placeholderTextColor="#1A1A1A" secureTextEntry={secure} autoCapitalize="none" autoCorrect={false}/>
+              </View>
+            ))}
+            <TouchableOpacity style={s.saveBtn} onPress={connectTradeLocker} disabled={tlBusy}>
+              <Text style={s.saveBtnT}>{tlBusy?'CONNECTING…':'CONNECT'}</Text>
+            </TouchableOpacity>
+            {tlAccount&&<View style={s.tlAcctCard}>
+              <Text style={s.tlAcctLine}>{tlAccount.env.toUpperCase()} · acct {tlAccount.accountId}</Text>
+              <Text style={s.tlAcctBal}>{tlAccount.currency} {Number(tlAccount.balance||0).toLocaleString()}</Text>
+            </View>}
+            <TouchableOpacity style={[s.saveBtn,{backgroundColor:'#111',borderWidth:1,borderColor:'#333',marginTop:10}]} onPress={disconnectTradeLocker}>
+              <Text style={[s.saveBtnT,{color:'#E05555'}]}>DISCONNECT</Text>
+            </TouchableOpacity>
+          </View>}
           {tab==='AI'&&<View>
             <Text style={s.secTitle}>AI BEHAVIOR</Text>
             <Text style={s.secSub}>Controls for the memory and research subsystems. Calls bill to your own API keys.</Text>
@@ -224,6 +272,13 @@ const s=StyleSheet.create({
   tab:{paddingHorizontal:14,paddingVertical:6,borderRadius:4,borderWidth:1,borderColor:'#111',marginBottom:8},
   tabA:{borderColor:'#E8C98A',backgroundColor:'#E8C98A11'},tabT:{fontFamily:'monospace',fontSize:9,color:'#333',letterSpacing:1},tabTA:{color:'#E8C98A'},
   content:{padding:18,paddingBottom:40},
+  tlEnvRow:{flexDirection:'row',gap:8,marginBottom:16},
+  tlEnvBtn:{flex:1,paddingVertical:8,borderRadius:6,borderWidth:1,borderColor:'#1A1A1A',alignItems:'center'},
+  tlEnvBtnA:{borderColor:'#E8C98A',backgroundColor:'#E8C98A11'},
+  tlEnvT:{fontFamily:'monospace',fontSize:9,color:'#444',letterSpacing:2},tlEnvTA:{color:'#E8C98A'},
+  tlAcctCard:{marginTop:14,borderWidth:1,borderColor:'#1F1B14',borderRadius:8,padding:14},
+  tlAcctLine:{fontFamily:'monospace',fontSize:8,color:'#555',letterSpacing:2,marginBottom:4},
+  tlAcctBal:{fontFamily:'monospace',fontSize:16,color:'#5FA779',fontWeight:'700'},
   toggleRow:{flexDirection:'row',alignItems:'center',paddingVertical:14,borderBottomWidth:1,borderBottomColor:'#0D0D0D'},
   toggleLabel:{fontFamily:'monospace',fontSize:10,color:'#E8C98A',letterSpacing:2,marginBottom:4},
   toggleSub:{fontFamily:'monospace',fontSize:8,color:'#444',lineHeight:13},
