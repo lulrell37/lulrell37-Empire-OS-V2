@@ -1,9 +1,17 @@
 import{loadKeys}from './keyStore';
-import{getPersonaMemory,getMemoriesByPersona,savePersonaMemory,getHudState,getTasks,trackApiUsage,getCustomPrompt}from './database';
+import{getPersonaMemory,getMemoriesByPersona,savePersonaMemory,getHudState,getTasks,trackApiUsage,getCustomPrompt,getUpcomingDates}from './database';
 import*as FileSystem from 'expo-file-system';
 import{Alert}from 'react-native';
 let keys=null;
 async function ensureKeys(){if(!keys)keys=await loadKeys();return keys;}
+// The full context-injected system prompt for a persona (HUD, memory, style).
+// Exported so the Grok realtime voice socket can be seeded with the same context
+// the text turn gets, instead of the bare personality prompt.
+export async function personaSystemPrompt(personaId){
+  const{getPersona}=await import('../personas/personas');
+  return buildSys(personaId,getPersona(personaId),[]);
+}
+
 async function buildSys(personaId,persona,convo=[]){
   const now=new Date();
   const timeStr=now.toLocaleString('en-US',{timeZone:'America/New_York',weekday:'long',month:'long',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit',hour12:true});
@@ -26,7 +34,12 @@ async function buildSys(personaId,persona,convo=[]){
     const dow=new Date().getDay();
     const todayBat=Array.isArray(bt)&&bt.length===7?bt[dow===0?6:dow-1]:null;
     const openTasks=tasks.map(t=>t.title).slice(0,15).join(', ');
-    sys+=`\n\n[LIVE HUD DATA:\nEmpire Score: ${hud.empire_score}%\nStreak: ${hud.streak} days\nWord of Day: ${hud.word_of_day||'Not set'}\nVerse of Day: ${hud.verse_of_day||'Not set'}\nFact of Day: ${hud.fact_of_day||'Not set'}\nMorning Routine (${routineCount}/${routineItems.length}): ${routineList}\nBatman Protocol Today: ${todayBat?`${todayBat.label} — ${todayBat.desc}`:'Not set'}\nOpen Tasks (${tasks.length}): ${openTasks||'none'}\n]`;
+    let upcoming='';
+    try{
+      const d=await getUpcomingDates(21);
+      if(d.length)upcoming=`\nUpcoming Dates: ${d.map(x=>`${x.label} (${x.daysOut===0?'today':x.daysOut===1?'tomorrow':`in ${x.daysOut}d`})`).join(', ')}`;
+    }catch{}
+    sys+=`\n\n[LIVE HUD DATA:\nEmpire Score: ${hud.empire_score}%\nStreak: ${hud.streak} days\nWord of Day: ${hud.word_of_day||'Not set'}\nVerse of Day: ${hud.verse_of_day||'Not set'}\nFact of Day: ${hud.fact_of_day||'Not set'}\nMorning Routine (${routineCount}/${routineItems.length}): ${routineList}\nBatman Protocol Today: ${todayBat?`${todayBat.label} — ${todayBat.desc}`:'Not set'}\nOpen Tasks (${tasks.length}): ${openTasks||'none'}${upcoming}\n]`;
   }
   const lastUser=[...convo].reverse().find(m=>m?.role==='user'&&m?.content);
   const mem=await getPersonaMemory(personaId,{query:lastUser?.content||'',limit:16});
@@ -170,6 +183,67 @@ export async function queryMemory(personaId,question,signal=null){
   const d=await res.json();
   if(d.usage)await trackApiUsage('claude',d.usage.input_tokens||0,d.usage.output_tokens||0).catch(()=>{});
   return d.content?.[0]?.text?.trim()||'(no recall)';
+}
+
+// Quick web search — a tight factual briefing, not deep research. Grok Live
+// Search for Grok personas, Claude's web_search tool otherwise.
+export async function webSearch(personaId,query,signal=null){
+  const k=await ensureKeys();
+  const{getPersona}=await import('../personas/personas');
+  const persona=getPersona(personaId);
+  const brief='Search the web and give a tight, factual briefing: the key numbers, facts, and dates, with source names inline. No fluff, no preamble.';
+  if(persona.api==='grok'&&k?.grok){
+    const res=await fetch('https://api.x.ai/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+k.grok},body:JSON.stringify({
+      model:persona.model||'grok-3-latest',max_tokens:900,
+      messages:[{role:'system',content:brief},{role:'user',content:query}],
+      search_parameters:{mode:'on',return_citations:true,max_search_results:8},
+    }),signal});
+    if(!res.ok)throw new Error(`web search: ${(await res.text()).substring(0,80)}`);
+    const d=await res.json();
+    if(d.usage)await trackApiUsage('grok',d.usage.prompt_tokens||0,d.usage.completion_tokens||0).catch(()=>{});
+    const txt=d.choices?.[0]?.message?.content||'';
+    const cites=d.citations?.length?`\n\nSources: ${d.citations.slice(0,8).join(' · ')}`:'';
+    return(txt+cites).trim()||'(no results)';
+  }
+  if(k?.claude){
+    const res=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':k.claude,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},body:JSON.stringify({
+      model:'claude-sonnet-4-6',max_tokens:1000,
+      tools:[{type:'web_search_20250305',name:'web_search',max_uses:5}],
+      messages:[{role:'user',content:`${brief}\n\nQuery: ${query}`}],
+    }),signal});
+    if(!res.ok)throw new Error(`web search: ${(await res.text()).substring(0,80)}`);
+    const d=await res.json();
+    if(d.usage)await trackApiUsage('claude',d.usage.input_tokens||0,d.usage.output_tokens||0).catch(()=>{});
+    return(d.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('\n').trim()||'(no results)';
+  }
+  throw new Error('web search needs a Grok or Claude API key');
+}
+
+// Long-form autonomous research via OpenAI Deep Research. Runs for minutes —
+// started in the background, caller polls deepResearchPoll(id).
+export async function deepResearchStart(topic){
+  const k=await ensureKeys();
+  if(!k?.openai)throw new Error('OpenAI API key needed for Deep Research (Settings → KEYS)');
+  const res=await fetch('https://api.openai.com/v1/responses',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+k.openai},body:JSON.stringify({
+    model:'o3-deep-research',
+    input:`Research this thoroughly and return a structured brief with findings, key figures, and cited sources:\n\n${topic}`,
+    background:true,
+    tools:[{type:'web_search_preview'}],
+  })});
+  if(!res.ok)throw new Error(`Deep Research: ${(await res.text()).substring(0,120)}`);
+  const d=await res.json();
+  return d.id;
+}
+export async function deepResearchPoll(id){
+  const k=await ensureKeys();
+  if(!k?.openai)throw new Error('OpenAI key missing');
+  const res=await fetch('https://api.openai.com/v1/responses/'+id,{headers:{'Authorization':'Bearer '+k.openai}});
+  if(!res.ok)throw new Error(`Deep Research poll: ${(await res.text()).substring(0,100)}`);
+  const d=await res.json();
+  if(d.status!=='completed')return{status:d.status};
+  if(d.usage)await trackApiUsage('openai',d.usage.input_tokens||0,d.usage.output_tokens||0).catch(()=>{});
+  const text=d.output_text||(d.output||[]).flatMap(o=>(o.content||[]).filter(c=>c.type==='output_text').map(c=>c.text)).join('\n');
+  return{status:'completed',text:text||'(Deep Research returned no text)'};
 }
 export async function textToSpeech(text,voiceId,personaName){
   const k=await ensureKeys();

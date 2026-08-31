@@ -16,6 +16,8 @@ export async function initDatabase(){
     CREATE TABLE IF NOT EXISTS api_usage(id INTEGER PRIMARY KEY AUTOINCREMENT,provider TEXT,tokens_in INTEGER DEFAULT 0,tokens_out INTEGER DEFAULT 0,date TEXT,created_at INTEGER);
     CREATE TABLE IF NOT EXISTS hud_layout(panel TEXT PRIMARY KEY,detached INTEGER DEFAULT 0,x REAL DEFAULT 0,y REAL DEFAULT 0,scale REAL DEFAULT 1,z INTEGER DEFAULT 0);
     CREATE TABLE IF NOT EXISTS app_settings(key TEXT PRIMARY KEY,value TEXT);
+    CREATE TABLE IF NOT EXISTS expenses(id INTEGER PRIMARY KEY AUTOINCREMENT,amount REAL,category TEXT,note TEXT,date TEXT,created_at INTEGER);
+    CREATE TABLE IF NOT EXISTS important_dates(id INTEGER PRIMARY KEY AUTOINCREMENT,label TEXT,date TEXT,note TEXT,created_at INTEGER);
   `);
   await migrateHudColumns();
   await migratePersonaMemory();
@@ -308,6 +310,43 @@ export async function deletePersonaMemory(id){await db.runAsync('DELETE FROM per
 // Simple app-wide key/value settings (feature toggles, etc.).
 export async function getSetting(key,fallback=null){const r=await db.getFirstAsync('SELECT value FROM app_settings WHERE key=?',[key]);return r?r.value:fallback;}
 export async function setSetting(key,value){await db.runAsync('INSERT OR REPLACE INTO app_settings(key,value) VALUES(?,?)',[key,String(value)]);}
+
+// --- Expenses (manual entry, local) ---
+export async function addExpense(amount,category,note=''){
+  const a=parseFloat(amount);if(isNaN(a))return;
+  await db.runAsync('INSERT INTO expenses(amount,category,note,date,created_at) VALUES(?,?,?,?,?)',[a,(category||'general').toLowerCase().trim(),note||'',getTodayStr(),Date.now()]);
+}
+export async function getExpensesRecent(limit=20){return await db.getAllAsync('SELECT * FROM expenses ORDER BY created_at DESC LIMIT ?',[limit]);}
+export async function getExpenseSummary(){
+  const month=getMonthStr();
+  const rows=await db.getAllAsync("SELECT category,SUM(amount) as total,COUNT(*) as n FROM expenses WHERE date LIKE ? GROUP BY category ORDER BY total DESC",[month+'%']);
+  const total=rows.reduce((a,r)=>a+(r.total||0),0);
+  return{month,total,byCategory:rows};
+}
+
+// --- Important dates ---
+export async function addImportantDate(label,date,note=''){
+  if(!label||!date)return;
+  await db.runAsync('INSERT INTO important_dates(label,date,note,created_at) VALUES(?,?,?,?)',[label.trim(),String(date).trim(),note||'',Date.now()]);
+}
+export async function getAllImportantDates(){return await db.getAllAsync('SELECT * FROM important_dates ORDER BY date ASC');}
+export async function deleteImportantDate(id){await db.runAsync('DELETE FROM important_dates WHERE id=?',[id]);}
+// Dates within `days` from today, ignoring year for recurring occasions.
+export async function getUpcomingDates(days=30){
+  const all=await getAllImportantDates();
+  const now=new Date();now.setHours(0,0,0,0);
+  const out=[];
+  for(const d of all){
+    const m=/(\d{4})-(\d{2})-(\d{2})/.exec(d.date)||/^(?:\d{4}-)?(\d{2})-(\d{2})$/.exec(d.date);
+    if(!m)continue;
+    const mm=m.length===4?+m[2]:+m[1],dd=m.length===4?+m[3]:+m[2];
+    let next=new Date(now.getFullYear(),mm-1,dd);
+    if(next<now)next=new Date(now.getFullYear()+1,mm-1,dd);
+    const daysOut=Math.round((next-now)/86400000);
+    if(daysOut<=days)out.push({...d,daysOut});
+  }
+  return out.sort((a,b)=>a.daysOut-b.daysOut);
+}
 export async function saveNote(title,content,persona=null){const now=Date.now();const ex=await db.getFirstAsync('SELECT * FROM notes WHERE title=?',[title]);if(ex){await db.runAsync('UPDATE notes SET content=?,updated_at=? WHERE id=?',[content,now,ex.id]);return ex.id;}const r=await db.runAsync('INSERT INTO notes(title,content,persona,created_at,updated_at) VALUES(?,?,?,?,?)',[title,content,persona,now,now]);return r.lastInsertRowId;}
 export async function getNote(title){return await db.getFirstAsync('SELECT * FROM notes WHERE title LIKE ?',['%'+title+'%']);}
 export async function getAllNotes(){return await db.getAllAsync('SELECT * FROM notes ORDER BY updated_at DESC');}

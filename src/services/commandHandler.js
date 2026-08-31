@@ -1,4 +1,4 @@
-import{addTask,updateTask,completeTask,deleteTask,saveNote,getNote,addRevenue,getTasks,getHudState,updateHudState,setRoutineDone,addRoutineItem,removeRoutineItem,renameRoutineItem,setBatmanDay,getBusinessTargets,setBusinessTarget,setPanelLayout}from './database';
+import{addTask,updateTask,completeTask,deleteTask,saveNote,getNote,addRevenue,getTasks,getHudState,updateHudState,setRoutineDone,addRoutineItem,removeRoutineItem,renameRoutineItem,setBatmanDay,getBusinessTargets,setBusinessTarget,setPanelLayout,addExpense,addImportantDate}from './database';
 import useEmpireStore from '../store/useEmpireStore';
 const HUD_PANELS=['briefing','businesses','tasks','routine','batman','daily'];
 const PANEL_ALIASES=[['brief','briefing'],['business','businesses'],['revenue','businesses'],['empire','businesses'],['task','tasks'],['routine','routine'],['morning','routine'],['batman','batman'],['protocol','batman'],['training','batman'],['daily','daily'],['word','daily'],['verse','daily'],['fact','daily']];
@@ -49,6 +49,15 @@ export async function handleCommands(response,personaId,callbacks={}){
   }
   for(const m of response.matchAll(/\[TRADE_CLOSE:\s*([^\]]+)\]/gi)){
     callbacks.onTradeClose?.(m[1].trim());
+  }
+  for(const m of response.matchAll(/\[DEEP_RESEARCH:\s*([^\]]+)\]/gi)){
+    if(m[1]?.trim())callbacks.onDeepResearch?.(m[1].trim());
+  }
+  for(const m of response.matchAll(/\[ADD_EXPENSE:\s*([^|\]]+)(?:\|([^|\]]+))?(?:\|([^\]]+))?\]/gi)){
+    await addExpense(m[1],m[2]?.trim()||'general',m[3]?.trim()||'');
+  }
+  for(const m of response.matchAll(/\[ADD_DATE:\s*([^|\]]+)\|([^|\]]+)(?:\|([^\]]+))?\]/gi)){
+    await addImportantDate(m[1].trim(),m[2].trim(),m[3]?.trim()||'');
   }
   if(/\[READ_HUD\]/i.test(response)){const hud=await getHudState();callbacks.onHudRead?.(hud);}
   for(const m of response.matchAll(/\[UPDATE_HUD:\s*([^|\]]+)\|([^\]]+)\]/gi)){
@@ -127,5 +136,6 @@ export function stripCommands(text){
     .replace(/\[READ_CALENDAR\]/gi,'').replace(/\[READ_EMAIL\]/gi,'')
     .replace(/\[MEMORY_QUERY:[^\]]*\]/gi,'').replace(/\[DEEP_RESEARCH:[^\]]*\]/gi,'')
     .replace(/\[TRADE_SCAN\]/gi,'').replace(/\[TRADE_PROPOSE:[^\]]*\]/gi,'').replace(/\[TRADE_CLOSE:[^\]]*\]/gi,'')
+    .replace(/\[ADD_EXPENSE:[^\]]*\]/gi,'').replace(/\[ADD_DATE:[^\]]*\]/gi,'').replace(/\[EXPENSE_SUMMARY\]/gi,'')
     .replace(/\[SEND_SMS:[^\]]*\]/gi,'').trim();
 }

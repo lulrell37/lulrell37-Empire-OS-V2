@@ -8,9 +8,9 @@ import*as DocumentPicker from 'expo-document-picker';
 import{Camera}from 'expo-camera';
 import*as FileSystem from 'expo-file-system';
 import{PERSONAS,PERSONA_LIST,COUNCIL_PERSONAS,EMPIRE_PERSONAS,getPersona}from '../personas/personas';
-import{callPersona,textToSpeech,transcribeAudio,queryMemory}from '../services/aiService';
+import{callPersona,textToSpeech,transcribeAudio,queryMemory,webSearch,personaSystemPrompt,deepResearchStart,deepResearchPoll}from '../services/aiService';
 import{handleCommands,stripCommands}from '../services/commandHandler';
-import{getMessages,saveMessage,getAllPersonaPics,savePersonaMemory,getSetting}from '../services/database';
+import{getMessages,saveMessage,getAllPersonaPics,savePersonaMemory,getSetting,getExpenseSummary}from '../services/database';
 import{tlSnapshot,tlFormatSnapshot,tlPlaceOrder,tlClosePosition,tlPositions,MAX_QTY}from '../services/tradeLocker';
 import{loadKeys}from '../services/keyStore';
 import useEmpireStore from '../store/useEmpireStore';
@@ -52,6 +52,7 @@ export default function CommandScreen({navigation}){
   const[view,setView]=useState('viz'); // viz | text
   const[tradeProposal,setTradeProposal]=useState(null); // {side,entry,stopLoss,takeProfit,qty,rationale,pid}
   const[tradeBusy,setTradeBusy]=useState(false);
+  const[deepResearch,setDeepResearch]=useState(null); // {id,topic,pid,status}
   const vizRef=useRef({speaking:false,amplitude:0,color:'#E8C98A',personaId:'jarvis'}).current;
   const flatRef=useRef(null);
   const abortRef=useRef(null);
@@ -148,6 +149,9 @@ export default function CommandScreen({navigation}){
     const keys=await loadKeys();
     if(!keys?.grok)throw new Error('Grok API key needed for Ara voice. Add in Settings.');
     araChunksRef.current=[];
+    // Seed the voice socket with the same HUD + memory context Ara's text turn got.
+    let araInstructions=getPersona('ara').system;
+    try{araInstructions=await personaSystemPrompt('ara');}catch{}
     return new Promise((resolve,reject)=>{
       const ws=new WebSocket(
         'wss://api.x.ai/v1/realtime?model=grok-voice-latest',
@@ -163,7 +167,7 @@ export default function CommandScreen({navigation}){
           type:'session.update',
           session:{
             voice:'ara',
-            instructions:getPersona('ara').system,
+            instructions:araInstructions,
             turn_detection:null,
             audio:{
               input:{format:{type:'audio/pcm',rate:24000}},
@@ -534,10 +538,23 @@ export default function CommandScreen({navigation}){
           try{injections.push('MARKET SNAPSHOT XAUUSD:\n'+tlFormatSnapshot(await tlSnapshot('XAUUSD')));}
           catch(e){injections.push('MARKET SNAPSHOT: failed — '+e.message);}
         }
+        if(/\[EXPENSE_SUMMARY\]/i.test(response)){
+          try{const es=await getExpenseSummary();injections.push(`EXPENSES ${es.month} — total ${es.total.toFixed(2)}:\n${es.byCategory.map(c=>`  ${c.category}: ${c.total.toFixed(2)} (${c.n})`).join('\n')||'  (none logged)'}`);}
+          catch(e){injections.push('EXPENSE SUMMARY: failed — '+e.message);}
+        }
+        const sw=[...response.matchAll(/\[SEARCH_WEB:\s*([^\]]+)\]/gi)].map(x=>x[1].trim()).filter(Boolean);
+        if(sw.length&&!myAbort.signal.aborted){
+          toolLabel='◇ searching…';
+          for(const q of sw.slice(0,2)){
+            try{injections.push(`WEB SEARCH — "${q}":\n${await webSearch(pid,q,myAbort.signal)}`);}
+            catch(e){injections.push(`WEB SEARCH — "${q}": (failed: ${e.message})`);}
+          }
+        }
         const cmdCallbacks={
           onRelay:({target,message})=>addRelay(target,`[From ${p.name}]: ${message}`),
           onTradePropose:(prop)=>setTradeProposal({...prop,pid}),
           onTradeClose:(id)=>closePosition(id),
+          onDeepResearch:(topic)=>startDeepResearch(topic,pid),
         };
         if(injections.length&&!myAbort.signal.aborted){
           await handleCommands(response,pid,cmdCallbacks);
@@ -596,6 +613,46 @@ export default function CommandScreen({navigation}){
       }
     }catch(e){pushSystemMsg(`Close failed: ${e.message}`);}
   }
+  function startDeepResearch(topic,pid){
+    if(deepResearch){pushSystemMsg('Deep Research already running — one at a time.');return;}
+    const go=async()=>{
+      try{
+        pushSystemMsg(`— DEEP RESEARCH STARTED · ${topic} —`);
+        const id=await deepResearchStart(topic);
+        setDeepResearch({id,topic,pid:pid||'ara',status:'running'});
+      }catch(e){pushSystemMsg(`Deep Research failed to start: ${e.message}`);}
+    };
+    getSetting('deep_research_confirm','1').then(v=>{
+      if(v==='1'){
+        Alert.alert('Deep Research',`Run deep research on:\n\n"${topic}"\n\nThis takes several minutes and bills to your OpenAI key.`,[
+          {text:'Cancel',style:'cancel'},
+          {text:'Run',onPress:go},
+        ]);
+      }else go();
+    });
+  }
+  useEffect(()=>{
+    if(!deepResearch?.id)return;
+    let stop=false;
+    const tick=async()=>{
+      if(stop)return;
+      try{
+        const r=await deepResearchPoll(deepResearch.id);
+        if(stop)return;
+        if(r.status==='completed'){
+          const dm={id:Date.now().toString(),role:'assistant',content:r.text,persona:deepResearch.pid,revealed:r.text.length,streaming:false};
+          if(mode==='direct')setMessages(prev=>[...prev,dm]);else setGroupMessages(prev=>[...prev,dm]);
+          savePersonaMemory(deepResearch.pid,`YOU: [deep research] ${deepResearch.topic}\n${getPersona(deepResearch.pid).name}: ${r.text.slice(0,4000)}`).catch(()=>{});
+          setDeepResearch(null);
+        }else if(r.status==='failed'||r.status==='cancelled'){
+          pushSystemMsg(`Deep Research ${r.status}.`);setDeepResearch(null);
+        }
+      }catch(e){/* keep polling through transient errors */}
+    };
+    const iv=setInterval(tick,15000);tick();
+    return()=>{stop=true;clearInterval(iv);};
+  },[deepResearch?.id]);// eslint-disable-line react-hooks/exhaustive-deps
+
   async function confirmTrade(){
     if(!tradeProposal||tradeBusy)return;
     setTradeBusy(true);
@@ -742,6 +799,14 @@ export default function CommandScreen({navigation}){
       </View>
 
       <TradePanel active={isFocused} onEvent={pushSystemMsg}/>
+
+      {deepResearch&&<View style={s.deepCard}>
+        <ActivityIndicator size="small" color="#5B8DEF"/>
+        <Text style={s.deepText} numberOfLines={1}>DEEP RESEARCH · {deepResearch.topic}</Text>
+        <TouchableOpacity onPress={()=>{setDeepResearch(null);pushSystemMsg('Deep Research dismissed (still running on OpenAI).');}}>
+          <Text style={s.deepX}>×</Text>
+        </TouchableOpacity>
+      </View>}
 
       {view==='viz'?(
         <View style={{flex:1}}>
@@ -982,4 +1047,7 @@ const s=StyleSheet.create({
   tradeV:{fontFamily:'monospace',fontSize:12,color:'#DDD',fontWeight:'700'},
   tradeRationale:{fontFamily:'monospace',fontSize:11,color:'#999',lineHeight:17,marginTop:12},
   tradeNote:{fontFamily:'monospace',fontSize:8,color:'#444',marginTop:10,letterSpacing:0.5},
+  deepCard:{flexDirection:'row',alignItems:'center',gap:10,marginHorizontal:10,marginTop:4,paddingHorizontal:12,paddingVertical:8,borderWidth:1,borderColor:'#1E2740',borderRadius:8,backgroundColor:'#070A10'},
+  deepText:{flex:1,fontFamily:'monospace',fontSize:9,color:'#5B8DEF',letterSpacing:1},
+  deepX:{color:'#555',fontSize:18,lineHeight:18},
 });
