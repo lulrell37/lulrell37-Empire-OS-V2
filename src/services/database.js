@@ -5,7 +5,7 @@ export async function initDatabase(){
   await db.execAsync(`PRAGMA journal_mode=WAL;
     CREATE TABLE IF NOT EXISTS messages(id INTEGER PRIMARY KEY AUTOINCREMENT,persona TEXT,role TEXT,content TEXT,mode TEXT DEFAULT 'direct',timestamp INTEGER);
     CREATE TABLE IF NOT EXISTS tasks(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT,notes TEXT,due_date TEXT,priority TEXT DEFAULT 'normal',completed INTEGER DEFAULT 0,created_at INTEGER);
-    CREATE TABLE IF NOT EXISTS hud_state(id INTEGER PRIMARY KEY DEFAULT 1,date TEXT,empire_score INTEGER DEFAULT 0,streak INTEGER DEFAULT 0,batman_protocol TEXT DEFAULT '{}',morning_routine TEXT DEFAULT '[]',morning_routine_done TEXT DEFAULT '{}',word_of_day TEXT,word_phonetic TEXT,word_def TEXT,verse_of_day TEXT,verse_ref TEXT,fact_of_day TEXT,updated_at INTEGER);
+    CREATE TABLE IF NOT EXISTS hud_state(id INTEGER PRIMARY KEY DEFAULT 1,date TEXT,empire_score INTEGER DEFAULT 0,streak INTEGER DEFAULT 0,batman_protocol TEXT DEFAULT '{}',batman_template TEXT DEFAULT '[]',morning_routine TEXT DEFAULT '[]',morning_routine_done TEXT DEFAULT '{}',word_of_day TEXT,word_phonetic TEXT,word_def TEXT,verse_of_day TEXT,verse_ref TEXT,fact_of_day TEXT,updated_at INTEGER);
     CREATE TABLE IF NOT EXISTS revenue(id INTEGER PRIMARY KEY AUTOINCREMENT,business TEXT,amount REAL,type TEXT DEFAULT 'income',note TEXT,date TEXT,created_at INTEGER);
     CREATE TABLE IF NOT EXISTS business_targets(business TEXT PRIMARY KEY,target REAL DEFAULT 0,week_goal REAL DEFAULT 0,sort_order INTEGER DEFAULT 0);
     CREATE TABLE IF NOT EXISTS persona_memory(id INTEGER PRIMARY KEY AUTOINCREMENT,persona TEXT,content TEXT,date TEXT,created_at INTEGER);
@@ -14,17 +14,37 @@ export async function initDatabase(){
     CREATE TABLE IF NOT EXISTS custom_prompts(id INTEGER PRIMARY KEY AUTOINCREMENT,persona TEXT UNIQUE,prompt TEXT);
     CREATE TABLE IF NOT EXISTS api_usage(id INTEGER PRIMARY KEY AUTOINCREMENT,provider TEXT,tokens_in INTEGER DEFAULT 0,tokens_out INTEGER DEFAULT 0,date TEXT,created_at INTEGER);
   `);
+  await migrateHudColumns();
   await ensureHudState();
   await ensureBusinessTargets();
 }
+async function migrateHudColumns(){
+  const cols=await db.getAllAsync('PRAGMA table_info(hud_state)');
+  const names=cols.map(c=>c.name);
+  if(!names.includes('batman_template')){
+    await db.execAsync("ALTER TABLE hud_state ADD COLUMN batman_template TEXT DEFAULT '[]'");
+  }
+}
 export function getTodayStr(){return new Date().toISOString().split('T')[0];}
 export function getMonthStr(){const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');}
+// --- Editable HUD structures: morning routine + Batman protocol ---
+const DEFAULT_ROUTINE_LABELS=['Pray','Charge tech','Calendar','Weather','Analytics','Emails','News','Finances','Study','Empire Sheets','Bible','Meditation','Memory Training','Social media post'];
+export const DEFAULT_BATMAN=[
+  {day:'MON',label:'Raw Power',desc:'Deadlifts, Bench Press, Pull-Ups, Squats, Overhead Press · 6×3-5'},
+  {day:'TUE',label:'Combat',desc:'3+ hours martial arts, heavy bag, acrobatics'},
+  {day:'WED',label:'Hell Day',desc:'Full body circuit 8-10 rounds + 10+ mile run'},
+  {day:'THU',label:'Skill & Precision',desc:'Martial arts, detective work, parkour'},
+  {day:'FRI',label:'Heavy Strength',desc:'Same as Monday, heavier'},
+  {day:'SAT',label:'Endurance & Pain',desc:'2-4 hour conditioning, ruck march, swimming'},
+  {day:'SUN',label:'Active Recovery',desc:'Mobility, meditation, study, plan'},
+];
+function routineId(i=0){return 'r_'+Date.now().toString(36)+i.toString(36)+Math.random().toString(36).slice(2,5);}
+function buildDefaultRoutine(){return DEFAULT_ROUTINE_LABELS.map((label,i)=>({id:routineId(i),label}));}
 async function ensureHudState(){
   const today=getTodayStr();
   const ex=await db.getFirstAsync('SELECT * FROM hud_state WHERE id=1');
   if(!ex){
-    const defaultRoutine=JSON.stringify(['Pray','Charge tech','Calendar','Weather','Analytics','Emails','News','Finances','Study','Empire Sheets','Bible','Meditation','Memory Training','Social media post']);
-    await db.runAsync('INSERT INTO hud_state(id,date,morning_routine,updated_at) VALUES(1,?,?,?)',[today,defaultRoutine,Date.now()]);
+    await db.runAsync('INSERT INTO hud_state(id,date,morning_routine,batman_template,updated_at) VALUES(1,?,?,?,?)',[today,JSON.stringify(buildDefaultRoutine()),JSON.stringify(DEFAULT_BATMAN),Date.now()]);
   }else if(ex.date!==today){
     const newStreak=ex.empire_score>=75?(ex.streak+1):0;
     await db.runAsync(`UPDATE hud_state SET date=?,empire_score=0,batman_protocol='{}',morning_routine_done='{}',streak=?,word_of_day=NULL,word_phonetic=NULL,word_def=NULL,verse_of_day=NULL,verse_ref=NULL,fact_of_day=NULL,updated_at=? WHERE id=1`,[today,newStreak,Date.now()]);
@@ -106,8 +126,89 @@ export async function deleteTask(id){await db.runAsync('DELETE FROM tasks WHERE 
 export async function getHudState(){return await db.getFirstAsync('SELECT * FROM hud_state WHERE id=1');}
 export async function updateHudState(updates){const fields=Object.keys(updates).map(k=>`${k}=?`).join(',');await db.runAsync(`UPDATE hud_state SET ${fields},updated_at=? WHERE id=1`,[...Object.values(updates),Date.now()]);}
 export async function updateEmpireScore(score){await updateHudState({empire_score:score});}
-export async function updateMorningRoutine(routine){await updateHudState({morning_routine:JSON.stringify(routine)});}
-export async function checkRoutineItem(item,done=true){const hud=await getHudState();let doneMap={};try{doneMap=JSON.parse(hud.morning_routine_done||'{}');}catch{}doneMap[item]=done;await updateHudState({morning_routine_done:JSON.stringify(doneMap)});}
+// Returns {items:[{id,label}], done:{[id]:true}}. Migrates the legacy string[]
+// shape (and label-keyed done map) to id-keyed on first read, persisting the result.
+export async function getMorningRoutine(){
+  const hud=await getHudState();
+  let items=[];try{items=JSON.parse(hud?.morning_routine||'[]');}catch{}
+  let done={};try{done=JSON.parse(hud?.morning_routine_done||'{}');}catch{}
+  if(!Array.isArray(items))items=[];
+  if(items.length&&typeof items[0]==='string'){
+    const migrated=items.map((label,i)=>({id:routineId(i),label}));
+    const nextDone={};
+    migrated.forEach(it=>{if(done[it.label])nextDone[it.id]=true;});
+    await updateHudState({morning_routine:JSON.stringify(migrated),morning_routine_done:JSON.stringify(nextDone)});
+    return{items:migrated,done:nextDone};
+  }
+  let changed=false;
+  items=items.map((it,i)=>{
+    if(it&&typeof it==='object'&&it.id)return{id:it.id,label:it.label||''};
+    changed=true;return{id:routineId(i),label:(it&&it.label)||String(it||'')};
+  });
+  if(changed)await updateHudState({morning_routine:JSON.stringify(items)});
+  return{items,done};
+}
+export async function saveMorningRoutine(items){await updateHudState({morning_routine:JSON.stringify(items.map(it=>({id:it.id||routineId(),label:(it.label||'').trim()})).filter(it=>it.label))});}
+export async function updateMorningRoutine(routine){await saveMorningRoutine(routine);}
+function resolveRoutineItem(items,ref){
+  const q=String(ref||'').toLowerCase().trim();
+  return items.find(i=>i.id===ref)||items.find(i=>i.label.toLowerCase()===q)||items.find(i=>i.label.toLowerCase().includes(q));
+}
+export async function addRoutineItem(label){
+  const{items}=await getMorningRoutine();
+  const item={id:routineId(items.length),label:String(label||'').trim()};
+  if(!item.label)return null;
+  await updateHudState({morning_routine:JSON.stringify([...items,item])});
+  return item;
+}
+export async function renameRoutineItem(ref,newLabel){
+  const{items}=await getMorningRoutine();
+  const it=resolveRoutineItem(items,ref);
+  if(!it)return false;
+  it.label=String(newLabel||'').trim();
+  await updateHudState({morning_routine:JSON.stringify(items)});
+  return true;
+}
+export async function removeRoutineItem(ref){
+  const{items,done}=await getMorningRoutine();
+  const it=resolveRoutineItem(items,ref);
+  if(!it)return false;
+  delete done[it.id];
+  await updateHudState({morning_routine:JSON.stringify(items.filter(i=>i.id!==it.id)),morning_routine_done:JSON.stringify(done)});
+  return true;
+}
+export async function setRoutineDone(ref,done=true){
+  const{items,done:doneMap}=await getMorningRoutine();
+  const it=resolveRoutineItem(items,ref);
+  if(!it)return false;
+  doneMap[it.id]=done;
+  await updateHudState({morning_routine_done:JSON.stringify(doneMap)});
+  return true;
+}
+export async function checkRoutineItem(item,done=true){return setRoutineDone(item,done);}
+export async function getBatmanTemplate(){
+  const hud=await getHudState();
+  let t=[];try{t=JSON.parse(hud?.batman_template||'[]');}catch{}
+  if(!Array.isArray(t)||t.length!==7){
+    t=DEFAULT_BATMAN.map(d=>({...d}));
+    await updateHudState({batman_template:JSON.stringify(t)});
+  }
+  return t;
+}
+export async function saveBatmanTemplate(days){
+  const t=(Array.isArray(days)?days:[]).slice(0,7).map((d,i)=>({day:d.day||DEFAULT_BATMAN[i].day,label:(d.label||'').trim(),desc:(d.desc||'').trim()}));
+  if(t.length===7)await updateHudState({batman_template:JSON.stringify(t)});
+}
+export async function setBatmanDay(day,label,desc){
+  const t=await getBatmanTemplate();
+  const key=String(day||'').toLowerCase().slice(0,3);
+  const d=t.find(x=>x.day.toLowerCase()===key);
+  if(!d)return false;
+  if(label!=null)d.label=String(label).trim();
+  if(desc!=null)d.desc=String(desc).trim();
+  await updateHudState({batman_template:JSON.stringify(t)});
+  return true;
+}
 export async function addRevenue(business,amount,type='income',note=''){await db.runAsync('INSERT INTO revenue(business,amount,type,note,date,created_at) VALUES(?,?,?,?,?,?)',[business,amount,type,note,getTodayStr(),Date.now()]);}
 export async function getTotalRevenue(){const r=await db.getFirstAsync("SELECT SUM(amount) as total FROM revenue WHERE type='income'");return r?.total||0;}
 export async function getRevenueByBusiness(){return await db.getAllAsync("SELECT business,SUM(amount) as total FROM revenue WHERE type='income' GROUP BY business ORDER BY total DESC");}

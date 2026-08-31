@@ -17,8 +17,14 @@ async function buildSys(personaId,persona){
   if(hud){
     let routineDone={};try{routineDone=JSON.parse(hud.morning_routine_done||'{}');}catch{}
     let routine=[];try{routine=JSON.parse(hud.morning_routine||'[]');}catch{}
-    const routineCount=Object.values(routineDone).filter(Boolean).length;
-    sys+=`\n\n[LIVE HUD DATA:\nEmpire Score: ${hud.empire_score}%\nStreak: ${hud.streak} days\nWord of Day: ${hud.word_of_day||'Not set'}\nVerse of Day: ${hud.verse_of_day||'Not set'}\nFact of Day: ${hud.fact_of_day||'Not set'}\nMorning Routine: ${routineCount}/${routine.length} complete\nOpen Tasks: ${tasks.length}\n]`;
+    const routineItems=(Array.isArray(routine)?routine:[]).map(r=>(typeof r==='string'?{id:r,label:r}:r));
+    const routineCount=routineItems.filter(r=>routineDone[r.id]).length;
+    const routineList=routineItems.map(r=>`${routineDone[r.id]?'[x]':'[ ]'} ${r.label}`).join(', ')||'none set';
+    let bt=[];try{bt=JSON.parse(hud.batman_template||'[]');}catch{}
+    const dow=new Date().getDay();
+    const todayBat=Array.isArray(bt)&&bt.length===7?bt[dow===0?6:dow-1]:null;
+    const openTasks=tasks.map(t=>t.title).slice(0,15).join(', ');
+    sys+=`\n\n[LIVE HUD DATA:\nEmpire Score: ${hud.empire_score}%\nStreak: ${hud.streak} days\nWord of Day: ${hud.word_of_day||'Not set'}\nVerse of Day: ${hud.verse_of_day||'Not set'}\nFact of Day: ${hud.fact_of_day||'Not set'}\nMorning Routine (${routineCount}/${routineItems.length}): ${routineList}\nBatman Protocol Today: ${todayBat?`${todayBat.label} — ${todayBat.desc}`:'Not set'}\nOpen Tasks (${tasks.length}): ${openTasks||'none'}\n]`;
   }
   const mem=await getPersonaMemory(personaId,14);
   if(mem?.length){sys+=`\n\n[MEMORY FROM RECENT SESSIONS:\n${mem.map(m=>`[${m.date}]\n${m.content}`).join('\n\n').substring(0,3000)}\n]`;}

@@ -1,14 +1,13 @@
-import React,{useState,useEffect,useRef}from 'react';
+import React,{useState,useCallback,useRef}from 'react';
 import{View,Text,StyleSheet,ScrollView,TouchableOpacity,TextInput,Modal,Dimensions}from 'react-native';
 import{SafeAreaView}from 'react-native-safe-area-context';
+import{useFocusEffect}from '@react-navigation/native';
 import Svg,{Circle,Defs,LinearGradient,Stop}from 'react-native-svg';
 import{Feather}from '@expo/vector-icons';
-import{getHudState,updateHudState,getTasks,addTask,completeTask,getBusinessesWithRevenue,setBusinessTarget,addRevenue,updateEmpireScore}from '../services/database';
+import{getHudState,updateHudState,getTasks,addTask,updateTask,deleteTask,completeTask,getBusinessesWithRevenue,setBusinessTarget,addRevenue,updateEmpireScore,getMorningRoutine,saveMorningRoutine,getBatmanTemplate,saveBatmanTemplate,DEFAULT_BATMAN}from '../services/database';
 import{colors,space,radius,type,FONTS}from '../theme';
 const{width}=Dimensions.get('window');
 const RS=196,ST=6,CI=2*Math.PI*((RS-ST)/2);
-const ROUTINE=['Pray','Charge tech','Calendar','Weather','Analytics','Emails','News','Finances','Study','Empire Sheets','Bible','Meditation','Memory Training','Social media post'];
-const BATMAN=[{day:'MON',label:'Raw Power',desc:'Deadlifts, Bench Press, Pull-Ups, Squats, Overhead Press · 6×3-5'},{day:'TUE',label:'Combat',desc:'3+ hours martial arts, heavy bag, acrobatics'},{day:'WED',label:'Hell Day',desc:'Full body circuit 8-10 rounds + 10+ mile run'},{day:'THU',label:'Skill & Precision',desc:'Martial arts, detective work, parkour'},{day:'FRI',label:'Heavy Strength',desc:'Same as Monday, heavier'},{day:'SAT',label:'Endurance & Pain',desc:'2-4 hour conditioning, ruck march, swimming'},{day:'SUN',label:'Active Recovery',desc:'Mobility, meditation, study, plan'}];
 const PANELS=['briefing','businesses','tasks','routine','batman','daily'];
 const NAV=[
   {key:'Command',icon:'terminal',label:'COMMAND'},
@@ -17,13 +16,16 @@ const NAV=[
   {key:'Settings',icon:'settings',label:'SETTINGS'},
   {key:'Map',icon:'map',label:'MAP'},
 ];
+const newId=()=>'r_'+Date.now().toString(36)+Math.random().toString(36).slice(2,6);
 
 export default function HUDScreen({navigation}){
   const[hud,setHud]=useState(null);
   const[tasks,setTasks]=useState([]);
   const[businesses,setBusinesses]=useState([]);
-  const[routine,setRoutine]=useState({});
-  const[batman,setBatman]=useState({});
+  const[routineItems,setRoutineItems]=useState([]);
+  const[routine,setRoutine]=useState({});          // { [id]: true }
+  const[batmanTemplate,setBatmanTemplate]=useState(DEFAULT_BATMAN);
+  const[batman,setBatman]=useState({});             // { [day]: true }
   const[newTask,setNewTask]=useState('');
   const[showAddTask,setShowAddTask]=useState(false);
   const[panelIndex,setPanelIndex]=useState(0);
@@ -31,21 +33,43 @@ export default function HUDScreen({navigation}){
   const[bizTargetInput,setBizTargetInput]=useState('');
   const[bizWeekGoalInput,setBizWeekGoalInput]=useState('');
   const[bizLogInput,setBizLogInput]=useState('');
+  const[editRoutine,setEditRoutine]=useState(false);
+  const[routineDraft,setRoutineDraft]=useState([]);
+  const[editBatman,setEditBatman]=useState(false);
+  const[batmanDraft,setBatmanDraft]=useState([]);
+  const[taskEdit,setTaskEdit]=useState(null);
+  const[taskEditInput,setTaskEditInput]=useState('');
   const scrollRef=useRef(null);
+  const editingRef=useRef(false);
+  editingRef.current=editRoutine||editBatman||!!taskEdit||showAddTask||!!bizModal;
 
-  useEffect(()=>{load();},[]);
+  useFocusEffect(useCallback(()=>{if(!editingRef.current)load();},[]));
 
   async function load(){
     const h=await getHudState();
     const t=await getTasks();
     const b=await getBusinessesWithRevenue();
+    const{items,done}=await getMorningRoutine();
+    const bt=await getBatmanTemplate();
     setHud(h);setTasks(t);setBusinesses(b);
-    try{if(h?.morning_routine_done)setRoutine(JSON.parse(h.morning_routine_done));}catch{}
-    try{if(h?.batman_protocol)setBatman(JSON.parse(h.batman_protocol));}catch{}
+    setRoutineItems(items);setRoutine(done);
+    setBatmanTemplate(bt);
+    try{setBatman(JSON.parse(h?.batman_protocol||'{}'));}catch{setBatman({});}
   }
 
-  async function toggleRoutine(item){
-    const r={...routine,[item]:!routine[item]};
+  async function recalcScore(r,b,t,routineLen=routineItems.length){
+    const rd=Object.values(r).filter(Boolean).length;
+    const bd=Object.values(b).filter(Boolean).length>0?1:0;
+    const td=t.filter(x=>x.completed).length;
+    const tt=t.length;
+    const rRatio=routineLen>0?Math.min(1,rd/routineLen):0;
+    const sc=Math.round(Math.min(100,25+rRatio*30+(bd*25)+(tt>0?(td/tt)*20:0)));
+    setHud(prev=>({...prev,empire_score:sc}));
+    await updateEmpireScore(sc);
+  }
+
+  async function toggleRoutine(id){
+    const r={...routine,[id]:!routine[id]};
     setRoutine(r);
     await updateHudState({morning_routine_done:JSON.stringify(r)});
     recalcScore(r,batman,tasks);
@@ -55,15 +79,6 @@ export default function HUDScreen({navigation}){
     setBatman(b);
     await updateHudState({batman_protocol:JSON.stringify(b)});
     recalcScore(routine,b,tasks);
-  }
-  async function recalcScore(r,b,t){
-    const rd=Object.values(r).filter(Boolean).length;
-    const bd=Object.values(b).filter(Boolean).length>0?1:0;
-    const td=t.filter(x=>x.completed).length;
-    const tt=t.length;
-    const sc=Math.round(Math.min(100,25+(rd/14)*30+(bd*25)+(tt>0?(td/tt)*20:0)));
-    setHud(prev=>({...prev,empire_score:sc}));
-    await updateEmpireScore(sc);
   }
   async function addNewTask(){
     if(!newTask.trim())return;
@@ -77,6 +92,46 @@ export default function HUDScreen({navigation}){
     const t=await getTasks();setTasks(t);
     recalcScore(routine,batman,t);
   }
+  function openTaskEdit(t){setTaskEdit(t);setTaskEditInput(t.title);}
+  async function saveTaskEdit(){
+    if(!taskEdit)return;
+    const title=taskEditInput.trim();
+    if(title)await updateTask(taskEdit.id,title,taskEdit.notes||'');
+    setTaskEdit(null);
+    const t=await getTasks();setTasks(t);
+  }
+  async function removeTask(){
+    if(!taskEdit)return;
+    await deleteTask(taskEdit.id);
+    setTaskEdit(null);
+    const t=await getTasks();setTasks(t);
+    recalcScore(routine,batman,t);
+  }
+
+  function startEditRoutine(){setRoutineDraft(routineItems.map(i=>({...i})));setEditRoutine(true);}
+  function draftSetLabel(idx,val){setRoutineDraft(d=>d.map((it,i)=>i===idx?{...it,label:val}:it));}
+  function draftMove(idx,dir){setRoutineDraft(d=>{const n=[...d];const j=idx+dir;if(j<0||j>=n.length)return n;[n[idx],n[j]]=[n[j],n[idx]];return n;});}
+  function draftRemove(idx){setRoutineDraft(d=>d.filter((_,i)=>i!==idx));}
+  function draftAdd(){setRoutineDraft(d=>[...d,{id:newId(),label:''}]);}
+  async function saveRoutine(){
+    const clean=routineDraft.map(it=>({id:it.id,label:it.label.trim()})).filter(it=>it.label);
+    await saveMorningRoutine(clean);
+    const validIds=new Set(clean.map(i=>i.id));
+    const prunedDone={};Object.keys(routine).forEach(k=>{if(validIds.has(k))prunedDone[k]=routine[k];});
+    await updateHudState({morning_routine_done:JSON.stringify(prunedDone)});
+    setEditRoutine(false);
+    await load();
+    recalcScore(prunedDone,batman,tasks,clean.length);
+  }
+
+  function startEditBatman(){setBatmanDraft(batmanTemplate.map(d=>({...d})));setEditBatman(true);}
+  function batmanDraftSet(idx,field,val){setBatmanDraft(d=>d.map((it,i)=>i===idx?{...it,[field]:val}:it));}
+  async function saveBatman(){
+    await saveBatmanTemplate(batmanDraft);
+    setEditBatman(false);
+    await load();
+  }
+
   function openBizModal(b){
     setBizModal(b);
     setBizTargetInput(String(b.target||0));
@@ -110,9 +165,11 @@ export default function HUDScreen({navigation}){
   const streak=hud?.streak||0;
   const scoreOffset=CI-(CI*score/100);
   const today=new Date().getDay();
-  const todayBatman=BATMAN[today===0?6:today-1];
-  const routineDone=Object.values(routine).filter(Boolean).length;
+  const todayIdx=today===0?6:today-1;
+  const todayBatman=batmanTemplate[todayIdx]||DEFAULT_BATMAN[todayIdx];
+  const routineDone=routineItems.filter(i=>routine[i.id]).length;
   const tasksDone=tasks.filter(t=>t.completed).length;
+  const openTasks=tasks.filter(t=>!t.completed);
   const statusIcon=score>=75?'trending-up':score>=50?'minus':'trending-down';
   const statusText=score>=75?`${streak} DAY STREAK`:score>=50?'BUILDING TODAY':'STREAK AT RISK';
 
@@ -165,6 +222,7 @@ export default function HUDScreen({navigation}){
         decelerationRate="fast"
         disableIntervalMomentum
         showsHorizontalScrollIndicator={false}
+        scrollEnabled={!editRoutine&&!editBatman}
         onMomentumScrollEnd={onScrollEnd}
         style={{flex:1}}
       >
@@ -181,15 +239,15 @@ export default function HUDScreen({navigation}){
           <View style={s.briefRow}>
             <View style={s.briefIcon}><Feather name="sunrise" size={15} color={colors.brass}/></View>
             <View style={{flex:1}}>
-              <Text style={s.briefMain}>{routineDone} of {ROUTINE.length} routine done</Text>
-              <Text style={s.briefSub}>{routineDone>=ROUTINE.length?'Fully complete':'Keep going'}</Text>
+              <Text style={s.briefMain}>{routineDone} of {routineItems.length} routine done</Text>
+              <Text style={s.briefSub}>{routineItems.length>0&&routineDone>=routineItems.length?'Fully complete':'Keep going'}</Text>
             </View>
           </View>
           <View style={s.briefRow}>
             <View style={s.briefIcon}><Feather name="activity" size={15} color={colors.brass}/></View>
             <View style={{flex:1}}>
-              <Text style={s.briefMain}>{todayBatman.label}</Text>
-              <Text style={s.briefSub}>{todayBatman.desc}</Text>
+              <Text style={s.briefMain}>{todayBatman?.label}</Text>
+              <Text style={s.briefSub}>{todayBatman?.desc}</Text>
             </View>
           </View>
           <Text style={s.briefNote}>Calendar and email require Google Sign-In — not yet connected on this device.</Text>
@@ -199,7 +257,7 @@ export default function HUDScreen({navigation}){
         <ScrollView style={{width}} contentContainerStyle={s.panelContent}>
           <Text style={s.panelLabel}>THE EMPIRE · REVENUE / TARGET</Text>
           <View style={s.bizGrid}>
-            {businesses.map((b,i)=>{
+            {businesses.map((b)=>{
               const pct=b.target>0?Math.min(100,Math.round((b.rev/b.target)*100)):0;
               const bizCI=2*Math.PI*25;
               const bizOffset=bizCI-(bizCI*pct/100);
@@ -229,42 +287,96 @@ export default function HUDScreen({navigation}){
               <Text style={s.addBtnT}>ADD</Text>
             </TouchableOpacity>
           </View>
-          {tasks.filter(t=>!t.completed).map(t=>(
-            <TouchableOpacity key={t.id} style={s.taskRow} onPress={()=>doneTask(t.id)} activeOpacity={0.6}>
+          {openTasks.map(t=>(
+            <TouchableOpacity key={t.id} style={s.taskRow} onPress={()=>doneTask(t.id)} onLongPress={()=>openTaskEdit(t)} delayLongPress={300} activeOpacity={0.6}>
               <Feather name="circle" size={17} color={colors.textDim}/>
               <Text style={s.taskName}>{t.title}</Text>
+              <Feather name="more-vertical" size={13} color={colors.textFaint}/>
             </TouchableOpacity>
           ))}
-          {!tasks.filter(t=>!t.completed).length&&<Text style={s.emptyText}>No open tasks.</Text>}
+          {!openTasks.length&&<Text style={s.emptyText}>No open tasks.</Text>}
+          {!!openTasks.length&&<Text style={s.hintText}>Long-press a task to edit or delete.</Text>}
         </ScrollView>
 
         {/* MORNING ROUTINE */}
-        <ScrollView style={{width}} contentContainerStyle={s.panelContent}>
+        <ScrollView style={{width}} contentContainerStyle={s.panelContent} keyboardShouldPersistTaps="handled">
           <View style={s.panelHeadRow}>
             <Text style={s.panelLabel}>MORNING ROUTINE</Text>
-            <Text style={s.panelMeta}>{routineDone} / {ROUTINE.length}</Text>
+            {editRoutine?(
+              <View style={s.editHeadBtns}>
+                <TouchableOpacity style={s.ghostBtn} onPress={()=>setEditRoutine(false)}><Text style={s.ghostBtnT}>CANCEL</Text></TouchableOpacity>
+                <TouchableOpacity style={s.addBtn} onPress={saveRoutine} activeOpacity={0.7}><Feather name="check" size={11} color={colors.bg}/><Text style={s.addBtnT}>DONE</Text></TouchableOpacity>
+              </View>
+            ):(
+              <View style={s.editHeadBtns}>
+                <Text style={s.panelMeta}>{routineDone} / {routineItems.length}</Text>
+                <TouchableOpacity style={s.ghostBtn} onPress={startEditRoutine} activeOpacity={0.7}><Feather name="edit-2" size={10} color={colors.gold}/><Text style={s.ghostBtnT}>EDIT</Text></TouchableOpacity>
+              </View>
+            )}
           </View>
-          {ROUTINE.map(item=>(
-            <TouchableOpacity key={item} style={s.taskRow} onPress={()=>toggleRoutine(item)} activeOpacity={0.6}>
-              <Feather name={routine[item]?'check-circle':'circle'} size={17} color={routine[item]?colors.gold:colors.textDim}/>
-              <Text style={[s.taskName,routine[item]&&s.taskNameDone]}>{item}</Text>
+
+          {!editRoutine&&routineItems.map(item=>(
+            <TouchableOpacity key={item.id} style={s.taskRow} onPress={()=>toggleRoutine(item.id)} activeOpacity={0.6}>
+              <Feather name={routine[item.id]?'check-circle':'circle'} size={17} color={routine[item.id]?colors.gold:colors.textDim}/>
+              <Text style={[s.taskName,routine[item.id]&&s.taskNameDone]}>{item.label}</Text>
             </TouchableOpacity>
           ))}
+          {!editRoutine&&!routineItems.length&&<Text style={s.emptyText}>No routine items. Tap EDIT to add some.</Text>}
+
+          {editRoutine&&routineDraft.map((item,idx)=>(
+            <View key={item.id} style={s.editRow}>
+              <View style={s.reorderCol}>
+                <TouchableOpacity onPress={()=>draftMove(idx,-1)} hitSlop={{top:6,bottom:6,left:6,right:6}}><Feather name="chevron-up" size={16} color={idx===0?colors.textFaint:colors.textDim}/></TouchableOpacity>
+                <TouchableOpacity onPress={()=>draftMove(idx,1)} hitSlop={{top:6,bottom:6,left:6,right:6}}><Feather name="chevron-down" size={16} color={idx===routineDraft.length-1?colors.textFaint:colors.textDim}/></TouchableOpacity>
+              </View>
+              <TextInput style={s.editInput} value={item.label} onChangeText={v=>draftSetLabel(idx,v)} placeholder="Routine item…" placeholderTextColor={colors.textFaint}/>
+              <TouchableOpacity onPress={()=>draftRemove(idx)} hitSlop={{top:8,bottom:8,left:8,right:8}}><Feather name="trash-2" size={15} color={colors.danger}/></TouchableOpacity>
+            </View>
+          ))}
+          {editRoutine&&(
+            <TouchableOpacity style={s.addItemRow} onPress={draftAdd} activeOpacity={0.7}>
+              <Feather name="plus" size={15} color={colors.gold}/>
+              <Text style={s.addItemT}>Add item</Text>
+            </TouchableOpacity>
+          )}
         </ScrollView>
 
         {/* BATMAN PROTOCOL */}
-        <ScrollView style={{width}} contentContainerStyle={s.panelContent}>
-          <Text style={s.panelLabel}>BATMAN PROTOCOL · TODAY</Text>
-          <Text style={s.batTitle}>{todayBatman.label}</Text>
-          <Text style={s.batDesc}>{todayBatman.desc}</Text>
-          <View style={s.batWeek}>
-            {BATMAN.map(b=>(
-              <TouchableOpacity key={b.day} style={[s.batDay,b.day===todayBatman.day&&s.batDayToday]} onPress={()=>toggleBatman(b.day)} activeOpacity={0.7}>
-                <Text style={[s.batDayT,b.day===todayBatman.day&&s.batDayTToday]}>{b.day}</Text>
-                <Feather name="check" size={11} color={batman[b.day]?colors.online:'transparent'} style={{marginTop:3}}/>
-              </TouchableOpacity>
-            ))}
+        <ScrollView style={{width}} contentContainerStyle={s.panelContent} keyboardShouldPersistTaps="handled">
+          <View style={s.panelHeadRow}>
+            <Text style={s.panelLabel}>BATMAN PROTOCOL{editBatman?' · TEMPLATE':' · TODAY'}</Text>
+            {editBatman?(
+              <View style={s.editHeadBtns}>
+                <TouchableOpacity style={s.ghostBtn} onPress={()=>setEditBatman(false)}><Text style={s.ghostBtnT}>CANCEL</Text></TouchableOpacity>
+                <TouchableOpacity style={s.addBtn} onPress={saveBatman} activeOpacity={0.7}><Feather name="check" size={11} color={colors.bg}/><Text style={s.addBtnT}>DONE</Text></TouchableOpacity>
+              </View>
+            ):(
+              <TouchableOpacity style={s.ghostBtn} onPress={startEditBatman} activeOpacity={0.7}><Feather name="edit-2" size={10} color={colors.gold}/><Text style={s.ghostBtnT}>EDIT</Text></TouchableOpacity>
+            )}
           </View>
+
+          {!editBatman&&<>
+            <Text style={s.batTitle}>{todayBatman?.label}</Text>
+            <Text style={s.batDesc}>{todayBatman?.desc}</Text>
+            <View style={s.batWeek}>
+              {batmanTemplate.map(b=>(
+                <TouchableOpacity key={b.day} style={[s.batDay,b.day===todayBatman?.day&&s.batDayToday]} onPress={()=>toggleBatman(b.day)} activeOpacity={0.7}>
+                  <Text style={[s.batDayT,b.day===todayBatman?.day&&s.batDayTToday]}>{b.day}</Text>
+                  <Feather name="check" size={11} color={batman[b.day]?colors.online:'transparent'} style={{marginTop:3}}/>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </>}
+
+          {editBatman&&batmanDraft.map((d,idx)=>(
+            <View key={d.day} style={s.batEditRow}>
+              <Text style={s.batEditDay}>{d.day}</Text>
+              <View style={{flex:1,gap:6}}>
+                <TextInput style={s.editInput} value={d.label} onChangeText={v=>batmanDraftSet(idx,'label',v)} placeholder="Focus" placeholderTextColor={colors.textFaint}/>
+                <TextInput style={[s.editInput,s.editInputMulti]} value={d.desc} onChangeText={v=>batmanDraftSet(idx,'desc',v)} placeholder="Description" placeholderTextColor={colors.textFaint} multiline/>
+              </View>
+            </View>
+          ))}
         </ScrollView>
 
         {/* WORD / VERSE / FACT */}
@@ -308,6 +420,18 @@ export default function HUDScreen({navigation}){
           <View style={s.modalActions}>
             <TouchableOpacity style={[s.modalBtn,s.modalBtnPrimary]} onPress={addNewTask}><Text style={s.modalBtnPrimaryT}>ADD</Text></TouchableOpacity>
             <TouchableOpacity style={[s.modalBtn,s.modalBtnGhost]} onPress={()=>setShowAddTask(false)}><Text style={s.modalBtnGhostT}>CANCEL</Text></TouchableOpacity>
+          </View>
+        </View></View>
+      </Modal>
+
+      <Modal visible={!!taskEdit} transparent animationType="slide">
+        <View style={s.modalOver}><View style={s.modalContent}>
+          <Text style={s.modalTitle}>EDIT TASK</Text>
+          <TextInput style={s.modalInput} value={taskEditInput} onChangeText={setTaskEditInput} placeholder="Task title…" placeholderTextColor={colors.textFaint} autoFocus/>
+          <View style={s.modalActions}>
+            <TouchableOpacity style={[s.modalBtn,s.modalBtnPrimary]} onPress={saveTaskEdit}><Text style={s.modalBtnPrimaryT}>SAVE</Text></TouchableOpacity>
+            <TouchableOpacity style={[s.modalBtn,s.modalBtnDanger]} onPress={removeTask}><Text style={s.modalBtnDangerT}>DELETE</Text></TouchableOpacity>
+            <TouchableOpacity style={[s.modalBtn,s.modalBtnGhost]} onPress={()=>setTaskEdit(null)}><Text style={s.modalBtnGhostT}>CANCEL</Text></TouchableOpacity>
           </View>
         </View></View>
       </Modal>
@@ -360,8 +484,11 @@ const s=StyleSheet.create({
   panelLabel:{...type.label,marginBottom:space.lg},
   panelMeta:{fontFamily:FONTS.monoMed,fontSize:9,color:colors.gold,letterSpacing:2},
   panelHeadRow:{flexDirection:'row',justifyContent:'space-between',alignItems:'center',marginBottom:space.lg},
+  editHeadBtns:{flexDirection:'row',alignItems:'center',gap:space.md},
   addBtn:{flexDirection:'row',alignItems:'center',gap:4,paddingHorizontal:space.md,paddingVertical:6,backgroundColor:colors.gold,borderRadius:radius.sm},
   addBtnT:{fontFamily:FONTS.monoMed,fontSize:9,color:colors.bg,letterSpacing:2},
+  ghostBtn:{flexDirection:'row',alignItems:'center',gap:4,paddingHorizontal:space.sm,paddingVertical:5,borderWidth:1,borderColor:colors.hairlineGold,borderRadius:radius.sm},
+  ghostBtnT:{fontFamily:FONTS.monoMed,fontSize:9,color:colors.gold,letterSpacing:2},
 
   briefRow:{flexDirection:'row',alignItems:'center',gap:space.lg,paddingVertical:space.md,borderBottomWidth:1,borderBottomColor:colors.hairline},
   briefIcon:{width:26,alignItems:'center'},
@@ -380,6 +507,14 @@ const s=StyleSheet.create({
   taskName:{fontFamily:FONTS.mono,fontSize:13,color:colors.text,flex:1,letterSpacing:0.2},
   taskNameDone:{color:colors.textFaint,textDecorationLine:'line-through'},
   emptyText:{...type.meta,color:colors.textFaint,marginTop:space.md},
+  hintText:{...type.meta,color:colors.textFaint,marginTop:space.md,letterSpacing:0.5},
+
+  editRow:{flexDirection:'row',alignItems:'center',gap:space.sm,paddingVertical:6,borderBottomWidth:1,borderBottomColor:colors.hairline},
+  reorderCol:{alignItems:'center'},
+  editInput:{flex:1,backgroundColor:colors.surface,borderWidth:1,borderColor:colors.hairline,borderRadius:radius.sm,paddingHorizontal:space.md,paddingVertical:8,color:colors.text,fontFamily:FONTS.mono,fontSize:13},
+  editInputMulti:{minHeight:38,textAlignVertical:'top'},
+  addItemRow:{flexDirection:'row',alignItems:'center',gap:space.sm,paddingVertical:space.md,marginTop:space.sm},
+  addItemT:{fontFamily:FONTS.monoMed,fontSize:11,color:colors.gold,letterSpacing:1},
 
   batTitle:{fontFamily:FONTS.displayMed,fontSize:32,color:colors.text,letterSpacing:0.5,marginBottom:space.xs},
   batDesc:{fontFamily:FONTS.mono,fontSize:9,color:colors.textMuted,lineHeight:16,marginBottom:space.xl},
@@ -388,6 +523,8 @@ const s=StyleSheet.create({
   batDayToday:{borderColor:colors.hairlineGold,backgroundColor:'rgba(232,201,138,0.06)'},
   batDayT:{fontFamily:FONTS.mono,fontSize:9,color:colors.textDim,letterSpacing:1.5},
   batDayTToday:{color:colors.gold},
+  batEditRow:{flexDirection:'row',gap:space.md,paddingVertical:space.md,borderBottomWidth:1,borderBottomColor:colors.hairline},
+  batEditDay:{fontFamily:FONTS.monoMed,fontSize:10,color:colors.gold,letterSpacing:1.5,width:34,paddingTop:10},
 
   wvfSection:{paddingVertical:space.lg,borderBottomWidth:1,borderBottomColor:colors.hairline},
   wvfSectionLast:{borderBottomWidth:0},
@@ -414,4 +551,6 @@ const s=StyleSheet.create({
   modalBtnPrimaryT:{fontFamily:FONTS.monoMed,fontSize:10,color:colors.bg,letterSpacing:2},
   modalBtnGhost:{backgroundColor:colors.surface,borderWidth:1,borderColor:colors.hairline},
   modalBtnGhostT:{fontFamily:FONTS.monoMed,fontSize:10,color:colors.textDim,letterSpacing:2},
+  modalBtnDanger:{backgroundColor:'rgba(199,97,75,0.12)',borderWidth:1,borderColor:'rgba(199,97,75,0.4)'},
+  modalBtnDangerT:{fontFamily:FONTS.monoMed,fontSize:10,color:colors.danger,letterSpacing:2},
 });

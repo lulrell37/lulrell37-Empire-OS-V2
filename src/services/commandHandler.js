@@ -1,5 +1,6 @@
-import{addTask,completeTask,deleteTask,saveNote,getNote,addRevenue,getTasks,getHudState,updateHudState,checkRoutineItem}from './database';
+import{addTask,updateTask,completeTask,deleteTask,saveNote,getNote,addRevenue,getTasks,getHudState,updateHudState,setRoutineDone,addRoutineItem,removeRoutineItem,renameRoutineItem,setBatmanDay,getBusinessTargets,setBusinessTarget}from './database';
 export async function handleCommands(response,personaId,callbacks={}){
+  const hudChanged=()=>callbacks.onHudMutated?.();
   for(const m of response.matchAll(/\[ADD_TASK:\s*([^|\]]+?)(?:\|([^|\]]+))?(?:\|([^\]]+))?\]/gi)){
     const title=m[1]?.trim();if(!title)continue;
     const id=await addTask(title,m[2]?.trim()||'',m[3]?.trim()||null);
@@ -15,6 +16,11 @@ export async function handleCommands(response,personaId,callbacks={}){
     const task=tasks.find(t=>t.title.toLowerCase().includes(m[1].trim().toLowerCase()));
     if(task){await deleteTask(task.id);callbacks.onTaskDeleted?.(task);}
   }
+  for(const m of response.matchAll(/\[TASK_EDIT:\s*([^|\]]+)\|([^\]]+)\]/gi)){
+    const tasks=await getTasks(true);
+    const task=tasks.find(t=>t.title.toLowerCase().includes(m[1].trim().toLowerCase()));
+    if(task){await updateTask(task.id,m[2].trim(),task.notes||'');callbacks.onTaskEdited?.(task);}
+  }
   for(const m of response.matchAll(/\[SAVE_NOTE:\s*([^|\]]+)\|([^\]]+)\]/gi)){
     if(m[1]&&m[2])await saveNote(m[1].trim(),m[2].trim(),personaId);
   }
@@ -27,24 +33,60 @@ export async function handleCommands(response,personaId,callbacks={}){
   }
   if(/\[READ_HUD\]/i.test(response)){const hud=await getHudState();callbacks.onHudRead?.(hud);}
   for(const m of response.matchAll(/\[UPDATE_HUD:\s*([^|\]]+)\|([^\]]+)\]/gi)){
-    await updateHudState({[m[1].trim()]:m[2].trim()});callbacks.onHudUpdated?.({field:m[1].trim(),value:m[2].trim()});
+    await updateHudState({[m[1].trim()]:m[2].trim()});hudChanged();callbacks.onHudUpdated?.({field:m[1].trim(),value:m[2].trim()});
   }
   for(const m of response.matchAll(/\[UPDATE_SCORE:\s*(\d+)\]/gi)){
-    await updateHudState({empire_score:parseInt(m[1])});callbacks.onScoreUpdated?.(parseInt(m[1]));
+    await updateHudState({empire_score:parseInt(m[1])});hudChanged();callbacks.onScoreUpdated?.(parseInt(m[1]));
   }
   for(const m of response.matchAll(/\[ROUTINE_DONE:\s*([^\]]+)\]/gi)){
     const items=m[1].split(',').map(s=>s.trim()).filter(Boolean);
-    for(const item of items){await checkRoutineItem(item,true);}
-    callbacks.onRoutineDone?.(items);
+    for(const item of items){await setRoutineDone(item,true);}
+    hudChanged();callbacks.onRoutineDone?.(items);
+  }
+  for(const m of response.matchAll(/\[ROUTINE_ADD:\s*([^\]]+)\]/gi)){
+    await addRoutineItem(m[1].trim());hudChanged();
+  }
+  for(const m of response.matchAll(/\[ROUTINE_REMOVE:\s*([^\]]+)\]/gi)){
+    await removeRoutineItem(m[1].trim());hudChanged();
+  }
+  for(const m of response.matchAll(/\[ROUTINE_RENAME:\s*([^|\]]+)\|([^\]]+)\]/gi)){
+    await renameRoutineItem(m[1].trim(),m[2].trim());hudChanged();
+  }
+  for(const m of response.matchAll(/\[BATMAN_SET:\s*([^|\]]+)\|([^|\]]+)(?:\|([^\]]+))?\]/gi)){
+    await setBatmanDay(m[1].trim(),m[2].trim(),m[3]!=null?m[3].trim():null);hudChanged();
+  }
+  for(const m of response.matchAll(/\[SET_WORD:\s*([^|\]]+)(?:\|([^|\]]*))?(?:\|([^\]]+))?\]/gi)){
+    await updateHudState({word_of_day:m[1].trim(),word_phonetic:m[2]?.trim()||'',word_def:m[3]?.trim()||''});hudChanged();
+  }
+  for(const m of response.matchAll(/\[SET_VERSE:\s*([^|\]]+)(?:\|([^\]]+))?\]/gi)){
+    await updateHudState({verse_of_day:m[1].trim(),verse_ref:m[2]?.trim()||''});hudChanged();
+  }
+  for(const m of response.matchAll(/\[SET_FACT:\s*([^\]]+)\]/gi)){
+    await updateHudState({fact_of_day:m[1].trim()});hudChanged();
+  }
+  for(const m of response.matchAll(/\[SET_TARGET:\s*([^|\]]+)\|([^|\]]+)(?:\|([^\]]+))?\]/gi)){
+    const targets=await getBusinessTargets();
+    const b=targets.find(x=>x.business.toLowerCase().includes(m[1].trim().toLowerCase()));
+    if(b){
+      const monthly=parseFloat(m[2]);
+      const weekly=m[3]!=null?parseFloat(m[3]):NaN;
+      await setBusinessTarget(b.business,isNaN(monthly)?b.target:monthly,isNaN(weekly)?b.week_goal:weekly);
+      hudChanged();
+    }
   }
 }
 export function stripCommands(text){
   return text
     .replace(/\[ADD_TASK:[^\]]*\]/gi,'').replace(/\[COMPLETE_TASK:[^\]]*\]/gi,'')
-    .replace(/\[DELETE_TASK:[^\]]*\]/gi,'').replace(/\[SAVE_NOTE:[^\]]*\]/gi,'')
+    .replace(/\[DELETE_TASK:[^\]]*\]/gi,'').replace(/\[TASK_EDIT:[^\]]*\]/gi,'')
+    .replace(/\[SAVE_NOTE:[^\]]*\]/gi,'')
     .replace(/\[READ_NOTE:[^\]]*\]/gi,'').replace(/\[ADD_REVENUE:[^\]]*\]/gi,'')
     .replace(/\[READ_HUD\]/gi,'').replace(/\[UPDATE_HUD:[^\]]*\]/gi,'')
     .replace(/\[UPDATE_SCORE:[^\]]*\]/gi,'').replace(/\[ROUTINE_DONE:[^\]]*\]/gi,'')
+    .replace(/\[ROUTINE_ADD:[^\]]*\]/gi,'').replace(/\[ROUTINE_REMOVE:[^\]]*\]/gi,'')
+    .replace(/\[ROUTINE_RENAME:[^\]]*\]/gi,'').replace(/\[BATMAN_SET:[^\]]*\]/gi,'')
+    .replace(/\[SET_WORD:[^\]]*\]/gi,'').replace(/\[SET_VERSE:[^\]]*\]/gi,'')
+    .replace(/\[SET_FACT:[^\]]*\]/gi,'').replace(/\[SET_TARGET:[^\]]*\]/gi,'')
     .replace(/\[RELAY_TO:[^\]]*\]/gi,'').replace(/\[SEARCH_WEB:[^\]]*\]/gi,'')
     .replace(/\[READ_CALENDAR\]/gi,'').replace(/\[READ_EMAIL\]/gi,'')
     .replace(/\[SEND_SMS:[^\]]*\]/gi,'').trim();
