@@ -12,6 +12,7 @@ async function buildSys(personaId,persona){
   const tz=now.getTimezoneOffset()<Math.max(jan,jul)?'EDT':'EST';
   const customPrompt=await getCustomPrompt(personaId);
   let sys=customPrompt||persona.system;
+  sys+=`\n\n[RESPONSE STYLE: Reply directly to what Mr. Burrus just said. Do not open with a status briefing, HUD summary, morning-routine readout, or any unprompted overview unless he explicitly asks for one. Skip "here is where things stand" preambles — answer the message and stop.]`;
   sys+=`\n\n[CURRENT DATE & TIME: ${timeStr} ${tz} | LOCATION: Waldorf, MD]`;
   const hud=await getHudState();const tasks=await getTasks();
   if(hud){

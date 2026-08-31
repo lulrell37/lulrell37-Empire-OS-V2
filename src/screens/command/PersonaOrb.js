@@ -54,37 +54,37 @@ export default function PersonaOrb({viz,color='#E8C98A',active=true}){
       geo.setAttribute('aSize',new THREE.BufferAttribute(aSize,1));
 
       const col=new THREE.Color(color);
-      const pointUniforms={uTime:{value:0},uAmp:{value:0},uColor:{value:col.clone()}};
+      const pointUniforms={uTime:{value:0},uAmp:{value:0},uLit:{value:0},uColor:{value:col.clone()}};
       const pointsMat=new THREE.ShaderMaterial({
         uniforms:pointUniforms,transparent:true,depthWrite:false,blending:THREE.AdditiveBlending,
         vertexShader:`
           attribute float aPhase; attribute float aFreq; attribute float aSize;
-          uniform float uTime; uniform float uAmp;
+          uniform float uTime; uniform float uAmp; uniform float uLit;
           varying float vGlow;
           void main(){
             vec3 dir=normalize(position);
             float disp=sin(uTime*aFreq+aPhase)*(0.05+uAmp*0.32);
-            vec3 p=dir*(1.0+disp)*(1.0+uAmp*0.22);
+            vec3 p=dir*(1.0+disp)*(1.0+uAmp*0.22+uLit*0.18);
             vec4 mv=modelViewMatrix*vec4(p,1.0);
             gl_Position=projectionMatrix*mv;
-            gl_PointSize=min(60.0,aSize*(1.0+uAmp*2.0)*(130.0/max(0.1,-mv.z)));
-            vGlow=0.35+uAmp*0.65+0.15*sin(uTime*aFreq*2.0+aPhase);
+            gl_PointSize=min(72.0,aSize*(1.0+uAmp*2.0+uLit*0.9)*(130.0/max(0.1,-mv.z)));
+            vGlow=0.35+uAmp*0.65+uLit*0.5+0.15*sin(uTime*aFreq*2.0+aPhase);
           }`,
         fragmentShader:`
           precision mediump float;
-          uniform vec3 uColor; uniform float uAmp;
+          uniform vec3 uColor; uniform float uAmp; uniform float uLit;
           varying float vGlow;
           void main(){
             float d=length(gl_PointCoord-0.5);
             if(d>0.5)discard;
             float a=smoothstep(0.5,0.0,d)*vGlow;
-            gl_FragColor=vec4(uColor*(1.0+uAmp*0.7),a*0.5);
+            gl_FragColor=vec4(uColor*(1.0+uAmp*0.7+uLit*0.6),a*(0.5+uLit*0.3));
           }`,
       });
       const points=new THREE.Points(geo,pointsMat);
       scene.add(points);
 
-      const glowUniforms={uColor:{value:col.clone()},uAmp:{value:0}};
+      const glowUniforms={uColor:{value:col.clone()},uAmp:{value:0},uLit:{value:0}};
       const glowMat=new THREE.ShaderMaterial({
         uniforms:glowUniforms,transparent:true,depthWrite:false,blending:THREE.AdditiveBlending,side:THREE.BackSide,
         vertexShader:`
@@ -97,17 +97,17 @@ export default function PersonaOrb({viz,color='#E8C98A',active=true}){
           }`,
         fragmentShader:`
           precision mediump float;
-          uniform vec3 uColor; uniform float uAmp;
+          uniform vec3 uColor; uniform float uAmp; uniform float uLit;
           varying vec3 vN; varying vec3 vP;
           void main(){
             float f=pow(1.0-abs(dot(vN,normalize(vP))),2.0);
-            gl_FragColor=vec4(uColor,f*(0.12+uAmp*0.4));
+            gl_FragColor=vec4(uColor*(1.0+uLit*0.5),f*(0.12+uAmp*0.4+uLit*0.33));
           }`,
       });
       const glow=new THREE.Mesh(new THREE.SphereGeometry(0.85,32,24),glowMat);
       scene.add(glow);
 
-      Object.assign(engine,{renderer,scene,camera,points,glow,pointUniforms,glowUniforms,amp:0,last:Date.now()});
+      Object.assign(engine,{renderer,scene,camera,points,glow,pointUniforms,glowUniforms,amp:0,spk:0,last:Date.now()});
 
       const animate=()=>{
         engine.raf=requestAnimationFrame(animate);
@@ -117,17 +117,25 @@ export default function PersonaOrb({viz,color='#E8C98A',active=true}){
         if(engine.active===false)return; // screen not focused — hold last frame
 
         pointUniforms.uTime.value+=dt;
-        const target=viz?.speaking?Math.max(0.12,Math.min(1,viz.amplitude||0.4)):0.05;
+        const speaking=!!viz?.speaking;
+        const target=speaking?Math.max(0.12,Math.min(1,viz.amplitude||0.4)):0.05;
         engine.amp+=(target-engine.amp)*Math.min(1,dt*9);
+        // Distinct "is speaking" state — eases in/out slower than the per-frame amplitude
+        // so the whole orb visibly lights up and swells on every reply, then settles.
+        engine.spk+=((speaking?1:0)-engine.spk)*Math.min(1,dt*4);
         pointUniforms.uAmp.value=engine.amp;
         glowUniforms.uAmp.value=engine.amp;
+        pointUniforms.uLit.value=engine.spk;
+        glowUniforms.uLit.value=engine.spk;
 
         const c=viz?.color||color;
         if(c){pointUniforms.uColor.value.set(c);glowUniforms.uColor.value.set(c);}
 
         points.rotation.y+=dt*0.16;
         points.rotation.x+=dt*0.05;
-        glow.scale.setScalar(1.0+engine.amp*0.3);
+        const swell=1.0+engine.spk*0.26;
+        points.scale.setScalar(swell);
+        glow.scale.setScalar(swell*(1.0+engine.amp*0.3));
 
         renderer.render(scene,camera);
         gl.endFrameEXP();

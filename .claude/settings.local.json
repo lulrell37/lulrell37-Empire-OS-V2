@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:docs.expo.dev)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:unpkg.com)"
+    ]
+  }
+}

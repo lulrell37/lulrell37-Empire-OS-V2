@@ -245,6 +245,15 @@ export default function CommandScreen({navigation}){
     const patch=(fn)=>setMsgs(prev=>prev.map(m=>m.id===msgId?fn(m):m));
 
     if(!voiceOn||voiceMuted||!text){
+      // No voice — still light the orb up briefly so every reply registers visually.
+      if(text){
+        vizRef.speaking=true;
+        const until=Date.now()+Math.min(4500,900+text.length*11);
+        const pulse=setInterval(()=>{
+          vizRef.amplitude=synthAmp();
+          if(Date.now()>=until){clearInterval(pulse);vizRef.speaking=false;vizRef.amplitude=0;}
+        },80);
+      }
       patch(m=>({...m,content:text,revealed:text.length,streaming:false}));
       maybeAutoListen();
       return{revealed:text.length,completed:true,finalText:text};
@@ -548,11 +557,6 @@ export default function CommandScreen({navigation}){
 
   const cp=getPersona(activePersona);
   const displayMessages=mode==='direct'?messages:groupMessages;
-  const streamingMsg=displayMessages.find(m=>m.streaming);
-  const lastAi=[...displayMessages].reverse().find(m=>m.role==='assistant');
-  const captionStreaming=!!streamingMsg;
-  const captionFull=streamingMsg?String(streamingMsg.content||'').slice(0,streamingMsg.revealed||0):(lastAi?.content||'');
-  const captionText=captionFull.length>230?'… '+captionFull.slice(-230):captionFull;
   const orbColor=vizRef.color||cp.color;
 
   if(showCamera){
@@ -654,9 +658,6 @@ export default function CommandScreen({navigation}){
           <View style={s.orbLabelWrap} pointerEvents="none">
             <Text style={[s.orbLabel,{color:orbColor}]}>{getPersona(vizRef.personaId||activePersona).name}</Text>
           </View>
-          {!!captionText&&<View style={s.orbCaptionWrap} pointerEvents="none">
-            <Text style={s.orbCaptionText}>{captionText}{captionStreaming&&<Text style={[s.caret,{color:orbColor}]}>▍</Text>}</Text>
-          </View>}
         </View>
       ):(
         <FlatList ref={flatRef} data={displayMessages} keyExtractor={i=>i.id} renderItem={renderMsg} contentContainerStyle={s.msgList} style={{flex:1}} onContentSizeChange={()=>flatRef.current?.scrollToEnd({animated:true})}/>
@@ -780,8 +781,6 @@ const s=StyleSheet.create({
   viewTabT:{fontFamily:'monospace',fontSize:11,color:'#444'},
   orbLabelWrap:{position:'absolute',top:14,left:0,right:0,alignItems:'center'},
   orbLabel:{fontFamily:'monospace',fontSize:11,fontWeight:'700',letterSpacing:3},
-  orbCaptionWrap:{position:'absolute',left:16,right:16,bottom:14,backgroundColor:'rgba(0,0,0,0.55)',borderRadius:10,paddingHorizontal:14,paddingVertical:10},
-  orbCaptionText:{color:'#DDD',fontSize:13,lineHeight:20,textAlign:'center'},
   onlineDot:{width:6,height:6,borderRadius:3,backgroundColor:'#4CAF50'},
   onlineText:{fontFamily:'monospace',fontSize:8,color:'#4CAF50',letterSpacing:2},
   teamPanel:{marginHorizontal:14,marginTop:6,marginBottom:4,borderWidth:1,borderColor:'#1A1A1A',borderRadius:6,overflow:'hidden'},
