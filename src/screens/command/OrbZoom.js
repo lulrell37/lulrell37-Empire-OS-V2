@@ -1,12 +1,11 @@
 // The orb screen as one continuous zoom. Pinch out (or +) drills in:
-//   orb  ->  memory regions  ->  one region's memories  ->  a single memory
-// Pinch in (or -) backs out the same way; pinching in from the orb calls
-// onZoomOut (the all-personas / group view). No tap-to-open — depth is the UI,
-// though tapping a region or a memory jumps straight to it.
-import React,{useState,useEffect,useMemo,useCallback}from 'react';
-import{View,Text,StyleSheet,TouchableOpacity,ScrollView,ActivityIndicator}from 'react-native';
+//   group -> orb -> memory regions -> one region -> a single memory
+// Pinch in (or -) backs out the same way. In the group level, tap a persona to
+// make it active, or drag personas down into the tray to build a custom group.
+import React,{useState,useEffect,useMemo,useCallback,useRef}from 'react';
+import{View,Text,StyleSheet,TouchableOpacity,ScrollView,ActivityIndicator,Dimensions}from 'react-native';
 import{Gesture,GestureDetector}from 'react-native-gesture-handler';
-import Animated,{useSharedValue,useAnimatedStyle,withTiming,runOnJS}from 'react-native-reanimated';
+import Animated,{useSharedValue,useAnimatedStyle,withTiming,withSpring,runOnJS}from 'react-native-reanimated';
 import PersonaOrb from './PersonaOrb';
 import Boundary from '../hud/Boundary';
 import{getMemoriesByPersona,deletePersonaMemory}from '../../services/database';
@@ -15,7 +14,7 @@ import{getPersona,PERSONA_LIST}from '../../personas/personas';
 
 const LEVELS=['group','orb','regions','region','memory'];
 
-export default function OrbZoom({personaId,color,active,vizRef,personaPics={},onPickPersona}){
+export default function OrbZoom({personaId,color,active,vizRef,personaPics={},onPickPersona,onLaunchGroup}){
   const persona=getPersona(personaId);
   const[memories,setMemories]=useState(null);
   const[level,setLevel]=useState('orb');
@@ -87,7 +86,9 @@ export default function OrbZoom({personaId,color,active,vizRef,personaPics={},on
       <GestureDetector gesture={gesture}>
         <Animated.View style={[{flex:1},animStyle]}>
           {level==='group'&&(
-            <GroupView activeId={personaId} pics={personaPics} onPick={id=>{onPickPersona?.(id);setLevel('orb');}}/>
+            <GroupView activeId={personaId} pics={personaPics}
+              onPick={id=>{onPickPersona?.(id);setLevel('orb');}}
+              onLaunch={ids=>{onLaunchGroup?.(ids);}}/>
           )}
 
           {level==='orb'&&(
@@ -136,19 +137,60 @@ export default function OrbZoom({personaId,color,active,vizRef,personaPics={},on
   );
 }
 
-function GroupView({activeId,pics,onPick}){
+function GroupView({activeId,pics,onPick,onLaunch}){
+  const[group,setGroup]=useState([]);
+  const trayRef=useRef(null);
+  const dropY=useRef(Dimensions.get('window').height-150);
+
+  const add=useCallback(id=>setGroup(g=>g.includes(id)?g:[...g,id]),[]);
+  const remove=useCallback(id=>setGroup(g=>g.filter(x=>x!==id)),[]);
+
   return(
-    <ScrollView contentContainerStyle={s.groupPad}>
-      {PERSONA_LIST.map(p=>{
-        const on=p.id===activeId;
-        return(
-          <TouchableOpacity key={p.id} style={[s.gOrb,{borderColor:p.color,backgroundColor:p.color+(on?'2A':'12')}]} onPress={()=>onPick(p.id)}>
-            <Text style={[s.gIcon,{color:p.color}]}>{p.icon}</Text>
-            <Text style={s.gName} numberOfLines={1}>{p.name.replace(/\./g,'')}</Text>
-          </TouchableOpacity>
-        );
-      })}
-    </ScrollView>
+    <View style={{flex:1}}>
+      <ScrollView contentContainerStyle={s.groupPad}>
+        {PERSONA_LIST.map(p=>(
+          <DraggableOrb key={p.id} p={p} on={p.id===activeId} inGroup={group.includes(p.id)}
+            getDropY={()=>dropY.current} onTap={onPick} onDropIn={add}/>
+        ))}
+      </ScrollView>
+
+      <View ref={trayRef} onLayout={()=>{trayRef.current?.measureInWindow?.((x,y)=>{if(y)dropY.current=y;});}} style={s.tray}>
+        <Text style={s.trayLabel}>CUSTOM GROUP · drag orbs here</Text>
+        <View style={s.trayChips}>
+          {group.length===0&&<Text style={s.trayEmpty}>—</Text>}
+          {group.map(id=>{const p=getPersona(id);return(
+            <TouchableOpacity key={id} style={[s.chip,{borderColor:p.color}]} onPress={()=>remove(id)}>
+              <Text style={[s.chipIcon,{color:p.color}]}>{p.icon}</Text>
+              <Text style={s.chipX}>×</Text>
+            </TouchableOpacity>
+          );})}
+        </View>
+        {group.length>=2&&<TouchableOpacity style={s.launch} onPress={()=>onLaunch(group)}>
+          <Text style={s.launchT}>LAUNCH GROUP · {group.length}</Text>
+        </TouchableOpacity>}
+      </View>
+    </View>
+  );
+}
+
+function DraggableOrb({p,on,inGroup,getDropY,onTap,onDropIn}){
+  const tx=useSharedValue(0),ty=useSharedValue(0),sc=useSharedValue(1);
+  const pan=useMemo(()=>Gesture.Pan()
+    .onUpdate(e=>{tx.value=e.translationX;ty.value=e.translationY;sc.value=1.18;})
+    .onEnd(e=>{
+      const dropped=e.absoluteY>getDropY();
+      if(dropped)runOnJS(onDropIn)(p.id);
+      else if(Math.abs(e.translationX)<8&&Math.abs(e.translationY)<8)runOnJS(onTap)(p.id);
+      tx.value=withSpring(0);ty.value=withSpring(0);sc.value=withTiming(1);
+    }),[p.id,onTap,onDropIn]);// eslint-disable-line react-hooks/exhaustive-deps
+  const st=useAnimatedStyle(()=>({transform:[{translateX:tx.value},{translateY:ty.value},{scale:sc.value}],zIndex:sc.value>1?20:1,elevation:sc.value>1?20:1}));
+  return(
+    <GestureDetector gesture={pan}>
+      <Animated.View style={[s.gOrb,{borderColor:p.color,backgroundColor:p.color+(inGroup?'33':on?'22':'12')},st]}>
+        <Text style={[s.gIcon,{color:p.color}]}>{p.icon}</Text>
+        <Text style={s.gName} numberOfLines={1}>{p.name.replace(/\./g,'')}</Text>
+      </Animated.View>
+    </GestureDetector>
   );
 }
 
@@ -230,8 +272,17 @@ const s=StyleSheet.create({
   memText:{color:'#CCC',fontSize:14,lineHeight:22},
   del:{borderTopWidth:1,borderTopColor:'#141414',paddingVertical:13,alignItems:'center'},
   delT:{fontFamily:'monospace',fontSize:9,color:'#C7614B',letterSpacing:2},
-  groupPad:{flexDirection:'row',flexWrap:'wrap',justifyContent:'center',alignItems:'center',gap:14,padding:24,paddingTop:48},
-  gOrb:{width:82,height:82,borderRadius:41,borderWidth:1.5,alignItems:'center',justifyContent:'center'},
-  gIcon:{fontFamily:'monospace',fontSize:16,fontWeight:'700'},
+  groupPad:{flexDirection:'row',flexWrap:'wrap',justifyContent:'center',alignItems:'center',gap:14,padding:20,paddingTop:44,paddingBottom:120},
+  gOrb:{width:76,height:76,borderRadius:38,borderWidth:1.5,alignItems:'center',justifyContent:'center'},
+  gIcon:{fontFamily:'monospace',fontSize:15,fontWeight:'700'},
   gName:{fontFamily:'monospace',fontSize:6,color:'#888',letterSpacing:1,marginTop:3},
+  tray:{position:'absolute',left:0,right:0,bottom:0,borderTopWidth:1,borderTopColor:'#1F1B14',backgroundColor:'#0A0806',paddingHorizontal:14,paddingTop:8,paddingBottom:12},
+  trayLabel:{fontFamily:'monospace',fontSize:7,color:'#6b5a30',letterSpacing:2,marginBottom:6},
+  trayChips:{flexDirection:'row',flexWrap:'wrap',gap:6,minHeight:26,alignItems:'center'},
+  trayEmpty:{fontFamily:'monospace',fontSize:12,color:'#2a2a2a'},
+  chip:{flexDirection:'row',alignItems:'center',gap:4,borderWidth:1,borderRadius:13,paddingHorizontal:8,paddingVertical:3},
+  chipIcon:{fontFamily:'monospace',fontSize:9,fontWeight:'700'},
+  chipX:{fontFamily:'monospace',fontSize:10,color:'#555'},
+  launch:{marginTop:8,backgroundColor:'#E8C98A',borderRadius:6,paddingVertical:9,alignItems:'center'},
+  launchT:{fontFamily:'monospace',fontSize:10,color:'#000',fontWeight:'700',letterSpacing:2},
 });

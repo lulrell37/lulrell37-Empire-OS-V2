@@ -817,6 +817,7 @@ export default function CommandScreen({navigation}){
           vizRef={vizRef}
           personaPics={personaPics}
           onPickPersona={id=>{setMode('direct');setActivePersona(id);}}
+          onLaunchGroup={ids=>{setCustomPersonas(ids);setMode('custom');setView('text');}}
         />
       ):(
         <FlatList ref={flatRef} data={displayMessages} keyExtractor={i=>i.id} renderItem={renderMsg} contentContainerStyle={s.msgList} style={{flex:1}} onContentSizeChange={()=>flatRef.current?.scrollToEnd({animated:true})}/>
