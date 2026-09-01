@@ -14,6 +14,15 @@ import MemoryList from './MemoryList';
 const GOLDEN=2.399963229728653;
 const ACircle=Animated.createAnimatedComponent(Circle);
 
+// Blend a #rrggbb toward white by amt (0..1) — for gradient highlights.
+function lighten(hex,amt){
+  const h=hex.replace('#','');
+  const n=h.length===3?h.split('').map(c=>c+c).join(''):h;
+  const r=parseInt(n.slice(0,2),16),g=parseInt(n.slice(2,4),16),b=parseInt(n.slice(4,6),16);
+  const m=(v)=>Math.round(v+(255-v)*amt).toString(16).padStart(2,'0');
+  return `#${m(r)}${m(g)}${m(b)}`;
+}
+
 function BrainWebInner({persona,memories,onNode,onExit},ref){
   const[mode,setMode]=useState('graph');   // 'graph' | 'list'
   const[focus,setFocus]=useState(null);     // category key, or null for the whole web
@@ -207,40 +216,67 @@ function BrainWebInner({persona,memories,onNode,onExit},ref){
               scrollEventThrottle={32} onScroll={e=>{scroll.current.x=e.nativeEvent.contentOffset.x;}}>
               {layout&&<Svg width={layout.size*zoom} height={layout.size*zoom}>
                 <Defs>
+                  <RadialGradient id="vignette" cx="50%" cy="50%" r="50%">
+                    <Stop offset="0" stopColor={persona.color} stopOpacity="0.09"/>
+                    <Stop offset="0.55" stopColor={persona.color} stopOpacity="0.02"/>
+                    <Stop offset="1" stopColor={persona.color} stopOpacity="0"/>
+                  </RadialGradient>
                   <RadialGradient id="coreGlow" cx="50%" cy="50%" r="50%">
                     <Stop offset="0" stopColor={persona.color} stopOpacity="0.5"/>
                     <Stop offset="1" stopColor={persona.color} stopOpacity="0"/>
                   </RadialGradient>
+                  <RadialGradient id="coreFill" cx="42%" cy="38%" r="65%">
+                    <Stop offset="0" stopColor={lighten(persona.color,0.7)} stopOpacity="1"/>
+                    <Stop offset="0.5" stopColor={persona.color} stopOpacity="0.95"/>
+                    <Stop offset="1" stopColor={persona.color} stopOpacity="0.5"/>
+                  </RadialGradient>
+                  {layout.hubs.map(h=>(
+                    <RadialGradient key={'ng'+h.key} id={`node-${h.key}`} cx="38%" cy="35%" r="70%">
+                      <Stop offset="0" stopColor={lighten(h.color,0.55)} stopOpacity="1"/>
+                      <Stop offset="0.55" stopColor={h.color} stopOpacity="0.95"/>
+                      <Stop offset="1" stopColor={h.color} stopOpacity="0.55"/>
+                    </RadialGradient>
+                  ))}
+                  {layout.hubs.map(h=>(
+                    <RadialGradient key={'hg'+h.key} id={`halo-${h.key}`} cx="50%" cy="50%" r="50%">
+                      <Stop offset="0" stopColor={h.color} stopOpacity="0.28"/>
+                      <Stop offset="1" stopColor={h.color} stopOpacity="0"/>
+                    </RadialGradient>
+                  ))}
                 </Defs>
                 <G scale={zoom}>
+                  <Circle cx={layout.cx} cy={layout.cy} r={layout.size/2} fill="url(#vignette)"/>
                   <ACircle cx={layout.cx} cy={layout.cy} r={layout.coreRad*5} fill="url(#coreGlow)" opacity={coreGlow}/>
                   {layout.hubs.map(h=>(
                     <Line key={'l'+h.key} x1={layout.cx} y1={layout.cy} x2={h.hx} y2={h.hy}
-                      stroke={h.color} strokeWidth={1.2} opacity={focus&&focus!==h.key?0.04:0.22}/>
+                      stroke={h.color} strokeWidth={1} opacity={focus&&focus!==h.key?0.03:0.16}/>
                   ))}
                   {layout.hubs.map(h=>{
                     const dim=focus&&focus!==h.key;
                     return(
-                      <G key={'g'+h.key} opacity={dim?0.07:1}>
-                        <Circle cx={h.hx} cy={h.hy} r={h.hubRad*3.4} fill={h.color} opacity={0.06}/>
+                      <G key={'g'+h.key} opacity={dim?0.06:1}>
+                        <Circle cx={h.hx} cy={h.hy} r={h.hubRad*6} fill={`url(#halo-${h.key})`}/>
                         {h.nodes.map((n,i)=>(
-                          <Line key={'nl'+i} x1={h.hx} y1={h.hy} x2={n.x} y2={n.y} stroke={h.color} strokeWidth={0.6} opacity={0.28}/>
+                          <Line key={'nl'+i} x1={h.hx} y1={h.hy} x2={n.x} y2={n.y} stroke={h.color} strokeWidth={0.5} opacity={0.2}/>
                         ))}
                         {h.nodes.map((n,i)=>(
-                          <Circle key={'n'+i} cx={n.x} cy={n.y} r={n.rad} fill={h.color} opacity={0.92} onPress={()=>onNode&&onNode(n.m)}/>
+                          <Circle key={'n'+i} cx={n.x} cy={n.y} r={n.rad*1.15} fill={`url(#node-${h.key})`}
+                            opacity={0.55+((i*GOLDEN)%1)*0.4} onPress={()=>onNode&&onNode(n.m)}/>
                         ))}
-                        <Circle cx={h.hx} cy={h.hy} r={h.hubRad} fill={colors.bg} stroke={h.color} strokeWidth={1.6}
-                          onPress={()=>pickCategory(h.key)}/>
-                        <Circle cx={h.hx} cy={h.hy} r={h.hubRad*0.42} fill={h.color} onPress={()=>pickCategory(h.key)}/>
-                        <SvgText x={h.hx} y={h.hy-h.hubRad-7} fill={h.color} fontSize={8.5} fontFamily={FONTS.mono}
+                        <Circle cx={h.hx} cy={h.hy} r={h.hubRad*2.1} fill={`url(#halo-${h.key})`}/>
+                        <Circle cx={h.hx} cy={h.hy} r={h.hubRad} fill={`url(#node-${h.key})`}
+                          stroke={lighten(h.color,0.4)} strokeWidth={0.75} onPress={()=>pickCategory(h.key)}/>
+                        <Circle cx={h.hx-h.hubRad*0.3} cy={h.hy-h.hubRad*0.32} r={h.hubRad*0.28} fill={lighten(h.color,0.85)} opacity={0.9}/>
+                        <SvgText x={h.hx} y={h.hy-h.hubRad-8} fill={dim?h.color:lighten(h.color,0.25)} fontSize={8.5} fontFamily={FONTS.mono}
                           textAnchor="middle" opacity={dim?0.3:0.95}>{`${h.label.toUpperCase()}  ${h.count}`}</SvgText>
                       </G>
                     );
                   })}
-                  <Circle cx={layout.cx} cy={layout.cy} r={layout.coreRad+5} fill="none" stroke={persona.color} strokeWidth={0.75} opacity={0.3}/>
-                  <Circle cx={layout.cx} cy={layout.cy} r={layout.coreRad} fill={colors.bg} opacity={0.9}/>
-                  <Circle cx={layout.cx} cy={layout.cy} r={layout.coreRad} stroke={persona.color} strokeWidth={1.75} fill="none"/>
-                  <SvgText x={layout.cx} y={layout.cy+4.5} fill={persona.color} fontSize={13} fontWeight="700"
+                  <Circle cx={layout.cx} cy={layout.cy} r={layout.coreRad*1.9} fill="url(#coreGlow)" opacity={0.5}/>
+                  <Circle cx={layout.cx} cy={layout.cy} r={layout.coreRad} fill="url(#coreFill)"/>
+                  <Circle cx={layout.cx} cy={layout.cy} r={layout.coreRad} fill="none" stroke={lighten(persona.color,0.5)} strokeWidth={1}/>
+                  <Circle cx={layout.cx} cy={layout.cy} r={layout.coreRad+6} fill="none" stroke={persona.color} strokeWidth={0.6} opacity={0.35}/>
+                  <SvgText x={layout.cx} y={layout.cy+4.5} fill={colors.bg} fontSize={13} fontWeight="700"
                     fontFamily={FONTS.mono} textAnchor="middle">{persona.icon}</SvgText>
                 </G>
               </Svg>}
