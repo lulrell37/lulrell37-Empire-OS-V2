@@ -9,6 +9,7 @@ import{Feather}from '@expo/vector-icons';
 import{useFocusEffect}from '@react-navigation/native';
 import{colors,space,radius,type,FONTS}from '../../theme';
 import{tlStatus,tlQuote,tlPositions,tlClosePosition}from '../../services/tradeLocker';
+import{reconcile as reconcileJournal}from '../../services/tradeJournal';
 
 const{width}=Dimensions.get('window');
 export const PANEL_META={
@@ -244,7 +245,9 @@ export function MarketPanel(){
       const[q,ps2]=await Promise.all([tlQuote('XAUUSD').catch(()=>null),tlPositions().catch(()=>[])]);
       if(!alive.current)return;
       if(q)setQuote(q);
-      setPositions((ps2||[]).filter(p=>Number(p.qty)>0));
+      const openPs=(ps2||[]).filter(p=>Number(p.qty)>0);
+      setPositions(openPs);
+      reconcileJournal(openPs).catch(()=>{}); // keep Atlas's trade journal current
     }catch{}
   },[]);
 

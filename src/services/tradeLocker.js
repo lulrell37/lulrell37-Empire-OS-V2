@@ -117,6 +117,12 @@ export async function tlQuote(symbol='XAUUSD'){
   return{symbol,bid:d.bp,ask:d.ap,mid:d.bp!=null&&d.ap!=null?(d.bp+d.ap)/2:null,ts:Date.now()};
 }
 
+// Standalone ATR read for the pre-send trade check (cheaper than a full snapshot).
+export async function tlVolatility(symbol='XAUUSD',resolution='15m',bars=20){
+  const h=await tlHistory(symbol,resolution,bars);
+  return{atr:atr(h,14),bars:h.length};
+}
+
 export async function tlHistory(symbol='XAUUSD',resolution='1H',bars=120){
   const m=await tlInstrument(symbol);
   const step=RES_MS[resolution]||RES_MS['1H'];
@@ -171,6 +177,20 @@ export function tlReset(){session.token=null;session.refresh=null;session.exp=0;
 
 // --- Analysis snapshot: everything Atlas needs to form a view on gold ---
 
+// Average True Range over the last `period` bars — the volatility figure Atlas
+// needs to size a stop that survives normal noise on this timeframe.
+function atr(bars,period=14){
+  if(!bars||bars.length<2)return null;
+  const trs=[];
+  for(let i=1;i<bars.length;i++){
+    const b=bars[i],p=bars[i-1];
+    trs.push(Math.max(b.h-b.l,Math.abs(b.h-p.c),Math.abs(b.l-p.c)));
+  }
+  const n=Math.min(period,trs.length);
+  if(!n)return null;
+  return trs.slice(-n).reduce((a,x)=>a+x,0)/n;
+}
+
 function summarizeBars(bars){
   if(!bars||bars.length<3)return null;
   const c=bars.map(b=>b.c);
@@ -179,10 +199,12 @@ function summarizeBars(bars){
   const sma=c.slice(-smaN).reduce((a,x)=>a+x,0)/smaN;
   const hi=Math.max(...bars.map(b=>b.h)),lo=Math.min(...bars.map(b=>b.l));
   const px=n=>+n.toFixed(2);
+  const a=atr(bars,14);
   return{
     last:px(last),changePct:+(((last-first)/first)*100).toFixed(2),
     sma20:px(sma),trend:last>sma?'up':'down',
     rangeHigh:px(hi),rangeLow:px(lo),
+    atr14:a!=null?px(a):null,
     recent:bars.slice(-6).map(b=>({o:px(b.o),h:px(b.h),l:px(b.l),c:px(b.c)})),
   };
 }
@@ -197,24 +219,87 @@ export async function tlSnapshot(symbol='XAUUSD'){
   for(const tf of['1D','4H','1H','15m']){
     try{candles[tf]=summarizeBars(await tlHistory(symbol,tf,60));}catch{candles[tf]=null;}
   }
+  // USD proxy with 24h % change so "is the dollar bid right now" is actually
+  // derivable — a bare level tells the model nothing.
   const usd={};
+  const usdContrib=[];
   for(const s of['EURUSD','USDJPY','GBPUSD']){
-    try{const q=await tlQuote(s);if(q.mid!=null)usd[s]=+q.mid.toFixed(5);}catch{}
+    try{
+      const q=await tlQuote(s);
+      let chg=null;
+      try{
+        const h=await tlHistory(s,'1H',24);
+        if(h.length>=2)chg=+(((h[h.length-1].c-h[0].c)/h[0].c)*100).toFixed(2);
+      }catch{}
+      if(q.mid!=null)usd[s]={mid:+q.mid.toFixed(5),chgPct:chg};
+      // USD gains when EUR/GBP fall and USDJPY rises.
+      if(chg!=null)usdContrib.push(s==='USDJPY'?chg:-chg);
+    }catch{}
   }
-  return{symbol,quote,state,positions,candles,usd,ts:Date.now()};
+  const usdBias=usdContrib.length
+    ?(()=>{const avg=usdContrib.reduce((a,x)=>a+x,0)/usdContrib.length;
+      return{avgPct:+avg.toFixed(2),label:avg>0.1?'USD firm (gold headwind)':avg<-0.1?'USD soft (gold tailwind)':'USD flat'};})()
+    :null;
+  return{symbol,quote,state,positions,candles,usd,usdBias,ts:Date.now()};
 }
 
 export function tlFormatSnapshot(snap){
   if(!snap)return '(market snapshot unavailable)';
-  const{quote,state,positions,candles,usd}=snap;
+  const{quote,state,positions,candles,usd,usdBias}=snap;
   const L=[];
   L.push(`Price ${snap.symbol}: bid ${quote.bid} / ask ${quote.ask} (mid ${quote.mid?.toFixed?.(2)})`);
   if(state)L.push(`Account: balance ${state.balance}, available ${state.availableFunds}, open P/L ${state.openNetPnL}, open positions ${state.positionsCount}`);
   for(const tf of Object.keys(candles)){
     const c=candles[tf];if(!c){L.push(`${tf}: no data`);continue;}
-    L.push(`${tf}: last ${c.last}, ${c.changePct>=0?'+':''}${c.changePct}% over window, trend ${c.trend} (SMA20 ${c.sma20}), range ${c.rangeLow}–${c.rangeHigh}; recent bars ${c.recent.map(b=>`${b.o}/${b.h}/${b.l}/${b.c}`).join('  ')}`);
+    L.push(`${tf}: last ${c.last}, ${c.changePct>=0?'+':''}${c.changePct}% over window, trend ${c.trend} (SMA20 ${c.sma20}), range ${c.rangeLow}–${c.rangeHigh}, ATR14 ${c.atr14??'—'}; recent bars ${c.recent.map(b=>`${b.o}/${b.h}/${b.l}/${b.c}`).join('  ')}`);
   }
-  if(Object.keys(usd).length)L.push(`USD proxy: ${Object.entries(usd).map(([k,v])=>`${k} ${v}`).join(', ')} (gold moves inverse to USD strength)`);
+  if(usd&&Object.keys(usd).length){
+    const parts=Object.entries(usd).map(([k,v])=>`${k} ${v.mid}${v.chgPct!=null?` (${v.chgPct>=0?'+':''}${v.chgPct}% 24h)`:''}`);
+    L.push(`USD proxy: ${parts.join(', ')}${usdBias?` — ${usdBias.label} [${usdBias.avgPct>=0?'+':''}${usdBias.avgPct}%]`:''} (gold moves inverse to USD)`);
+  }
   if(positions?.length)L.push(`Open positions: ${positions.map(p=>`#${p.id} ${p.side} ${p.qty} @ ${p.avgPrice} (uP/L ${p.unrealizedPl})`).join('; ')}`);
+  L.push('Stop guidance: distance from entry to stop should be about 1–2x the 15m ATR14 (never tighter than 1x) so normal noise does not knock you out.');
   return L.join('\n');
+}
+
+// --- Proposal validation: block the trades that are simply wrong ---
+
+export const MIN_RR=1.5;      // reward:risk floor
+export const MAX_ENTRY_DRIFT_PCT=0.35; // proposed entry vs live mid before we warn
+
+// Returns { ok, errors:[], warnings:[], rr, riskPts, rewardPts }. `errors`
+// block the send; `warnings` are shown but overridable.
+export function validateProposal(prop,{mid,atr15}={}){
+  const errors=[],warnings=[];
+  const{side,entry,stopLoss,takeProfit}=prop||{};
+  const n=v=>typeof v==='number'&&isFinite(v);
+  if(side!=='buy'&&side!=='sell')errors.push('side must be buy or sell');
+  if(!n(stopLoss))errors.push('no valid stop loss');
+  if(!n(takeProfit))errors.push('no valid take profit');
+  const ref=n(entry)?entry:(n(mid)?mid:null);
+  if(ref==null)errors.push('no entry or live price to check against');
+
+  let rr=null,riskPts=null,rewardPts=null;
+  if(!errors.length){
+    if(side==='buy'){
+      if(stopLoss>=ref)errors.push(`buy stop (${stopLoss}) must be below entry (${ref})`);
+      if(takeProfit<=ref)errors.push(`buy target (${takeProfit}) must be above entry (${ref})`);
+    }else{
+      if(stopLoss<=ref)errors.push(`sell stop (${stopLoss}) must be above entry (${ref})`);
+      if(takeProfit>=ref)errors.push(`sell target (${takeProfit}) must be below entry (${ref})`);
+    }
+    riskPts=Math.abs(ref-stopLoss);
+    rewardPts=Math.abs(takeProfit-ref);
+    rr=riskPts>0?+(rewardPts/riskPts).toFixed(2):null;
+    if(rr!=null&&rr<MIN_RR)errors.push(`reward:risk ${rr} is below the ${MIN_RR} minimum`);
+    if(n(mid)&&n(entry)){
+      const drift=Math.abs(entry-mid)/mid*100;
+      if(drift>MAX_ENTRY_DRIFT_PCT)warnings.push(`price has moved ${drift.toFixed(2)}% from the proposed entry (${entry} vs ${mid.toFixed(2)}) — a market fill will differ`);
+    }
+    if(n(atr15)&&riskPts!=null){
+      if(riskPts<atr15*0.9)warnings.push(`stop is only ${riskPts.toFixed(2)} pts (< 1x 15m ATR ${atr15.toFixed(2)}) — likely to be stopped on noise`);
+      if(riskPts>atr15*6)warnings.push(`stop is ${riskPts.toFixed(2)} pts (> 6x 15m ATR ${atr15.toFixed(2)}) — unusually wide`);
+    }
+  }
+  return{ok:errors.length===0,errors,warnings,rr,riskPts,rewardPts};
 }
