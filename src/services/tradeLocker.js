@@ -91,13 +91,25 @@ export async function tlAccountState(){
 }
 
 // Resolve XAUUSD (or any symbol) to its ids + routes, cached per session.
+// Brokers label gold differently (XAUUSD, GOLD, XAU/USD, XAUUSD.r, …) so for
+// gold we fall back to a fuzzy match instead of failing outright.
 export async function tlInstrument(symbol='XAUUSD'){
   await ensureAccount();
   if(session.instruments[symbol])return session.instruments[symbol];
   const j=await api(`/trade/accounts/${session.accountId}/instruments`);
   const list=j.d?.instruments||[];
-  const inst=list.find(x=>String(x.name).toUpperCase()===symbol.toUpperCase());
-  if(!inst)throw new Error(`TradeLocker: instrument ${symbol} not found on this account`);
+  const want=symbol.toUpperCase().replace(/[^A-Z]/g,'');
+  const norm=x=>String(x.name||'').toUpperCase().replace(/[^A-Z]/g,'');
+  let inst=list.find(x=>norm(x)===want);
+  if(!inst&&want==='XAUUSD'){
+    inst=list.find(x=>norm(x).startsWith('XAUUSD'))
+       ||list.find(x=>norm(x).includes('XAU')&&norm(x).includes('USD'))
+       ||list.find(x=>norm(x).startsWith('GOLD'));
+  }
+  if(!inst){
+    const names=list.slice(0,20).map(x=>x.name).join(', ');
+    throw new Error(`TradeLocker: no instrument matching ${symbol} on this account. Available: ${names||'(none)'}`);
+  }
   const routes=inst.routes||[];
   const trade=routes.find(r=>r.type==='TRADE');
   const info=routes.find(r=>r.type==='INFO');
@@ -210,14 +222,19 @@ function summarizeBars(bars){
 }
 
 export async function tlSnapshot(symbol='XAUUSD'){
+  const errors=[];
+  const grab=async(label,fn,fallback)=>{
+    try{return await fn();}
+    catch(e){errors.push(`${label}: ${String(e?.message||e).slice(0,120)}`);return fallback;}
+  };
   const[quote,state,positions]=await Promise.all([
-    tlQuote(symbol),
-    tlAccountState().catch(()=>null),
-    tlPositions().catch(()=>[]),
+    grab('price',()=>tlQuote(symbol),null),
+    grab('account',()=>tlAccountState(),null),
+    grab('positions',()=>tlPositions(),[]),
   ]);
   const candles={};
   for(const tf of['1D','4H','1H','15m']){
-    try{candles[tf]=summarizeBars(await tlHistory(symbol,tf,60));}catch{candles[tf]=null;}
+    candles[tf]=await grab(`${tf} candles`,async()=>summarizeBars(await tlHistory(symbol,tf,60)),null);
   }
   // USD proxy with 24h % change so "is the dollar bid right now" is actually
   // derivable — a bare level tells the model nothing.
@@ -240,14 +257,19 @@ export async function tlSnapshot(symbol='XAUUSD'){
     ?(()=>{const avg=usdContrib.reduce((a,x)=>a+x,0)/usdContrib.length;
       return{avgPct:+avg.toFixed(2),label:avg>0.1?'USD firm (gold headwind)':avg<-0.1?'USD soft (gold tailwind)':'USD flat'};})()
     :null;
-  return{symbol,quote,state,positions,candles,usd,usdBias,ts:Date.now()};
+  return{symbol,connected:tlStatus().connected,errors,quote,state,positions,candles,usd,usdBias,ts:Date.now()};
 }
 
 export function tlFormatSnapshot(snap){
-  if(!snap)return '(market snapshot unavailable)';
-  const{quote,state,positions,candles,usd,usdBias}=snap;
+  if(!snap)return 'MARKET SNAPSHOT: unavailable. TradeLocker call threw before any data came back — likely not connected. Tell Mr. Burrus to add / re-check his login in Settings › Trading.';
+  const{quote,state,positions,candles,usd,usdBias,connected,errors=[]}=snap;
   const L=[];
-  L.push(`Price ${snap.symbol}: bid ${quote.bid} / ask ${quote.ask} (mid ${quote.mid?.toFixed?.(2)})`);
+  if(!connected&&!quote){
+    return 'MARKET SNAPSHOT: TradeLocker is NOT connected — no live data at all. You cannot scan or place a trade. Tell Mr. Burrus plainly to add his TradeLocker login in Settings › Trading, then try again. Do not say "information is limited" — say it is not connected.';
+  }
+  L.push(`TradeLocker: ${connected?'connected':'session not established'}${errors.length?` · ${errors.length} feed(s) degraded`:''}`);
+  if(quote)L.push(`Price ${snap.symbol}: bid ${quote.bid} / ask ${quote.ask} (mid ${quote.mid?.toFixed?.(2)})`);
+  else L.push(`Price ${snap.symbol}: UNAVAILABLE — no live quote this scan.`);
   if(state)L.push(`Account: balance ${state.balance}, available ${state.availableFunds}, open P/L ${state.openNetPnL}, open positions ${state.positionsCount}`);
   for(const tf of Object.keys(candles)){
     const c=candles[tf];if(!c){L.push(`${tf}: no data`);continue;}
@@ -258,7 +280,14 @@ export function tlFormatSnapshot(snap){
     L.push(`USD proxy: ${parts.join(', ')}${usdBias?` — ${usdBias.label} [${usdBias.avgPct>=0?'+':''}${usdBias.avgPct}%]`:''} (gold moves inverse to USD)`);
   }
   if(positions?.length)L.push(`Open positions: ${positions.map(p=>`#${p.id} ${p.side} ${p.qty} @ ${p.avgPrice} (uP/L ${p.unrealizedPl})`).join('; ')}`);
-  L.push('Stop guidance: distance from entry to stop should be about 1–2x the 15m ATR14 (never tighter than 1x) so normal noise does not knock you out.');
+  if(errors.length)L.push(`Degraded feeds — ${errors.join(' | ')}`);
+  const haveAtr=Object.values(candles).some(c=>c&&c.atr14!=null);
+  L.push(haveAtr
+    ? 'Stop guidance: entry->stop distance ~1–2x the 15m ATR14 (never tighter than 1x).'
+    : 'Stop guidance: no ATR this scan — size the stop off structure, and on XAUUSD keep it at least ~$3–4 from entry so intraday noise does not take you out.');
+  L.push(quote
+    ? 'You HAVE a live price. A few missing feeds is not a reason to refuse — analyse what you have, note what is missing, and you may still [TRADE_PROPOSE]. Mr. Burrus confirms every order and the app re-checks it against a fresh quote before it fires.'
+    : 'No live price this scan — do not propose a trade. Say what failed and ask Mr. Burrus to retry or reconnect in Settings › Trading.');
   return L.join('\n');
 }
 
