@@ -1,6 +1,7 @@
 // The JARVIS-style persona visualization: a drifting cloud of light points
-// around a soft glowing core, in the persona's colour, that swells and
-// brightens while the persona speaks and settles when they stop.
+// around a soft glowing core, in the persona's colour. At rest it breathes and
+// throws the odd sparkle; while the persona speaks the whole cloud blooms
+// outward with a one-shot shockwave, then settles.
 //
 // `viz` is a shared mutable object updated by CommandScreen:
 //   { speaking:boolean, amplitude:0..1, color:'#hex', personaId }
@@ -54,37 +55,39 @@ export default function PersonaOrb({viz,color='#E8C98A',active=true}){
       geo.setAttribute('aSize',new THREE.BufferAttribute(aSize,1));
 
       const col=new THREE.Color(color);
-      const pointUniforms={uTime:{value:0},uAmp:{value:0},uLit:{value:0},uColor:{value:col.clone()}};
+      const pointUniforms={uTime:{value:0},uAmp:{value:0},uLit:{value:0},uPulse:{value:0},uColor:{value:col.clone()}};
       const pointsMat=new THREE.ShaderMaterial({
         uniforms:pointUniforms,transparent:true,depthWrite:false,blending:THREE.AdditiveBlending,
         vertexShader:`
           attribute float aPhase; attribute float aFreq; attribute float aSize;
-          uniform float uTime; uniform float uAmp; uniform float uLit;
+          uniform float uTime; uniform float uAmp; uniform float uLit; uniform float uPulse;
           varying float vGlow;
           void main(){
             vec3 dir=normalize(position);
             float disp=sin(uTime*aFreq+aPhase)*(0.05+uAmp*0.32);
-            vec3 p=dir*(1.0+disp)*(1.0+uAmp*0.22+uLit*0.18);
+            disp+=uPulse*0.30*sin(dir.y*5.0-uPulse*14.0+aPhase*0.3);
+            vec3 p=dir*(1.0+disp)*(1.0+uAmp*0.22+uLit*0.18+uPulse*0.30);
             vec4 mv=modelViewMatrix*vec4(p,1.0);
             gl_Position=projectionMatrix*mv;
-            gl_PointSize=min(72.0,aSize*(1.0+uAmp*2.0+uLit*0.9)*(130.0/max(0.1,-mv.z)));
-            vGlow=0.35+uAmp*0.65+uLit*0.5+0.15*sin(uTime*aFreq*2.0+aPhase);
+            float tw=pow(max(0.0,sin(uTime*aFreq*0.7+aPhase)),20.0);
+            gl_PointSize=min(80.0,aSize*(1.0+uAmp*2.0+uLit*0.9+tw*2.2+uPulse*1.5)*(130.0/max(0.1,-mv.z)));
+            vGlow=0.30+uAmp*0.65+uLit*0.5+uPulse*0.5+tw*0.9+0.14*sin(uTime*aFreq*2.0+aPhase);
           }`,
         fragmentShader:`
           precision mediump float;
-          uniform vec3 uColor; uniform float uAmp; uniform float uLit;
+          uniform vec3 uColor; uniform float uAmp; uniform float uLit; uniform float uPulse;
           varying float vGlow;
           void main(){
             float d=length(gl_PointCoord-0.5);
             if(d>0.5)discard;
             float a=smoothstep(0.5,0.0,d)*vGlow;
-            gl_FragColor=vec4(uColor*(1.0+uAmp*0.7+uLit*0.6),a*(0.5+uLit*0.3));
+            gl_FragColor=vec4(uColor*(1.0+uAmp*0.7+uLit*0.6+uPulse*0.5),a*(0.5+uLit*0.3));
           }`,
       });
       const points=new THREE.Points(geo,pointsMat);
       scene.add(points);
 
-      const glowUniforms={uColor:{value:col.clone()},uAmp:{value:0},uLit:{value:0}};
+      const glowUniforms={uColor:{value:col.clone()},uAmp:{value:0},uLit:{value:0},uPulse:{value:0}};
       const glowMat=new THREE.ShaderMaterial({
         uniforms:glowUniforms,transparent:true,depthWrite:false,blending:THREE.AdditiveBlending,side:THREE.BackSide,
         vertexShader:`
@@ -97,17 +100,17 @@ export default function PersonaOrb({viz,color='#E8C98A',active=true}){
           }`,
         fragmentShader:`
           precision mediump float;
-          uniform vec3 uColor; uniform float uAmp; uniform float uLit;
+          uniform vec3 uColor; uniform float uAmp; uniform float uLit; uniform float uPulse;
           varying vec3 vN; varying vec3 vP;
           void main(){
             float f=pow(1.0-abs(dot(vN,normalize(vP))),2.0);
-            gl_FragColor=vec4(uColor*(1.0+uLit*0.5),f*(0.12+uAmp*0.4+uLit*0.33));
+            gl_FragColor=vec4(uColor*(1.0+uLit*0.5+uPulse*0.4),f*(0.12+uAmp*0.4+uLit*0.33+uPulse*0.3));
           }`,
       });
       const glow=new THREE.Mesh(new THREE.SphereGeometry(0.85,32,24),glowMat);
       scene.add(glow);
 
-      Object.assign(engine,{renderer,scene,camera,points,glow,pointUniforms,glowUniforms,amp:0,spk:0,last:Date.now()});
+      Object.assign(engine,{renderer,scene,camera,points,glow,pointUniforms,glowUniforms,amp:0,spk:0,pulse:0,prevSpeaking:false,last:Date.now()});
 
       const animate=()=>{
         engine.raf=requestAnimationFrame(animate);
@@ -118,22 +121,28 @@ export default function PersonaOrb({viz,color='#E8C98A',active=true}){
 
         pointUniforms.uTime.value+=dt;
         const speaking=!!viz?.speaking;
-        const target=speaking?Math.max(0.12,Math.min(1,viz.amplitude||0.4)):0.05;
+        // one-shot bloom on the rising edge of "speaking"
+        if(speaking&&!engine.prevSpeaking)engine.pulse=1;
+        engine.prevSpeaking=speaking;
+        engine.pulse=Math.max(0,engine.pulse-dt*1.6);
+        // idle floor raised from 0.05 so the orb never looks dead
+        const target=speaking?Math.max(0.12,Math.min(1,viz.amplitude||0.4)):0.12;
         engine.amp+=(target-engine.amp)*Math.min(1,dt*9);
-        // Distinct "is speaking" state — eases in/out slower than the per-frame amplitude
-        // so the whole orb visibly lights up and swells on every reply, then settles.
         engine.spk+=((speaking?1:0)-engine.spk)*Math.min(1,dt*4);
         pointUniforms.uAmp.value=engine.amp;
         glowUniforms.uAmp.value=engine.amp;
         pointUniforms.uLit.value=engine.spk;
         glowUniforms.uLit.value=engine.spk;
+        pointUniforms.uPulse.value=engine.pulse;
+        glowUniforms.uPulse.value=engine.pulse;
 
         const c=viz?.color||color;
         if(c){pointUniforms.uColor.value.set(c);glowUniforms.uColor.value.set(c);}
 
         points.rotation.y+=dt*0.16;
         points.rotation.x+=dt*0.05;
-        const swell=1.0+engine.spk*0.26;
+        const breathe=1.0+0.03*Math.sin(pointUniforms.uTime.value*0.6);
+        const swell=breathe*(1.0+engine.spk*0.26+engine.pulse*0.12);
         points.scale.setScalar(swell);
         glow.scale.setScalar(swell*(1.0+engine.amp*0.3));
 
