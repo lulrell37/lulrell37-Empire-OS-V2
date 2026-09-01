@@ -9,8 +9,6 @@ import{Feather}from '@expo/vector-icons';
 import{useFocusEffect,useIsFocused}from '@react-navigation/native';
 import{colors,space,radius,type,FONTS}from '../../theme';
 import{tlStatus,tlQuote,tlPositions,tlClosePosition}from '../../services/tradeLocker';
-import TradeStatus from '../../components/TradeStatus';
-import{reconcile as reconcileJournal}from '../../services/tradeJournal';
 import{getBuildJobs}from '../../services/database';
 import{pollBuildJobs}from '../../services/buildJobs';
 
@@ -240,7 +238,6 @@ export function MarketPanel(){
   const[connected,setConnected]=useState(true);
   const[busy,setBusy]=useState(null);
   const alive=useRef(true);
-  const focused=useIsFocused();
 
   const poll=useCallback(async()=>{
     if(!tlStatus().connected){if(alive.current)setConnected(false);return;}
@@ -249,16 +246,14 @@ export function MarketPanel(){
       const[q,ps2]=await Promise.all([tlQuote('XAUUSD').catch(()=>null),tlPositions().catch(()=>[])]);
       if(!alive.current)return;
       if(q)setQuote(q);
-      const openPs=(ps2||[]).filter(p=>Number(p.qty)>0);
-      setPositions(openPs);
-      reconcileJournal(openPs).catch(()=>{}); // keep Atlas's trade journal current
+      setPositions((ps2||[]).filter(p=>Number(p.qty)>0));
     }catch{}
   },[]);
 
   useFocusEffect(useCallback(()=>{
     alive.current=true;
     poll();
-    const iv=setInterval(poll,9000); // gentle — Cloudflare 1015s a chatty client
+    const iv=setInterval(poll,9000);
     return()=>{alive.current=false;clearInterval(iv);};
   },[poll]));
 
@@ -273,14 +268,13 @@ export function MarketPanel(){
 
   if(!connected)return(
     <View style={{paddingVertical:space.xl,alignItems:'center',gap:space.md}}>
-      <TradeStatus active={focused} showDetail style={{alignSelf:'stretch',alignItems:'center'}}/>
       <Feather name="bar-chart-2" size={20} color={colors.textFaint}/>
+      <Text style={ps.emptyText}>Not connected. Add a TradeLocker login in Settings › Trading.</Text>
     </View>
   );
 
   return(
     <>
-      <TradeStatus active={focused} style={{marginBottom:space.md}}/>
       <View style={ps.mktQuoteRow}>
         <View>
           <Text style={ps.mktLabel}>XAUUSD</Text>

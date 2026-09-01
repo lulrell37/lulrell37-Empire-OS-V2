@@ -13,15 +13,13 @@ import{handleCommands,stripCommands}from '../services/commandHandler';
 import{getMessages,saveMessage,getAllPersonaPics,savePersonaMemory,getSetting,getExpenseSummary,addBuildJob,updateBuildJob,getBuildJob,getBuildJobs}from '../services/database';
 import{fileBuildRequest,replyToBuild,mergeBuild,cancelBuild}from '../services/buildAgent';
 import{pollBuildJobs}from '../services/buildJobs';
-import{tlSnapshot,tlFormatSnapshot,tlPlaceOrder,tlClosePosition,tlPositions,tlQuote,tlVolatility,validateProposal,MAX_QTY}from '../services/tradeLocker';
-import{logFired as logFiredTrade,formatReview as formatTradeReview}from '../services/tradeJournal';
+import{tlSnapshot,tlFormatSnapshot,tlPlaceOrder,tlClosePosition,tlPositions,MAX_QTY}from '../services/tradeLocker';
 import{loadKeys}from '../services/keyStore';
 import useEmpireStore from '../store/useEmpireStore';
 import{useIsFocused}from '@react-navigation/native';
 import OrbZoom from './command/OrbZoom';
 import ChartOverlay from './command/ChartOverlay';
 import TradePanel from './command/TradePanel';
-import TradeStatus from '../components/TradeStatus';
 import BuildPanel from './command/BuildPanel';
 import NudgeBar from './command/NudgeBar';
 import{parseChartSpec}from '../services/chartSpec';
@@ -643,10 +641,6 @@ export default function CommandScreen({navigation}){
           toolLabel='◇ reading the market…';
           try{injections.push('MARKET SNAPSHOT XAUUSD:\n'+tlFormatSnapshot(await tlSnapshot('XAUUSD')));}
           catch(e){injections.push('MARKET SNAPSHOT: failed — '+e.message);}
-          try{injections.push(await formatTradeReview(8));}catch{}
-        }
-        if(/\[TRADE_REVIEW\]/i.test(response)&&!myAbort.signal.aborted){
-          try{injections.push(await formatTradeReview(12));}catch(e){injections.push('TRADE REVIEW: failed — '+e.message);}
         }
         if(/\[BUILD_STATUS\]/i.test(response)&&!myAbort.signal.aborted){
           try{
@@ -670,13 +664,7 @@ export default function CommandScreen({navigation}){
         }
         const cmdCallbacks={
           onRelay:({target,message})=>addRelay(target,`[From ${p.name}]: ${message}`),
-          onTradePropose:(prop)=>{
-            // Pre-check the numbers we can judge without a live quote. The
-            // authoritative re-check (drift, ATR) runs in confirmTrade.
-            const v=validateProposal(prop);
-            const preErrors=prop.entry==null?[]:v.errors;
-            setTradeProposal({...prop,pid,rr:v.rr,checkErrors:preErrors,checkWarnings:[]});
-          },
+          onTradePropose:(prop)=>setTradeProposal({...prop,pid}),
           onTradeClose:(id)=>closePosition(id),
           onDeepResearch:(topic)=>startDeepResearch(topic,pid),
           onShowChart:(raw)=>{const spec=parseChartSpec(raw);if(spec.valid){setChartOverlay(spec);setView('viz');}},
@@ -867,34 +855,13 @@ export default function CommandScreen({navigation}){
   async function confirmTrade(){
     if(!tradeProposal||tradeBusy)return;
     setTradeBusy(true);
-    const{side,entry,stopLoss,takeProfit,qty,rationale,pid}=tradeProposal;
+    const{side,stopLoss,takeProfit,qty,pid}=tradeProposal;
     try{
-      // Re-check against the live market right before firing: catches inverted
-      // stops, sub-1.5R trades, and price that has drifted off the plan.
-      let mid=null,atr15=null;
-      try{mid=(await tlQuote('XAUUSD')).mid;}catch{}
-      try{atr15=(await tlVolatility('XAUUSD','15m')).atr;}catch{}
-      const v=validateProposal({side,entry,stopLoss,takeProfit},{mid,atr15});
-      if(!v.ok){
-        pushSystemMsg(`— TRADE BLOCKED — ${v.errors.join('; ')} —`);
-        setTradeProposal(null);return;
-      }
-      if(v.warnings.length&&!(await confirmWarnings(v.warnings)))return; // keep card open to adjust
       const r=await tlPlaceOrder({symbol:'XAUUSD',side,qty:Math.min(qty||MAX_QTY,MAX_QTY),stopLoss,takeProfit});
-      pushSystemMsg(`— ORDER SENT · ${r.side.toUpperCase()} ${r.qty} XAUUSD · SL ${r.stopLoss??'—'} · TP ${r.takeProfit??'—'} · R:R ${v.rr??'—'} · #${r.orderId||'?'} —`);
-      logFiredTrade({side,entry,fillPrice:mid,stopLoss,takeProfit,qty:r.qty,rationale,orderId:r.orderId}).catch(()=>{});
-      savePersonaMemory(pid||'atlas',`YOU: [confirmed trade]\nA.T.L.A.S.: order sent ${r.side} ${r.qty} XAUUSD @~${mid??entry} SL ${r.stopLoss} TP ${r.takeProfit} (R:R ${v.rr??'—'}) — ${rationale||''}`).catch(()=>{});
-      setTradeProposal(null);
+      pushSystemMsg(`— ORDER SENT · ${r.side.toUpperCase()} ${r.qty} XAUUSD · SL ${r.stopLoss??'—'} · TP ${r.takeProfit??'—'} · #${r.orderId||'?'} —`);
+      savePersonaMemory(pid||'atlas',`YOU: [confirmed trade]\nA.T.L.A.S.: order sent ${r.side} ${r.qty} XAUUSD SL ${r.stopLoss} TP ${r.takeProfit}`).catch(()=>{});
     }catch(e){pushSystemMsg(`Order failed: ${e.message}`);}
-    finally{setTradeBusy(false);}
-  }
-  function confirmWarnings(warnings){
-    return new Promise(resolve=>{
-      Alert.alert('Trade warnings',warnings.map(w=>`• ${w}`).join('\n\n'),[
-        {text:'Cancel',style:'cancel',onPress:()=>resolve(false)},
-        {text:'Send anyway',style:'destructive',onPress:()=>resolve(true)},
-      ]);
-    });
+    finally{setTradeBusy(false);setTradeProposal(null);}
   }
 
   function interject(){
@@ -994,7 +961,6 @@ export default function CommandScreen({navigation}){
         </View>
       )}
 
-      {mode==='direct'&&activePersona==='atlas'&&<TradeStatus active={isFocused} showDetail style={{marginHorizontal:10,marginTop:6}}/>}
       {mode==='direct'&&activePersona==='atlas'&&<TradePanel active={isFocused} onEvent={pushSystemMsg}/>}
       {mode==='direct'&&activePersona==='jarvis'&&<BuildPanel active={isFocused} onMerge={confirmBuildMerge} onCancel={confirmBuildCancel}/>}
 
@@ -1122,13 +1088,10 @@ export default function CommandScreen({navigation}){
             <View style={s.tradeRow}><Text style={s.tradeK}>Entry (ref)</Text><Text style={s.tradeV}>{tradeProposal.entry??'market'}</Text></View>
             <View style={s.tradeRow}><Text style={s.tradeK}>Stop loss</Text><Text style={[s.tradeV,{color:'#C7614B'}]}>{tradeProposal.stopLoss??'—'}</Text></View>
             <View style={s.tradeRow}><Text style={s.tradeK}>Take profit</Text><Text style={[s.tradeV,{color:'#5FA779'}]}>{tradeProposal.takeProfit??'—'}</Text></View>
-            <View style={s.tradeRow}><Text style={s.tradeK}>Reward : risk</Text><Text style={[s.tradeV,{color:tradeProposal.rr==null?'#777':tradeProposal.rr>=1.5?'#5FA779':'#C7614B'}]}>{tradeProposal.rr==null?'—':`${tradeProposal.rr} : 1`}</Text></View>
             {!!tradeProposal.rationale&&<Text style={s.tradeRationale}>{tradeProposal.rationale}</Text>}
-            {tradeProposal.checkErrors?.length>0&&<Text style={[s.tradeNote,{color:'#C7614B'}]}>⚠ {tradeProposal.checkErrors.join('; ')} — will be blocked at send.</Text>}
-            {tradeProposal.checkWarnings?.length>0&&<Text style={[s.tradeNote,{color:'#D4A017'}]}>{tradeProposal.checkWarnings.join('; ')}</Text>}
-            <Text style={s.tradeNote}>Re-checked against the live market on send. Sends a market order — fill may differ from the reference entry.</Text>
+            <Text style={s.tradeNote}>Sends a market order now — fill may differ from the reference entry.</Text>
             <View style={{flexDirection:'row',gap:10,marginTop:16}}>
-              <TouchableOpacity style={[s.modalBtn,{backgroundColor:tradeProposal.side==='buy'?'#5FA779':'#C7614B',opacity:tradeProposal.checkErrors?.length?0.5:1}]} disabled={tradeBusy||tradeProposal.checkErrors?.length>0} onPress={confirmTrade}>
+              <TouchableOpacity style={[s.modalBtn,{backgroundColor:tradeProposal.side==='buy'?'#5FA779':'#C7614B'}]} disabled={tradeBusy} onPress={confirmTrade}>
                 <Text style={[s.modalBtnT,{color:'#000'}]}>{tradeBusy?'SENDING…':'CONFIRM & SEND'}</Text>
               </TouchableOpacity>
               <TouchableOpacity style={[s.modalBtn,{backgroundColor:'#111',borderWidth:1,borderColor:'#333'}]} onPress={()=>setTradeProposal(null)}>

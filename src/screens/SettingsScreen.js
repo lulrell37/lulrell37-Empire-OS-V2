@@ -5,7 +5,6 @@ import*as ImagePicker from 'expo-image-picker';
 import{saveKeys,loadKeys,saveGoogleToken,loadGoogleToken,clearGoogleToken,saveTradeCreds,loadTradeCreds,clearTradeCreds,saveGitHubToken,loadGitHubToken,clearGitHubToken}from '../services/keyStore';
 import{tlConnect,tlReset}from '../services/tradeLocker';
 import{ghVerify}from '../services/buildAgent';
-import TradeStatus from '../components/TradeStatus';
 import{saveCustomPrompt,getCustomPrompt,getApiUsage,getAllPersonaPics,savePersonaPic,getSetting,setSetting}from '../services/database';
 import{getCrashLog,clearCrashLog}from '../services/crashLog';
 import{PERSONA_LIST,getPersona}from '../personas/personas';
@@ -192,7 +191,6 @@ export default function SettingsScreen({navigation}){
           {tab==='TRADING'&&<View>
             <Text style={s.secTitle}>TRADELOCKER</Text>
             <Text style={s.secSub}>Atlas trades XAUUSD through this login while the app is open. Max 0.01 lot per order. Demo account recommended until proven. Stored securely on device.</Text>
-            <TradeStatus active showDetail style={{marginBottom:14}}/>
             <View style={s.tlEnvRow}>
               {['demo','live'].map(e=>(
                 <TouchableOpacity key={e} style={[s.tlEnvBtn,tl.env===e&&s.tlEnvBtnA]} onPress={()=>setTl(v=>({...v,env:e}))}>
