@@ -14,8 +14,10 @@ function BrainWebInner({persona,memories,onNode,onExit},ref){
   const[zoom,setZoom]=useState(1);
   const vp=useRef({w:0,h:0});
   const scroll=useRef({x:0,y:0});
+  const origin=useRef({x:0,y:0});
+  const rootRef=useRef(null);
   const vRef=useRef(null),hRef=useRef(null);
-  const pinch=useRef({d0:0,d1:0});
+  const pinch=useRef({d0:0,d1:0,cx:0,cy:0});
 
   const groups=useMemo(()=>{
     if(!memories)return[];
@@ -49,13 +51,14 @@ function BrainWebInner({persona,memories,onNode,onExit},ref){
     return{size:sizePx,cx,cy,hubs,coreRad:20+Math.log2(total+1)*3};
   },[groups,total]);
 
-  // centre of the viewport, in unscaled SVG coords
-  const centre=useCallback(()=>{
+  // A point in unscaled SVG coords: the pinch centroid if given (stage-local px),
+  // otherwise the centre of the viewport.
+  const target=useCallback((centroid)=>{
     const z=zoom||1;
-    return{
-      x:(scroll.current.x+(vp.current.w||1)/2)/z,
-      y:(scroll.current.y+(vp.current.h||1)/2)/z,
-    };
+    if(centroid&&typeof centroid.x==='number'){
+      return{x:(scroll.current.x+centroid.x)/z,y:(scroll.current.y+Math.max(0,centroid.y-34))/z};
+    }
+    return{x:(scroll.current.x+(vp.current.w||1)/2)/z,y:(scroll.current.y+(vp.current.h||1)/2)/z};
   },[zoom]);
 
   const scrollTo=useCallback((sx,sy)=>{
@@ -63,9 +66,9 @@ function BrainWebInner({persona,memories,onNode,onExit},ref){
     vRef.current?.scrollTo?.({y:Math.max(0,sy),animated:true});
   },[]);
 
-  const drillIn=useCallback(()=>{
+  const drillIn=useCallback((centroid)=>{
     if(!layout)return;
-    const c=centre();
+    const c=target(centroid);
     if(!focus){
       let best=layout.hubs[0],bd=Infinity;
       for(const h of layout.hubs){const d=Math.hypot(h.hx-c.x,h.hy-c.y);if(d<bd){bd=d;best=h;}}
@@ -80,7 +83,7 @@ function BrainWebInner({persona,memories,onNode,onExit},ref){
       for(const n of h.nodes){const d=Math.hypot(n.x-c.x,n.y-c.y);if(d<bd){bd=d;best=n;}}
       onNode&&onNode(best.m);
     }
-  },[layout,focus,centre,scrollTo]);
+  },[layout,focus,target,scrollTo]);
 
   const drillOut=useCallback(()=>{
     if(focus){setFocus(null);setZoom(1);return true;}
@@ -96,15 +99,20 @@ function BrainWebInner({persona,memories,onNode,onExit},ref){
     onMoveShouldSetPanResponderCapture:(e)=>!!e.nativeEvent.touches&&e.nativeEvent.touches.length===2,
     onPanResponderGrant:(e)=>{
       const t=e.nativeEvent.touches;
-      if(t&&t.length===2){const d=Math.hypot(t[0].pageX-t[1].pageX,t[0].pageY-t[1].pageY);pinch.current={d0:d,d1:d};}
+      if(t&&t.length===2){
+        const d=Math.hypot(t[0].pageX-t[1].pageX,t[0].pageY-t[1].pageY);
+        pinch.current={d0:d,d1:d,
+          cx:(t[0].pageX+t[1].pageX)/2-origin.current.x,
+          cy:(t[0].pageY+t[1].pageY)/2-origin.current.y};
+      }
     },
     onPanResponderMove:(e)=>{
       const t=e.nativeEvent.touches;
       if(t&&t.length===2)pinch.current.d1=Math.hypot(t[0].pageX-t[1].pageX,t[0].pageY-t[1].pageY);
     },
     onPanResponderRelease:()=>{
-      const{d0,d1}=pinch.current;pinch.current={d0:0,d1:0};
-      if(d0>0&&d1>0){const r=d1/d0;if(r>1.22)drillIn();else if(r<0.82)drillOut();}
+      const{d0,d1,cx,cy}=pinch.current;pinch.current={d0:0,d1:0,cx:0,cy:0};
+      if(d0>0&&d1>0){const r=d1/d0;if(r>1.22)drillIn({x:cx,y:cy});else if(r<0.82)drillOut();}
     },
     onPanResponderTerminationRequest:()=>false,
   }),[drillIn,drillOut]);
@@ -117,8 +125,11 @@ function BrainWebInner({persona,memories,onNode,onExit},ref){
   );
 
   return(
-    <View style={{flex:1}} {...pan.panHandlers}
-      onLayout={e=>{vp.current={w:e.nativeEvent.layout.width,h:e.nativeEvent.layout.height};}}>
+    <View ref={rootRef} style={{flex:1}} {...pan.panHandlers}
+      onLayout={e=>{
+        vp.current={w:e.nativeEvent.layout.width,h:e.nativeEvent.layout.height};
+        rootRef.current&&rootRef.current.measureInWindow&&rootRef.current.measureInWindow((x,y)=>{origin.current={x:x||0,y:y||0};});
+      }}>
       <View style={s.statsRow}>
         <Text style={[s.statBig,{color:persona.color}]}>{total}</Text>
         <Text style={s.statLabel}>MEMOR{total===1?'Y':'IES'}</Text>

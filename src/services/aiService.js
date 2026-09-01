@@ -277,6 +277,10 @@ export async function transcribeAudio(audioUri){
   formData.append('file',{uri:audioUri,type:'audio/m4a',name:'voice.m4a'});
   formData.append('model','whisper-1');
   formData.append('language','en');
+  formData.append('temperature','0');
+  // A neutral priming sentence — Whisper is less likely to drop the final word
+  // of a short clip when it isn't starting cold.
+  formData.append('prompt','Okay. Here is what I need you to do.');
   const res=await fetch('https://api.openai.com/v1/audio/transcriptions',{method:'POST',headers:{'Authorization':'Bearer '+k.openai},body:formData});
   if(!res.ok){const e=await res.text();throw new Error('Whisper: '+e.substring(0,100));}
   const d=await res.json();

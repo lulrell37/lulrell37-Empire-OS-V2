@@ -22,7 +22,7 @@ import NudgeBar from './command/NudgeBar';
 import{parseChartSpec}from '../services/chartSpec';
 
 const TEAM_PHOTO=require('../../assets/teamphoto.png');
-const HANDS_FREE_SILENCE_MS=1900;
+const HANDS_FREE_SILENCE_MS=2200;
 const HANDS_FREE_VOICE_DB=-35;
 // Synthetic speech-loudness envelope for the persona orb (no real FFT in Expo).
 function synthAmp(){
@@ -50,6 +50,7 @@ export default function CommandScreen({navigation}){
   const[showCamera,setShowCamera]=useState(false);
   const[cameraRef,setCameraRef]=useState(null);
   const[view,setView]=useState('viz'); // viz | text
+  const[orbLevel,setOrbLevel]=useState('group'); // lifted so it survives the viz/text toggle
   const[tradeProposal,setTradeProposal]=useState(null); // {side,entry,stopLoss,takeProfit,qty,rationale,pid}
   const[tradeBusy,setTradeBusy]=useState(false);
   const[deepResearch,setDeepResearch]=useState(null); // {id,topic,pid,status}
@@ -432,7 +433,7 @@ export default function CommandScreen({navigation}){
       if(!recordingRef.current)return;
       const rec=recordingRef.current;
       recordingRef.current=null;
-      await new Promise(r=>setTimeout(r,350)); // let the encoder flush the trailing word
+      await new Promise(r=>setTimeout(r,500)); // keep recording a moment so the last word + a tail of silence make it into the clip
       await rec.stopAndUnloadAsync();
       const uri=rec.getURI();
       if(!uri)return;
@@ -511,12 +512,15 @@ export default function CommandScreen({navigation}){
     return mode==='custom'?customPersonas:[activePersona];
   }
 
-  const pickPersonaFromOrb=useCallback((id)=>{setMode('direct');setActivePersona(id);},[]);
+  const pickPersonaFromOrb=useCallback((id)=>{setMode('direct');setActivePersona(id);setOrbLevel('orb');},[]);
   const launchGroupFromOrb=useCallback((ids)=>{setCustomPersonas(ids);setMode('custom');setView('text');},[]);
 
   async function send(){
+    // Blur first so the keyboard commits any word still in the IME's compose
+    // buffer, then wait a beat for that final onChangeText to land before reading.
     try{textInputRef.current?.blur();}catch{}
     Keyboard.dismiss();
+    await new Promise(r=>setTimeout(r,60));
     const text=(inputRef.current||input).trim();if(!text||loading)return;
     inputRef.current='';setInput('');abortRef.current?.abort();stopAudio();
     const isGroup=mode!=='direct';
@@ -817,6 +821,8 @@ export default function CommandScreen({navigation}){
           active={isFocused}
           vizRef={vizRef}
           personaPics={personaPics}
+          level={orbLevel}
+          onLevelChange={setOrbLevel}
           onPickPersona={pickPersonaFromOrb}
           onLaunchGroup={launchGroupFromOrb}
         />

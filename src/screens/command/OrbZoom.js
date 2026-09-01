@@ -1,11 +1,12 @@
 // The orb screen as one continuous zoom:
 //   persona sphere  ->  the persona you zoomed into  ->  its memory web  ->  a memory
-// Pinch out drills in on whatever you are looking at; pinch in backs out.
-// The + / - buttons and (on web) the mouse wheel do the same. Opens on the sphere.
+// Pinch out drills in toward wherever your fingers are; pinch in backs out.
+// Each level change animates. The + / - buttons and the mouse wheel (web) do the
+// same. `level` is owned by the parent so it survives the viz/chat toggle.
 //
 // Built entirely on React Native's own Animated + PanResponder — no reanimated
 // worklets, which is what hard-crashed the earlier 3D version.
-import React,{useState,useEffect,useMemo,useCallback,useRef}from 'react';
+import React,{useState,useEffect,useMemo,useCallback,useRef,useImperativeHandle,forwardRef}from 'react';
 import{View,Text,StyleSheet,TouchableOpacity,ActivityIndicator,Dimensions,Platform,Animated,PanResponder,Image,Easing}from 'react-native';
 import PersonaOrb from './PersonaOrb';
 import BrainWeb from './BrainWeb';
@@ -16,11 +17,9 @@ import{getPersona,PERSONA_LIST}from '../../personas/personas';
 
 const LEVELS=['group','orb','brain'];
 
-// sin/cos lookup covering ±12 turns so the sphere never runs out of range.
 const SAMP=[],SIN=[],COS=[];
 for(let k=0;k<=480;k++){const v=-12*Math.PI+(24*Math.PI)*(k/480);SAMP.push(v);SIN.push(Math.sin(v));COS.push(Math.cos(v));}
 
-// Personas spread over a unit sphere (Fibonacci).
 const SPHERE_PTS=PERSONA_LIST.map((_,i)=>{
   const n=PERSONA_LIST.length;
   const y=1-(i/((n-1)||1))*2;
@@ -31,10 +30,9 @@ const SPHERE_PTS=PERSONA_LIST.map((_,i)=>{
 
 function touchDist(t){return Math.hypot(t[0].pageX-t[1].pageX,t[0].pageY-t[1].pageY);}
 
-export default function OrbZoom({personaId,color,active,vizRef,personaPics={},onPickPersona,onLaunchGroup}){
+export default function OrbZoom({personaId,color,active,vizRef,personaPics={},onPickPersona,onLaunchGroup,level='group',onLevelChange}){
   const persona=getPersona(personaId);
   const[memories,setMemories]=useState(null);
-  const[level,setLevel]=useState('group');
   const[memory,setMemory]=useState(null);
   const[undo,setUndo]=useState(null);
   const undoTimer=useRef(null);
@@ -44,67 +42,108 @@ export default function OrbZoom({personaId,color,active,vizRef,personaPics={},on
   const wheelAcc=useRef(0);
   const pinchRef=useRef({d0:0,d1:0});
   const brainRef=useRef(null);
-  const frontRef=useRef(null);   // () => id of the persona currently facing you
-  const levelRef=useRef('group');
-  const fade=useRef(new Animated.Value(1)).current;
+  const sphereRef=useRef(null);
+  const levelRef=useRef(level);
+  const dirRef=useRef(1);
+  const originRef=useRef({x:0,y:0});
+  const sizeRef=useRef({w:Dimensions.get('window').width,h:Dimensions.get('window').height});
+  const centroidRef=useRef(null);
+  const pinchScale=useRef(new Animated.Value(1)).current;
+  const pinchTX=useRef(new Animated.Value(0)).current;
+  const pinchTY=useRef(new Animated.Value(0)).current;
+  const enter=useRef(new Animated.Value(1)).current;
 
   useEffect(()=>{levelRef.current=level;},[level]);
+
+  const setLvl=useCallback((l,dir)=>{
+    dirRef.current=dir||1;
+    if(l!==levelRef.current)onLevelChange?.(l);
+  },[onLevelChange]);
+
   useEffect(()=>{
-    fade.setValue(0);
-    Animated.timing(fade,{toValue:1,duration:200,useNativeDriver:true}).start();
+    pinchScale.setValue(1);pinchTX.setValue(0);pinchTY.setValue(0);
+    enter.setValue(0);
+    Animated.timing(enter,{toValue:1,duration:300,easing:Easing.out(Easing.cubic),useNativeDriver:false}).start();
   },[level]);// eslint-disable-line react-hooks/exhaustive-deps
+
+  const morph=useMemo(()=>{
+    const from=dirRef.current>0?0.5:1.6;
+    return{
+      opacity:enter.interpolate({inputRange:[0,1],outputRange:[0.12,1]}),
+      scale:enter.interpolate({inputRange:[0,1],outputRange:[from,1]}),
+    };
+  },[level]);// eslint-disable-line react-hooks/exhaustive-deps
+  const contentScale=useMemo(()=>Animated.multiply(pinchScale,morph.scale),[morph]);// eslint-disable-line react-hooks/exhaustive-deps
 
   const reload=useCallback(()=>{getMemoriesByPersona(personaId).then(m=>setMemories(m||[])).catch(()=>setMemories([]));},[personaId]);
   useEffect(()=>{
-    if(didMount.current){setLevel('orb');setMemory(null);}
+    if(didMount.current){setLvl('orb',1);setMemory(null);}
     didMount.current=true;
     setMemories(null);reload();
-  },[personaId,reload]);
+  },[personaId,reload]);// eslint-disable-line react-hooks/exhaustive-deps
   useEffect(()=>{if(level==='brain')reload();},[level,reload]);
   useEffect(()=>()=>{
     if(undoTimer.current){clearTimeout(undoTimer.current);if(pendingRef.current)deletePersonaMemory(pendingRef.current.id).catch(()=>{});}
   },[]);
 
-  const pick=useCallback((id)=>{onPickPersona?.(id);setLevel('orb');},[onPickPersona]);
+  const pick=useCallback((id)=>{onPickPersona?.(id);setLvl('orb',1);},[onPickPersona,setLvl]);
   const launch=useCallback((ids)=>{onLaunchGroup?.(ids);},[onLaunchGroup]);
 
-  // Drill in on whatever you're looking at.
-  const deeper=useCallback(()=>{
+  const deeper=useCallback((centroid)=>{
     const cur=levelRef.current;
-    if(cur==='group'){const id=frontRef.current&&frontRef.current();pick(id||PERSONA_LIST[0].id);return;}
-    if(cur==='orb'){setLevel('brain');return;}
-    if(cur==='brain'){brainRef.current&&brainRef.current.drillIn();return;}
-  },[pick]);
+    const c=(centroid&&typeof centroid.x==='number')?centroid:null;
+    if(cur==='group'){
+      const id=(sphereRef.current&&sphereRef.current.pickAt(c?c.x:null,c?c.y:null))||PERSONA_LIST[0].id;
+      pick(id);return;
+    }
+    if(cur==='orb'){setLvl('brain',1);return;}
+    if(cur==='brain'){brainRef.current&&brainRef.current.drillIn(c);return;}
+  },[pick,setLvl]);
 
   const shallower=useCallback(()=>{
     const cur=levelRef.current;
     if(cur==='brain'){
-      if(brainRef.current&&brainRef.current.drillOut())return; // handled inside the web
-      setLevel('orb');return;
+      if(brainRef.current&&brainRef.current.drillOut())return;
+      setLvl('orb',-1);return;
     }
-    if(cur==='orb'){setLevel('group');return;}
-  },[]);
+    if(cur==='orb'){setLvl('group',-1);return;}
+  },[setLvl]);
 
-  // Two-finger pinch on the stage → change level (unless we're in the brain,
-  // which owns its own pinch so it can drill hub -> memory).
   const stagePan=useMemo(()=>PanResponder.create({
     onStartShouldSetPanResponderCapture:(e)=>!!e.nativeEvent.touches&&e.nativeEvent.touches.length===2&&levelRef.current!=='brain',
     onMoveShouldSetPanResponderCapture:(e)=>!!e.nativeEvent.touches&&e.nativeEvent.touches.length===2&&levelRef.current!=='brain',
     onPanResponderGrant:(e)=>{
       const t=e.nativeEvent.touches;
-      if(t&&t.length===2){const d=touchDist(t);pinchRef.current={d0:d,d1:d};}
+      if(t&&t.length===2){
+        const d=touchDist(t);pinchRef.current={d0:d,d1:d};
+        pinchScale.stopAnimation();pinchTX.stopAnimation();pinchTY.stopAnimation();
+        centroidRef.current={
+          x:(t[0].pageX+t[1].pageX)/2-originRef.current.x,
+          y:(t[0].pageY+t[1].pageY)/2-originRef.current.y,
+        };
+      }
     },
     onPanResponderMove:(e)=>{
       const t=e.nativeEvent.touches;
-      if(t&&t.length===2)pinchRef.current.d1=touchDist(t);
+      if(t&&t.length===2){
+        pinchRef.current.d1=touchDist(t);
+        const sc=Math.max(0.55,Math.min(1.8,pinchRef.current.d1/pinchRef.current.d0));
+        pinchScale.setValue(sc);
+        const c=centroidRef.current||{x:0,y:0};
+        pinchTX.setValue((c.x-sizeRef.current.w/2)*(1-sc));
+        pinchTY.setValue((c.y-sizeRef.current.h/2)*(1-sc));
+      }
     },
     onPanResponderRelease:()=>{
       const{d0,d1}=pinchRef.current;
       pinchRef.current={d0:0,d1:0};
-      if(d0>0&&d1>0){
-        const r=d1/d0;
-        if(r>1.22)deeper();
-        else if(r<0.82)shallower();
+      const r=(d0>0&&d1>0)?d1/d0:1;
+      if(r>1.20){deeper(centroidRef.current);}
+      else if(r<0.83){shallower();}
+      else{
+        Animated.spring(pinchScale,{toValue:1,useNativeDriver:false}).start();
+        Animated.spring(pinchTX,{toValue:0,useNativeDriver:false}).start();
+        Animated.spring(pinchTY,{toValue:0,useNativeDriver:false}).start();
       }
     },
     onPanResponderTerminationRequest:()=>false,
@@ -143,10 +182,13 @@ export default function OrbZoom({personaId,color,active,vizRef,personaPics={},on
   const idx=LEVELS.indexOf(level);
 
   return(
-    <View ref={wrapRef} style={s.wrap} {...stagePan.panHandlers}>
-      <Animated.View style={[{flex:1},{opacity:fade}]}>
+    <View ref={wrapRef} style={s.wrap} {...stagePan.panHandlers}
+      onLayout={()=>{wrapRef.current&&wrapRef.current.measureInWindow&&wrapRef.current.measureInWindow((x,y,w,h)=>{
+        originRef.current={x:x||0,y:y||0};if(w&&h)sizeRef.current={w,h};
+      });}}>
+      <Animated.View style={{flex:1,opacity:morph.opacity,transform:[{translateX:pinchTX},{translateY:pinchTY},{scale:contentScale}]}}>
         {level==='group'&&(
-          <PersonaSphere activeId={personaId} pics={personaPics} onPick={pick} onLaunch={launch} frontRef={frontRef}/>
+          <PersonaSphere ref={sphereRef} activeId={personaId} pics={personaPics} onPick={pick} onLaunch={launch}/>
         )}
         {level==='orb'&&(
           <Boundary label="The visualization"><PersonaOrb viz={vizRef} color={color} active={active}/></Boundary>
@@ -154,7 +196,7 @@ export default function OrbZoom({personaId,color,active,vizRef,personaPics={},on
         {level==='brain'&&(
           <Boundary label="The memory web">
             <BrainWeb ref={brainRef} persona={persona} memories={memories}
-              onNode={m=>setMemory(m)} onExit={()=>setLevel('orb')}/>
+              onNode={m=>setMemory(m)} onExit={()=>setLvl('orb',-1)}/>
           </Boundary>
         )}
       </Animated.View>
@@ -171,8 +213,8 @@ export default function OrbZoom({personaId,color,active,vizRef,personaPics={},on
       </View>
 
       <View style={s.zoomCtl} pointerEvents="box-none">
-        <TouchableOpacity style={s.zBtn} onPress={shallower}><Text style={s.zT}>−</Text></TouchableOpacity>
-        <TouchableOpacity style={s.zBtn} onPress={deeper}><Text style={s.zT}>+</Text></TouchableOpacity>
+        <TouchableOpacity style={s.zBtn} onPress={()=>shallower()}><Text style={s.zT}>−</Text></TouchableOpacity>
+        <TouchableOpacity style={s.zBtn} onPress={()=>deeper()}><Text style={s.zT}>+</Text></TouchableOpacity>
       </View>
 
       {level==='orb'&&<Text style={[s.hint,{color}]} pointerEvents="none">◈ PINCH OUT FOR MEMORY · PINCH IN FOR ALL PERSONAS</Text>}
@@ -190,52 +232,34 @@ export default function OrbZoom({personaId,color,active,vizRef,personaPics={},on
 
 // --- The rotatable persona sphere -------------------------------------------
 
-function PersonaSphere({activeId,pics,onPick,onLaunch,frontRef}){
+function PersonaSphereInner({activeId,pics,onPick,onLaunch},ref){
   const[size,setSize]=useState({w:Dimensions.get('window').width,h:340});
   const[group,setGroup]=useState([]);
   const[order,setOrder]=useState(()=>PERSONA_LIST.map((_,i)=>i));
-  const theta=useRef(new Animated.Value(0.4)).current;   // spin (around vertical)
-  const phi=useRef(new Animated.Value(0.15)).current;    // tilt (around horizontal)
+  const theta=useRef(new Animated.Value(0.4)).current;
+  const phi=useRef(new Animated.Value(0.15)).current;
   const tStart=useRef(0.4),pStart=useRef(0.15);
   const tNow=useRef(0.4),pNow=useRef(0.15);
+  const sizeRef=useRef(size);
   const sparkles=useRef(PERSONA_LIST.map(()=>new Animated.Value(Math.random()))).current;
 
-  // track angles + which orb is facing the viewer
-  useEffect(()=>{
-    const idT=theta.addListener(({value})=>{tNow.current=value;});
-    const idP=phi.addListener(({value})=>{pNow.current=value;});
-    return()=>{theta.removeListener(idT);phi.removeListener(idP);};
-  },[]);// eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(()=>{sizeRef.current=size;},[size]);
 
-  const frontId=useCallback(()=>{
-    const t=tNow.current,p=pNow.current;
-    const ct=Math.cos(t),st=Math.sin(t),cp=Math.cos(p),sp=Math.sin(p);
-    let best=PERSONA_LIST[0].id,bz=-Infinity;
-    for(let i=0;i<PERSONA_LIST.length;i++){
-      const pt=SPHERE_PTS[i];
-      const z1=-st*pt.x+ct*pt.z;
-      const z2=sp*pt.y+cp*z1;
-      if(z2>bz){bz=z2;best=PERSONA_LIST[i].id;}
-    }
-    return best;
-  },[]);
-  useEffect(()=>{if(frontRef)frontRef.current=frontId;return()=>{if(frontRef)frontRef.current=null;};},[frontRef,frontId]);
-
-  // keep front orbs painted last so touches land where you look
   useEffect(()=>{
     let last=0;
-    const tick=()=>{
-      const now=Date.now();if(now-last<160)return;last=now;
+    const onMove=({value},which)=>{
+      if(which==='t')tNow.current=value;else pNow.current=value;
+      const now=Date.now();if(now-last<150)return;last=now;
       const t=tNow.current,p=pNow.current;
       const ct=Math.cos(t),st=Math.sin(t),cp=Math.cos(p),sp=Math.sin(p);
       const z=(i)=>{const pt=SPHERE_PTS[i];const z1=-st*pt.x+ct*pt.z;return sp*pt.y+cp*z1;};
       setOrder(PERSONA_LIST.map((_,i)=>i).sort((a,b)=>z(a)-z(b)));
     };
-    const idT=theta.addListener(tick);const idP=phi.addListener(tick);
+    const idT=theta.addListener(e=>onMove(e,'t'));
+    const idP=phi.addListener(e=>onMove(e,'p'));
     return()=>{theta.removeListener(idT);phi.removeListener(idP);};
   },[]);// eslint-disable-line react-hooks/exhaustive-deps
 
-  // per-orb sparkle
   useEffect(()=>{
     const loops=sparkles.map((v,i)=>Animated.loop(Animated.sequence([
       Animated.delay(i*160),
@@ -245,6 +269,36 @@ function PersonaSphere({activeId,pics,onPick,onLaunch,frontRef}){
     loops.forEach(l=>l.start());
     return()=>loops.forEach(l=>l.stop());
   },[]);// eslint-disable-line react-hooks/exhaustive-deps
+
+  const RX=Math.min(size.w,520)*0.36;
+  const RY=Math.min(size.w,size.h,520)*0.32;
+
+  // pickAt(x,y): the orb nearest that screen point (front hemisphere), or the
+  // frontmost one when no point is given.
+  useImperativeHandle(ref,()=>({
+    pickAt(x,y){
+      const t=tNow.current,p=pNow.current;
+      const ct=Math.cos(t),st=Math.sin(t),cp=Math.cos(p),sp=Math.sin(p);
+      const cx=sizeRef.current.w/2,cy=sizeRef.current.h*0.42;
+      let best=PERSONA_LIST[0].id,score=-Infinity;
+      for(let i=0;i<PERSONA_LIST.length;i++){
+        const pt=SPHERE_PTS[i];
+        const x1=ct*pt.x+st*pt.z;
+        const z1=-st*pt.x+ct*pt.z;
+        const y2=cp*pt.y-sp*z1;
+        const z2=sp*pt.y+cp*z1;
+        let sc;
+        if(x==null){sc=z2;}
+        else{
+          if(z2<-0.2)continue;
+          const sx=cx+x1*RX,sy=cy+y2*RY;
+          sc=z2*140-Math.hypot(sx-x,sy-y);
+        }
+        if(sc>score){score=sc;best=PERSONA_LIST[i].id;}
+      }
+      return best;
+    },
+  }),[RX,RY]);
 
   const pan=useMemo(()=>PanResponder.create({
     onStartShouldSetPanResponder:()=>false,
@@ -262,9 +316,6 @@ function PersonaSphere({activeId,pics,onPick,onLaunch,frontRef}){
     },
   }),[]);// eslint-disable-line react-hooks/exhaustive-deps
 
-  const RX=Math.min(size.w,520)*0.36;
-  const RY=Math.min(size.w,size.h,520)*0.32;
-
   const orbs=useMemo(()=>{
     const cosT=theta.interpolate({inputRange:SAMP,outputRange:COS,extrapolate:'clamp'});
     const sinT=theta.interpolate({inputRange:SAMP,outputRange:SIN,extrapolate:'clamp'});
@@ -276,14 +327,16 @@ function PersonaSphere({activeId,pics,onPick,onLaunch,frontRef}){
       const z1=Animated.add(Animated.multiply(sinT,-pt.x),Animated.multiply(cosT,pt.z));
       const y2=Animated.subtract(Animated.multiply(cosP,pt.y),Animated.multiply(sinP,z1));
       const z2=Animated.add(Animated.multiply(sinP,pt.y),Animated.multiply(cosP,z1));
-      const spk=sparkles[i].interpolate({inputRange:[0,1],outputRange:[0.55,1]});
       return{
         p,
         translateX:Animated.multiply(x1,RX),
         translateY:Animated.multiply(y2,RY),
-        scale:Animated.multiply(z2.interpolate({inputRange:[-1,1],outputRange:[0.5,1.15],extrapolate:'clamp'}),
+        scale:Animated.multiply(
+          z2.interpolate({inputRange:[-1,1],outputRange:[0.5,1.15],extrapolate:'clamp'}),
           sparkles[i].interpolate({inputRange:[0,1],outputRange:[0.9,1.12]})),
-        opacity:Animated.multiply(z2.interpolate({inputRange:[-1,1],outputRange:[0.22,1],extrapolate:'clamp'}),spk),
+        opacity:Animated.multiply(
+          z2.interpolate({inputRange:[-1,1],outputRange:[0.22,1],extrapolate:'clamp'}),
+          sparkles[i].interpolate({inputRange:[0,1],outputRange:[0.55,1]})),
       };
     });
   },[theta,phi,RX,RY]);// eslint-disable-line react-hooks/exhaustive-deps
@@ -297,7 +350,7 @@ function PersonaSphere({activeId,pics,onPick,onLaunch,frontRef}){
           <Animated.View key={p.id} style={[s.orbWrap,{opacity,transform:[{translateX},{translateY},{scale}]}]}>
             <TouchableOpacity activeOpacity={0.85} delayLongPress={280}
               onPress={()=>onPick(p.id)} onLongPress={()=>toggle(p.id)}>
-              <View style={[s.orbGlow,{backgroundColor:p.color+'20',borderColor:'transparent'}]}>
+              <View style={[s.orbGlow,{backgroundColor:p.color+'20'}]}>
                 {pics[p.id]
                   ?<Image source={{uri:pics[p.id]}} style={s.orbImg}/>
                   :<View style={[s.orbCore,{backgroundColor:p.color,shadowColor:p.color}]}/>}
@@ -326,6 +379,7 @@ function PersonaSphere({activeId,pics,onPick,onLaunch,frontRef}){
     </View>
   );
 }
+const PersonaSphere=forwardRef(PersonaSphereInner);
 
 const s=StyleSheet.create({
   wrap:{flex:1},
