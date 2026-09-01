@@ -206,7 +206,7 @@ export default function OrbZoom({personaId,color,active,vizRef,personaPics={},on
 
       <View style={s.rail} pointerEvents="none">
         <Text style={[s.railLabel,{color}]}>
-          {level==='group'?'ALL PERSONAS':level==='orb'?persona.name:`${persona.name} · MEMORY`}
+          {level==='group'?'':level==='orb'?persona.name:`${persona.name} · MEMORY`}
         </Text>
         <View style={s.dots}>
           {LEVELS.map((l,i)=>(<View key={l} style={[s.dot,i<=idx&&{backgroundColor:color,opacity:i===idx?1:0.4}]}/>))}
@@ -361,7 +361,7 @@ function PersonaSphereInner({activeId,pics,onPick,onLaunch},ref){
       </View>
 
       <View style={s.tray}>
-        <Text style={s.trayLabel}>CUSTOM GROUP · hold an orb to add</Text>
+        <Text style={s.trayLabel}>CUSTOM GROUP</Text>
         <View style={s.trayChips}>
           {group.length===0&&<Text style={s.trayEmpty}>—</Text>}
           {group.map(id=>{const p=getPersona(id);return(
