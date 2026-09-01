@@ -4,11 +4,12 @@ import React from 'react';
 import{View,Text,StyleSheet}from 'react-native';
 import{Feather}from '@expo/vector-icons';
 import{colors,space,FONTS}from '../../theme';
+import{logCrash}from '../../services/crashLog';
 
 export default class Boundary extends React.Component{
   state={err:null};
   static getDerivedStateFromError(err){return{err};}
-  componentDidCatch(err){if(__DEV__)console.warn('Panel boundary:',err);}
+  componentDidCatch(err){logCrash('boundary:'+(this.props.label||'panel'),err&&err.message,err&&err.stack);if(__DEV__)console.warn('Panel boundary:',err);}
   render(){
     if(this.state.err){
       return(

@@ -5,16 +5,18 @@ import*as ImagePicker from 'expo-image-picker';
 import{saveKeys,loadKeys,saveGoogleToken,loadGoogleToken,clearGoogleToken,saveTradeCreds,loadTradeCreds,clearTradeCreds}from '../services/keyStore';
 import{tlConnect}from '../services/tradeLocker';
 import{saveCustomPrompt,getCustomPrompt,getApiUsage,getAllPersonaPics,savePersonaPic,getSetting,setSetting}from '../services/database';
+import{getCrashLog,clearCrashLog}from '../services/crashLog';
 import{PERSONA_LIST,getPersona}from '../personas/personas';
 import{useGoogleAuth}from '../services/googleAuth';
 import useEmpireStore from '../store/useEmpireStore';
-const TABS=['KEYS','GOOGLE','TRADING','AI','PROFILES','PROMPTS','USAGE'];
+const TABS=['KEYS','GOOGLE','TRADING','AI','PROFILES','PROMPTS','USAGE','DIAGNOSTICS'];
 export default function SettingsScreen({navigation}){
   const[tab,setTab]=useState('KEYS');
   const[claude,setClaude]=useState('');const[grok,setGrok]=useState('');const[openai,setOpenai]=useState('');const[elevenlabs,setElevenlabs]=useState('');const[meshy,setMeshy]=useState('');
   const[showKey,setShowKey]=useState({});
   const[promptPersona,setPromptPersona]=useState('jarvis');const[promptText,setPromptText]=useState('');
   const[usage,setUsage]=useState([]);const[saved,setSaved]=useState(false);
+  const[crashes,setCrashes]=useState([]);
   const[googleConnected,setGoogleConnected]=useState(false);
   const[googleConnecting,setGoogleConnecting]=useState(false);
   const[memoryRecall,setMemoryRecall]=useState(true);
@@ -43,6 +45,7 @@ export default function SettingsScreen({navigation}){
     setMemoryRecall((await getSetting('memory_recall','1'))==='1');
     setDeepConfirm((await getSetting('deep_research_confirm','1'))==='1');
     const tc=await loadTradeCreds();if(tc)setTl({email:tc.email||'',password:tc.password||'',server:tc.server||'',env:tc.env||'demo'});
+    setCrashes(await getCrashLog().catch(()=>[]));
   }
   async function connectTradeLocker(){
     if(!tl.email.trim()||!tl.password||!tl.server.trim()){Alert.alert('Required','Email, password and server are all required.');return;}
@@ -168,7 +171,7 @@ export default function SettingsScreen({navigation}){
           </View>}
           {tab==='TRADING'&&<View>
             <Text style={s.secTitle}>TRADELOCKER</Text>
-            <Text style={s.secSub}>Atlas trades XAUUSD through this login while the app is open. Max 1 lot per order. Demo account recommended until proven. Stored securely on device.</Text>
+            <Text style={s.secSub}>Atlas trades XAUUSD through this login while the app is open. Max 0.01 lot per order. Demo account recommended until proven. Stored securely on device.</Text>
             <View style={s.tlEnvRow}>
               {['demo','live'].map(e=>(
                 <TouchableOpacity key={e} style={[s.tlEnvBtn,tl.env===e&&s.tlEnvBtnA]} onPress={()=>setTl(v=>({...v,env:e}))}>
@@ -210,6 +213,10 @@ export default function SettingsScreen({navigation}){
               </View>
               <View style={[s.switch,deepConfirm&&s.switchOn]}><View style={[s.knob,deepConfirm&&s.knobOn]}/></View>
             </TouchableOpacity>
+            <View style={s.infoRow}>
+              <Text style={s.toggleLabel}>MEMORY</Text>
+              <Text style={s.toggleSub}>Every persona keeps its full memory loaded and active on every conversation, direct or group. No switch — always on.</Text>
+            </View>
           </View>}
           {tab==='PROFILES'&&<View>
             <Text style={s.secTitle}>PERSONA PROFILES</Text>
@@ -258,6 +265,21 @@ export default function SettingsScreen({navigation}){
             ))}
             {Object.keys(totalUsage).length===0&&<Text style={s.empty}>No usage recorded yet.</Text>}
           </View>}
+          {tab==='DIAGNOSTICS'&&<View>
+            <Text style={s.secTitle}>DIAGNOSTICS</Text>
+            <Text style={s.secSub}>The last {crashes.length} crash{crashes.length===1?'':'es'} captured on this device. Share these if the app is misbehaving.</Text>
+            {crashes.length>0&&<TouchableOpacity style={[s.saveBtn,{marginTop:0,marginBottom:16,backgroundColor:'#111',borderWidth:1,borderColor:'#333'}]} onPress={async()=>{await clearCrashLog();setCrashes([]);}}>
+              <Text style={[s.saveBtnT,{color:'#E05555'}]}>CLEAR LOG</Text>
+            </TouchableOpacity>}
+            {crashes.length===0&&<Text style={s.empty}>No crashes logged. Good sign.</Text>}
+            {crashes.map((c,i)=>(
+              <View key={i} style={s.usageCard}>
+                <Text style={s.crashHead}>{new Date(c.ts).toLocaleString()} · {c.source}</Text>
+                <Text style={s.crashMsg}>{c.message}</Text>
+                {!!c.stack&&<Text style={s.crashStack} numberOfLines={6}>{c.stack}</Text>}
+              </View>
+            ))}
+          </View>}
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -280,6 +302,10 @@ const s=StyleSheet.create({
   tlAcctLine:{fontFamily:'monospace',fontSize:8,color:'#555',letterSpacing:2,marginBottom:4},
   tlAcctBal:{fontFamily:'monospace',fontSize:16,color:'#5FA779',fontWeight:'700'},
   toggleRow:{flexDirection:'row',alignItems:'center',paddingVertical:14,borderBottomWidth:1,borderBottomColor:'#0D0D0D'},
+  infoRow:{paddingVertical:14,borderBottomWidth:1,borderBottomColor:'#0D0D0D'},
+  crashHead:{fontFamily:'monospace',fontSize:8,color:'#E8C98A',letterSpacing:1,marginBottom:6},
+  crashMsg:{fontFamily:'monospace',fontSize:10,color:'#CCC',lineHeight:15,marginBottom:6},
+  crashStack:{fontFamily:'monospace',fontSize:7,color:'#555',lineHeight:11},
   toggleLabel:{fontFamily:'monospace',fontSize:10,color:'#E8C98A',letterSpacing:2,marginBottom:4},
   toggleSub:{fontFamily:'monospace',fontSize:8,color:'#444',lineHeight:13},
   switch:{width:40,height:22,borderRadius:11,backgroundColor:'#1A1A1A',borderWidth:1,borderColor:'#2A2A2A',padding:2,justifyContent:'center'},

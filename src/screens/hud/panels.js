@@ -2,11 +2,13 @@
 // scroll wrapper) so the same component works docked in the carousel or inside
 // a floating card. Routine and Batman own their edit-mode state locally and
 // report results up via onSave / onSaveTemplate.
-import React,{useState}from 'react';
-import{View,Text,StyleSheet,TouchableOpacity,TextInput,Dimensions}from 'react-native';
+import React,{useState,useRef,useCallback}from 'react';
+import{View,Text,StyleSheet,TouchableOpacity,TextInput,Dimensions,ActivityIndicator}from 'react-native';
 import Svg,{Circle}from 'react-native-svg';
 import{Feather}from '@expo/vector-icons';
+import{useFocusEffect}from '@react-navigation/native';
 import{colors,space,radius,type,FONTS}from '../../theme';
+import{tlStatus,tlQuote,tlPositions,tlClosePosition}from '../../services/tradeLocker';
 
 const{width}=Dimensions.get('window');
 export const PANEL_META={
@@ -17,6 +19,7 @@ export const PANEL_META={
   batman:{title:'BATMAN PROTOCOL'},
   daily:{title:'DAILY'},
   diagram:{title:'DIAGRAM'},
+  market:{title:'GOLD · MARKET'},
 };
 export const newRoutineId=()=>'r_'+Date.now().toString(36)+Math.random().toString(36).slice(2,6);
 
@@ -225,6 +228,89 @@ export function DailyPanel({hud}){
   );
 }
 
+// Live XAUUSD quote + Atlas's open gold positions. Polls only while the HUD is
+// focused (assisted-trading boundary — nothing runs in the background).
+export function MarketPanel(){
+  const[quote,setQuote]=useState(null);
+  const[positions,setPositions]=useState([]);
+  const[connected,setConnected]=useState(true);
+  const[busy,setBusy]=useState(null);
+  const alive=useRef(true);
+
+  const poll=useCallback(async()=>{
+    if(!tlStatus().connected){if(alive.current)setConnected(false);return;}
+    if(alive.current)setConnected(true);
+    try{
+      const[q,ps2]=await Promise.all([tlQuote('XAUUSD').catch(()=>null),tlPositions().catch(()=>[])]);
+      if(!alive.current)return;
+      if(q)setQuote(q);
+      setPositions((ps2||[]).filter(p=>Number(p.qty)>0));
+    }catch{}
+  },[]);
+
+  useFocusEffect(useCallback(()=>{
+    alive.current=true;
+    poll();
+    const iv=setInterval(poll,4500);
+    return()=>{alive.current=false;clearInterval(iv);};
+  },[poll]));
+
+  async function close(id){
+    setBusy(id);
+    try{await tlClosePosition(id);await poll();}catch{}
+    finally{setBusy(null);}
+  }
+
+  if(!connected)return(
+    <View style={{paddingVertical:space.xl,alignItems:'center',gap:space.sm}}>
+      <Feather name="bar-chart-2" size={20} color={colors.textFaint}/>
+      <Text style={ps.mktHint}>TradeLocker not connected.{'\n'}Add your login in Settings › Trading.</Text>
+    </View>
+  );
+
+  const totalPl=positions.reduce((a,p)=>a+(Number(p.unrealizedPl)||0),0);
+  const plColor=totalPl>=0?colors.online:colors.danger;
+
+  return(
+    <>
+      <View style={ps.mktQuoteRow}>
+        <View>
+          <Text style={ps.mktLabel}>XAUUSD</Text>
+          <Text style={ps.mktMid}>{quote?.mid!=null?quote.mid.toFixed(2):'—'}</Text>
+        </View>
+        <View style={{alignItems:'flex-end'}}>
+          <Text style={ps.mktSub}>BID {quote?.bid??'—'}</Text>
+          <Text style={ps.mktSub}>ASK {quote?.ask??'—'}</Text>
+        </View>
+      </View>
+
+      {positions.length>0?(
+        <>
+          <View style={ps.mktHeadRow}>
+            <Text style={ps.headHint}>{positions.length} OPEN</Text>
+            <Text style={[ps.mktTotalPl,{color:plColor}]}>{totalPl>=0?'+':''}{totalPl.toFixed(2)}</Text>
+          </View>
+          {positions.map(p=>{
+            const pl=Number(p.unrealizedPl)||0;
+            return(
+              <View key={p.id} style={ps.mktPosRow}>
+                <Text style={[ps.mktSide,{color:p.side==='buy'?colors.online:colors.danger}]}>{p.side==='buy'?'▲':'▼'} {p.qty}</Text>
+                <Text style={ps.mktEntry}>@ {Number(p.avgPrice).toFixed(2)}</Text>
+                <Text style={[ps.mktPl,{color:pl>=0?colors.online:colors.danger}]}>{pl>=0?'+':''}{pl.toFixed(2)}</Text>
+                <TouchableOpacity style={ps.mktClose} disabled={!!busy} onPress={()=>close(p.id)}>
+                  {busy===p.id?<ActivityIndicator size="small" color={colors.danger}/>:<Text style={ps.mktCloseT}>CLOSE</Text>}
+                </TouchableOpacity>
+              </View>
+            );
+          })}
+        </>
+      ):(
+        <Text style={ps.emptyText}>No open gold positions.</Text>
+      )}
+    </>
+  );
+}
+
 export const ps=StyleSheet.create({
   headRow:{flexDirection:'row',justifyContent:'space-between',alignItems:'center',marginBottom:space.lg},
   headBtns:{flexDirection:'row',alignItems:'center',gap:space.md},
@@ -279,4 +365,18 @@ export const ps=StyleSheet.create({
   wvfText:{fontFamily:FONTS.mono,fontSize:12,color:colors.textMuted,lineHeight:19,letterSpacing:0.2},
   verseText:{...type.verse,marginBottom:space.sm},
   verseRef:{fontFamily:FONTS.mono,fontSize:9,color:colors.textDim,letterSpacing:2},
+
+  mktHint:{fontFamily:FONTS.mono,fontSize:9,color:colors.textFaint,textAlign:'center',lineHeight:15,letterSpacing:0.5},
+  mktQuoteRow:{flexDirection:'row',justifyContent:'space-between',alignItems:'flex-start',paddingBottom:space.lg,borderBottomWidth:1,borderBottomColor:colors.hairline},
+  mktLabel:{fontFamily:FONTS.mono,fontSize:9,color:colors.textDim,letterSpacing:2},
+  mktMid:{fontFamily:FONTS.displaySemi,fontSize:34,color:colors.goldBright,letterSpacing:1,marginTop:2},
+  mktSub:{fontFamily:FONTS.mono,fontSize:9,color:colors.textMuted,letterSpacing:1,marginTop:2},
+  mktHeadRow:{flexDirection:'row',justifyContent:'space-between',alignItems:'center',marginTop:space.lg,marginBottom:space.sm},
+  mktTotalPl:{fontFamily:FONTS.monoMed,fontSize:12,fontWeight:'700'},
+  mktPosRow:{flexDirection:'row',alignItems:'center',gap:space.md,paddingVertical:space.md,borderBottomWidth:1,borderBottomColor:colors.hairline},
+  mktSide:{fontFamily:FONTS.monoMed,fontSize:12,fontWeight:'700',width:52},
+  mktEntry:{fontFamily:FONTS.mono,fontSize:11,color:colors.textMuted,flex:1},
+  mktPl:{fontFamily:FONTS.monoMed,fontSize:11,fontWeight:'700',width:70,textAlign:'right'},
+  mktClose:{borderWidth:1,borderColor:'rgba(199,97,75,0.4)',borderRadius:radius.sm,paddingHorizontal:8,paddingVertical:4,minWidth:52,alignItems:'center'},
+  mktCloseT:{fontFamily:FONTS.mono,fontSize:8,color:colors.danger,letterSpacing:1},
 });

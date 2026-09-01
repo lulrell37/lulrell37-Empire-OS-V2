@@ -1,10 +1,11 @@
 import React,{useState,useEffect,useRef}from 'react';
-import{View,Text,StyleSheet,ScrollView,TouchableOpacity,Alert,Modal}from 'react-native';
+import{View,Text,StyleSheet,ScrollView,TouchableOpacity,Alert}from 'react-native';
 import{SafeAreaView}from 'react-native-safe-area-context';
 import{Swipeable}from 'react-native-gesture-handler';
 import{getAllPersonaMemory,getAllNotes,deleteNote,deletePersonaMemory}from '../services/database';
 import{getPersona}from '../personas/personas';
 import{categoryMeta}from '../services/memoryCategories';
+import MemoryPopup from './command/MemoryPopup';
 
 export default function MemoryScreen({navigation}){
   const[memories,setMemories]=useState([]);const[notes,setNotes]=useState([]);const[tab,setTab]=useState('MEMORY');
@@ -42,7 +43,7 @@ export default function MemoryScreen({navigation}){
       <ScrollView style={{flex:1}}>
         {tab==='MEMORY'&&<View style={s.sec}>
           <Text style={s.secTitle}>CONVERSATION MEMORY</Text>
-          <Text style={s.secSub}>EVERY EXCHANGE, KEPT RAW · SWIPE A MEMORY AWAY TO DELETE · TAP FOR THE MAP</Text>
+          <Text style={s.secSub}>EVERY EXCHANGE, KEPT RAW · SWIPE A MEMORY AWAY TO DELETE · TAP TO OPEN</Text>
           {memories.length===0&&<Text style={s.empty}>No memory yet. Start talking to your personas.</Text>}
           {memories.map(m=>{const p=getPersona(m.persona);const cat=m.category?categoryMeta(m.category):null;return(
             <Swipeable key={m.id} friction={1.6} rightThreshold={44}
@@ -73,19 +74,7 @@ export default function MemoryScreen({navigation}){
         <Text style={s.undoAction}>UNDO</Text>
       </TouchableOpacity>}
 
-      <Modal visible={!!open} transparent animationType="fade" onRequestClose={()=>setOpen(null)}>
-        <View style={s.modalOver}><View style={s.modalCard}>
-          <View style={s.modalHdr}>
-            <Text style={[s.memPersona,{color:getPersona(open?.persona)?.color||'#E8C98A',flex:1}]}>{getPersona(open?.persona)?.name}</Text>
-            <Text style={s.memDate}>{open?.date}</Text>
-            <TouchableOpacity onPress={()=>setOpen(null)}><Text style={{color:'#666',fontSize:20}}>×</Text></TouchableOpacity>
-          </View>
-          <ScrollView style={{maxHeight:'72%'}} contentContainerStyle={{padding:16}}><Text style={s.modalBody} selectable>{open?.content}</Text></ScrollView>
-          <TouchableOpacity style={s.modalDel} onPress={()=>{if(open){deletePersonaMemory(open.id).catch(()=>{});setMemories(prev=>prev.filter(x=>x.id!==open.id));setOpen(null);}}}>
-            <Text style={s.modalDelT}>DELETE THIS MEMORY</Text>
-          </TouchableOpacity>
-        </View></View>
-      </Modal>
+      {open&&<MemoryPopup memory={open} onClose={()=>setOpen(null)} onDelete={m=>swipeAwayMemory(m)}/>}
     </SafeAreaView>
   );
 }
