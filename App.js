@@ -2,6 +2,7 @@ import './errorHandler';
 import ErrorBoundary from './ErrorBoundary';
 import ErrorBanner,{reportError}from './ErrorBanner';
 import React,{useEffect,useState}from 'react';
+import{AppState}from 'react-native';
 import{StatusBar}from 'expo-status-bar';
 import{NavigationContainer}from '@react-navigation/native';
 import{createNativeStackNavigator}from '@react-navigation/native-stack';
@@ -19,6 +20,7 @@ import LaboratoryScreen from './src/screens/LaboratoryScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
 import{initDatabase}from './src/services/database';
 import{loadKeys}from './src/services/keyStore';
+import{runSync,initSyncStatus}from './src/services/sync';
 import{tlInit}from './src/services/tradeLocker';
 import{getAllPersonaPics}from './src/services/database';
 import useEmpireStore from './src/store/useEmpireStore';
@@ -38,7 +40,8 @@ export default function App(){
         await Font.loadAsync(FONT_MAP).catch(e=>{console.warn('Font load failed, using fallback:',e.message);});
         await initDatabase();const keys=await loadKeys();setHasKeys(!!(keys?.claude));const pics=await getAllPersonaPics();setPersonaPics(pics);
         tlInit().catch(()=>{}); // learn the TradeLocker login state + warm the session
-
+        await initSyncStatus().catch(()=>{});
+        runSync().catch(()=>{}); // no-op unless a backend is configured
       }
       catch(e){console.warn('Init error:',e);reportError('Init error: '+e.message);}
       finally{setIsReady(true);await SplashScreen.hideAsync();}
@@ -58,6 +61,12 @@ export default function App(){
       finally{setNavReady(true);}
     }
     restoreNavState();
+  },[]);
+  useEffect(()=>{
+    // Sync on every return to the foreground + a gentle background interval.
+    const sub=AppState.addEventListener('change',(st)=>{if(st==='active')runSync().catch(()=>{});});
+    const iv=setInterval(()=>{runSync().catch(()=>{});},120000);
+    return()=>{sub.remove();clearInterval(iv);};
   },[]);
   if(!isReady||!navReady)return null;
   return(

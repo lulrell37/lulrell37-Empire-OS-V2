@@ -2,7 +2,8 @@ import React,{useState,useEffect}from 'react';
 import{View,Text,StyleSheet,TextInput,TouchableOpacity,ScrollView,Alert,KeyboardAvoidingView,Platform,Image}from 'react-native';
 import{SafeAreaView}from 'react-native-safe-area-context';
 import*as ImagePicker from 'expo-image-picker';
-import{saveKeys,loadKeys,saveGoogleToken,loadGoogleToken,clearGoogleToken,saveTradeCreds,loadTradeCreds,clearTradeCreds,saveGitHubToken,loadGitHubToken,clearGitHubToken}from '../services/keyStore';
+import{saveKeys,loadKeys,saveGoogleToken,loadGoogleToken,clearGoogleToken,saveTradeCreds,loadTradeCreds,clearTradeCreds,saveGitHubToken,loadGitHubToken,clearGitHubToken,saveBackend,loadBackend,clearBackend}from '../services/keyStore';
+import{runSync,pingBackend,initSyncStatus}from '../services/sync';
 import{tlConnect,tlReset}from '../services/tradeLocker';
 import{ghVerify}from '../services/buildAgent';
 import{saveCustomPrompt,getCustomPrompt,getApiUsage,getAllPersonaPics,savePersonaPic,getSetting,setSetting}from '../services/database';
@@ -10,7 +11,7 @@ import{getCrashLog,clearCrashLog}from '../services/crashLog';
 import{PERSONA_LIST,getPersona}from '../personas/personas';
 import{useGoogleAuth,exchangeGoogleCode,revokeGoogle}from '../services/googleAuth';
 import useEmpireStore from '../store/useEmpireStore';
-const TABS=['KEYS','GOOGLE','TRADING','DEV','AI','PROFILES','PROMPTS','USAGE','DIAGNOSTICS'];
+const TABS=['KEYS','GOOGLE','TRADING','DEV','BACKEND','AI','PROFILES','PROMPTS','USAGE','DIAGNOSTICS'];
 export default function SettingsScreen({navigation}){
   const[tab,setTab]=useState('KEYS');
   const[claude,setClaude]=useState('');const[grok,setGrok]=useState('');const[openai,setOpenai]=useState('');const[elevenlabs,setElevenlabs]=useState('');const[meshy,setMeshy]=useState('');
@@ -28,6 +29,10 @@ export default function SettingsScreen({navigation}){
   const[ghToken,setGhToken]=useState('');
   const[ghBusy,setGhBusy]=useState(false);
   const[ghStatus,setGhStatus]=useState(null); // {ok,repo,error}
+  const[beUrl,setBeUrl]=useState('');const[beToken,setBeToken]=useState('');
+  const[beBusy,setBeBusy]=useState(false);
+  const[beConfigured,setBeConfigured]=useState(false);
+  const[beSync,setBeSync]=useState({lastSync:0,error:null,running:false});
   const{personaPics,setPersonaPics}=useEmpireStore();
   const[request,response,promptAsync]=useGoogleAuth();
   useEffect(()=>{loadAll();},[]);
@@ -53,7 +58,36 @@ export default function SettingsScreen({navigation}){
     setDeepConfirm((await getSetting('deep_research_confirm','1'))==='1');
     const tc=await loadTradeCreds();if(tc)setTl({email:tc.email||'',password:tc.password||'',server:tc.server||'',env:tc.env||'demo'});
     const gt=await loadGitHubToken();if(gt){setGhToken(gt);ghVerify().then(setGhStatus);}
+    const be=await loadBackend();if(be){setBeUrl(be.url);setBeToken(be.token);setBeConfigured(true);}
+    const st=await initSyncStatus().catch(()=>null);if(st)setBeSync({lastSync:st.lastSync,error:st.error,running:st.running});
     setCrashes(await getCrashLog().catch(()=>[]));
+  }
+  async function connectBackend(){
+    if(!beUrl.trim()||!beToken.trim()){Alert.alert('Required','Server URL and sync token are both required.');return;}
+    setBeBusy(true);
+    try{
+      await pingBackend(beUrl);
+      const saved=await saveBackend({url:beUrl,token:beToken});
+      setBeUrl(saved.url);setBeConfigured(true);
+      const st=await runSync({full:true});
+      setBeSync({lastSync:st.lastSync,error:st.error,running:st.running});
+      Alert.alert(st.error?'Connected · first sync failed':'Connected',st.error||'Backend linked. This device now syncs and routes AI calls through it.');
+    }catch(e){Alert.alert('Backend',e.message);}
+    finally{setBeBusy(false);}
+  }
+  async function syncNow(){
+    setBeBusy(true);
+    try{const st=await runSync();setBeSync({lastSync:st.lastSync,error:st.error,running:st.running});if(st.error)Alert.alert('Sync failed',st.error);}
+    finally{setBeBusy(false);}
+  }
+  async function fullResync(){
+    setBeBusy(true);
+    try{const st=await runSync({full:true});setBeSync({lastSync:st.lastSync,error:st.error,running:st.running});Alert.alert(st.error?'Resync failed':'Resync complete',st.error||'Re-pulled the full dataset from the backend.');}
+    finally{setBeBusy(false);}
+  }
+  async function disconnectBackend(){
+    await clearBackend();setBeConfigured(false);setBeToken('');setBeSync({lastSync:0,error:null,running:false});
+    Alert.alert('Disconnected','Backend removed. This device is fully local again.');
   }
   async function connectTradeLocker(){
     if(!tl.email.trim()||!tl.password||!tl.server.trim()){Alert.alert('Required','Email, password and server are all required.');return;}
@@ -247,6 +281,33 @@ export default function SettingsScreen({navigation}){
             </TouchableOpacity>
             <Text style={[s.secSub,{marginTop:20,marginBottom:0}]}>ONE-TIME GITHUB SETUP{'\n'}1 · Repo → Settings → Secrets and variables → Actions → add ANTHROPIC_API_KEY (sk-ant-…). Without it Claude Code can't run.{'\n'}2 · Repo → Settings → Actions → General → enable "Allow GitHub Actions to create and approve pull requests."{'\n'}3 · github.com/settings/tokens → fine-grained token, this repo only, with Contents + Issues + Pull requests set to Read and write. Paste it above.</Text>
           </View>}
+          {tab==='BACKEND'&&<View>
+            <Text style={s.secTitle}>BACKEND SERVER</Text>
+            <Text style={s.secSub}>Optional. Links this device to your Empire OS server for cross-device sync — tasks, memory, notes, revenue, dates — and routes every AI call through it so the provider keys live on the server, not in the app. Leave it blank to stay fully local.</Text>
+            {beConfigured&&<View style={[s.tlAcctCard,{marginTop:0,marginBottom:16,borderColor:beSync.error?'#4a2c2c':'#2c4a38'}]}>
+              <Text style={[s.tlAcctLine,{color:beSync.error?'#C7614B':'#5FA779'}]}>{beSync.error?'SYNC ERROR':beSync.running?'SYNCING…':'CONNECTED'}</Text>
+              <Text style={s.beMeta}>{beSync.error?beSync.error:beSync.lastSync?'Last sync '+new Date(beSync.lastSync).toLocaleString():'Not synced yet'}</Text>
+            </View>}
+            <View style={s.keyField}>
+              <Text style={s.keyLabel}>SERVER URL</Text>
+              <TextInput style={s.keyInput} value={beUrl} onChangeText={setBeUrl} placeholder="https://your-app.replit.app" placeholderTextColor="#1A1A1A" autoCapitalize="none" autoCorrect={false} keyboardType="url"/>
+            </View>
+            <View style={s.keyField}>
+              <Text style={s.keyLabel}>SYNC TOKEN</Text>
+              <TextInput style={s.keyInput} value={beToken} onChangeText={setBeToken} placeholder="the SYNC_TOKEN server secret" placeholderTextColor="#1A1A1A" secureTextEntry autoCapitalize="none" autoCorrect={false}/>
+            </View>
+            <TouchableOpacity style={s.saveBtn} onPress={connectBackend} disabled={beBusy}>
+              <Text style={s.saveBtnT}>{beBusy?'WORKING…':beConfigured?'RECONNECT':'CONNECT'}</Text>
+            </TouchableOpacity>
+            {beConfigured&&<View style={{flexDirection:'row',gap:10,marginTop:10}}>
+              <TouchableOpacity style={[s.saveBtn,{flex:1,marginTop:0,backgroundColor:'#111',borderWidth:1,borderColor:'#333'}]} onPress={syncNow} disabled={beBusy}><Text style={[s.saveBtnT,{color:'#E8C98A'}]}>SYNC NOW</Text></TouchableOpacity>
+              <TouchableOpacity style={[s.saveBtn,{flex:1,marginTop:0,backgroundColor:'#111',borderWidth:1,borderColor:'#333'}]} onPress={fullResync} disabled={beBusy}><Text style={[s.saveBtnT,{color:'#E8C98A'}]}>FULL RESYNC</Text></TouchableOpacity>
+            </View>}
+            {beConfigured&&<TouchableOpacity style={[s.saveBtn,{backgroundColor:'#111',borderWidth:1,borderColor:'#333',marginTop:10}]} onPress={disconnectBackend}>
+              <Text style={[s.saveBtnT,{color:'#E05555'}]}>DISCONNECT</Text>
+            </TouchableOpacity>}
+            <Text style={[s.secSub,{marginTop:20,marginBottom:0}]}>The token must match the server's SYNC_TOKEN secret exactly. Every device you connect with the same URL and token shares one dataset, last write wins.</Text>
+          </View>}
           {tab==='AI'&&<View>
             <Text style={s.secTitle}>AI BEHAVIOR</Text>
             <Text style={s.secSub}>Controls for the memory and research subsystems. Calls bill to your own API keys.</Text>
@@ -379,6 +440,7 @@ const s=StyleSheet.create({
   googleDotOn:{backgroundColor:'#4CAF50'},
   googleStatusText:{fontFamily:'monospace',fontSize:10,color:'#888',letterSpacing:2},
   googleNote:{fontFamily:'monospace',fontSize:8,color:'#333',letterSpacing:1,marginTop:16,lineHeight:14},
+  beMeta:{fontFamily:'monospace',fontSize:8,color:'#555',letterSpacing:1,marginTop:4,lineHeight:12},
   picsGrid:{flexDirection:'row',flexWrap:'wrap',gap:16},
   picItem:{width:'28%',alignItems:'center'},
   picAvatar:{width:56,height:56,borderRadius:28,borderWidth:2,alignItems:'center',justifyContent:'center',marginBottom:6,overflow:'hidden'},

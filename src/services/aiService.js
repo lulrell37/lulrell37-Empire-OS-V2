@@ -1,9 +1,31 @@
-import{loadKeys}from './keyStore';
+import{loadKeys,loadBackend}from './keyStore';
 import{getPersonaMemory,getMemoriesByPersona,savePersonaMemory,getHudState,getTasks,trackApiUsage,getCustomPrompt,getUpcomingDates}from './database';
 import*as FileSystem from 'expo-file-system';
 import{Alert}from 'react-native';
 let keys=null;
 async function ensureKeys(){if(!keys)keys=await loadKeys();return keys;}
+
+// --- Provider routing ------------------------------------------------------
+// Direct calls hit the provider with the on-device key. When a backend is
+// configured in Settings, every call instead goes through `${backend}/ai/<name>`
+// with the backend bearer token and the provider key never leaves the server.
+const AI_BASE={claude:'https://api.anthropic.com',grok:'https://api.x.ai',openai:'https://api.openai.com',elevenlabs:'https://api.elevenlabs.io'};
+const AI_PROXY_NAME={claude:'anthropic',grok:'xai',openai:'openai',elevenlabs:'elevenlabs'};
+const AI_KEYHDR={
+  claude:(kk)=>({'x-api-key':kk,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'}),
+  grok:(kk)=>({Authorization:'Bearer '+kk}),
+  openai:(kk)=>({Authorization:'Bearer '+kk}),
+  elevenlabs:(kk)=>({'xi-api-key':kk}),
+};
+// Returns { base, auth } — `base` has no trailing slash; the paths below start
+// with `/v1/...`. Throws a Settings pointer when there's neither a backend nor a
+// key for the provider.
+async function aiRoute(provider,localKey,label){
+  const be=await loadBackend();
+  if(be)return{base:be.url+'/ai/'+AI_PROXY_NAME[provider],auth:{Authorization:'Bearer '+be.token}};
+  if(!localKey)throw new Error(`No ${label} API key. Add one in Settings → KEYS, or connect a backend in Settings → BACKEND.`);
+  return{base:AI_BASE[provider],auth:AI_KEYHDR[provider](localKey)};
+}
 // The full context-injected system prompt for a persona (HUD, memory, style).
 // Exported so the Grok realtime voice socket can be seeded with the same context
 // the text turn gets, instead of the bare personality prompt.
@@ -116,9 +138,9 @@ export async function callPersona(personaId,messages,signal=null,onDelta=null,op
   let response='';
   const emit=(t)=>{if(t){response+=t;if(stream){try{onDelta(t);}catch{}}}};
   if(persona.api==='claude'){
-    if(!k?.claude)throw new Error('No Claude API key. Go to Settings.');
-    const url='https://api.anthropic.com/v1/messages';
-    const headers={'Content-Type':'application/json','x-api-key':k.claude,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'};
+    const{base,auth}=await aiRoute('claude',k?.claude,'Claude');
+    const url=base+'/v1/messages';
+    const headers={'Content-Type':'application/json',...auth};
     const body=JSON.stringify({model:persona.model||'claude-sonnet-4-6',max_tokens:1500,system:sys,messages:hist,stream});
     if(stream){
       let tin=0,tout=0;
@@ -137,9 +159,9 @@ export async function callPersona(personaId,messages,signal=null,onDelta=null,op
       if(d.usage)await trackApiUsage('claude',d.usage.input_tokens||0,d.usage.output_tokens||0).catch(()=>{});
     }
   }else if(persona.api==='grok'){
-    if(!k?.grok)throw new Error('No Grok API key. Go to Settings.');
-    const url='https://api.x.ai/v1/chat/completions';
-    const headers={'Content-Type':'application/json','Authorization':'Bearer '+k.grok};
+    const{base,auth}=await aiRoute('grok',k?.grok,'Grok');
+    const url=base+'/v1/chat/completions';
+    const headers={'Content-Type':'application/json',...auth};
     const body=JSON.stringify({model:persona.model||'grok-3-latest',max_tokens:1500,messages:[{role:'system',content:sys},...hist],stream});
     if(stream){
       await xhrStream({url,headers,body,signal,onEvent:(e)=>{
@@ -154,9 +176,9 @@ export async function callPersona(personaId,messages,signal=null,onDelta=null,op
       if(d.usage)await trackApiUsage('grok',d.usage.prompt_tokens||0,d.usage.completion_tokens||0).catch(()=>{});
     }
   }else if(persona.api==='openai'){
-    if(!k?.openai)throw new Error('No OpenAI API key. Go to Settings.');
-    const url='https://api.openai.com/v1/chat/completions';
-    const headers={'Content-Type':'application/json','Authorization':'Bearer '+k.openai};
+    const{base,auth}=await aiRoute('openai',k?.openai,'OpenAI');
+    const url=base+'/v1/chat/completions';
+    const headers={'Content-Type':'application/json',...auth};
     const body=JSON.stringify({model:persona.model||'gpt-4o',max_tokens:1500,messages:[{role:'system',content:sys},...hist],stream,...(stream?{stream_options:{include_usage:true}}:{})});
     if(stream){
       await xhrStream({url,headers,body,signal,onEvent:(e)=>{
@@ -183,7 +205,7 @@ export async function callPersona(personaId,messages,signal=null,onDelta=null,op
 // regardless of which model runs the persona's conversation.
 export async function queryMemory(personaId,question,signal=null){
   const k=await ensureKeys();
-  if(!k?.claude)throw new Error('Claude key needed for memory recall');
+  const{base,auth}=await aiRoute('claude',k?.claude,'Claude');
   const{getPersona}=await import('../personas/personas');
   const persona=getPersona(personaId);
   let rows=[];
@@ -191,7 +213,7 @@ export async function queryMemory(personaId,question,signal=null){
   if(!rows.length){try{rows=(await getMemoriesByPersona(personaId)).slice(0,60);}catch{}}
   const corpus=rows.map(r=>`[${r.date}${r.category?' · '+r.category:''}]\n${r.content}`).join('\n\n').slice(0,14000);
   const sys=`You are the private memory index for ${persona.name}, the assistant to Mr. Burrus. Below are stored exchanges between Mr. Burrus and ${persona.name}, newest first. Answer the recall question using ONLY what is in these memories. Be specific — quote dates and details. If the memories do not cover it, say so in one sentence. No preamble.\n\n=== STORED MEMORIES ===\n${corpus||'(none)'}\n=== END ===`;
-  const res=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':k.claude,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:700,system:sys,messages:[{role:'user',content:question}]}),signal});
+  const res=await fetch(base+'/v1/messages',{method:'POST',headers:{'Content-Type':'application/json',...auth},body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:700,system:sys,messages:[{role:'user',content:question}]}),signal});
   if(!res.ok){const e=await res.text();throw new Error(`memory recall: ${e.substring(0,80)}`);}
   const d=await res.json();
   if(d.usage)await trackApiUsage('claude',d.usage.input_tokens||0,d.usage.output_tokens||0).catch(()=>{});
@@ -205,8 +227,10 @@ export async function webSearch(personaId,query,signal=null){
   const{getPersona}=await import('../personas/personas');
   const persona=getPersona(personaId);
   const brief='Search the web and give a tight, factual briefing: the key numbers, facts, and dates, with source names inline. No fluff, no preamble.';
-  if(persona.api==='grok'&&k?.grok){
-    const res=await fetch('https://api.x.ai/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+k.grok},body:JSON.stringify({
+  const be=await loadBackend();
+  if(persona.api==='grok'&&(k?.grok||be)){
+    const{base,auth}=await aiRoute('grok',k?.grok,'Grok');
+    const res=await fetch(base+'/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json',...auth},body:JSON.stringify({
       model:persona.model||'grok-3-latest',max_tokens:900,
       messages:[{role:'system',content:brief},{role:'user',content:query}],
       search_parameters:{mode:'on',return_citations:true,max_search_results:8},
@@ -218,8 +242,9 @@ export async function webSearch(personaId,query,signal=null){
     const cites=d.citations?.length?`\n\nSources: ${d.citations.slice(0,8).join(' · ')}`:'';
     return(txt+cites).trim()||'(no results)';
   }
-  if(k?.claude){
-    const res=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':k.claude,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},body:JSON.stringify({
+  if(k?.claude||be){
+    const{base,auth}=await aiRoute('claude',k?.claude,'Claude');
+    const res=await fetch(base+'/v1/messages',{method:'POST',headers:{'Content-Type':'application/json',...auth},body:JSON.stringify({
       model:'claude-sonnet-4-6',max_tokens:1000,
       tools:[{type:'web_search_20250305',name:'web_search',max_uses:5}],
       messages:[{role:'user',content:`${brief}\n\nQuery: ${query}`}],
@@ -229,15 +254,15 @@ export async function webSearch(personaId,query,signal=null){
     if(d.usage)await trackApiUsage('claude',d.usage.input_tokens||0,d.usage.output_tokens||0).catch(()=>{});
     return(d.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('\n').trim()||'(no results)';
   }
-  throw new Error('web search needs a Grok or Claude API key');
+  throw new Error('web search needs a Grok or Claude API key, or a connected backend');
 }
 
 // Long-form autonomous research via OpenAI Deep Research. Runs for minutes —
 // started in the background, caller polls deepResearchPoll(id).
 export async function deepResearchStart(topic){
   const k=await ensureKeys();
-  if(!k?.openai)throw new Error('OpenAI API key needed for Deep Research (Settings → KEYS)');
-  const res=await fetch('https://api.openai.com/v1/responses',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+k.openai},body:JSON.stringify({
+  const{base,auth}=await aiRoute('openai',k?.openai,'OpenAI');
+  const res=await fetch(base+'/v1/responses',{method:'POST',headers:{'Content-Type':'application/json',...auth},body:JSON.stringify({
     model:'o3-deep-research',
     input:`Research this thoroughly and return a structured brief with findings, key figures, and cited sources:\n\n${topic}`,
     background:true,
@@ -249,8 +274,8 @@ export async function deepResearchStart(topic){
 }
 export async function deepResearchPoll(id){
   const k=await ensureKeys();
-  if(!k?.openai)throw new Error('OpenAI key missing');
-  const res=await fetch('https://api.openai.com/v1/responses/'+id,{headers:{'Authorization':'Bearer '+k.openai}});
+  const{base,auth}=await aiRoute('openai',k?.openai,'OpenAI');
+  const res=await fetch(base+'/v1/responses/'+id,{headers:{...auth}});
   if(!res.ok)throw new Error(`Deep Research poll: ${(await res.text()).substring(0,100)}`);
   const d=await res.json();
   if(d.status!=='completed')return{status:d.status};
@@ -260,12 +285,14 @@ export async function deepResearchPoll(id){
 }
 export async function textToSpeech(text,voiceId,personaName){
   const k=await ensureKeys();
-  if(!k?.elevenlabs){Alert.alert('ElevenLabs Error','No API key found');return null;}
+  const be=await loadBackend();
+  if(!be&&!k?.elevenlabs){Alert.alert('ElevenLabs Error','No API key found');return null;}
   if(!voiceId){Alert.alert('ElevenLabs Error','No voiceId provided for this persona');return null;}
   const clean=text.replace(/\[[^\]]*\]/g,'').replace(/[*#`]/g,'').trim().substring(0,2000);
   if(!clean)return null;
   try{
-    const res=await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,{method:'POST',headers:{'Content-Type':'application/json','xi-api-key':k.elevenlabs},body:JSON.stringify({text:clean,model_id:'eleven_turbo_v2_5',voice_settings:{stability:0.5,similarity_boost:0.8}})});
+    const{base,auth}=await aiRoute('elevenlabs',k?.elevenlabs,'ElevenLabs');
+    const res=await fetch(`${base}/v1/text-to-speech/${voiceId}`,{method:'POST',headers:{'Content-Type':'application/json',...auth},body:JSON.stringify({text:clean,model_id:'eleven_turbo_v2_5',voice_settings:{stability:0.5,similarity_boost:0.8}})});
     if(!res.ok){const e=await res.text();Alert.alert('ElevenLabs API Error',`Status ${res.status}: ${e.substring(0,150)}`);return null;}
     const arrayBuffer=await res.arrayBuffer();
     const bytes=new Uint8Array(arrayBuffer);
@@ -279,7 +306,7 @@ export async function textToSpeech(text,voiceId,personaName){
 }
 export async function transcribeAudio(audioUri){
   const k=await ensureKeys();
-  if(!k?.openai)throw new Error('OpenAI API key needed for voice transcription. Add it in Settings.');
+  const{base,auth}=await aiRoute('openai',k?.openai,'OpenAI');
   const formData=new FormData();
   formData.append('file',{uri:audioUri,type:'audio/m4a',name:'voice.m4a'});
   formData.append('model','whisper-1');
@@ -288,7 +315,7 @@ export async function transcribeAudio(audioUri){
   // A neutral priming sentence — Whisper is less likely to drop the final word
   // of a short clip when it isn't starting cold.
   formData.append('prompt','Okay. Here is what I need you to do.');
-  const res=await fetch('https://api.openai.com/v1/audio/transcriptions',{method:'POST',headers:{'Authorization':'Bearer '+k.openai},body:formData});
+  const res=await fetch(base+'/v1/audio/transcriptions',{method:'POST',headers:{...auth},body:formData});
   if(!res.ok){const e=await res.text();throw new Error('Whisper: '+e.substring(0,100));}
   const d=await res.json();
   return d.text?.trim()||'';

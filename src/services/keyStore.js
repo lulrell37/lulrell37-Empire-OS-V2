@@ -23,3 +23,14 @@ const GITHUB_KEY='empire_os_github';
 export async function saveGitHubToken(token){await SecureStore.setItemAsync(GITHUB_KEY,String(token||''));}
 export async function loadGitHubToken(){try{return(await SecureStore.getItemAsync(GITHUB_KEY))||null;}catch{return null;}}
 export async function clearGitHubToken(){await SecureStore.deleteItemAsync(GITHUB_KEY);}
+
+// Backend: { url, token }. When set, the app syncs to it and routes AI calls
+// through it. When absent, the app is fully local (unchanged behaviour).
+const BACKEND_KEY='empire_os_backend';
+export async function saveBackend({url,token}){
+  const clean={url:String(url||'').trim().replace(/\/+$/,''),token:String(token||'').trim()};
+  await SecureStore.setItemAsync(BACKEND_KEY,JSON.stringify(clean));
+  return clean;
+}
+export async function loadBackend(){try{const v=await SecureStore.getItemAsync(BACKEND_KEY);const b=v?JSON.parse(v):null;return b?.url&&b?.token?b:null;}catch{return null;}}
+export async function clearBackend(){await SecureStore.deleteItemAsync(BACKEND_KEY);}

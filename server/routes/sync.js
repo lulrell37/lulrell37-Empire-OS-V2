@@ -19,12 +19,13 @@ r.post('/push', async (req, res) => {
       for (const row of rows) {
         if (!row || !row.sync_id) continue;
         await query(
-          `INSERT INTO sync_rows (table_name, sync_id, data, updated_at, deleted)
-             VALUES ($1, $2, $3, $4, $5)
+          `INSERT INTO sync_rows (table_name, sync_id, data, updated_at, deleted, server_seq)
+             VALUES ($1, $2, $3, $4, $5, nextval('sync_seq'))
            ON CONFLICT (table_name, sync_id) DO UPDATE
              SET data = EXCLUDED.data,
                  updated_at = EXCLUDED.updated_at,
-                 deleted = EXCLUDED.deleted
+                 deleted = EXCLUDED.deleted,
+                 server_seq = nextval('sync_seq')
              WHERE sync_rows.updated_at < EXCLUDED.updated_at`,
           [
             String(table),
@@ -49,16 +50,16 @@ r.get('/pull', async (req, res) => {
   const only = req.query.tables ? String(req.query.tables).split(',').map((s) => s.trim()).filter(Boolean) : null;
   try {
     const params = [since];
-    let sql = `SELECT table_name, sync_id, data, updated_at, deleted
-                 FROM sync_rows WHERE updated_at > $1`;
+    let sql = `SELECT table_name, sync_id, data, updated_at, deleted, server_seq
+                 FROM sync_rows WHERE server_seq > $1`;
     if (only && only.length) {
       params.push(only);
       sql += ` AND table_name = ANY($2)`;
     }
-    sql += ` ORDER BY updated_at ASC LIMIT ${MAX_PULL}`;
+    sql += ` ORDER BY server_seq ASC LIMIT ${MAX_PULL}`;
     const { rows } = await query(sql, params);
     const changes = {};
-    let maxUpdated = since;
+    let cursor = since;
     for (const row of rows) {
       (changes[row.table_name] || (changes[row.table_name] = [])).push({
         sync_id: row.sync_id,
@@ -66,12 +67,12 @@ r.get('/pull', async (req, res) => {
         updated_at: Number(row.updated_at),
         deleted: row.deleted,
       });
-      if (Number(row.updated_at) > maxUpdated) maxUpdated = Number(row.updated_at);
+      if (Number(row.server_seq) > cursor) cursor = Number(row.server_seq);
     }
     res.json({
       changes,
       count: rows.length,
-      cursor: maxUpdated,
+      cursor,
       more: rows.length === MAX_PULL,
       serverTime: Date.now(),
     });

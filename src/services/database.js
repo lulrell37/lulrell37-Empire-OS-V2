@@ -1,6 +1,7 @@
 import*as SQLite from 'expo-sqlite';
 import{classifyMemory,memoryRelevance}from './memoryCategories';
 let db;
+export function getDb(){return db;}
 export async function initDatabase(){
   db=await SQLite.openDatabaseAsync('empire_os.db');
   await db.execAsync(`PRAGMA journal_mode=WAL;
@@ -24,6 +25,68 @@ export async function initDatabase(){
   await migratePersonaMemory();
   await ensureHudState();
   await ensureBusinessTargets();
+  await initSync();
+}
+
+// --- Cross-device sync scaffolding -----------------------------------------
+// Each syncable table gets a stable `sync_id` and an `updated_at` (ms). SQLite
+// triggers keep both current so the ~40 existing write functions don't change.
+// Deletes drop a row in `tombstones`. During a pull, `sync_meta.mute` is set to
+// 1 so applying server rows doesn't re-stamp them (which would ping-pong).
+
+const NOW_MS="CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)";
+
+// table -> SQL expression for its sync_id at INSERT time (NEW.* refers to the row)
+const SYNC_TABLES={
+  tasks:'lower(hex(randomblob(16)))',
+  persona_memory:'lower(hex(randomblob(16)))',
+  revenue:'lower(hex(randomblob(16)))',
+  notes:'lower(hex(randomblob(16)))',
+  expenses:'lower(hex(randomblob(16)))',
+  important_dates:'lower(hex(randomblob(16)))',
+  build_jobs:'CAST(NEW.issue_number AS TEXT)',
+  business_targets:'NEW.business',
+  custom_prompts:'NEW.persona',
+  persona_pics:'NEW.persona',
+  hud_layout:'NEW.panel',
+  hud_state:"'singleton'",
+  app_settings:'NEW.key',
+};
+// of those, the tables that don't already have an updated_at column
+const NEEDS_UPDATED_AT=new Set(['tasks','persona_memory','revenue','expenses','important_dates','business_targets','custom_prompts','persona_pics','hud_layout','app_settings']);
+
+export const SYNC_TABLE_NAMES=Object.keys(SYNC_TABLES);
+
+async function initSync(){
+  await db.execAsync(`
+    PRAGMA recursive_triggers=OFF;
+    CREATE TABLE IF NOT EXISTS sync_meta(id INTEGER PRIMARY KEY CHECK(id=1), mute INTEGER DEFAULT 0, pull_cursor INTEGER DEFAULT 0, push_cursor INTEGER DEFAULT 0, last_sync INTEGER DEFAULT 0, last_error TEXT);
+    INSERT OR IGNORE INTO sync_meta(id) VALUES(1);
+    CREATE TABLE IF NOT EXISTS tombstones(table_name TEXT NOT NULL, sync_id TEXT NOT NULL, deleted_at INTEGER NOT NULL, PRIMARY KEY(table_name,sync_id));
+  `);
+  for(const[t,expr]of Object.entries(SYNC_TABLES)){
+    const cols=(await db.getAllAsync(`PRAGMA table_info(${t})`)).map(c=>c.name);
+    if(!cols.includes('sync_id'))await db.execAsync(`ALTER TABLE ${t} ADD COLUMN sync_id TEXT`);
+    if(NEEDS_UPDATED_AT.has(t)&&!cols.includes('updated_at'))await db.execAsync(`ALTER TABLE ${t} ADD COLUMN updated_at INTEGER`);
+    await db.execAsync(`CREATE UNIQUE INDEX IF NOT EXISTS ${t}_sync_id_idx ON ${t}(sync_id)`);
+    // backfill any rows that predate the columns
+    await db.execAsync(`UPDATE ${t} SET sync_id=${expr.replace(/NEW\./g,'')} WHERE sync_id IS NULL OR sync_id=''`);
+    await db.execAsync(`UPDATE ${t} SET updated_at=${NOW_MS} WHERE updated_at IS NULL`);
+    await db.execAsync(`
+      DROP TRIGGER IF EXISTS ${t}_sync_ins;
+      DROP TRIGGER IF EXISTS ${t}_sync_upd;
+      DROP TRIGGER IF EXISTS ${t}_sync_del;
+      CREATE TRIGGER ${t}_sync_ins AFTER INSERT ON ${t}
+      WHEN NEW.sync_id IS NULL OR NEW.sync_id=''
+      BEGIN UPDATE ${t} SET sync_id=${expr}, updated_at=${NOW_MS} WHERE rowid=NEW.rowid; END;
+      CREATE TRIGGER ${t}_sync_upd AFTER UPDATE ON ${t}
+      WHEN (SELECT mute FROM sync_meta WHERE id=1)=0
+      BEGIN UPDATE ${t} SET updated_at=${NOW_MS} WHERE rowid=NEW.rowid; END;
+      CREATE TRIGGER ${t}_sync_del AFTER DELETE ON ${t}
+      WHEN (SELECT mute FROM sync_meta WHERE id=1)=0 AND OLD.sync_id IS NOT NULL
+      BEGIN INSERT OR REPLACE INTO tombstones(table_name,sync_id,deleted_at) VALUES('${t}',OLD.sync_id,${NOW_MS}); END;
+    `);
+  }
 }
 async function migrateHudColumns(){
   const cols=await db.getAllAsync('PRAGMA table_info(hud_state)');
@@ -310,7 +373,7 @@ export async function getMemoriesByPersona(persona){return await db.getAllAsync(
 export async function deletePersonaMemory(id){await db.runAsync('DELETE FROM persona_memory WHERE id=?',[id]);}
 // Simple app-wide key/value settings (feature toggles, etc.).
 export async function getSetting(key,fallback=null){const r=await db.getFirstAsync('SELECT value FROM app_settings WHERE key=?',[key]);return r?r.value:fallback;}
-export async function setSetting(key,value){await db.runAsync('INSERT OR REPLACE INTO app_settings(key,value) VALUES(?,?)',[key,String(value)]);}
+export async function setSetting(key,value){await db.runAsync('INSERT INTO app_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',[key,String(value)]);}
 
 // --- Expenses (manual entry, local) ---
 export async function addExpense(amount,category,note=''){
@@ -352,10 +415,10 @@ export async function saveNote(title,content,persona=null){const now=Date.now();
 export async function getNote(title){return await db.getFirstAsync('SELECT * FROM notes WHERE title LIKE ?',['%'+title+'%']);}
 export async function getAllNotes(){return await db.getAllAsync('SELECT * FROM notes ORDER BY updated_at DESC');}
 export async function deleteNote(id){await db.runAsync('DELETE FROM notes WHERE id=?',[id]);}
-export async function savePersonaPic(persona,picData){await db.runAsync('INSERT OR REPLACE INTO persona_pics(persona,pic_data) VALUES(?,?)',[persona,picData]);}
+export async function savePersonaPic(persona,picData){await db.runAsync('INSERT INTO persona_pics(persona,pic_data) VALUES(?,?) ON CONFLICT(persona) DO UPDATE SET pic_data=excluded.pic_data',[persona,picData]);}
 export async function getPersonaPic(persona){const r=await db.getFirstAsync('SELECT pic_data FROM persona_pics WHERE persona=?',[persona]);return r?.pic_data||null;}
 export async function getAllPersonaPics(){const rows=await db.getAllAsync('SELECT * FROM persona_pics');const map={};rows.forEach(r=>{map[r.persona]=r.pic_data;});return map;}
-export async function saveCustomPrompt(persona,prompt){await db.runAsync('INSERT OR REPLACE INTO custom_prompts(persona,prompt) VALUES(?,?)',[persona,prompt]);}
+export async function saveCustomPrompt(persona,prompt){await db.runAsync('INSERT INTO custom_prompts(persona,prompt) VALUES(?,?) ON CONFLICT(persona) DO UPDATE SET prompt=excluded.prompt',[persona,prompt]);}
 export async function getCustomPrompt(persona){const r=await db.getFirstAsync('SELECT prompt FROM custom_prompts WHERE persona=?',[persona]);return r?.prompt||null;}
 export async function trackApiUsage(provider,tokensIn,tokensOut){const today=getTodayStr();const ex=await db.getFirstAsync('SELECT * FROM api_usage WHERE provider=? AND date=?',[provider,today]);if(ex){await db.runAsync('UPDATE api_usage SET tokens_in=tokens_in+?,tokens_out=tokens_out+? WHERE id=?',[tokensIn,tokensOut,ex.id]);}else{await db.runAsync('INSERT INTO api_usage(provider,tokens_in,tokens_out,date,created_at) VALUES(?,?,?,?,?)',[provider,tokensIn,tokensOut,today,Date.now()]);}}
 export async function getApiUsage(){return await db.getAllAsync('SELECT * FROM api_usage ORDER BY date DESC LIMIT 30');}
@@ -366,7 +429,8 @@ const BUILD_TERMINAL=['pushed','failed','cancelled'];
 export async function addBuildJob({issueNumber,spec,title,state='queued'}){
   const now=Date.now();
   await db.runAsync(
-    'INSERT OR REPLACE INTO build_jobs(issue_number,pr_number,spec,state,question,last_comment_id,title,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)',
+    `INSERT INTO build_jobs(issue_number,pr_number,spec,state,question,last_comment_id,title,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)
+     ON CONFLICT(issue_number) DO UPDATE SET pr_number=excluded.pr_number,spec=excluded.spec,state=excluded.state,question=excluded.question,last_comment_id=excluded.last_comment_id,title=excluded.title,updated_at=excluded.updated_at`,
     [issueNumber,null,spec||'',state,null,0,title||'',now,now],
   );
   return issueNumber;
