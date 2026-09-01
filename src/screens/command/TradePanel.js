@@ -6,7 +6,7 @@ import{View,Text,StyleSheet,TouchableOpacity,ActivityIndicator}from 'react-nativ
 import{tlPositions,tlQuote,tlClosePosition,tlStatus}from '../../services/tradeLocker';
 import{reconcile as reconcileJournal}from '../../services/tradeJournal';
 
-const POLL_MS=4500;
+const POLL_MS=9000; // gentle — a chatty client trips Cloudflare's 1015 rate limit
 
 export default function TradePanel({active,onEvent}){
   const[positions,setPositions]=useState([]);

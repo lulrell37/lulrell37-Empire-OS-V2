@@ -18,17 +18,43 @@ const RES_MS={'1m':60e3,'5m':300e3,'15m':900e3,'30m':1800e3,'1H':3600e3,'4H':144
 
 export const MAX_QTY=0.01; // hard lot cap — 0.01, enforced on every order
 
-const session={token:null,refresh:null,exp:0,env:'demo',accountId:null,accNum:null,instruments:{}};
+const session={token:null,refresh:null,exp:0,env:'demo',accountId:null,accNum:null,instruments:{},instrList:null};
 
 function base(){return BASE[session.env]||BASE.demo;}
+
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+
+// The public API sits behind Cloudflare, which rate-limits bursts with
+// "error code: 1015" (served as HTTP 429). A single scan fires ~15 calls, so
+// without a governor Cloudflare 1015s every one of them and the snapshot comes
+// back completely blank.
+const RATE_LIMIT_COOLDOWN_MS=60e3;
+let rateLimitedUntil=0;
+
+// True while a recent burst got 1015'd — callers show "throttled, not
+// disconnected" without firing another round of doomed requests.
+export function tlRateLimited(){return Date.now()<rateLimitedUntil;}
+
+function isRateLimit(status,text){
+  return status===429||status===503||/error code:? *1015|\brate[ -]?limit/i.test(String(text||''));
+}
+function rateLimitError(where){
+  rateLimitedUntil=Date.now()+RATE_LIMIT_COOLDOWN_MS;
+  return Object.assign(
+    new Error(`TradeLocker is being rate-limited by Cloudflare (error 1015)${where?` on ${where}`:''}. This is NOT a login problem — wait ~60s and try again.`),
+    {rateLimited:true},
+  );
+}
 
 async function authenticate(){
   const creds=await loadTradeCreds();
   if(!creds?.email||!creds?.password||!creds?.server)throw new Error('TradeLocker not connected. Add your login in Settings.');
   session.env=creds.env==='live'?'live':'demo';
   const res=await fetch(base()+'/auth/jwt/token',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:creds.email,password:creds.password,server:creds.server})});
-  if(!res.ok)throw new Error('TradeLocker login failed: '+(await res.text()).slice(0,120));
-  const d=await res.json();
+  const bodyText=await res.text();
+  if(isRateLimit(res.status,bodyText))throw rateLimitError('login');
+  if(!res.ok)throw new Error('TradeLocker login failed: '+bodyText.slice(0,120));
+  const d=JSON.parse(bodyText);
   session.token=d.accessToken;session.refresh=d.refreshToken;
   session.exp=d.expireDate?Date.parse(d.expireDate):Date.now()+55*60e3;
 }
@@ -54,15 +80,43 @@ function qs(query){
   return parts.length?'?'+parts.join('&'):'';
 }
 
-async function api(path,{method='GET',body,query}={}){
+// Every request goes through one chain with a minimum gap between calls, and a
+// 1015/429 is retried a few times with exponential backoff. This keeps a scan's
+// burst under Cloudflare's threshold instead of tripping it and going blind.
+const API_MIN_GAP_MS=200;
+let apiGate=Promise.resolve();
+let apiLast=0;
+
+async function apiCall(path,method,body,query){
+  const wait=API_MIN_GAP_MS-(Date.now()-apiLast);
+  if(wait>0)await sleep(wait);
+  apiLast=Date.now();
   const t=await token();
   const headers={'Authorization':'Bearer '+t,'Content-Type':'application/json'};
   if(session.accNum!=null)headers.accNum=String(session.accNum);
   const res=await fetch(base()+path+qs(query),{method,headers,body:body?JSON.stringify(body):undefined});
   const text=await res.text();
-  let json;try{json=text?JSON.parse(text):{};}catch{json={raw:text};}
-  if(!res.ok||json.s==='error')throw new Error(`TradeLocker ${method} ${path}: ${(json.errmsg||text||res.status).toString().slice(0,140)}`);
-  return json;
+  return{res,text};
+}
+
+async function api(path,{method='GET',body,query}={}){
+  const task=async()=>{
+    // Still cooling down from a recent 1015 — fail fast instead of piling on.
+    if(tlRateLimited())throw rateLimitError(`${method} ${path}`);
+    for(let attempt=0;;attempt++){
+      const{res,text}=await apiCall(path,method,body,query);
+      if(isRateLimit(res.status,text)){
+        if(attempt<2){await sleep(700*2**attempt+Math.random()*300);continue;}
+        throw rateLimitError(`${method} ${path}`); // also arms the cooldown
+      }
+      let json;try{json=text?JSON.parse(text):{};}catch{json={raw:text};}
+      if(!res.ok||json.s==='error')throw new Error(`TradeLocker ${method} ${path}: ${(json.errmsg||text||res.status).toString().slice(0,140)}`);
+      return json;
+    }
+  };
+  const run=apiGate.then(task,task);
+  apiGate=run.then(()=>{},()=>{});
+  return run;
 }
 
 // --- Public surface ---
@@ -70,8 +124,10 @@ async function api(path,{method='GET',body,query}={}){
 export async function tlConnect(){
   await authenticate();
   const res=await fetch(base()+'/auth/jwt/all-accounts',{headers:{'Authorization':'Bearer '+session.token,'Content-Type':'application/json'}});
+  const text=await res.text();
+  if(isRateLimit(res.status,text))throw rateLimitError('account list');
   if(!res.ok)throw new Error('TradeLocker: could not list accounts');
-  const{accounts=[]}=await res.json();
+  const{accounts=[]}=JSON.parse(text||'{}');
   if(!accounts.length)throw new Error('TradeLocker: no accounts on this login');
   const a=accounts[0];
   session.accountId=a.id;session.accNum=a.accNum;
@@ -80,7 +136,15 @@ export async function tlConnect(){
 
 export function tlStatus(){return{connected:!!session.accountId,env:session.env,accountId:session.accountId};}
 
-async function ensureAccount(){if(!session.accountId)await tlConnect();}
+// A scan calls tlQuote/tlAccountState/tlPositions in parallel and each would
+// otherwise kick off its own login — three simultaneous auth round-trips is a
+// fast way to get 1015'd. Collapse concurrent connects into one.
+let connecting=null;
+async function ensureAccount(){
+  if(session.accountId)return;
+  if(!connecting)connecting=tlConnect().finally(()=>{connecting=null;});
+  await connecting;
+}
 
 export async function tlAccountState(){
   await ensureAccount();
@@ -93,11 +157,20 @@ export async function tlAccountState(){
 // Resolve XAUUSD (or any symbol) to its ids + routes, cached per session.
 // Brokers label gold differently (XAUUSD, GOLD, XAU/USD, XAUUSD.r, …) so for
 // gold we fall back to a fuzzy match instead of failing outright.
+// The full instrument list is the same for every symbol — fetch it once per
+// session so resolving EURUSD/USDJPY/GBPUSD for the USD proxy doesn't re-pull it.
+async function instrumentList(){
+  await ensureAccount();
+  if(session.instrList)return session.instrList;
+  const j=await api(`/trade/accounts/${session.accountId}/instruments`);
+  session.instrList=j.d?.instruments||[];
+  return session.instrList;
+}
+
 export async function tlInstrument(symbol='XAUUSD'){
   await ensureAccount();
   if(session.instruments[symbol])return session.instruments[symbol];
-  const j=await api(`/trade/accounts/${session.accountId}/instruments`);
-  const list=j.d?.instruments||[];
+  const list=await instrumentList();
   const want=symbol.toUpperCase().replace(/[^A-Z]/g,'');
   const norm=x=>String(x.name||'').toUpperCase().replace(/[^A-Z]/g,'');
   let inst=list.find(x=>norm(x)===want);
@@ -185,7 +258,7 @@ export async function tlModifyPosition(positionId,{stopLoss,takeProfit}={}){
   return{modified:positionId};
 }
 
-export function tlReset(){session.token=null;session.refresh=null;session.exp=0;session.accountId=null;session.accNum=null;session.instruments={};}
+export function tlReset(){session.token=null;session.refresh=null;session.exp=0;session.accountId=null;session.accNum=null;session.instruments={};session.instrList=null;}
 
 // --- Analysis snapshot: everything Atlas needs to form a view on gold ---
 
@@ -223,9 +296,14 @@ function summarizeBars(bars){
 
 export async function tlSnapshot(symbol='XAUUSD'){
   const errors=[];
+  let rateLimited=false;
   const grab=async(label,fn,fallback)=>{
     try{return await fn();}
-    catch(e){errors.push(`${label}: ${String(e?.message||e).slice(0,120)}`);return fallback;}
+    catch(e){
+      if(e?.rateLimited)rateLimited=true;
+      errors.push(`${label}: ${String(e?.message||e).slice(0,120)}`);
+      return fallback;
+    }
   };
   const[quote,state,positions]=await Promise.all([
     grab('price',()=>tlQuote(symbol),null),
@@ -240,7 +318,8 @@ export async function tlSnapshot(symbol='XAUUSD'){
   // derivable — a bare level tells the model nothing.
   const usd={};
   const usdContrib=[];
-  for(const s of['EURUSD','USDJPY','GBPUSD']){
+  // If we're already being throttled, don't pile on 9 more calls for the proxy.
+  for(const s of(rateLimited?[]:['EURUSD','USDJPY','GBPUSD'])){
     try{
       const q=await tlQuote(s);
       let chg=null;
@@ -257,13 +336,16 @@ export async function tlSnapshot(symbol='XAUUSD'){
     ?(()=>{const avg=usdContrib.reduce((a,x)=>a+x,0)/usdContrib.length;
       return{avgPct:+avg.toFixed(2),label:avg>0.1?'USD firm (gold headwind)':avg<-0.1?'USD soft (gold tailwind)':'USD flat'};})()
     :null;
-  return{symbol,connected:tlStatus().connected,errors,quote,state,positions,candles,usd,usdBias,ts:Date.now()};
+  return{symbol,connected:tlStatus().connected,rateLimited,errors,quote,state,positions,candles,usd,usdBias,ts:Date.now()};
 }
 
 export function tlFormatSnapshot(snap){
   if(!snap)return 'MARKET SNAPSHOT: unavailable. TradeLocker call threw before any data came back — likely not connected. Tell Mr. Burrus to add / re-check his login in Settings › Trading.';
-  const{quote,state,positions,candles,usd,usdBias,connected,errors=[]}=snap;
+  const{quote,state,positions,candles,usd,usdBias,connected,rateLimited,errors=[]}=snap;
   const L=[];
+  if(rateLimited&&!quote){
+    return 'MARKET SNAPSHOT: TradeLocker\'s data feed is being rate-limited by Cloudflare right now (error 1015). This is NOT a login problem — do NOT tell Mr. Burrus to reconnect or re-add his login. Tell him the broker feed is briefly throttled, wait about a minute, then run [TRADE_SCAN] again. Do not propose a trade until a scan returns a live price.';
+  }
   if(!connected&&!quote){
     return 'MARKET SNAPSHOT: TradeLocker is NOT connected — no live data at all. You cannot scan or place a trade. Tell Mr. Burrus plainly to add his TradeLocker login in Settings › Trading, then try again. Do not say "information is limited" — say it is not connected.';
   }
@@ -281,6 +363,7 @@ export function tlFormatSnapshot(snap){
   }
   if(positions?.length)L.push(`Open positions: ${positions.map(p=>`#${p.id} ${p.side} ${p.qty} @ ${p.avgPrice} (uP/L ${p.unrealizedPl})`).join('; ')}`);
   if(errors.length)L.push(`Degraded feeds — ${errors.join(' | ')}`);
+  if(rateLimited)L.push('Some feeds were rate-limited (Cloudflare 1015), not disconnected — the login is fine. A fuller picture is available if Mr. Burrus rescans in a minute.');
   const haveAtr=Object.values(candles).some(c=>c&&c.atr14!=null);
   L.push(haveAtr
     ? 'Stop guidance: entry->stop distance ~1–2x the 15m ATR14 (never tighter than 1x).'

@@ -8,7 +8,7 @@ import Svg,{Circle}from 'react-native-svg';
 import{Feather}from '@expo/vector-icons';
 import{useFocusEffect}from '@react-navigation/native';
 import{colors,space,radius,type,FONTS}from '../../theme';
-import{tlStatus,tlQuote,tlPositions,tlClosePosition}from '../../services/tradeLocker';
+import{tlStatus,tlRateLimited,tlQuote,tlPositions,tlClosePosition}from '../../services/tradeLocker';
 import{reconcile as reconcileJournal}from '../../services/tradeJournal';
 
 const{width}=Dimensions.get('window');
@@ -253,7 +253,7 @@ export function MarketPanel(){
   useFocusEffect(useCallback(()=>{
     alive.current=true;
     poll();
-    const iv=setInterval(poll,4500);
+    const iv=setInterval(poll,9000); // gentle — Cloudflare 1015s a chatty client
     return()=>{alive.current=false;clearInterval(iv);};
   },[poll]));
 
@@ -266,7 +266,9 @@ export function MarketPanel(){
   if(!connected)return(
     <View style={{paddingVertical:space.xl,alignItems:'center',gap:space.sm}}>
       <Feather name="bar-chart-2" size={20} color={colors.textFaint}/>
-      <Text style={ps.mktHint}>TradeLocker not connected.{'\n'}Add your login in Settings › Trading.</Text>
+      <Text style={ps.mktHint}>{tlRateLimited()
+        ?'TradeLocker feed is rate-limited (1015).\nYour login is fine — it clears in about a minute.'
+        :'TradeLocker not connected.\nAdd your login in Settings › Trading.'}</Text>
     </View>
   );
 
