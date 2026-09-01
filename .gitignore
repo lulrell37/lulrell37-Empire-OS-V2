@@ -39,3 +39,6 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# Claude Code workflow — add via GitHub web UI (local token lacks workflow scope)
+.github/workflows/claude.yml
