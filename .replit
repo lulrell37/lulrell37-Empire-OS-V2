@@ -5,3 +5,15 @@ channel = "stable-25_05"
 
 [agent]
 expertMode = true
+
+# The Empire OS backend (server/). Deployed as a Reserved VM so the nudge cron
+# can run continuously. The Expo app itself is not hosted here — it ships as an
+# APK via EAS.
+[deployment]
+deploymentTarget = "vm"
+build = ["sh", "-c", "cd server && npm ci"]
+run = ["sh", "-c", "cd server && npm start"]
+
+[[ports]]
+localPort = 3000
+externalPort = 80
