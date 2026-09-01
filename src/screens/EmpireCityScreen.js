@@ -32,7 +32,7 @@ const HEROES=[
 
 const CITY_R=26;          // ground radius
 const ROAM_BOUND=20;      // how far the camera target can travel
-const ENTER_R=6.4;        // camera distance at which "zoom into a landmark" fires
+const ENTER_R=9;          // camera distance at which "zoom into a landmark" fires
 
 function mulberry32(a){
   return function(){
@@ -189,8 +189,8 @@ function EmpireCity({navigation}){
   const fade=useRef(new Animated.Value(0)).current;   // black wash for page-change
 
   const engine=useRef({
-    rotY:0.7,rotX:0.6,startRX:0,startRY:0,
-    dolly:0,startDolly:0,baseR:21,minR:3.5,maxR:34,
+    rotY:0.7,rotX:0.62,startRX:0,startRY:0,
+    dolly:0,startDolly:0,baseR:17,minR:4,maxR:30,
     panX:0,panZ:0,startPanX:0,startPanZ:0,
     active:true,idle:0,entering:null,navigated:false,
     vw:Dimensions.get('window').width,vh:Dimensions.get('window').height,
@@ -230,19 +230,11 @@ function EmpireCity({navigation}){
   },[engine]);
 
   const gesture=useMemo(()=>{
-    // 1 finger -> orbit
-    const orbit=Gesture.Pan().runOnJS(true).maxPointers(1)
-      .onStart(()=>{engine.startRX=engine.rotX;engine.startRY=engine.rotY;engine.idle=0;})
-      .onUpdate(e=>{
-        engine.rotY=engine.startRY-e.translationX*0.006;
-        engine.rotX=Math.max(0.12,Math.min(1.4,engine.startRX-e.translationY*0.005));
-        engine.idle=0;
-      });
-    // 2 fingers -> move across the city, oriented to where the camera faces
-    const move=Gesture.Pan().runOnJS(true).minPointers(2)
+    // 1 finger -> move across the city, oriented to where the camera faces
+    const move=Gesture.Pan().runOnJS(true).maxPointers(1)
       .onStart(()=>{engine.startPanX=engine.panX;engine.startPanZ=engine.panZ;engine.idle=0;})
       .onUpdate(e=>{
-        const s=0.022*(engine.baseR+engine.dolly)/21;
+        const s=0.020*(engine.baseR+engine.dolly)/17;
         const fx=Math.sin(engine.rotY), fz=Math.cos(engine.rotY);   // toward camera on ground
         const rx=Math.cos(engine.rotY), rz=-Math.sin(engine.rotY);  // screen-right on ground
         let nx=engine.startPanX - (rx*e.translationX + fx*e.translationY)*s;
@@ -251,17 +243,25 @@ function EmpireCity({navigation}){
         if(d>ROAM_BOUND){nx=nx/d*ROAM_BOUND;nz=nz/d*ROAM_BOUND;}
         engine.panX=nx;engine.panZ=nz;engine.idle=0;
       });
-    // pinch -> zoom only (2-finger drag owns translation, so no conflict)
+    // 2 fingers -> orbit / adjust the view
+    const orbit=Gesture.Pan().runOnJS(true).minPointers(2)
+      .onStart(()=>{engine.startRX=engine.rotX;engine.startRY=engine.rotY;engine.idle=0;})
+      .onUpdate(e=>{
+        engine.rotY=engine.startRY-e.translationX*0.006;
+        engine.rotX=Math.max(0.12,Math.min(1.4,engine.startRX-e.translationY*0.005));
+        engine.idle=0;
+      });
+    // pinch -> zoom
     const pinch=Gesture.Pinch().runOnJS(true)
       .onStart(()=>{engine.startDolly=engine.dolly;engine.idle=0;})
       .onUpdate(e=>{
-        engine.dolly=Math.max(engine.minR-engine.baseR,Math.min(engine.maxR-engine.baseR,engine.startDolly-(e.scale-1)*13));
+        engine.dolly=Math.max(engine.minR-engine.baseR,Math.min(engine.maxR-engine.baseR,engine.startDolly-(e.scale-1)*17));
         engine.idle=0;
       });
-    // tap a landmark still works as a shortcut
-    const tap=Gesture.Tap().runOnJS(true).maxDistance(14)
+    // tap directly on a landmark -> open it
+    const tap=Gesture.Tap().runOnJS(true).maxDistance(18)
       .onEnd((e,ok)=>{if(ok){const t=raycastAt(e.x,e.y);if(t){const h=HEROES.find(x=>x.name===t);if(h)startEnter(h.route);}}});
-    return Gesture.Simultaneous(pinch,move,Gesture.Race(tap,orbit));
+    return Gesture.Simultaneous(pinch,orbit,Gesture.Exclusive(tap,move));
   },[engine,raycastAt,startEnter]);
 
   async function onContextCreate(gl){
@@ -297,7 +297,9 @@ function EmpireCity({navigation}){
 
         engine.uniforms.uTime.value+=dt;
         engine.idle+=dt;
-        if(engine.idle>2.5&&!engine.entering)engine.rotY+=dt*0.045;
+        const rNow=engine.baseR+engine.dolly;
+        // only drift at the overview zoom, not while the user has zoomed in
+        if(engine.idle>2.5&&!engine.entering&&rNow>engine.baseR-2)engine.rotY+=dt*0.03;
         for(const sp of engine.spinners)sp.rotation.z+=dt*0.9;
 
         // traffic
@@ -352,7 +354,7 @@ function EmpireCity({navigation}){
             const d=Math.hypot(sx-engine.vw/2,sy-engine.vh/2);
             if(d<bestD){bestD=d;best=a;}
           }
-          if(best&&bestD<Math.min(engine.vw,engine.vh)*0.26){
+          if(best&&bestD<Math.min(engine.vw,engine.vh)*0.34){
             startEnter(HEROES.find(h=>h.name===best.name).route);
           }
         }
@@ -406,12 +408,21 @@ function EmpireCity({navigation}){
         <GLView style={StyleSheet.absoluteFill} onContextCreate={onContextCreate}/>
       </GestureDetector>
 
-      {labels.filter(l=>l.visible).map(l=>(
-        <View key={l.name} pointerEvents="none" style={[s.label,{left:l.x-70,top:l.y-20,borderColor:l.tint+'66'}]}>
-          <Text style={[s.labelT,{color:l.tint}]}>{l.label}</Text>
-          <Text style={s.labelS}>{l.sub}</Text>
-        </View>
-      ))}
+      {labels.filter(l=>l.visible).map(l=>{
+        const h=HEROES.find(x=>x.name===l.name);
+        return(
+          <TouchableOpacity
+            key={l.name}
+            activeOpacity={0.7}
+            onPress={()=>startEnter(h.route)}
+            hitSlop={{top:16,bottom:16,left:16,right:16}}
+            style={[s.label,{left:l.x-72,top:l.y-22,borderColor:l.tint+'88'}]}
+          >
+            <Text style={[s.labelT,{color:l.tint}]}>{l.label}</Text>
+            <Text style={s.labelS}>{l.sub}  ⤢</Text>
+          </TouchableOpacity>
+        );
+      })}
 
       <SafeAreaView style={s.hudStrip} edges={['top']} pointerEvents="none">
         <Text style={s.hudBrand}>THE EMPIRE</Text>
@@ -419,7 +430,7 @@ function EmpireCity({navigation}){
       </SafeAreaView>
 
       <SafeAreaView style={s.hint} edges={['bottom']} pointerEvents="none">
-        <Text style={s.hintT}>DRAG TO LOOK · TWO FINGERS TO MOVE · ZOOM INTO A LANDMARK</Text>
+        <Text style={s.hintT}>DRAG TO MOVE · TWO FINGERS TO LOOK · TAP OR ZOOM INTO A LANDMARK</Text>
       </SafeAreaView>
 
       {status==='loading'&&(
