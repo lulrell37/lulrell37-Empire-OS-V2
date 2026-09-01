@@ -67,13 +67,13 @@ export default function App(){
           onStateChange={(state)=>{AsyncStorage.setItem(NAV_STATE_KEY,JSON.stringify(state)).catch(()=>{});}}
         >
           <StatusBar style="light" backgroundColor="#000"/>
-          <Stack.Navigator initialRouteName={hasKeys?'Map':'Splash'} screenOptions={{headerShown:false,animation:'fade',contentStyle:{backgroundColor:'#000'}}}>
+          <Stack.Navigator initialRouteName={hasKeys?'Map':'Splash'} screenOptions={{headerShown:false,animation:'fade',animationDuration:320,contentStyle:{backgroundColor:'#000'}}}>
             <Stack.Screen name="Splash" component={SplashScreenComponent}/>
             <Stack.Screen name="Map" component={EmpireCityScreen}/>
-            <Stack.Screen name="Command" component={CommandScreen} options={{animation:'slide_from_right'}}/>
-            <Stack.Screen name="HUD" component={HUDScreen} options={{animation:'slide_from_bottom'}}/>
-            <Stack.Screen name="Laboratory" component={LaboratoryScreen} options={{animation:'slide_from_bottom'}}/>
-            <Stack.Screen name="Settings" component={SettingsScreen} options={{animation:'slide_from_right'}}/>
+            <Stack.Screen name="Command" component={CommandScreen}/>
+            <Stack.Screen name="HUD" component={HUDScreen}/>
+            <Stack.Screen name="Laboratory" component={LaboratoryScreen}/>
+            <Stack.Screen name="Settings" component={SettingsScreen}/>
           </Stack.Navigator>
         </NavigationContainer>
       </SafeAreaProvider>

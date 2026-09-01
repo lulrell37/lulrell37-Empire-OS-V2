@@ -58,7 +58,9 @@ export function injectHoloClip(shader,uniforms){
 
 // The gold hologram material. `tint` lets a caller (e.g. a persona-coloured
 // building) shift the base colour while keeping the same glow behaviour.
-export function createHoloMaterial(uniforms,{tint=0xE8C98A,opacity=0.42,emissive=0x5a4423}={}){
+// `windows:true` etches a procedural lit-window grid into the emissive channel,
+// using object-local position — for the city's buildings.
+export function createHoloMaterial(uniforms,{tint=0xE8C98A,opacity=0.42,emissive=0x5a4423,windows=false}={}){
   const mat=new THREE.MeshStandardMaterial({
     color:new THREE.Color(tint),
     emissive:new THREE.Color(emissive),
@@ -69,14 +71,29 @@ export function createHoloMaterial(uniforms,{tint=0xE8C98A,opacity=0.42,emissive
   mat.onBeforeCompile=(shader)=>{
     shader.uniforms.uTime=uniforms.uTime;
     injectHoloClip(shader,uniforms);
+    let frag='#include <emissivemap_fragment>\n'+
+      'float _fres = pow(1.0 - clamp(dot(normalize(normal), normalize(vViewPosition)), 0.0, 1.0), 3.0);\n'+
+      'float _scan = 0.9 + 0.1 * sin(uTime * 3.0 + vFocusWP.y * 26.0);\n'+
+      'totalEmissiveRadiance += _fres * vec3(1.0, 0.86, 0.55) * 1.5;\n'+
+      'totalEmissiveRadiance *= _scan;\n';
+    if(windows){
+      shader.vertexShader=shader.vertexShader
+        .replace('#include <common>','#include <common>\nvarying vec3 vWinPos;')
+        .replace('#include <begin_vertex>','#include <begin_vertex>\nvWinPos = position;');
+      shader.fragmentShader=shader.fragmentShader
+        .replace('#include <common>','#include <common>\nvarying vec3 vWinPos;');
+      frag+=
+        'vec3 _wp = vWinPos;\n'+
+        'float _fy = abs(fract(_wp.y * 1.15) - 0.5);\n'+
+        'float _fx = abs(fract(_wp.x * 1.7) - 0.5);\n'+
+        'float _fz = abs(fract(_wp.z * 1.7) - 0.5);\n'+
+        'float _win = max(step(_fx,0.3), step(_fz,0.3)) * step(_fy,0.32);\n'+
+        'float _lit = fract(sin(dot(floor(vec3(_wp.x*1.7,_wp.y*1.15,_wp.z*1.7)), vec3(12.9898,78.233,37.719))) * 43758.5453);\n'+
+        'totalEmissiveRadiance += _win * (0.25 + 0.75*step(0.45,_lit)) * vec3(1.0,0.8,0.48) * 0.9;\n';
+    }
     shader.fragmentShader=shader.fragmentShader
       .replace('#include <common>','#include <common>\nuniform float uTime;')
-      .replace('#include <emissivemap_fragment>',
-        '#include <emissivemap_fragment>\n'+
-        'float _fres = pow(1.0 - clamp(dot(normalize(normal), normalize(vViewPosition)), 0.0, 1.0), 3.0);\n'+
-        'float _scan = 0.9 + 0.1 * sin(uTime * 3.0 + vFocusWP.y * 26.0);\n'+
-        'totalEmissiveRadiance += _fres * vec3(1.0, 0.86, 0.55) * 1.5;\n'+
-        'totalEmissiveRadiance *= _scan;');
+      .replace('#include <emissivemap_fragment>',frag);
   };
   return mat;
 }
