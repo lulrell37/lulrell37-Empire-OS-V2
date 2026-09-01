@@ -22,8 +22,10 @@ import NudgeBar from './command/NudgeBar';
 import{parseChartSpec}from '../services/chartSpec';
 
 const TEAM_PHOTO=require('../../assets/teamphoto.png');
-const HANDS_FREE_SILENCE_MS=2200;
-const HANDS_FREE_VOICE_DB=-35;
+const HANDS_FREE_SILENCE_MS=1600;   // quiet for this long after speaking -> stop
+const HANDS_FREE_VOICE_DB=-42;      // metering above this counts as "talking"
+const HANDS_FREE_MAX_MS=18000;      // hard cap on one hands-free take
+const HANDS_FREE_NOMETER_MS=6000;   // devices that don't report metering -> fixed take
 // Synthetic speech-loudness envelope for the persona orb (no real FFT in Expo).
 function synthAmp(){
   const t=Date.now()/1000;
@@ -72,6 +74,8 @@ export default function CommandScreen({navigation}){
   const silenceTimerRef=useRef(null);
   const hasVoicedRef=useRef(false);
   const recBusyRef=useRef(false); // true while a recorder is preparing OR being torn down
+  const recPollRef=useRef(null);  // interval polling the recorder's metering
+  const recStartRef=useRef(0);
   const{addRelay}=useEmpireStore();
   const isFocused=useIsFocused();
 
@@ -102,6 +106,7 @@ export default function CommandScreen({navigation}){
     return()=>{
       // Full teardown — a half-lived timer / socket / sound is a common crash source.
       clearSilenceTimer();
+      clearRecPoll();
       handsFreeRef.current=false;
       try{abortRef.current?.abort();}catch{}
       try{speakCancelRef.current?.();}catch{}
@@ -130,19 +135,38 @@ export default function CommandScreen({navigation}){
   function clearSilenceTimer(){
     if(silenceTimerRef.current){clearTimeout(silenceTimerRef.current);silenceTimerRef.current=null;}
   }
+  function clearRecPoll(){
+    if(recPollRef.current){clearInterval(recPollRef.current);recPollRef.current=null;}
+  }
 
+  // Called ~4x/second from a poll of the recorder's status. Decides when the
+  // hands-free take is done.
   function onRecordingStatus(status){
-    if(!status.isRecording||status.metering===undefined)return;
-    if(status.metering>HANDS_FREE_VOICE_DB){
-      hasVoicedRef.current=true;
+    if(!status||!status.isRecording)return;
+    if(!recordingRef.current)return;
+    const elapsed=Date.now()-recStartRef.current;
+    const m=(typeof status.metering==='number')?status.metering:null;
+
+    // Hard cap — never let a take run away.
+    if(elapsed>HANDS_FREE_MAX_MS){stopRecording();return;}
+
+    // Device reports no metering → fall back to a fixed-length take.
+    if(m===null){
+      if(elapsed>HANDS_FREE_NOMETER_MS)stopRecording();
+      return;
+    }
+
+    // Count them as "talking" once we hear them, or once the mic has been open a
+    // moment (so a soft voice that never crosses the threshold still ends).
+    if(m>HANDS_FREE_VOICE_DB||elapsed>1400)hasVoicedRef.current=true;
+
+    if(m>HANDS_FREE_VOICE_DB){
       clearSilenceTimer();
-    }else if(hasVoicedRef.current){
-      if(!silenceTimerRef.current){
-        silenceTimerRef.current=setTimeout(()=>{
-          silenceTimerRef.current=null;
-          if(recordingRef.current)stopRecording();
-        },HANDS_FREE_SILENCE_MS);
-      }
+    }else if(hasVoicedRef.current&&!silenceTimerRef.current){
+      silenceTimerRef.current=setTimeout(()=>{
+        silenceTimerRef.current=null;
+        if(recordingRef.current)stopRecording();
+      },HANDS_FREE_SILENCE_MS);
     }
   }
 
@@ -421,12 +445,20 @@ export default function CommandScreen({navigation}){
       hasVoicedRef.current=false;
       clearSilenceTimer();
       await rec.prepareToRecordAsync({...Audio.RecordingOptionsPresets.HIGH_QUALITY,isMeteringEnabled:true});
-      rec.setProgressUpdateInterval(150);
-      rec.setOnRecordingStatusUpdate(onRecordingStatus);
+      try{rec.setProgressUpdateInterval(150);}catch{}
       await rec.startAsync();
       recordingRef.current=rec;
+      recStartRef.current=Date.now();
+      hasVoicedRef.current=false;
       setRecording(true);
       recBusyRef.current=false;
+      // Poll the recorder ourselves — setOnRecordingStatusUpdate is unreliable
+      // across devices, and this is what decides when to auto-stop.
+      clearRecPoll();
+      recPollRef.current=setInterval(async()=>{
+        if(!recordingRef.current){clearRecPoll();return;}
+        try{onRecordingStatus(await recordingRef.current.getStatusAsync());}catch{}
+      },250);
     }catch(e){
       recBusyRef.current=false;
       try{await Audio.setAudioModeAsync({allowsRecordingIOS:false,playsInSilentModeIOS:true});}catch{}
@@ -442,6 +474,7 @@ export default function CommandScreen({navigation}){
 
   async function stopRecording(){
     clearSilenceTimer();
+    clearRecPoll();
     setRecording(false);
     const rec=recordingRef.current;
     if(!rec)return;
