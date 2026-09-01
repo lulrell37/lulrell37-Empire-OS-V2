@@ -8,7 +8,7 @@ import{ghVerify}from '../services/buildAgent';
 import{saveCustomPrompt,getCustomPrompt,getApiUsage,getAllPersonaPics,savePersonaPic,getSetting,setSetting}from '../services/database';
 import{getCrashLog,clearCrashLog}from '../services/crashLog';
 import{PERSONA_LIST,getPersona}from '../personas/personas';
-import{useGoogleAuth}from '../services/googleAuth';
+import{useGoogleAuth,exchangeGoogleCode,revokeGoogle}from '../services/googleAuth';
 import useEmpireStore from '../store/useEmpireStore';
 const TABS=['KEYS','GOOGLE','TRADING','DEV','AI','PROFILES','PROMPTS','USAGE','DIAGNOSTICS'];
 export default function SettingsScreen({navigation}){
@@ -32,15 +32,18 @@ export default function SettingsScreen({navigation}){
   const[request,response,promptAsync]=useGoogleAuth();
   useEffect(()=>{loadAll();},[]);
   useEffect(()=>{
-    if(response?.type==='success'&&response.authentication?.accessToken){
-      handleGoogleSuccess(response.authentication.accessToken);
+    if(response?.type==='success'&&response.params?.code&&request){
+      handleGoogleCode(response.params.code);
+    }else if(response?.type==='success'&&response.authentication?.accessToken){
+      // fallback: a provider that auto-exchanged or returned an implicit token
+      handleGoogleSuccess({accessToken:response.authentication.accessToken,refreshToken:response.authentication.refreshToken||null,expiresAt:Date.now()+(Number(response.authentication.expiresIn)||3600)*1000});
     }else if(response?.type==='error'){
       setGoogleConnecting(false);
-      Alert.alert('Google Sign-In Error',response.error?.message||'Unknown error');
+      Alert.alert('Google Sign-In Error',response.error?.message||response.params?.error_description||'Unknown error');
     }else if(response?.type==='cancel'||response?.type==='dismiss'){
       setGoogleConnecting(false);
     }
-  },[response]);
+  },[response]);// eslint-disable-line react-hooks/exhaustive-deps
   async function loadAll(){
     const k=await loadKeys();if(k){setClaude(k.claude||'');setGrok(k.grok||'');setOpenai(k.openai||'');setElevenlabs(k.elevenlabs||'');setMeshy(k.meshy||'');}
     const u=await getApiUsage();setUsage(u);
@@ -104,17 +107,28 @@ export default function SettingsScreen({navigation}){
       {text:'Remove',style:'destructive',onPress:async()=>{await savePersonaPic(id,'');const p=await getAllPersonaPics();setPersonaPics(p);}},
     ]);
   }
-  async function handleGoogleSuccess(accessToken){
-    await saveGoogleToken(accessToken);
+  async function handleGoogleCode(code){
+    try{
+      await handleGoogleSuccess(await exchangeGoogleCode(code,request));
+    }catch(e){
+      setGoogleConnecting(false);
+      Alert.alert('Google Sign-In Error',e.message);
+    }
+  }
+  async function handleGoogleSuccess(tok){
+    await saveGoogleToken(tok);
     setGoogleConnected(true);
     setGoogleConnecting(false);
-    Alert.alert('Connected','Google account connected successfully.');
+    Alert.alert('Connected',tok?.refreshToken
+      ?'Google account connected. The token now refreshes itself in the background.'
+      :'Google account connected — but no refresh token was issued, so it will expire in ~1 hour. Disconnect and reconnect once to enable auto-refresh.');
   }
   async function connectGoogle(){
     setGoogleConnecting(true);
     try{await promptAsync();}catch(e){setGoogleConnecting(false);Alert.alert('Error',e.message);}
   }
   async function disconnectGoogle(){
+    await revokeGoogle();
     await clearGoogleToken();
     setGoogleConnected(false);
     Alert.alert('Disconnected','Google account disconnected.');
@@ -186,7 +200,7 @@ export default function SettingsScreen({navigation}){
                 </TouchableOpacity>
               )}
             </View>
-            <Text style={s.googleNote}>Note: the access token currently lasts about 1 hour. If Drive/Gmail/Calendar features stop responding, reconnect here. Automatic token refresh requires a backend and is planned for a later update.</Text>
+            <Text style={s.googleNote}>The access token is refreshed automatically in the background using a stored refresh token — no need to reconnect unless you revoke access from your Google account.</Text>
           </View>}
           {tab==='TRADING'&&<View>
             <Text style={s.secTitle}>TRADELOCKER</Text>

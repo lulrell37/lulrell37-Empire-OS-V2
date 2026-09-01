@@ -5,7 +5,11 @@ const TRADE_KEY='empire_os_tradelocker';
 export async function saveKeys(keys){await SecureStore.setItemAsync(KEY,JSON.stringify(keys));}
 export async function loadKeys(){try{const v=await SecureStore.getItemAsync(KEY);return v?JSON.parse(v):null;}catch{return null;}}
 export async function clearKeys(){await SecureStore.deleteItemAsync(KEY);}
-export async function saveGoogleToken(accessToken){await SecureStore.setItemAsync(GOOGLE_KEY,JSON.stringify({accessToken,savedAt:Date.now()}));}
+// tok: { accessToken, refreshToken, expiresAt, scope }
+export async function saveGoogleToken(tok){
+  const obj=typeof tok==='string'?{accessToken:tok}:{...tok};
+  await SecureStore.setItemAsync(GOOGLE_KEY,JSON.stringify({...obj,savedAt:Date.now()}));
+}
 export async function loadGoogleToken(){try{const v=await SecureStore.getItemAsync(GOOGLE_KEY);return v?JSON.parse(v):null;}catch{return null;}}
 export async function clearGoogleToken(){await SecureStore.deleteItemAsync(GOOGLE_KEY);}
 // TradeLocker login: { email, password, server, env: 'demo'|'live' }
