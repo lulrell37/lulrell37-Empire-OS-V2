@@ -19,6 +19,7 @@ import LaboratoryScreen from './src/screens/LaboratoryScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
 import{initDatabase}from './src/services/database';
 import{loadKeys}from './src/services/keyStore';
+import{tlInit}from './src/services/tradeLocker';
 import{getAllPersonaPics}from './src/services/database';
 import useEmpireStore from './src/store/useEmpireStore';
 import{recentCrashCount}from './src/services/crashLog';
@@ -36,6 +37,8 @@ export default function App(){
       try{
         await Font.loadAsync(FONT_MAP).catch(e=>{console.warn('Font load failed, using fallback:',e.message);});
         await initDatabase();const keys=await loadKeys();setHasKeys(!!(keys?.claude));const pics=await getAllPersonaPics();setPersonaPics(pics);
+        tlInit().catch(()=>{}); // learn the TradeLocker login state + warm the session
+
       }
       catch(e){console.warn('Init error:',e);reportError('Init error: '+e.message);}
       finally{setIsReady(true);await SplashScreen.hideAsync();}

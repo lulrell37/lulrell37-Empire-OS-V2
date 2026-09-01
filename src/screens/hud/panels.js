@@ -6,9 +6,10 @@ import React,{useState,useRef,useCallback}from 'react';
 import{View,Text,StyleSheet,TouchableOpacity,TextInput,Dimensions,ActivityIndicator}from 'react-native';
 import Svg,{Circle}from 'react-native-svg';
 import{Feather}from '@expo/vector-icons';
-import{useFocusEffect}from '@react-navigation/native';
+import{useFocusEffect,useIsFocused}from '@react-navigation/native';
 import{colors,space,radius,type,FONTS}from '../../theme';
-import{tlStatus,tlRateLimited,tlQuote,tlPositions,tlClosePosition}from '../../services/tradeLocker';
+import{tlStatus,tlQuote,tlPositions,tlClosePosition}from '../../services/tradeLocker';
+import TradeStatus from '../../components/TradeStatus';
 import{reconcile as reconcileJournal}from '../../services/tradeJournal';
 
 const{width}=Dimensions.get('window');
@@ -236,6 +237,7 @@ export function MarketPanel(){
   const[connected,setConnected]=useState(true);
   const[busy,setBusy]=useState(null);
   const alive=useRef(true);
+  const focused=useIsFocused();
 
   const poll=useCallback(async()=>{
     if(!tlStatus().connected){if(alive.current)setConnected(false);return;}
@@ -263,20 +265,19 @@ export function MarketPanel(){
     finally{setBusy(null);}
   }
 
-  if(!connected)return(
-    <View style={{paddingVertical:space.xl,alignItems:'center',gap:space.sm}}>
-      <Feather name="bar-chart-2" size={20} color={colors.textFaint}/>
-      <Text style={ps.mktHint}>{tlRateLimited()
-        ?'TradeLocker feed is rate-limited (1015).\nYour login is fine — it clears in about a minute.'
-        :'TradeLocker not connected.\nAdd your login in Settings › Trading.'}</Text>
-    </View>
-  );
-
   const totalPl=positions.reduce((a,p)=>a+(Number(p.unrealizedPl)||0),0);
   const plColor=totalPl>=0?colors.online:colors.danger;
 
+  if(!connected)return(
+    <View style={{paddingVertical:space.xl,alignItems:'center',gap:space.md}}>
+      <TradeStatus active={focused} showDetail style={{alignSelf:'stretch',alignItems:'center'}}/>
+      <Feather name="bar-chart-2" size={20} color={colors.textFaint}/>
+    </View>
+  );
+
   return(
     <>
+      <TradeStatus active={focused} style={{marginBottom:space.md}}/>
       <View style={ps.mktQuoteRow}>
         <View>
           <Text style={ps.mktLabel}>XAUUSD</Text>

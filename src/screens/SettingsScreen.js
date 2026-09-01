@@ -3,7 +3,8 @@ import{View,Text,StyleSheet,TextInput,TouchableOpacity,ScrollView,Alert,Keyboard
 import{SafeAreaView}from 'react-native-safe-area-context';
 import*as ImagePicker from 'expo-image-picker';
 import{saveKeys,loadKeys,saveGoogleToken,loadGoogleToken,clearGoogleToken,saveTradeCreds,loadTradeCreds,clearTradeCreds}from '../services/keyStore';
-import{tlConnect}from '../services/tradeLocker';
+import{tlConnect,tlReset}from '../services/tradeLocker';
+import TradeStatus from '../components/TradeStatus';
 import{saveCustomPrompt,getCustomPrompt,getApiUsage,getAllPersonaPics,savePersonaPic,getSetting,setSetting}from '../services/database';
 import{getCrashLog,clearCrashLog}from '../services/crashLog';
 import{PERSONA_LIST,getPersona}from '../personas/personas';
@@ -60,7 +61,7 @@ export default function SettingsScreen({navigation}){
     finally{setTlBusy(false);}
   }
   async function disconnectTradeLocker(){
-    await clearTradeCreds();setTlAccount(null);setTl({email:'',password:'',server:'',env:'demo'});
+    await clearTradeCreds();tlReset();setTlAccount(null);setTl({email:'',password:'',server:'',env:'demo'});
     Alert.alert('Disconnected','TradeLocker login removed.');
   }
   async function toggleMemoryRecall(){const nv=!memoryRecall;setMemoryRecall(nv);await setSetting('memory_recall',nv?'1':'0');}
@@ -172,6 +173,7 @@ export default function SettingsScreen({navigation}){
           {tab==='TRADING'&&<View>
             <Text style={s.secTitle}>TRADELOCKER</Text>
             <Text style={s.secSub}>Atlas trades XAUUSD through this login while the app is open. Max 0.01 lot per order. Demo account recommended until proven. Stored securely on device.</Text>
+            <TradeStatus active showDetail style={{marginBottom:14}}/>
             <View style={s.tlEnvRow}>
               {['demo','live'].map(e=>(
                 <TouchableOpacity key={e} style={[s.tlEnvBtn,tl.env===e&&s.tlEnvBtnA]} onPress={()=>setTl(v=>({...v,env:e}))}>

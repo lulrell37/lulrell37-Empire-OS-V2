@@ -20,6 +20,21 @@ export const MAX_QTY=0.01; // hard lot cap — 0.01, enforced on every order
 
 const session={token:null,refresh:null,exp:0,env:'demo',accountId:null,accNum:null,instruments:{},instrList:null};
 
+// Connection health. `tlStatus().connected` is only "did an auth ever succeed
+// this JS session" — it resets on every reload and never notices a token going
+// stale or every call 1015'ing. `health` is the truthful picture the UI shows:
+// when we last had a good call, when we last failed, and why.
+const health={configured:null,lastOkAt:0,lastFailAt:0,lastError:null,connecting:false};
+// Only a genuinely stale session (no good call in this long) plus a recent
+// failure counts as OFFLINE — one flaky /trade/history mid-scan must not flip
+// the indicator, since the snapshot already tolerates a degraded feed.
+const STALE_MS=75e3;
+function markOk(){health.lastOkAt=Date.now();health.lastError=null;}
+function markFail(e,kind){
+  health.lastFailAt=Date.now();
+  health.lastError={message:String(e?.message||e).slice(0,180),rateLimited:!!e?.rateLimited,kind:kind||e?.kind||'feed'};
+}
+
 function base(){return BASE[session.env]||BASE.demo;}
 
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
@@ -48,15 +63,20 @@ function rateLimitError(where){
 
 async function authenticate(){
   const creds=await loadTradeCreds();
-  if(!creds?.email||!creds?.password||!creds?.server)throw new Error('TradeLocker not connected. Add your login in Settings.');
+  if(!creds?.email||!creds?.password||!creds?.server){
+    health.configured=false;
+    throw new Error('TradeLocker not connected. Add your login in Settings.');
+  }
+  health.configured=true;
   session.env=creds.env==='live'?'live':'demo';
   const res=await fetch(base()+'/auth/jwt/token',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:creds.email,password:creds.password,server:creds.server})});
   const bodyText=await res.text();
-  if(isRateLimit(res.status,bodyText))throw rateLimitError('login');
-  if(!res.ok)throw new Error('TradeLocker login failed: '+bodyText.slice(0,120));
+  if(isRateLimit(res.status,bodyText)){const e=rateLimitError('login');markFail(e,'ratelimit');throw e;}
+  if(!res.ok){const e=new Error('TradeLocker login failed: '+bodyText.slice(0,120));markFail(e,'auth');throw e;}
   const d=JSON.parse(bodyText);
   session.token=d.accessToken;session.refresh=d.refreshToken;
   session.exp=d.expireDate?Date.parse(d.expireDate):Date.now()+55*60e3;
+  markOk();
 }
 
 async function refreshToken(){
@@ -107,10 +127,15 @@ async function api(path,{method='GET',body,query}={}){
       const{res,text}=await apiCall(path,method,body,query);
       if(isRateLimit(res.status,text)){
         if(attempt<2){await sleep(700*2**attempt+Math.random()*300);continue;}
-        throw rateLimitError(`${method} ${path}`); // also arms the cooldown
+        const e=rateLimitError(`${method} ${path}`); // also arms the cooldown
+        markFail(e);throw e;
       }
       let json;try{json=text?JSON.parse(text):{};}catch{json={raw:text};}
-      if(!res.ok||json.s==='error')throw new Error(`TradeLocker ${method} ${path}: ${(json.errmsg||text||res.status).toString().slice(0,140)}`);
+      if(!res.ok||json.s==='error'){
+        const e=new Error(`TradeLocker ${method} ${path}: ${(json.errmsg||text||res.status).toString().slice(0,140)}`);
+        markFail(e);throw e;
+      }
+      markOk();
       return json;
     }
   };
@@ -125,16 +150,76 @@ export async function tlConnect(){
   await authenticate();
   const res=await fetch(base()+'/auth/jwt/all-accounts',{headers:{'Authorization':'Bearer '+session.token,'Content-Type':'application/json'}});
   const text=await res.text();
-  if(isRateLimit(res.status,text))throw rateLimitError('account list');
-  if(!res.ok)throw new Error('TradeLocker: could not list accounts');
+  if(isRateLimit(res.status,text)){const e=rateLimitError('account list');markFail(e,'ratelimit');throw e;}
+  if(!res.ok){const e=new Error('TradeLocker: could not list accounts');markFail(e,'auth');throw e;}
   const{accounts=[]}=JSON.parse(text||'{}');
-  if(!accounts.length)throw new Error('TradeLocker: no accounts on this login');
+  if(!accounts.length){const e=new Error('TradeLocker: no accounts on this login');markFail(e,'auth');throw e;}
   const a=accounts[0];
   session.accountId=a.id;session.accNum=a.accNum;
+  health.configured=true;markOk();
   return{accountId:a.id,accNum:a.accNum,name:a.name,currency:a.currency,balance:a.accountBalance??a.aaccountBalance,status:a.status,env:session.env};
 }
 
 export function tlStatus(){return{connected:!!session.accountId,env:session.env,accountId:session.accountId};}
+
+// Call once at app start: learn whether a login is saved (so the status reads
+// "no login" vs "connecting" correctly the instant the app opens) and quietly
+// warm the session so a reload reconnects on its own instead of showing a false
+// "not connected" until the next scan.
+export async function tlInit(){
+  try{
+    const creds=await loadTradeCreds();
+    health.configured=!!(creds?.email&&creds?.password&&creds?.server);
+    if(health.configured){
+      session.env=creds.env==='live'?'live':'demo';
+      ensureAccount().catch(()=>{}); // errors are recorded in `health`
+    }
+  }catch{/* leave health.configured as-is */}
+  return tlHealth();
+}
+
+// Truthful, synchronous connection status for the always-on UI indicator.
+// state: 'unconfigured' | 'connecting' | 'live' | 'throttled' | 'down'
+export function tlHealth(){
+  const env=session.env;
+  if(health.configured===false)
+    return{state:'unconfigured',label:'NO LOGIN',env:null,accountId:null,
+      detail:'No TradeLocker login saved. Add it in Settings › Trading.'};
+  if(tlRateLimited())
+    return{state:'throttled',label:'THROTTLED',env,accountId:session.accountId,
+      retryInMs:Math.max(0,rateLimitedUntil-Date.now()),
+      detail:'Broker feed is rate-limited (Cloudflare 1015). The login is fine — it clears in about a minute.'};
+  const err=health.lastError;
+  const failing=!!err&&health.lastFailAt>=health.lastOkAt;
+  // A dead session: auth was rejected, or nothing has succeeded in a long time.
+  // A lone failed data feed while other calls keep succeeding stays LIVE.
+  const dead=failing&&(err.kind==='auth'||health.lastOkAt===0||Date.now()-health.lastOkAt>STALE_MS);
+  if(session.accountId&&!dead)
+    return{state:'live',label:'LIVE',env,accountId:session.accountId,lastOkAt:health.lastOkAt,
+      detail:`Connected to ${env.toUpperCase()}${session.accountId?` · acct ${session.accountId}`:''}.${failing?' Last feed call errored; retrying.':''}`};
+  if(dead&&health.connecting)
+    return{state:'connecting',label:'RECONNECTING…',env,accountId:session.accountId,
+      detail:`Retrying after: ${err.message}`};
+  if(dead)
+    return{state:'down',label:'OFFLINE',env,accountId:session.accountId,lastOkAt:health.lastOkAt,
+      detail:err.message};
+  if(health.connecting||health.configured)
+    return{state:'connecting',label:'CONNECTING…',env,accountId:null,
+      detail:'Establishing the TradeLocker session…'};
+  return{state:'connecting',label:'CHECKING…',env,accountId:null,detail:'Checking the TradeLocker session…'};
+}
+
+// Active health probe used by the status indicator's slow tick: a cheap
+// authenticated call that also re-auths / re-establishes the session if the
+// token or the whole in-memory session went away. Never throws.
+export async function tlPing(){
+  try{
+    if(health.configured==null)await tlInit();
+    if(health.configured===false||tlRateLimited())return tlHealth();
+    await tlAccountState();
+  }catch(e){markFail(e);}
+  return tlHealth();
+}
 
 // A scan calls tlQuote/tlAccountState/tlPositions in parallel and each would
 // otherwise kick off its own login — three simultaneous auth round-trips is a
@@ -142,7 +227,10 @@ export function tlStatus(){return{connected:!!session.accountId,env:session.env,
 let connecting=null;
 async function ensureAccount(){
   if(session.accountId)return;
-  if(!connecting)connecting=tlConnect().finally(()=>{connecting=null;});
+  if(!connecting){
+    health.connecting=true;
+    connecting=tlConnect().finally(()=>{connecting=null;health.connecting=false;});
+  }
   await connecting;
 }
 
@@ -258,7 +346,10 @@ export async function tlModifyPosition(positionId,{stopLoss,takeProfit}={}){
   return{modified:positionId};
 }
 
-export function tlReset(){session.token=null;session.refresh=null;session.exp=0;session.accountId=null;session.accNum=null;session.instruments={};session.instrList=null;}
+export function tlReset(){
+  session.token=null;session.refresh=null;session.exp=0;session.accountId=null;session.accNum=null;session.instruments={};session.instrList=null;
+  health.configured=false;health.lastOkAt=0;health.lastFailAt=0;health.lastError=null;health.connecting=false;
+}
 
 // --- Analysis snapshot: everything Atlas needs to form a view on gold ---
 

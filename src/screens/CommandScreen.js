@@ -19,6 +19,7 @@ import{useIsFocused}from '@react-navigation/native';
 import OrbZoom from './command/OrbZoom';
 import ChartOverlay from './command/ChartOverlay';
 import TradePanel from './command/TradePanel';
+import TradeStatus from '../components/TradeStatus';
 import NudgeBar from './command/NudgeBar';
 import{parseChartSpec}from '../services/chartSpec';
 
@@ -903,6 +904,7 @@ export default function CommandScreen({navigation}){
         </View>
       )}
 
+      {mode==='direct'&&activePersona==='atlas'&&<TradeStatus active={isFocused} showDetail style={{marginHorizontal:10,marginTop:6}}/>}
       {mode==='direct'&&activePersona==='atlas'&&<TradePanel active={isFocused} onEvent={pushSystemMsg}/>}
 
       {deepResearch&&<View style={s.deepCard}>
