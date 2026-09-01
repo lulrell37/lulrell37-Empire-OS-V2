@@ -1,5 +1,5 @@
-import React,{useState,useEffect,useRef}from 'react';
-import{View,Text,StyleSheet,TextInput,TouchableOpacity,FlatList,KeyboardAvoidingView,Platform,ActivityIndicator,ScrollView,Modal,Image,Alert}from 'react-native';
+import React,{useState,useEffect,useRef,useCallback}from 'react';
+import{View,Text,StyleSheet,TextInput,TouchableOpacity,FlatList,KeyboardAvoidingView,Platform,ActivityIndicator,ScrollView,Modal,Image,Alert,Keyboard}from 'react-native';
 import{SafeAreaView}from 'react-native-safe-area-context';
 import{Audio}from 'expo-av';
 import*as Speech from 'expo-speech';
@@ -7,7 +7,7 @@ import*as ImagePicker from 'expo-image-picker';
 import*as DocumentPicker from 'expo-document-picker';
 import{Camera}from 'expo-camera';
 import*as FileSystem from 'expo-file-system';
-import{PERSONAS,PERSONA_LIST,COUNCIL_PERSONAS,EMPIRE_PERSONAS,getPersona}from '../personas/personas';
+import{PERSONA_LIST,getPersona}from '../personas/personas';
 import{callPersona,textToSpeech,transcribeAudio,queryMemory,webSearch,personaSystemPrompt,deepResearchStart,deepResearchPoll}from '../services/aiService';
 import{handleCommands,stripCommands}from '../services/commandHandler';
 import{getMessages,saveMessage,getAllPersonaPics,savePersonaMemory,getSetting,getExpenseSummary}from '../services/database';
@@ -21,10 +21,8 @@ import TradePanel from './command/TradePanel';
 import NudgeBar from './command/NudgeBar';
 import{parseChartSpec}from '../services/chartSpec';
 
-const COUNCIL=['jarvis','ara','selene'];
-const SPECIALISTS=['stephanie','rogue','atlas','haven','aisha','abraham','batman','ghost'];
 const TEAM_PHOTO=require('../../assets/teamphoto.png');
-const HANDS_FREE_SILENCE_MS=1500;
+const HANDS_FREE_SILENCE_MS=1900;
 const HANDS_FREE_VOICE_DB=-35;
 // Synthetic speech-loudness envelope for the persona orb (no real FFT in Expo).
 function synthAmp(){
@@ -57,6 +55,8 @@ export default function CommandScreen({navigation}){
   const[deepResearch,setDeepResearch]=useState(null); // {id,topic,pid,status}
   const[chartOverlay,setChartOverlay]=useState(null); // parsed chart spec shown over the orb
   const vizRef=useRef({speaking:false,amplitude:0,color:'#E8C98A',personaId:'jarvis'}).current;
+  const inputRef=useRef('');       // mirrors `input` so send() never misses a pending keystroke
+  const textInputRef=useRef(null);
   const flatRef=useRef(null);
   const abortRef=useRef(null);
   const contRef=useRef(false);
@@ -78,15 +78,45 @@ export default function CommandScreen({navigation}){
   useEffect(()=>{if(!vizRef.speaking){vizRef.personaId=activePersona;vizRef.color=getPersona(activePersona).color;}},[activePersona]);// eslint-disable-line react-hooks/exhaustive-deps
   useEffect(()=>{loadingRef.current=loading;},[loading]);
   useEffect(()=>{voicePausedRef.current=voicePaused;},[voicePaused]);
+  // Continuous-voice loop: the single source of truth for re-opening the mic.
+  // Whenever hands-free is on and nothing is thinking, speaking or already
+  // recording, listen again. Playback callbacks null soundRef and clear loading;
+  // this effect notices the state settle and fires — which the old inline
+  // maybeAutoListen() calls missed because they ran before loading flipped.
+  useEffect(()=>{
+    if(!handsFree||voicePaused)return;
+    if(loading||recording||!isFocused)return;
+    const t=setTimeout(()=>{
+      if(handsFreeRef.current&&!loadingRef.current&&!recordingRef.current&&!voicePausedRef.current&&!soundRef.current){
+        startRecording();
+      }
+    },450);
+    return()=>clearTimeout(t);
+  },[handsFree,voicePaused,loading,recording,isFocused]);// eslint-disable-line react-hooks/exhaustive-deps
   useEffect(()=>{if(mode==='direct')loadHistory(activePersona);},[activePersona,mode]);
   useEffect(()=>{
     Audio.setAudioModeAsync({allowsRecordingIOS:true,playsInSilentModeIOS:true});
     loadPics();
     return()=>{
+      // Full teardown — a half-lived timer / socket / sound is a common crash source.
       clearSilenceTimer();
-      if(recordingRef.current){try{recordingRef.current.stopAndUnloadAsync();}catch{}}
+      handsFreeRef.current=false;
+      try{abortRef.current?.abort();}catch{}
+      try{speakCancelRef.current?.();}catch{}
+      if(recordingRef.current){try{recordingRef.current.stopAndUnloadAsync();}catch{}recordingRef.current=null;}
+      if(soundRef.current){const snd=soundRef.current;soundRef.current=null;try{snd.stopAsync();snd.unloadAsync();}catch{}}
+      if(araWsRef.current){try{araWsRef.current.close();}catch{}araWsRef.current=null;}
+      try{Speech.stop();}catch{}
     };
   },[]);
+  // Navigating away from Command: stop listening / speaking immediately. The
+  // continuous-voice effect gates on isFocused, so it resumes on return.
+  useEffect(()=>{
+    if(isFocused)return;
+    clearSilenceTimer();
+    if(recordingRef.current)stopRecording();
+    stopAudio();
+  },[isFocused]);// eslint-disable-line react-hooks/exhaustive-deps
 
   async function loadPics(){try{const pics=await getAllPersonaPics();setPersonaPics(pics);}catch{}}
 
@@ -225,7 +255,7 @@ export default function CommandScreen({navigation}){
       if(persona.id==='ara'){
         const result=await araGrokVoice(text);
         soundRef.current=result?.sound||null;
-        if(soundRef.current)soundRef.current.setOnPlaybackStatusUpdate(st=>{if(st.didJustFinish)maybeAutoListen();});
+        if(soundRef.current)soundRef.current.setOnPlaybackStatusUpdate(st=>{if(st.didJustFinish){const snd=soundRef.current;soundRef.current=null;try{snd?.unloadAsync();}catch{}maybeAutoListen();}});
         else maybeAutoListen();
       }else if(persona.elevenlabsVoiceId){
         const uri=await textToSpeech(text,persona.elevenlabsVoiceId,persona.name);
@@ -233,7 +263,7 @@ export default function CommandScreen({navigation}){
           await Audio.setAudioModeAsync({playsInSilentModeIOS:true,allowsRecordingIOS:false});
           const{sound}=await Audio.Sound.createAsync({uri},{shouldPlay:true});
           soundRef.current=sound;
-          sound.setOnPlaybackStatusUpdate(st=>{if(st.didJustFinish)maybeAutoListen();});
+          sound.setOnPlaybackStatusUpdate(st=>{if(st.didJustFinish){soundRef.current=null;try{sound.unloadAsync();}catch{}maybeAutoListen();}});
         }else{
           Alert.alert('Voice Debug','textToSpeech returned null for '+persona.name);
           maybeAutoListen();
@@ -278,7 +308,7 @@ export default function CommandScreen({navigation}){
       const done=(completed)=>{
         if(settled)return;settled=true;cleanup();
         vizRef.speaking=false;
-        if(soundRef.current){try{soundRef.current.stopAsync();}catch{}}
+        if(soundRef.current){const snd=soundRef.current;soundRef.current=null;try{snd.stopAsync();snd.unloadAsync();}catch{}}
         const revealed=completed?fullText.length:lastRevealed;
         const finalText=completed?fullText:(fullText.slice(0,revealed).trim()+(revealed<fullText.length?' …':''));
         patch(m=>({...m,content:finalText,revealed:finalText.length,streaming:false}));
@@ -402,6 +432,7 @@ export default function CommandScreen({navigation}){
       if(!recordingRef.current)return;
       const rec=recordingRef.current;
       recordingRef.current=null;
+      await new Promise(r=>setTimeout(r,350)); // let the encoder flush the trailing word
       await rec.stopAndUnloadAsync();
       const uri=rec.getURI();
       if(!uri)return;
@@ -477,15 +508,17 @@ export default function CommandScreen({navigation}){
   }
 
   function getTargets(){
-    if(mode==='council')return COUNCIL_PERSONAS;
-    if(mode==='empire')return EMPIRE_PERSONAS;
-    if(mode==='custom')return customPersonas;
-    return[activePersona];
+    return mode==='custom'?customPersonas:[activePersona];
   }
 
+  const pickPersonaFromOrb=useCallback((id)=>{setMode('direct');setActivePersona(id);},[]);
+  const launchGroupFromOrb=useCallback((ids)=>{setCustomPersonas(ids);setMode('custom');setView('text');},[]);
+
   async function send(){
-    const text=input.trim();if(!text||loading)return;
-    setInput('');abortRef.current?.abort();stopAudio();
+    try{textInputRef.current?.blur();}catch{}
+    Keyboard.dismiss();
+    const text=(inputRef.current||input).trim();if(!text||loading)return;
+    inputRef.current='';setInput('');abortRef.current?.abort();stopAudio();
     const isGroup=mode!=='direct';
     const userMsg={id:Date.now().toString(),role:'user',content:text,persona:'user'};
     if(isGroup)setGroupMessages(prev=>[...prev,userMsg]);
@@ -746,64 +779,25 @@ export default function CommandScreen({navigation}){
       <NudgeBar active={isFocused}/>
 
       {view==='text'&&<View style={s.teamPanel}>
-        <View style={s.teamLabels}>
-          <Text style={s.teamLabel}>THE EMPIRE</Text>
-          <Text style={s.councilLabel}>THE COUNCIL</Text>
-        </View>
         <Image source={TEAM_PHOTO} style={s.teamPhoto} resizeMode="cover"/>
       </View>}
 
-      <View style={s.councilRow}>
-        {COUNCIL.map(id=>{
-          const p=getPersona(id);const active=mode==='direct'&&activePersona===id;const pic=personaPics[id];
-          return(
-            <TouchableOpacity key={id} style={[s.ctab,active&&{borderBottomColor:p.color,borderBottomWidth:2}]} onPress={()=>{setMode('direct');setActivePersona(id);}}>
-              <View style={[s.ctabAvatar,{borderColor:active?p.color:p.color+'44'}]}>
-                {pic?<Image source={{uri:pic}} style={s.ctabAvatarImg}/>:<Text style={[s.ctabIcon,{color:p.color}]}>{p.icon}</Text>}
-              </View>
-              <Text style={[s.ctabName,{color:active?p.color:'#444'}]}>{p.name.replace(/\./g,'').substring(0,6)}</Text>
-            </TouchableOpacity>
-          );
-        })}
-      </View>
-
-      <Text style={s.specLabel}>SPECIALISTS</Text>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.specsScroll} contentContainerStyle={s.specialistsRow}>
-        {SPECIALISTS.map(id=>{
-          const p=getPersona(id);const active=mode==='direct'&&activePersona===id;const pic=personaPics[id];
-          return(
-            <TouchableOpacity key={id} style={[s.stab,active&&{borderBottomColor:p.color,borderBottomWidth:2}]} onPress={()=>{setMode('direct');setActivePersona(id);}}>
-              <View style={[s.stabAvatar,{borderColor:active?p.color:p.color+'44'}]}>
-                {pic?<Image source={{uri:pic}} style={s.stabAvatarImg}/>:<Text style={[s.stabIcon,{color:p.color}]}>{p.icon}</Text>}
-              </View>
-              <Text style={[s.stabName,{color:active?p.color:'#444'}]}>{p.name.replace(/\./g,'').substring(0,4)}</Text>
-            </TouchableOpacity>
-          );
-        })}
-      </ScrollView>
-
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.modeBarScroll} contentContainerStyle={s.modeBar}>
-        {['direct','council','empire','custom'].map(m=>(
-          <TouchableOpacity key={m} style={[s.modeBtn,mode===m&&{borderColor:'#E8C98A',backgroundColor:'#E8C98A11'}]} onPress={()=>{setMode(m);if(m==='custom')setShowCustomPicker(true);}}>
-            <Text style={[s.modeBtnT,mode===m&&{color:'#E8C98A'}]}>{m==='direct'?'DIRECT':m==='council'?'✕ COUNCIL':m==='empire'?'◆ EMPIRE':'⬟ CUSTOM'}</Text>
-          </TouchableOpacity>
-        ))}
-        {mode!=='direct'&&<>
+      {mode==='custom'&&(
+        <View style={s.groupCtl}>
+          <Text style={s.groupCtlLabel} numberOfLines={1}>GROUP · {customPersonas.length}</Text>
           <TouchableOpacity style={[s.modeBtn,continuous&&{borderColor:'#4CAF50',backgroundColor:'#4CAF5011'}]} onPress={()=>setContinuous(v=>!v)}>
             <Text style={[s.modeBtnT,continuous&&{color:'#4CAF50'}]}>⟳ LIVE</Text>
           </TouchableOpacity>
           <TouchableOpacity style={[s.modeBtn,{borderColor:'#E0555533'}]} onPress={interject}>
             <Text style={[s.modeBtnT,{color:'#E05555'}]}>✋ INTERJECT</Text>
           </TouchableOpacity>
-        </>}
-      </ScrollView>
+          <TouchableOpacity style={[s.modeBtn,{borderColor:'#1A1A1A'}]} onPress={()=>{setMode('direct');setContinuous(false);contRef.current=false;}}>
+            <Text style={s.modeBtnT}>✕ END</Text>
+          </TouchableOpacity>
+        </View>
+      )}
 
-      <View style={s.memBar}>
-        <Text style={s.memLabel}>MEMORY</Text>
-        <Text style={s.memStatus}>{mode==='direct'?`${cp.name} memory active`:'All persona memory loaded ✓'}</Text>
-      </View>
-
-      <TradePanel active={isFocused} onEvent={pushSystemMsg}/>
+      {mode==='direct'&&activePersona==='atlas'&&<TradePanel active={isFocused} onEvent={pushSystemMsg}/>}
 
       {deepResearch&&<View style={s.deepCard}>
         <ActivityIndicator size="small" color="#5B8DEF"/>
@@ -823,8 +817,8 @@ export default function CommandScreen({navigation}){
           active={isFocused}
           vizRef={vizRef}
           personaPics={personaPics}
-          onPickPersona={id=>{setMode('direct');setActivePersona(id);}}
-          onLaunchGroup={ids=>{setCustomPersonas(ids);setMode('custom');setView('text');}}
+          onPickPersona={pickPersonaFromOrb}
+          onLaunchGroup={launchGroupFromOrb}
         />
         )
       ):(
@@ -844,7 +838,7 @@ export default function CommandScreen({navigation}){
       <KeyboardAvoidingView behavior={Platform.OS==='ios'?'padding':'height'}>
         <View style={s.inputArea}>
           <View style={s.inputRow}>
-            <TextInput style={s.input} value={input} onChangeText={setInput} placeholder="Speak your directive..." placeholderTextColor="#333" multiline maxLength={2000}/>
+            <TextInput ref={textInputRef} style={s.input} value={input} onChangeText={t=>{inputRef.current=t;setInput(t);}} placeholder="Speak your directive..." placeholderTextColor="#333" multiline maxLength={2000} autoCorrect={false} autoComplete="off" autoCapitalize="sentences"/>
             <TouchableOpacity style={[s.sendBtn,{backgroundColor:mode==='direct'?cp.color:'#E8C98A'}]} onPress={send} disabled={loading||!input.trim()}>
               <Text style={s.sendT}>SEND</Text>
             </TouchableOpacity>
@@ -940,7 +934,7 @@ export default function CommandScreen({navigation}){
           <Text style={s.tradeTitle}>CONFIRM TRADE · XAUUSD</Text>
           {tradeProposal&&<>
             <View style={[s.tradeSideChip,{backgroundColor:(tradeProposal.side==='buy'?'#5FA779':'#C7614B')+'22',borderColor:tradeProposal.side==='buy'?'#5FA779':'#C7614B'}]}>
-              <Text style={[s.tradeSideT,{color:tradeProposal.side==='buy'?'#5FA779':'#C7614B'}]}>{tradeProposal.side==='buy'?'▲ BUY':'▼ SELL'} {Math.min(tradeProposal.qty||1,MAX_QTY)} LOT</Text>
+              <Text style={[s.tradeSideT,{color:tradeProposal.side==='buy'?'#5FA779':'#C7614B'}]}>{tradeProposal.side==='buy'?'▲ BUY':'▼ SELL'} {Math.min(tradeProposal.qty||MAX_QTY,MAX_QTY)} LOT</Text>
             </View>
             <View style={s.tradeRow}><Text style={s.tradeK}>Entry (ref)</Text><Text style={s.tradeV}>{tradeProposal.entry??'market'}</Text></View>
             <View style={s.tradeRow}><Text style={s.tradeK}>Stop loss</Text><Text style={[s.tradeV,{color:'#C7614B'}]}>{tradeProposal.stopLoss??'—'}</Text></View>
@@ -996,6 +990,8 @@ const s=StyleSheet.create({
   modeBar:{paddingHorizontal:10,paddingVertical:5,gap:4,flexDirection:'row'},
   modeBtn:{paddingHorizontal:10,paddingVertical:4,borderRadius:4,borderWidth:1,borderColor:'#1A1A1A'},
   modeBtnT:{fontFamily:'monospace',fontSize:8,color:'#444',letterSpacing:1},
+  groupCtl:{flexDirection:'row',alignItems:'center',gap:6,paddingHorizontal:12,paddingVertical:6,borderTopWidth:1,borderTopColor:'#0D0D0D',borderBottomWidth:1,borderBottomColor:'#0D0D0D'},
+  groupCtlLabel:{fontFamily:'monospace',fontSize:8,color:'#E8C98A',letterSpacing:2,flex:1},
   memBar:{flexDirection:'row',alignItems:'center',gap:8,paddingHorizontal:14,paddingVertical:4,borderTopWidth:1,borderTopColor:'#0A0A0A'},
   memLabel:{fontFamily:'monospace',fontSize:7,color:'#555',letterSpacing:2},
   memStatus:{fontFamily:'monospace',fontSize:7,color:'#333',flex:1},

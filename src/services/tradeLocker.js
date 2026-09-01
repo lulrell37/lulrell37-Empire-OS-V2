@@ -16,7 +16,7 @@ const POSITION_COLS=['id','tradableInstrumentId','routeId','side','qty','avgPric
 
 const RES_MS={'1m':60e3,'5m':300e3,'15m':900e3,'30m':1800e3,'1H':3600e3,'4H':14400e3,'1D':86400e3,'1W':604800e3};
 
-export const MAX_QTY=1; // hard lot cap — user-set, enforced on every order
+export const MAX_QTY=0.01; // hard lot cap — 0.01, enforced on every order
 
 const session={token:null,refresh:null,exp:0,env:'demo',accountId:null,accNum:null,instruments:{}};
 

@@ -21,6 +21,7 @@ import{initDatabase}from './src/services/database';
 import{loadKeys}from './src/services/keyStore';
 import{getAllPersonaPics}from './src/services/database';
 import useEmpireStore from './src/store/useEmpireStore';
+import{recentCrashCount}from './src/services/crashLog';
 SplashScreen.preventAutoHideAsync();
 const Stack=createNativeStackNavigator();
 const NAV_STATE_KEY='EMPIRE_OS_NAV_STATE_V1';
@@ -44,6 +45,10 @@ export default function App(){
   useEffect(()=>{
     async function restoreNavState(){
       try{
+        // Crash-loop guard: if we've crashed 2+ times in the last 30s, the saved
+        // screen is likely what's crashing — start clean instead.
+        const crashes=await recentCrashCount(30000).catch(()=>0);
+        if(crashes>=2){setNavReady(true);return;}
         const saved=await AsyncStorage.getItem(NAV_STATE_KEY);
         if(saved)setInitialNavState(JSON.parse(saved));
       }catch(e){}
