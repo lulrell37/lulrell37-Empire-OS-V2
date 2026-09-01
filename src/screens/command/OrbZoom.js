@@ -206,7 +206,7 @@ export default function OrbZoom({personaId,color,active,vizRef,personaPics={},on
 
       <View style={s.rail} pointerEvents="none">
         <Text style={[s.railLabel,{color}]}>
-          {level==='group'?'':level==='orb'?persona.name:`${persona.name} · MEMORY`}
+          {level==='group'?'':persona.name}
         </Text>
         <View style={s.dots}>
           {LEVELS.map((l,i)=>(<View key={l} style={[s.dot,i<=idx&&{backgroundColor:color,opacity:i===idx?1:0.4}]}/>))}
