@@ -566,6 +566,15 @@ export default function CommandScreen({navigation}){
   const pickPersonaFromOrb=useCallback((id)=>{setMode('direct');setActivePersona(id);setOrbLevel('orb');},[]);
   const launchGroupFromOrb=useCallback((ids)=>{setCustomPersonas(ids);setMode('custom');setView('text');},[]);
 
+  // Back to the Empire city — the only way out of the Command screen now that
+  // the bottom nav is gone. Tear down any live voice/recording first.
+  function goToCity(){
+    setHandsFree(false);handsFreeRef.current=false;clearSilenceTimer();
+    if(recordingRef.current)stopRecording();
+    stopAudio();
+    navigation.navigate('Map');
+  }
+
   async function send(){
     // The input is uncontrolled (no `value` prop) so Android never drops the last
     // keystroke to a state/native race. inputRef holds the live text; blur once to
@@ -659,6 +668,7 @@ export default function CommandScreen({navigation}){
           onTradeClose:(id)=>closePosition(id),
           onDeepResearch:(topic)=>startDeepResearch(topic,pid),
           onShowChart:(raw)=>{const spec=parseChartSpec(raw);if(spec.valid){setChartOverlay(spec);setView('viz');}},
+          onShowDiagram:()=>navigation.navigate('Laboratory'),
         };
         if(injections.length&&!myAbort.signal.aborted){
           await handleCommands(response,pid,cmdCallbacks);
@@ -857,7 +867,9 @@ export default function CommandScreen({navigation}){
   return(
     <SafeAreaView style={s.container} edges={['top','bottom']}>
       <View style={s.header}>
-        <Text style={s.empireOS}>♔ EMPIRE OS</Text>
+        <TouchableOpacity onPress={goToCity} hitSlop={{top:10,bottom:10,left:10,right:10}}>
+          <Text style={s.empireOS}>‹ EMPIRE OS</Text>
+        </TouchableOpacity>
         <View style={s.headerRight}>
           <View style={s.viewToggle}>
             {[['viz','◉'],['text','≣']].map(([v,ic])=>(
@@ -915,6 +927,7 @@ export default function CommandScreen({navigation}){
           onLevelChange={setOrbLevel}
           onPickPersona={pickPersonaFromOrb}
           onLaunchGroup={launchGroupFromOrb}
+          onZoomOut={goToCity}
         />
         )
       ):(
@@ -978,25 +991,6 @@ export default function CommandScreen({navigation}){
           </ScrollView>
         </View>
       </KeyboardAvoidingView>
-
-      <View style={s.bottomNav}>
-        <TouchableOpacity style={s.navItem} onPress={()=>{}}>
-          <Text style={[s.navIcon,{color:'#E8C98A'}]}>✕</Text>
-          <Text style={[s.navLabel,{color:'#E8C98A'}]}>COMMAND</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={s.navItem} onPress={()=>navigation.navigate('HUD')}>
-          <Text style={s.navIcon}>◉</Text><Text style={s.navLabel}>HUD</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={s.navItem} onPress={()=>navigation.navigate('Memory')}>
-          <Text style={s.navIcon}>☁</Text><Text style={s.navLabel}>MEMORY</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={s.navItem} onPress={()=>navigation.navigate('Settings')}>
-          <Text style={s.navIcon}>⚙</Text><Text style={s.navLabel}>SETTINGS</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={s.navItem} onPress={()=>{setHandsFree(false);handsFreeRef.current=false;clearSilenceTimer();if(recordingRef.current)stopRecording();stopAudio();navigation.navigate('Map');}}>
-          <Text style={s.navIcon}>🗺</Text><Text style={s.navLabel}>MAP</Text>
-        </TouchableOpacity>
-      </View>
 
       <Modal visible={showCustomPicker} transparent animationType="slide">
         <View style={s.modalOver}><View style={s.modalContent}>
@@ -1122,10 +1116,6 @@ const s=StyleSheet.create({
   iact:{flexDirection:'row',alignItems:'center',gap:4,paddingHorizontal:8,paddingVertical:4,borderRadius:4,borderWidth:1,borderColor:'#111'},
   iactDot:{width:5,height:5,borderRadius:2.5,backgroundColor:'#E8C98A',opacity:0.5},
   iactT:{fontFamily:'monospace',fontSize:7,color:'#444',letterSpacing:1},
-  bottomNav:{flexDirection:'row',borderTopWidth:1,borderTopColor:'#111',paddingVertical:6,backgroundColor:'#000'},
-  navItem:{flex:1,alignItems:'center',paddingVertical:3},
-  navIcon:{fontSize:12,color:'#444',marginBottom:2},
-  navLabel:{fontFamily:'monospace',fontSize:6,color:'#444',letterSpacing:1},
   modalOver:{flex:1,backgroundColor:'rgba(0,0,0,0.92)',justifyContent:'flex-end'},
   modalContent:{backgroundColor:'#0A0A0A',borderTopWidth:1,borderTopColor:'#1A1A1A',borderTopLeftRadius:16,borderTopRightRadius:16,padding:20},
   modalTitle:{fontFamily:'monospace',fontSize:12,color:'#E8C98A',letterSpacing:3,marginBottom:2},

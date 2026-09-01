@@ -107,8 +107,7 @@ export async function handleCommands(response,personaId,callbacks={}){
     const subject=m[1].trim();
     if(subject){
       useEmpireStore.getState().setDiagramPrompt(subject);
-      await setPanelLayout('diagram',{detached:1,x:24,y:24,z:Math.floor(Date.now()/1000)%100000});
-      hudChanged();
+      callbacks.onShowDiagram?.();
     }
   }
   for(const m of response.matchAll(/\[SET_TARGET:\s*([^|\]]+)\|([^|\]]+)(?:\|([^\]]+))?\]/gi)){

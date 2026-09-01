@@ -12,10 +12,10 @@ import{GestureHandlerRootView}from 'react-native-gesture-handler';
 import{SafeAreaProvider}from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import SplashScreenComponent from './src/screens/SplashScreen';
-import MapScreen from './src/screens/MapScreen';
+import EmpireCityScreen from './src/screens/EmpireCityScreen';
 import CommandScreen from './src/screens/CommandScreen';
 import HUDScreen from './src/screens/HUDScreen';
-import MemoryScreen from './src/screens/MemoryScreen';
+import LaboratoryScreen from './src/screens/LaboratoryScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
 import{initDatabase}from './src/services/database';
 import{loadKeys}from './src/services/keyStore';
@@ -24,7 +24,7 @@ import useEmpireStore from './src/store/useEmpireStore';
 import{recentCrashCount}from './src/services/crashLog';
 SplashScreen.preventAutoHideAsync();
 const Stack=createNativeStackNavigator();
-const NAV_STATE_KEY='EMPIRE_OS_NAV_STATE_V1';
+const NAV_STATE_KEY='EMPIRE_OS_NAV_STATE_V2';
 export default function App(){
   const[isReady,setIsReady]=useState(false);
   const[hasKeys,setHasKeys]=useState(false);
@@ -69,10 +69,10 @@ export default function App(){
           <StatusBar style="light" backgroundColor="#000"/>
           <Stack.Navigator initialRouteName={hasKeys?'Map':'Splash'} screenOptions={{headerShown:false,animation:'fade',contentStyle:{backgroundColor:'#000'}}}>
             <Stack.Screen name="Splash" component={SplashScreenComponent}/>
-            <Stack.Screen name="Map" component={MapScreen}/>
+            <Stack.Screen name="Map" component={EmpireCityScreen}/>
             <Stack.Screen name="Command" component={CommandScreen} options={{animation:'slide_from_right'}}/>
             <Stack.Screen name="HUD" component={HUDScreen} options={{animation:'slide_from_bottom'}}/>
-            <Stack.Screen name="Memory" component={MemoryScreen} options={{animation:'slide_from_right'}}/>
+            <Stack.Screen name="Laboratory" component={LaboratoryScreen} options={{animation:'slide_from_bottom'}}/>
             <Stack.Screen name="Settings" component={SettingsScreen} options={{animation:'slide_from_right'}}/>
           </Stack.Navigator>
         </NavigationContainer>

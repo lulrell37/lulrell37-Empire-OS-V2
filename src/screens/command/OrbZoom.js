@@ -30,7 +30,7 @@ const SPHERE_PTS=PERSONA_LIST.map((_,i)=>{
 
 function touchDist(t){return Math.hypot(t[0].pageX-t[1].pageX,t[0].pageY-t[1].pageY);}
 
-export default function OrbZoom({personaId,color,active,vizRef,personaPics={},onPickPersona,onLaunchGroup,level='group',onLevelChange}){
+export default function OrbZoom({personaId,color,active,vizRef,personaPics={},onPickPersona,onLaunchGroup,onZoomOut,level='group',onLevelChange}){
   const persona=getPersona(personaId);
   const[memories,setMemories]=useState(null);
   const[memory,setMemory]=useState(null);
@@ -107,7 +107,8 @@ export default function OrbZoom({personaId,color,active,vizRef,personaPics={},on
       setLvl('orb',-1);return;
     }
     if(cur==='orb'){setLvl('group',-1);return;}
-  },[setLvl]);
+    if(cur==='group'){onZoomOut?.();return;} // zoom out past the sphere -> the city
+  },[setLvl,onZoomOut]);
 
   const stagePan=useMemo(()=>PanResponder.create({
     onStartShouldSetPanResponderCapture:(e)=>!!e.nativeEvent.touches&&e.nativeEvent.touches.length===2&&levelRef.current!=='brain',
@@ -218,7 +219,7 @@ export default function OrbZoom({personaId,color,active,vizRef,personaPics={},on
       </View>
 
       {level==='orb'&&<Text style={[s.hint,{color}]} pointerEvents="none">◈ PINCH OUT FOR MEMORY · PINCH IN FOR ALL PERSONAS</Text>}
-      {level==='group'&&<Text style={[s.hint,{color}]} pointerEvents="none">◈ DRAG TO SPIN · PINCH THE ONE YOU WANT · HOLD TO GROUP</Text>}
+      {level==='group'&&<Text style={[s.hint,{color}]} pointerEvents="none">◈ DRAG TO SPIN · PINCH ONE TO OPEN · PINCH OUT TO THE CITY</Text>}
 
       {undo&&<TouchableOpacity style={s.undoBar} activeOpacity={0.8} onPress={undoMemory}>
         <Text style={s.undoT}>Memory deleted</Text>

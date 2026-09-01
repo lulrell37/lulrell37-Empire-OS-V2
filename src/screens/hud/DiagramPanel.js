@@ -23,32 +23,12 @@ import{generateModel}from '../../services/models3d';
 import{getPersona}from '../../personas/personas';
 import useEmpireStore from '../../store/useEmpireStore';
 import{colors,space,radius,FONTS}from '../../theme';
+import{b64ToArrayBuffer,disposeObject,makeHoloUniforms,injectHoloClip,createHoloMaterial}from '../command/holoMaterial';
 
 const MODEL=require('../../../assets/models/Avocado.glb');
 const VIEW_H=300;
 const JARVIS=getPersona('jarvis');
 const HS={top:8,bottom:8,left:8,right:8};
-
-function b64ToArrayBuffer(b64){
-  const bin=global.atob(b64);
-  const len=bin.length;
-  const bytes=new Uint8Array(len);
-  for(let i=0;i<len;i++)bytes[i]=bin.charCodeAt(i);
-  return bytes.buffer;
-}
-function disposeObject(obj){
-  obj.traverse(o=>{
-    if(o.geometry?.dispose)o.geometry.dispose();
-    if(o.material){
-      const mats=Array.isArray(o.material)?o.material:[o.material];
-      mats.forEach(m=>{
-        if(m.userData?.shared)return; // never dispose the shared holo material
-        for(const key in m){const v=m[key];if(v&&v.isTexture&&v.dispose)v.dispose();}
-        m.dispose?.();
-      });
-    }
-  });
-}
 
 export default function DiagramPanel(){
   const[status,setStatus]=useState('loading'); // loading | ready | error (GL init only)
@@ -182,43 +162,9 @@ export default function DiagramPanel(){
       const kl=new THREE.DirectionalLight(0xfff2d8,1.5);kl.position.set(3,4,5);scene.add(kl);
       const rl=new THREE.DirectionalLight(0xE8C98A,0.8);rl.position.set(-4,-2,-3);scene.add(rl);
 
-      const uniforms={
-        uFocusActive:{value:0},
-        uFocusCenter:{value:new THREE.Vector3()},
-        uFocusRadius:{value:1},
-        uTime:{value:0},
-      };
-      const injectClip=(shader)=>{
-        shader.uniforms.uFocusActive=uniforms.uFocusActive;
-        shader.uniforms.uFocusCenter=uniforms.uFocusCenter;
-        shader.uniforms.uFocusRadius=uniforms.uFocusRadius;
-        shader.vertexShader=shader.vertexShader
-          .replace('#include <common>','#include <common>\nvarying vec3 vFocusWP;')
-          .replace('#include <begin_vertex>','#include <begin_vertex>\nvFocusWP = (modelMatrix * vec4(transformed, 1.0)).xyz;');
-        shader.fragmentShader=shader.fragmentShader
-          .replace('#include <common>','#include <common>\nuniform float uFocusActive;\nuniform vec3 uFocusCenter;\nuniform float uFocusRadius;\nvarying vec3 vFocusWP;')
-          .replace('#include <clipping_planes_fragment>','#include <clipping_planes_fragment>\nif (uFocusActive > 0.5 && distance(vFocusWP, uFocusCenter) > uFocusRadius) discard;');
-      };
-
-      const holoMat=new THREE.MeshStandardMaterial({
-        color:new THREE.Color(0xE8C98A),
-        emissive:new THREE.Color(0x5a4423),
-        emissiveIntensity:0.55,metalness:0.25,roughness:0.4,
-        transparent:true,opacity:0.42,side:THREE.DoubleSide,depthWrite:false,
-      });
-      holoMat.userData.shared=true;
-      holoMat.onBeforeCompile=(shader)=>{
-        shader.uniforms.uTime=uniforms.uTime;
-        injectClip(shader);
-        shader.fragmentShader=shader.fragmentShader
-          .replace('#include <common>','#include <common>\nuniform float uTime;')
-          .replace('#include <emissivemap_fragment>',
-            '#include <emissivemap_fragment>\n'+
-            'float _fres = pow(1.0 - clamp(dot(normalize(normal), normalize(vViewPosition)), 0.0, 1.0), 3.0);\n'+
-            'float _scan = 0.9 + 0.1 * sin(uTime * 3.0 + vFocusWP.y * 26.0);\n'+
-            'totalEmissiveRadiance += _fres * vec3(1.0, 0.86, 0.55) * 1.5;\n'+
-            'totalEmissiveRadiance *= _scan;');
-      };
+      const uniforms=makeHoloUniforms();
+      const injectClip=(shader)=>injectHoloClip(shader,uniforms);
+      const holoMat=createHoloMaterial(uniforms);
 
       function applyMode(m){
         const{gltfScene,originals}=engine;

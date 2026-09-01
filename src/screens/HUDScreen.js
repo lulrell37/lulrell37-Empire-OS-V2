@@ -8,18 +8,10 @@ import{getHudState,updateHudState,getTasks,addTask,updateTask,deleteTask,complet
 import{colors,space,radius,type,FONTS}from '../theme';
 import{PANEL_META,BriefingPanel,BusinessPanel,TasksPanel,RoutinePanel,BatmanPanel,DailyPanel,MarketPanel}from './hud/panels';
 import FloatingCard from './hud/FloatingCard';
-import DiagramPanel from './hud/DiagramPanel';
 import Boundary from './hud/Boundary';
 const{width}=Dimensions.get('window');
 const RS=196,ST=6,CI=2*Math.PI*((RS-ST)/2);
-const PANELS=['briefing','businesses','tasks','routine','batman','daily','market','diagram'];
-const NAV=[
-  {key:'Command',icon:'terminal',label:'COMMAND'},
-  {key:'HUD',icon:'target',label:'HUD'},
-  {key:'Memory',icon:'cloud',label:'MEMORY'},
-  {key:'Settings',icon:'settings',label:'SETTINGS'},
-  {key:'Map',icon:'map',label:'MAP'},
-];
+const PANELS=['briefing','businesses','tasks','routine','batman','daily','market'];
 
 export default function HUDScreen({navigation}){
   const[hud,setHud]=useState(null);
@@ -204,7 +196,6 @@ export default function HUDScreen({navigation}){
       case 'batman':return <BatmanPanel template={batmanTemplate} done={batman} today={todayBatman} onToggleDay={toggleBatman} onSaveTemplate={handleSaveBatman} onEditingChange={setPanelEditing}/>;
       case 'daily':return <DailyPanel hud={hud}/>;
       case 'market':return <Boundary label="The market panel"><MarketPanel/></Boundary>;
-      case 'diagram':return <Boundary label="The diagram card"><DiagramPanel/></Boundary>;
       default:return null;
     }
   }
@@ -212,10 +203,10 @@ export default function HUDScreen({navigation}){
   return(
     <SafeAreaView style={s.container} edges={['top','bottom']}>
       <View style={s.header}>
-        <View style={s.brandRow}>
-          <Feather name="hexagon" size={13} color={colors.gold}/>
+        <TouchableOpacity style={s.brandRow} onPress={()=>navigation.navigate('Map')} hitSlop={{top:10,bottom:10,left:10,right:10}} activeOpacity={0.7}>
+          <Feather name="chevron-left" size={15} color={colors.gold}/>
           <Text style={s.brand}>EMPIRE OS</Text>
-        </View>
+        </TouchableOpacity>
         <View style={s.onlinePill}><View style={s.onlineDot}/><Text style={s.onlineText}>ONLINE</Text></View>
       </View>
 
@@ -299,19 +290,6 @@ export default function HUDScreen({navigation}){
         </View>
       </View>
 
-      <View style={s.bottomNav}>
-        {NAV.map(n=>{
-          const active=n.key==='HUD';
-          return(
-            <TouchableOpacity key={n.key} style={s.navItem} activeOpacity={0.7}
-              onPress={()=>{if(!active)navigation.navigate(n.key);}}>
-              <Feather name={n.icon} size={15} color={active?colors.gold:colors.textDim}/>
-              <Text style={[s.navLabel,active&&{color:colors.gold}]}>{n.label}</Text>
-            </TouchableOpacity>
-          );
-        })}
-      </View>
-
       <Modal visible={showAddTask} transparent animationType="slide">
         <View style={s.modalOver}><View style={s.modalContent}>
           <Text style={s.modalTitle}>NEW TASK</Text>
@@ -383,10 +361,6 @@ const s=StyleSheet.create({
   panelTopBar:{flexDirection:'row',justifyContent:'space-between',alignItems:'center',marginBottom:space.lg},
   panelLabel:{...type.label},
   allDetached:{...type.meta,color:colors.textFaint,textAlign:'center',marginTop:space.md,lineHeight:16},
-
-  bottomNav:{flexDirection:'row',borderTopWidth:1,borderTopColor:colors.hairline,paddingVertical:space.sm,backgroundColor:colors.bg},
-  navItem:{flex:1,alignItems:'center',gap:4,paddingVertical:3},
-  navLabel:{fontFamily:FONTS.mono,fontSize:7,color:colors.textDim,letterSpacing:1.5},
 
   modalOver:{flex:1,backgroundColor:'rgba(0,0,0,0.92)',justifyContent:'flex-end'},
   modalContent:{backgroundColor:colors.card,borderTopWidth:1,borderTopColor:colors.hairlineGold,borderTopLeftRadius:radius.xl,borderTopRightRadius:radius.xl,padding:space.xl},
