@@ -1,15 +1,15 @@
-// Live position monitor for Atlas's gold trades. Polls TradeLocker while the
-// Command screen is focused — this is the "assisted" boundary: no polling in the
-// background, so nothing here runs once the app is closed.
+// Live position monitor for Atlas's trades (any pair). Polls TradeLocker while
+// the Command screen is focused — this is the "assisted" boundary: no polling in
+// the background, so nothing here runs once the app is closed.
 import React,{useState,useEffect,useRef,useCallback}from 'react';
 import{View,Text,StyleSheet,TouchableOpacity,ActivityIndicator}from 'react-native';
-import{tlPositions,tlQuote,tlClosePosition,tlStatus}from '../../services/tradeLocker';
+import{tlPositions,tlClosePosition,tlStatus,tlInstrumentsById}from '../../services/tradeLocker';
 
 const POLL_MS=4500;
 
 export default function TradePanel({active,onEvent}){
   const[positions,setPositions]=useState([]);
-  const[quote,setQuote]=useState(null);
+  const[names,setNames]=useState({}); // tradableInstrumentId -> symbol
   const[busy,setBusy]=useState(null); // position id being closed, or 'all'
   const[collapsed,setCollapsed]=useState(false);
   const timer=useRef(null);
@@ -18,12 +18,15 @@ export default function TradePanel({active,onEvent}){
   const poll=useCallback(async()=>{
     if(!tlStatus().connected)return;
     try{
-      const[ps,q]=await Promise.all([tlPositions(),tlQuote('XAUUSD').catch(()=>null)]);
+      const ps=await tlPositions();
       if(!alive.current)return;
-      setPositions(ps.filter(p=>String(p.tradableInstrumentId)&&Number(p.qty)>0));
-      if(q)setQuote(q);
+      const open=ps.filter(p=>String(p.tradableInstrumentId)&&Number(p.qty)>0);
+      setPositions(open);
+      if(open.length&&!Object.keys(names).length){
+        tlInstrumentsById().then(m=>{if(alive.current)setNames(m);}).catch(()=>{});
+      }
     }catch{}
-  },[]);
+  },[names]);
 
   useEffect(()=>{
     alive.current=true;
@@ -50,9 +53,8 @@ export default function TradePanel({active,onEvent}){
   return(
     <View style={s.wrap}>
       <TouchableOpacity style={s.hdr} activeOpacity={0.7} onPress={()=>setCollapsed(c=>!c)}>
-        <Text style={s.hdrLabel}>◆ GOLD · {positions.length} OPEN</Text>
+        <Text style={s.hdrLabel}>◆ POSITIONS · {positions.length} OPEN</Text>
         <View style={s.hdrRight}>
-          {quote&&<Text style={s.hdrPx}>{quote.mid?.toFixed?.(2)}</Text>}
           <Text style={[s.hdrPl,{color:plColor}]}>{totalPl>=0?'+':''}{totalPl.toFixed(2)}</Text>
           <Text style={s.hdrChevron}>{collapsed?'▸':'▾'}</Text>
         </View>
@@ -60,10 +62,11 @@ export default function TradePanel({active,onEvent}){
       {!collapsed&&<>
         {positions.map(p=>{
           const pl=Number(p.unrealizedPl)||0;
+          const sym=names[String(p.tradableInstrumentId)]||'';
           return(
             <View key={p.id} style={s.row}>
               <Text style={[s.side,{color:p.side==='buy'?'#5FA779':'#C7614B'}]}>{p.side==='buy'?'▲':'▼'} {p.qty}</Text>
-              <Text style={s.entry}>@ {Number(p.avgPrice).toFixed(2)}</Text>
+              <Text style={s.entry}>{sym?`${sym} `:''}@ {Number(p.avgPrice).toFixed(2)}</Text>
               <Text style={[s.pl,{color:pl>=0?'#5FA779':'#C7614B'}]}>{pl>=0?'+':''}{pl.toFixed(2)}</Text>
               <TouchableOpacity style={s.closeBtn} disabled={!!busy} onPress={()=>close(p.id)}>
                 {busy===p.id?<ActivityIndicator size="small" color="#C7614B"/>:<Text style={s.closeT}>CLOSE</Text>}

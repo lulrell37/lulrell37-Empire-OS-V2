@@ -18,7 +18,7 @@ const RES_MS={'1m':60e3,'5m':300e3,'15m':900e3,'30m':1800e3,'1H':3600e3,'4H':144
 
 export const MAX_QTY=0.01; // hard lot cap — user-set, enforced on every order
 
-const session={token:null,refresh:null,exp:0,env:'demo',accountId:null,accNum:null,instruments:{}};
+const session={token:null,refresh:null,exp:0,env:'demo',accountId:null,accNum:null,instruments:{},instrumentList:null};
 
 function base(){return BASE[session.env]||BASE.demo;}
 
@@ -90,14 +90,41 @@ export async function tlAccountState(){
   return out;
 }
 
-// Resolve XAUUSD (or any symbol) to its ids + routes, cached per session.
+// The full tradable-instrument list for the account, cached per session.
+async function loadInstrumentList(){
+  await ensureAccount();
+  if(session.instrumentList)return session.instrumentList;
+  const j=await api(`/trade/accounts/${session.accountId}/instruments`);
+  session.instrumentList=j.d?.instruments||[];
+  return session.instrumentList;
+}
+
+// Every symbol name the account can trade (e.g. XAUUSD, EURUSD, GBPJPY, BTCUSD).
+export async function tlListInstruments(){
+  const list=await loadInstrumentList();
+  return list.map(x=>String(x.name)).filter(Boolean).sort();
+}
+
+// { tradableInstrumentId -> symbol name } — used to label open positions.
+export async function tlInstrumentsById(){
+  const list=await loadInstrumentList();
+  const out={};
+  for(const x of list)out[String(x.tradableInstrumentId)]=String(x.name);
+  return out;
+}
+
+// Resolve any symbol to its ids + routes, cached per session.
 export async function tlInstrument(symbol='XAUUSD'){
   await ensureAccount();
   if(session.instruments[symbol])return session.instruments[symbol];
-  const j=await api(`/trade/accounts/${session.accountId}/instruments`);
-  const list=j.d?.instruments||[];
-  const inst=list.find(x=>String(x.name).toUpperCase()===symbol.toUpperCase());
-  if(!inst)throw new Error(`TradeLocker: instrument ${symbol} not found on this account`);
+  const list=await loadInstrumentList();
+  const want=symbol.toUpperCase();
+  const inst=list.find(x=>String(x.name).toUpperCase()===want)
+    ||list.find(x=>String(x.name).toUpperCase().replace(/[^A-Z0-9]/g,'')===want.replace(/[^A-Z0-9]/g,''));
+  if(!inst){
+    const sample=list.map(x=>x.name).slice(0,40).join(', ');
+    throw new Error(`TradeLocker: instrument ${symbol} not found on this account. Available include: ${sample}`);
+  }
   const routes=inst.routes||[];
   const trade=routes.find(r=>r.type==='TRADE');
   const info=routes.find(r=>r.type==='INFO');
@@ -167,9 +194,13 @@ export async function tlModifyPosition(positionId,{stopLoss,takeProfit}={}){
   return{modified:positionId};
 }
 
-export function tlReset(){session.token=null;session.refresh=null;session.exp=0;session.accountId=null;session.accNum=null;session.instruments={};}
+export function tlReset(){session.token=null;session.refresh=null;session.exp=0;session.accountId=null;session.accNum=null;session.instruments={};session.instrumentList=null;}
 
-// --- Analysis snapshot: everything Atlas needs to form a view on gold ---
+// --- Analysis snapshot: everything Atlas needs to form a view on a pair ---
+
+// Instruments to pull alongside the target for cross-market context (dollar
+// direction, risk tone). Skipped for the target itself and for crypto.
+const CONTEXT_SYMBOLS=['DXY','EURUSD','USDJPY','XAUUSD'];
 
 function summarizeBars(bars){
   if(!bars||bars.length<3)return null;
@@ -188,25 +219,30 @@ function summarizeBars(bars){
 }
 
 export async function tlSnapshot(symbol='XAUUSD'){
+  const sym=symbol.toUpperCase();
   const[quote,state,positions]=await Promise.all([
-    tlQuote(symbol),
+    tlQuote(sym),
     tlAccountState().catch(()=>null),
     tlPositions().catch(()=>[]),
   ]);
   const candles={};
   for(const tf of['1D','4H','1H','15m']){
-    try{candles[tf]=summarizeBars(await tlHistory(symbol,tf,60));}catch{candles[tf]=null;}
+    try{candles[tf]=summarizeBars(await tlHistory(sym,tf,60));}catch{candles[tf]=null;}
   }
-  const usd={};
-  for(const s of['EURUSD','USDJPY','GBPUSD']){
-    try{const q=await tlQuote(s);if(q.mid!=null)usd[s]=+q.mid.toFixed(5);}catch{}
+  const context={};
+  const isCrypto=/BTC|ETH|SOL|XRP|DOGE|USDT|USDC/.test(sym);
+  if(!isCrypto){
+    for(const s of CONTEXT_SYMBOLS){
+      if(s===sym)continue;
+      try{const q=await tlQuote(s);if(q.mid!=null)context[s]=+q.mid.toFixed(5);}catch{}
+    }
   }
-  return{symbol,quote,state,positions,candles,usd,ts:Date.now()};
+  return{symbol:sym,quote,state,positions,candles,context,ts:Date.now()};
 }
 
 export function tlFormatSnapshot(snap){
   if(!snap)return '(market snapshot unavailable)';
-  const{quote,state,positions,candles,usd}=snap;
+  const{quote,state,positions,candles,context}=snap;
   const L=[];
   L.push(`Price ${snap.symbol}: bid ${quote.bid} / ask ${quote.ask} (mid ${quote.mid?.toFixed?.(2)})`);
   if(state)L.push(`Account: balance ${state.balance}, available ${state.availableFunds}, open P/L ${state.openNetPnL}, open positions ${state.positionsCount}`);
@@ -214,7 +250,7 @@ export function tlFormatSnapshot(snap){
     const c=candles[tf];if(!c){L.push(`${tf}: no data`);continue;}
     L.push(`${tf}: last ${c.last}, ${c.changePct>=0?'+':''}${c.changePct}% over window, trend ${c.trend} (SMA20 ${c.sma20}), range ${c.rangeLow}–${c.rangeHigh}; recent bars ${c.recent.map(b=>`${b.o}/${b.h}/${b.l}/${b.c}`).join('  ')}`);
   }
-  if(Object.keys(usd).length)L.push(`USD proxy: ${Object.entries(usd).map(([k,v])=>`${k} ${v}`).join(', ')} (gold moves inverse to USD strength)`);
-  if(positions?.length)L.push(`Open positions: ${positions.map(p=>`#${p.id} ${p.side} ${p.qty} @ ${p.avgPrice} (uP/L ${p.unrealizedPl})`).join('; ')}`);
+  if(context&&Object.keys(context).length)L.push(`Cross-market: ${Object.entries(context).map(([k,v])=>`${k} ${v}`).join(', ')} (read dollar direction / risk tone from these)`);
+  if(positions?.length)L.push(`Open positions (all pairs): ${positions.map(p=>`#${p.id} ${p.side} ${p.qty} @ ${p.avgPrice} (uP/L ${p.unrealizedPl})`).join('; ')}`);
   return L.join('\n');
 }

@@ -8,7 +8,7 @@ import Svg,{Circle}from 'react-native-svg';
 import{Feather}from '@expo/vector-icons';
 import{useFocusEffect,useIsFocused}from '@react-navigation/native';
 import{colors,space,radius,type,FONTS}from '../../theme';
-import{tlStatus,tlQuote,tlPositions,tlClosePosition}from '../../services/tradeLocker';
+import{tlStatus,tlQuote,tlPositions,tlClosePosition,tlInstrumentsById}from '../../services/tradeLocker';
 import{getBuildJobs}from '../../services/database';
 import{pollBuildJobs}from '../../services/buildJobs';
 
@@ -20,7 +20,7 @@ export const PANEL_META={
   routine:{title:'MORNING ROUTINE'},
   batman:{title:'BATMAN PROTOCOL'},
   daily:{title:'DAILY'},
-  market:{title:'GOLD · MARKET'},
+  market:{title:'MARKET'},
   build:{title:'BUILD PIPELINE'},
 };
 export const newRoutineId=()=>'r_'+Date.now().toString(36)+Math.random().toString(36).slice(2,6);
@@ -229,11 +229,12 @@ export function DailyPanel({hud}){
   );
 }
 
-// Live XAUUSD quote + Atlas's open gold positions. Polls only while the HUD is
-// focused (assisted-trading boundary — nothing runs in the background).
+// XAUUSD spot as a market-pulse headline + every open position (any pair).
+// Polls only while the HUD is focused — nothing runs in the background.
 export function MarketPanel(){
   const[quote,setQuote]=useState(null);
   const[positions,setPositions]=useState([]);
+  const[names,setNames]=useState({});
   const[connected,setConnected]=useState(true);
   const[busy,setBusy]=useState(null);
   const alive=useRef(true);
@@ -245,9 +246,13 @@ export function MarketPanel(){
       const[q,ps2]=await Promise.all([tlQuote('XAUUSD').catch(()=>null),tlPositions().catch(()=>[])]);
       if(!alive.current)return;
       if(q)setQuote(q);
-      setPositions((ps2||[]).filter(p=>Number(p.qty)>0));
+      const open=(ps2||[]).filter(p=>Number(p.qty)>0);
+      setPositions(open);
+      if(open.length&&!Object.keys(names).length){
+        tlInstrumentsById().then(m=>{if(alive.current)setNames(m);}).catch(()=>{});
+      }
     }catch{}
-  },[]);
+  },[names]);
 
   useFocusEffect(useCallback(()=>{
     alive.current=true;
@@ -293,10 +298,11 @@ export function MarketPanel(){
           </View>
           {positions.map(p=>{
             const pl=Number(p.unrealizedPl)||0;
+            const sym=names[String(p.tradableInstrumentId)]||'';
             return(
               <View key={p.id} style={ps.mktPosRow}>
                 <Text style={[ps.mktSide,{color:p.side==='buy'?colors.online:colors.danger}]}>{p.side==='buy'?'▲':'▼'} {p.qty}</Text>
-                <Text style={ps.mktEntry}>@ {Number(p.avgPrice).toFixed(2)}</Text>
+                <Text style={ps.mktEntry}>{sym?`${sym} `:''}@ {Number(p.avgPrice).toFixed(2)}</Text>
                 <Text style={[ps.mktPl,{color:pl>=0?colors.online:colors.danger}]}>{pl>=0?'+':''}{pl.toFixed(2)}</Text>
                 <TouchableOpacity style={ps.mktClose} disabled={!!busy} onPress={()=>close(p.id)}>
                   {busy===p.id?<ActivityIndicator size="small" color={colors.danger}/>:<Text style={ps.mktCloseT}>CLOSE</Text>}

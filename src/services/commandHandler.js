@@ -40,11 +40,16 @@ export async function handleCommands(response,personaId,callbacks={}){
   for(const m of response.matchAll(/\[RELAY_TO:\s*([^|\]]+)\|([^\]]+)\]/gi)){
     callbacks.onRelay?.({target:m[1].trim().toLowerCase(),message:m[2].trim()});
   }
-  for(const m of response.matchAll(/\[TRADE_PROPOSE:\s*([^|\]]+)\|([^|\]]+)\|([^|\]]+)\|([^|\]]+)\|([^|\]]+)\|([^\]]+)\]/gi)){
+  // [TRADE_PROPOSE: SYMBOL | side | entry | stopLoss | takeProfit | qty | rationale]
+  // SYMBOL is optional for backward compatibility; side must be buy/sell/long/short.
+  for(const m of response.matchAll(/\[TRADE_PROPOSE:\s*(?:([A-Za-z0-9./]{3,12})\s*\|\s*)?(buy|sell|long|short)\s*\|([^|\]]+)\|([^|\]]+)\|([^|\]]+)\|([^|\]]+)\|([^\]]+)\]/gi)){
     const num=s=>{const v=parseFloat(String(s).replace(/[^0-9.\-]/g,''));return isNaN(v)?null:v;};
+    const side=m[2].trim().toLowerCase();
     callbacks.onTradePropose?.({
-      side:m[1].trim().toLowerCase(),entry:num(m[2]),stopLoss:num(m[3]),
-      takeProfit:num(m[4]),qty:num(m[5])||1,rationale:m[6].trim(),
+      symbol:m[1]?m[1].trim().toUpperCase():'XAUUSD',
+      side:side==='long'?'buy':side==='short'?'sell':side,
+      entry:num(m[3]),stopLoss:num(m[4]),takeProfit:num(m[5]),
+      qty:num(m[6])||1,rationale:m[7].trim(),
     });
   }
   for(const m of response.matchAll(/\[TRADE_CLOSE:\s*([^\]]+)\]/gi)){
@@ -150,7 +155,7 @@ export function stripCommands(text){
     .replace(/\[RELAY_TO:[^\]]*\]/gi,'').replace(/\[SEARCH_WEB:[^\]]*\]/gi,'')
     .replace(/\[READ_CALENDAR\]/gi,'').replace(/\[READ_EMAIL\]/gi,'')
     .replace(/\[MEMORY_QUERY:[^\]]*\]/gi,'').replace(/\[DEEP_RESEARCH:[^\]]*\]/gi,'')
-    .replace(/\[TRADE_SCAN\]/gi,'').replace(/\[TRADE_PROPOSE:[^\]]*\]/gi,'').replace(/\[TRADE_CLOSE:[^\]]*\]/gi,'')
+    .replace(/\[TRADE_SCAN(?::[^\]]*)?\]/gi,'').replace(/\[TRADE_PROPOSE:[^\]]*\]/gi,'').replace(/\[TRADE_CLOSE:[^\]]*\]/gi,'')
     .replace(/\[ADD_EXPENSE:[^\]]*\]/gi,'').replace(/\[ADD_DATE:[^\]]*\]/gi,'').replace(/\[EXPENSE_SUMMARY\]/gi,'')
     .replace(/\[SHOW_CHART:[^\]]*\]/gi,'')
     .replace(/\[BUILD_REQUEST:[^\]]*\]/gi,'').replace(/\[BUILD_REPLY:[^\]]*\]/gi,'')

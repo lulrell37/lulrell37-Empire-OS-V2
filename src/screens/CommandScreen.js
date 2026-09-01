@@ -58,7 +58,7 @@ export default function CommandScreen({navigation}){
   const[cameraRef,setCameraRef]=useState(null);
   const[view,setView]=useState('viz'); // viz | text
   const[orbLevel,setOrbLevel]=useState('group'); // lifted so it survives the viz/text toggle
-  const[tradeProposal,setTradeProposal]=useState(null); // {side,entry,stopLoss,takeProfit,qty,rationale,pid}
+  const[tradeProposal,setTradeProposal]=useState(null); // {symbol,side,entry,stopLoss,takeProfit,qty,rationale,pid}
   const[tradeBusy,setTradeBusy]=useState(false);
   const[deepResearch,setDeepResearch]=useState(null); // {id,topic,pid,status}
   const[chartOverlay,setChartOverlay]=useState(null); // parsed chart spec shown over the orb
@@ -675,10 +675,16 @@ export default function CommandScreen({navigation}){
             catch(e){injections.push(`MEMORY RECALL — Q: ${q}\nA: (failed: ${e.message})`);}
           }
         }
-        if(/\[TRADE_SCAN\]/i.test(response)&&!myAbort.signal.aborted){
+        const scanTags=[...response.matchAll(/\[TRADE_SCAN(?::\s*([^\]]+))?\]/gi)];
+        if(scanTags.length&&!myAbort.signal.aborted){
           toolLabel='◇ reading the market…';
-          try{injections.push('MARKET SNAPSHOT XAUUSD:\n'+tlFormatSnapshot(await tlSnapshot('XAUUSD')));}
-          catch(e){injections.push('MARKET SNAPSHOT: failed — '+e.message);}
+          let syms=scanTags.flatMap(m=>(m[1]||'').split(/[\s,]+/).map(x=>x.trim().toUpperCase()).filter(Boolean));
+          syms=[...new Set(syms.length?syms:['XAUUSD'])].slice(0,4);
+          for(const sym of syms){
+            if(myAbort.signal.aborted)break;
+            try{injections.push(`MARKET SNAPSHOT ${sym}:\n`+tlFormatSnapshot(await tlSnapshot(sym)));}
+            catch(e){injections.push(`MARKET SNAPSHOT ${sym}: failed — `+e.message);}
+          }
         }
         if(/\[BUILD_STATUS\]/i.test(response)&&!myAbort.signal.aborted){
           try{
@@ -893,11 +899,12 @@ export default function CommandScreen({navigation}){
   async function confirmTrade(){
     if(!tradeProposal||tradeBusy)return;
     setTradeBusy(true);
-    const{side,stopLoss,takeProfit,qty,pid}=tradeProposal;
+    const{symbol,side,stopLoss,takeProfit,qty,pid}=tradeProposal;
+    const sym=symbol||'XAUUSD';
     try{
-      const r=await tlPlaceOrder({symbol:'XAUUSD',side,qty:Math.min(qty||MAX_QTY,MAX_QTY),stopLoss,takeProfit});
-      pushSystemMsg(`— ORDER SENT · ${r.side.toUpperCase()} ${r.qty} XAUUSD · SL ${r.stopLoss??'—'} · TP ${r.takeProfit??'—'} · #${r.orderId||'?'} —`);
-      savePersonaMemory(pid||'atlas',`YOU: [confirmed trade]\nA.T.L.A.S.: order sent ${r.side} ${r.qty} XAUUSD SL ${r.stopLoss} TP ${r.takeProfit}`).catch(()=>{});
+      const r=await tlPlaceOrder({symbol:sym,side,qty:Math.min(qty||MAX_QTY,MAX_QTY),stopLoss,takeProfit});
+      pushSystemMsg(`— ORDER SENT · ${r.side.toUpperCase()} ${r.qty} ${sym} · SL ${r.stopLoss??'—'} · TP ${r.takeProfit??'—'} · #${r.orderId||'?'} —`);
+      savePersonaMemory(pid||'atlas',`YOU: [confirmed trade]\nA.T.L.A.S.: order sent ${r.side} ${r.qty} ${sym} SL ${r.stopLoss} TP ${r.takeProfit}`).catch(()=>{});
     }catch(e){pushSystemMsg(`Order failed: ${e.message}`);}
     finally{setTradeBusy(false);setTradeProposal(null);}
   }
@@ -1119,7 +1126,7 @@ export default function CommandScreen({navigation}){
 
       <Modal visible={!!tradeProposal} transparent animationType="fade" onRequestClose={()=>setTradeProposal(null)}>
         <View style={s.modalOver}><View style={s.tradeCard}>
-          <Text style={s.tradeTitle}>CONFIRM TRADE · XAUUSD</Text>
+          <Text style={s.tradeTitle}>CONFIRM TRADE · {tradeProposal?.symbol||'XAUUSD'}</Text>
           {tradeProposal&&<>
             <View style={[s.tradeSideChip,{backgroundColor:(tradeProposal.side==='buy'?'#5FA779':'#C7614B')+'22',borderColor:tradeProposal.side==='buy'?'#5FA779':'#C7614B'}]}>
               <Text style={[s.tradeSideT,{color:tradeProposal.side==='buy'?'#5FA779':'#C7614B'}]}>{tradeProposal.side==='buy'?'▲ BUY':'▼ SELL'} {Math.min(tradeProposal.qty||MAX_QTY,MAX_QTY)} LOT</Text>
