@@ -429,10 +429,6 @@ function EmpireCity({navigation}){
         <Text style={s.hudMeta}>{score}%  ·  {streak}🔥</Text>
       </SafeAreaView>
 
-      <SafeAreaView style={s.hint} edges={['bottom']} pointerEvents="none">
-        <Text style={s.hintT}>DRAG TO MOVE · TWO FINGERS TO LOOK · TAP OR ZOOM INTO A LANDMARK</Text>
-      </SafeAreaView>
-
       {status==='loading'&&(
         <View style={s.loading} pointerEvents="none">
           <ActivityIndicator color="#E8C98A"/>

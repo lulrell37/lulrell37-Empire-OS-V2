@@ -218,8 +218,6 @@ export default function OrbZoom({personaId,color,active,vizRef,personaPics={},on
         <TouchableOpacity style={s.zBtn} onPress={()=>deeper()}><Text style={s.zT}>+</Text></TouchableOpacity>
       </View>
 
-      {level==='orb'&&<Text style={[s.hint,{color}]} pointerEvents="none">◈ PINCH OUT FOR MEMORY · PINCH IN FOR ALL PERSONAS</Text>}
-      {level==='group'&&<Text style={[s.hint,{color}]} pointerEvents="none">◈ DRAG TO SPIN · PINCH ONE TO OPEN · PINCH OUT TO THE CITY</Text>}
 
       {undo&&<TouchableOpacity style={s.undoBar} activeOpacity={0.8} onPress={undoMemory}>
         <Text style={s.undoT}>Memory deleted</Text>

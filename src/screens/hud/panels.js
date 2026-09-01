@@ -97,7 +97,6 @@ export function TasksPanel({tasks,onComplete,onEdit,onAdd}){
         </TouchableOpacity>
       ))}
       {!tasks.length&&<Text style={ps.emptyText}>No open tasks.</Text>}
-      {!!tasks.length&&<Text style={ps.hintText}>Long-press a task to edit or delete.</Text>}
     </>
   );
 }

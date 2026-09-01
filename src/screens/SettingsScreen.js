@@ -257,7 +257,7 @@ export default function SettingsScreen({navigation}){
           </View>}
           {tab==='PROFILES'&&<View>
             <Text style={s.secTitle}>PERSONA PROFILES</Text>
-            <Text style={s.secSub}>Tap to set a photo. Used on the Command screen and, for the persona visualization, inside the glow.</Text>
+            <Text style={s.secSub}>Used on the Command screen and, for the persona visualization, inside the glow.</Text>
             <View style={s.picsGrid}>
               {PERSONA_LIST.map(p=>{
                 const pic=personaPics?.[p.id];
@@ -267,7 +267,7 @@ export default function SettingsScreen({navigation}){
                       {pic?<Image source={{uri:pic}} style={{width:'100%',height:'100%'}}/>:<Text style={[s.picInitial,{color:p.color}]}>{p.icon}</Text>}
                     </View>
                     <Text style={[s.picName,{color:p.color}]}>{p.name.replace(/\./g,'').substring(0,6)}</Text>
-                    <Text style={s.picRole} numberOfLines={1}>{pic?'Long-press to remove':p.role}</Text>
+                    <Text style={s.picRole} numberOfLines={1}>{p.role}</Text>
                   </TouchableOpacity>
                 );
               })}

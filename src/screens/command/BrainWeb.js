@@ -172,8 +172,6 @@ function BrainWebInner({persona,memories,onNode,onExit},ref){
           </Svg>}
         </ScrollView>
       </ScrollView>
-
-      <Text style={s.foot}>◈ PINCH OUT TO GO DEEPER · PINCH IN TO BACK OUT</Text>
     </View>
   );
 }

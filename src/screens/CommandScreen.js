@@ -20,15 +20,17 @@ import{useIsFocused}from '@react-navigation/native';
 import OrbZoom from './command/OrbZoom';
 import ChartOverlay from './command/ChartOverlay';
 import TradePanel from './command/TradePanel';
+import TradeStatus from '../components/TradeStatus';
 import BuildPanel from './command/BuildPanel';
 import NudgeBar from './command/NudgeBar';
 import{parseChartSpec}from '../services/chartSpec';
 
 const TEAM_PHOTO=require('../../assets/teamphoto.png');
-const HANDS_FREE_SILENCE_MS=1600;   // quiet for this long after speaking -> stop
+const HANDS_FREE_SILENCE_MS=2200;   // quiet for this long AFTER real speech -> stop (allow mid-sentence pauses)
 const HANDS_FREE_VOICE_DB=-42;      // metering above this counts as "talking"
 const HANDS_FREE_MAX_MS=18000;      // hard cap on one hands-free take
 const HANDS_FREE_NOMETER_MS=6000;   // devices that don't report metering -> fixed take
+const HANDS_FREE_NOVOICE_MS=4500;   // mic open this long with no voice at all -> give up, discard the take
 // Synthetic speech-loudness envelope for the persona orb (no real FFT in Expo).
 function synthAmp(){
   const t=Date.now()/1000;
@@ -76,6 +78,8 @@ export default function CommandScreen({navigation}){
   const voicePausedRef=useRef(false);
   const silenceTimerRef=useRef(null);
   const hasVoicedRef=useRef(false);
+  const voicedCountRef=useRef(0);   // metering polls that crossed the voice threshold
+  const emptyTakeRef=useRef(false); // hands-free take that never heard a voice — discard, don't transcribe
   const recBusyRef=useRef(false); // true while a recorder is preparing OR being torn down
   const recPollRef=useRef(null);  // interval polling the recorder's metering
   const recStartRef=useRef(0);
@@ -159,13 +163,25 @@ export default function CommandScreen({navigation}){
       return;
     }
 
-    // Count them as "talking" once we hear them, or once the mic has been open a
-    // moment (so a soft voice that never crosses the threshold still ends).
-    if(m>HANDS_FREE_VOICE_DB||elapsed>1400)hasVoicedRef.current=true;
+    // Only real audio counts as speech — needs a couple of polls above the
+    // threshold so a single click/pop doesn't register. Mic-open time is NOT
+    // speech (that was sending silence to the transcriber).
+    const talking=m>HANDS_FREE_VOICE_DB;
+    if(talking){
+      voicedCountRef.current+=1;
+      if(voicedCountRef.current>=2)hasVoicedRef.current=true;
+    }
 
-    if(m>HANDS_FREE_VOICE_DB){
+    // Never actually heard the user — don't ship silence to Whisper (it
+    // hallucinates phantom phrases). Give up and drop the take.
+    if(!hasVoicedRef.current){
+      if(elapsed>HANDS_FREE_NOVOICE_MS){emptyTakeRef.current=true;stopRecording();}
+      return;
+    }
+
+    if(talking){
       clearSilenceTimer();
-    }else if(hasVoicedRef.current&&!silenceTimerRef.current){
+    }else if(!silenceTimerRef.current){
       silenceTimerRef.current=setTimeout(()=>{
         silenceTimerRef.current=null;
         if(recordingRef.current)stopRecording();
@@ -446,6 +462,8 @@ export default function CommandScreen({navigation}){
       await Audio.setAudioModeAsync({allowsRecordingIOS:true,playsInSilentModeIOS:true});
       const rec=new Audio.Recording();
       hasVoicedRef.current=false;
+      voicedCountRef.current=0;
+      emptyTakeRef.current=false;
       clearSilenceTimer();
       await rec.prepareToRecordAsync({...Audio.RecordingOptionsPresets.HIGH_QUALITY,isMeteringEnabled:true});
       try{rec.setProgressUpdateInterval(150);}catch{}
@@ -483,28 +501,48 @@ export default function CommandScreen({navigation}){
     if(!rec)return;
     recordingRef.current=null;
     recBusyRef.current=true; // block the loop until this recorder is fully gone
+    const wasEmpty=emptyTakeRef.current;
+    emptyTakeRef.current=false;
     let uri=null;
     try{
-      await new Promise(r=>setTimeout(r,200)); // small tail so a trailing word isn't clipped
+      await new Promise(r=>setTimeout(r,300)); // small tail so a trailing word isn't clipped
       await Promise.race([rec.stopAndUnloadAsync(),new Promise(r=>setTimeout(r,3000))]);
       uri=rec.getURI();
     }catch(e){/* recorder already gone */}
     recBusyRef.current=false;
-    if(!uri){maybeAutoListen();return;}
+    // Hands-free take that never heard a voice — drop it, don't transcribe silence.
+    if(wasEmpty||!uri){maybeAutoListen();return;}
     setLoading(true);
     try{
       const transcript=await transcribeAudio(uri);
-      if(transcript){
+      const clean=(transcript||'').trim();
+      if(clean&&!isLikelyHallucination(clean)){
         const isGroup=mode!=='direct';
-        const userMsg={id:Date.now().toString(),role:'user',content:transcript,persona:'user'};
+        const userMsg={id:Date.now().toString(),role:'user',content:clean,persona:'user'};
         if(isGroup)setGroupMessages(prev=>[...prev,userMsg]);
-        else{setMessages(prev=>[...prev,userMsg]);await saveMessage(activePersona,'user',transcript,'direct');}
-        await runRound(transcript,isGroup);
+        else{setMessages(prev=>[...prev,userMsg]);await saveMessage(activePersona,'user',clean,'direct');}
+        await runRound(clean,isGroup);
       }else{
         setLoading(false);
         maybeAutoListen();
       }
     }catch(e){Alert.alert('Voice Error',e.message);setLoading(false);maybeAutoListen();}
+  }
+
+  // Whisper invents stock phrases from silence or noise ("thank you", "you",
+  // "thanks for watching"). Drop those and near-empty transcripts in hands-free
+  // mode so a persona doesn't answer something the user never said.
+  function isLikelyHallucination(text){
+    const s=text.trim().toLowerCase().replace(/[.!?,…"'()[\]]+/g,'').replace(/\s+/g,' ').trim();
+    if(s.length<=1)return true;
+    // Classic Whisper "silence" outputs — YouTube-caption boilerplate nobody
+    // actually says to an assistant. Kept deliberately narrow so real short
+    // answers ("yes", "no", "stop") still get through.
+    const PHANTOMS=new Set(['you','thank you','thank you so much','thank you very much','thanks for watching','thank you for watching','thanks for watching everyone','please subscribe','like and subscribe','subscribe to my channel','music','[music]','uh','um','mhm','you know','subtitles by the amaraorg community']);
+    if(PHANTOMS.has(s))return true;
+    const words=s.split(' ');
+    if(words.length>=3&&new Set(words).size===1)return true; // "you you you"
+    return false;
   }
 
   async function pickImage(){
@@ -961,6 +999,7 @@ export default function CommandScreen({navigation}){
         </View>
       )}
 
+      {mode==='direct'&&activePersona==='atlas'&&<TradeStatus active={isFocused} style={{marginHorizontal:10,marginTop:6}}/>}
       {mode==='direct'&&activePersona==='atlas'&&<TradePanel active={isFocused} onEvent={pushSystemMsg}/>}
       {mode==='direct'&&activePersona==='jarvis'&&<BuildPanel active={isFocused} onMerge={confirmBuildMerge} onCancel={confirmBuildCancel}/>}
 

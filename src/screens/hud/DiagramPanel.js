@@ -299,7 +299,7 @@ export default function DiagramPanel(){
             <TouchableOpacity onPress={clearFocus} style={st.barBtn} hitSlop={HS}><Feather name="maximize" size={12} color={colors.gold}/></TouchableOpacity>
           </>
         ):(
-          <Text style={st.barHint}>{subject.toUpperCase()} · drag to rotate · tap to isolate</Text>
+          <Text style={st.barHint}>{subject.toUpperCase()}</Text>
         )}
       </View>
 

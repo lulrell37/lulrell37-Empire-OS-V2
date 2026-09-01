@@ -28,7 +28,6 @@ export default function MemoryPopup({memory,onClose,onDelete}){
               <ScrollView style={s.scroll} contentContainerStyle={{padding:16}}>
                 <Text style={s.body} selectable>{memory.content}</Text>
               </ScrollView>
-              <Text style={s.hint}>◄ SWIPE TO DELETE ►</Text>
             </View>
           </Swipeable>
         </TouchableOpacity>
