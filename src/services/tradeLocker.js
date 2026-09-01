@@ -39,6 +39,22 @@ function base(){return BASE[session.env]||BASE.demo;}
 
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 
+// Every request through one serial chain means a single hung fetch would wedge
+// the whole queue forever — the persona fires [TRADE_SCAN], the snapshot never
+// resolves, and "Atlas doesn't come back". Hard-cap every fetch so a dead
+// endpoint fails in seconds instead of hanging.
+const FETCH_TIMEOUT_MS=13000;
+async function fetchT(url,opts={},ms=FETCH_TIMEOUT_MS){
+  const ctrl=new AbortController();
+  const timer=setTimeout(()=>ctrl.abort(),ms);
+  try{
+    return await fetch(url,{...opts,signal:ctrl.signal});
+  }catch(e){
+    if(e?.name==='AbortError')throw Object.assign(new Error('TradeLocker timed out — the broker API did not respond.'),{timeout:true});
+    throw e;
+  }finally{clearTimeout(timer);}
+}
+
 // The public API sits behind Cloudflare, which rate-limits bursts with
 // "error code: 1015" (served as HTTP 429). A single scan fires ~15 calls, so
 // without a governor Cloudflare 1015s every one of them and the snapshot comes
@@ -69,7 +85,7 @@ async function authenticate(){
   }
   health.configured=true;
   session.env=creds.env==='live'?'live':'demo';
-  const res=await fetch(base()+'/auth/jwt/token',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:creds.email,password:creds.password,server:creds.server})});
+  const res=await fetchT(base()+'/auth/jwt/token',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:creds.email,password:creds.password,server:creds.server})},16000);
   const bodyText=await res.text();
   if(isRateLimit(res.status,bodyText)){const e=rateLimitError('login');markFail(e,'ratelimit');throw e;}
   if(!res.ok){const e=new Error('TradeLocker login failed: '+bodyText.slice(0,120));markFail(e,'auth');throw e;}
@@ -81,7 +97,9 @@ async function authenticate(){
 
 async function refreshToken(){
   if(!session.refresh)return authenticate();
-  const res=await fetch(base()+'/auth/jwt/refresh',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({refreshToken:session.refresh})});
+  let res;
+  try{res=await fetchT(base()+'/auth/jwt/refresh',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({refreshToken:session.refresh})},12000);}
+  catch{return authenticate();}
   if(!res.ok)return authenticate();
   const d=await res.json();
   session.token=d.accessToken;session.refresh=d.refreshToken||session.refresh;
@@ -106,6 +124,10 @@ function qs(query){
 const API_MIN_GAP_MS=200;
 let apiGate=Promise.resolve();
 let apiLast=0;
+// How many api() calls are queued or in flight — the status pill's probe skips
+// its network check while a real trading call is running so it never competes
+// with a [TRADE_SCAN].
+let apiPending=0;
 
 async function apiCall(path,method,body,query){
   const wait=API_MIN_GAP_MS-(Date.now()-apiLast);
@@ -114,7 +136,7 @@ async function apiCall(path,method,body,query){
   const t=await token();
   const headers={'Authorization':'Bearer '+t,'Content-Type':'application/json'};
   if(session.accNum!=null)headers.accNum=String(session.accNum);
-  const res=await fetch(base()+path+qs(query),{method,headers,body:body?JSON.stringify(body):undefined});
+  const res=await fetchT(base()+path+qs(query),{method,headers,body:body?JSON.stringify(body):undefined});
   const text=await res.text();
   return{res,text};
 }
@@ -124,7 +146,9 @@ async function api(path,{method='GET',body,query}={}){
     // Still cooling down from a recent 1015 — fail fast instead of piling on.
     if(tlRateLimited())throw rateLimitError(`${method} ${path}`);
     for(let attempt=0;;attempt++){
-      const{res,text}=await apiCall(path,method,body,query);
+      let res,text;
+      try{({res,text}=await apiCall(path,method,body,query));}
+      catch(e){markFail(e);throw e;} // timeout / network / auth failure
       if(isRateLimit(res.status,text)){
         if(attempt<2){await sleep(700*2**attempt+Math.random()*300);continue;}
         const e=rateLimitError(`${method} ${path}`); // also arms the cooldown
@@ -141,6 +165,8 @@ async function api(path,{method='GET',body,query}={}){
   };
   const run=apiGate.then(task,task);
   apiGate=run.then(()=>{},()=>{});
+  apiPending++;
+  run.then(()=>{apiPending--;},()=>{apiPending--;});
   return run;
 }
 
@@ -148,7 +174,7 @@ async function api(path,{method='GET',body,query}={}){
 
 export async function tlConnect(){
   await authenticate();
-  const res=await fetch(base()+'/auth/jwt/all-accounts',{headers:{'Authorization':'Bearer '+session.token,'Content-Type':'application/json'}});
+  const res=await fetchT(base()+'/auth/jwt/all-accounts',{headers:{'Authorization':'Bearer '+session.token,'Content-Type':'application/json'}},12000);
   const text=await res.text();
   if(isRateLimit(res.status,text)){const e=rateLimitError('account list');markFail(e,'ratelimit');throw e;}
   if(!res.ok){const e=new Error('TradeLocker: could not list accounts');markFail(e,'auth');throw e;}
@@ -162,18 +188,16 @@ export async function tlConnect(){
 
 export function tlStatus(){return{connected:!!session.accountId,env:session.env,accountId:session.accountId};}
 
-// Call once at app start: learn whether a login is saved (so the status reads
-// "no login" vs "connecting" correctly the instant the app opens) and quietly
-// warm the session so a reload reconnects on its own instead of showing a false
-// "not connected" until the next scan.
+// Call once at app start: learn whether a login is saved so the status reads
+// "no login" vs "connecting" correctly the instant the app opens. Does NOT hit
+// the network — the first real trading call (a panel poll or a scan) establishes
+// the session. A startup connect here just added load that tripped Cloudflare's
+// 1015 and left the next scan blocked for a minute.
 export async function tlInit(){
   try{
     const creds=await loadTradeCreds();
     health.configured=!!(creds?.email&&creds?.password&&creds?.server);
-    if(health.configured){
-      session.env=creds.env==='live'?'live':'demo';
-      ensureAccount().catch(()=>{}); // errors are recorded in `health`
-    }
+    if(health.configured)session.env=creds.env==='live'?'live':'demo';
   }catch{/* leave health.configured as-is */}
   return tlHealth();
 }
@@ -209,13 +233,14 @@ export function tlHealth(){
   return{state:'connecting',label:'CHECKING…',env,accountId:null,detail:'Checking the TradeLocker session…'};
 }
 
-// Active health probe used by the status indicator's slow tick: a cheap
-// authenticated call that also re-auths / re-establishes the session if the
-// token or the whole in-memory session went away. Never throws.
+// One-shot probe the status pill fires when it mounts: establish the session so
+// the pill can show LIVE without waiting for a panel poll. Skips entirely if a
+// real trading call is already running (never competes with a [TRADE_SCAN]) or
+// if we're already connected / throttled. Never throws.
 export async function tlPing(){
   try{
     if(health.configured==null)await tlInit();
-    if(health.configured===false||tlRateLimited())return tlHealth();
+    if(health.configured===false||tlRateLimited()||session.accountId||apiPending>0||connecting)return tlHealth();
     await tlAccountState();
   }catch(e){markFail(e);}
   return tlHealth();

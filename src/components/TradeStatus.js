@@ -1,8 +1,7 @@
-// Always-on TradeLocker connection indicator. Shows the truthful state at all
-// times — LIVE / CONNECTING / THROTTLED / OFFLINE / NO LOGIN — polling the
-// cheap synchronous tlHealth() every few seconds and running an active tlPing()
-// on a slower tick that also re-establishes a dropped session on its own.
-import React,{useState,useEffect,useRef,useCallback}from 'react';
+// Always-on TradeLocker connection indicator — LIVE / CONNECTING / THROTTLED /
+// OFFLINE / NO LOGIN. Reads the cheap synchronous tlHealth() on a timer (the
+// trading panel polls keep that state fresh) and fires one lazy connect on mount.
+import React,{useState,useEffect,useRef}from 'react';
 import{View,Text,StyleSheet,TouchableOpacity}from 'react-native';
 import{tlHealth,tlPing}from '../services/tradeLocker';
 import{colors,FONTS,radius,space}from '../theme';
@@ -15,30 +14,24 @@ const TONE={
   unconfigured:{dot:colors.textFaint,text:colors.textDim,border:colors.hairline},
 };
 
-const FAST_MS=3000;   // reflect state changes quickly
-const SLOW_MS=20000;  // actively verify + self-heal a dropped session
+const FAST_MS=3500;   // reflect state changes quickly (sync read, no network)
 
 export default function TradeStatus({active=true,style,onPress,showDetail=false}){
   const[h,setH]=useState(()=>tlHealth());
   const alive=useRef(true);
 
-  const tick=useCallback(async(probe)=>{
-    if(probe){
-      const next=await tlPing();
-      if(alive.current)setH(next);
-    }else if(alive.current){
-      setH(tlHealth());
-    }
-  },[]);
-
   useEffect(()=>{
     alive.current=true;
-    if(!active){setH(tlHealth());return()=>{alive.current=false;};}
-    tick(true);
-    const fast=setInterval(()=>tick(false),FAST_MS);
-    const slow=setInterval(()=>tick(true),SLOW_MS);
-    return()=>{alive.current=false;clearInterval(fast);clearInterval(slow);};
-  },[active,tick]);
+    setH(tlHealth());
+    if(!active)return()=>{alive.current=false;};
+    // One lazy connect attempt on mount so the pill can show LIVE even on a
+    // screen that doesn't otherwise poll (Settings). tlPing no-ops if a real
+    // trading call is already running or we're already connected.
+    tlPing().then(next=>{if(alive.current)setH(next);}).catch(()=>{});
+    // Everything after is a synchronous read of state the trading polls update.
+    const fast=setInterval(()=>{if(alive.current)setH(tlHealth());},FAST_MS);
+    return()=>{alive.current=false;clearInterval(fast);};
+  },[active]);
 
   const tone=TONE[h.state]||TONE.connecting;
   const env=h.env&&h.state!=='unconfigured'?` · ${h.env.toUpperCase()}`:'';
