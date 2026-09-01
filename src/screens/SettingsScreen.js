@@ -4,6 +4,7 @@ import{SafeAreaView}from 'react-native-safe-area-context';
 import*as ImagePicker from 'expo-image-picker';
 import{saveKeys,loadKeys,saveGoogleToken,loadGoogleToken,clearGoogleToken,saveTradeCreds,loadTradeCreds,clearTradeCreds,saveGitHubToken,loadGitHubToken,clearGitHubToken,saveBackend,loadBackend,clearBackend}from '../services/keyStore';
 import{runSync,pingBackend,initSyncStatus}from '../services/sync';
+import{registerPushToken,unregisterPushToken,sendTestPush}from '../services/push';
 import{tlConnect,tlReset}from '../services/tradeLocker';
 import{ghVerify}from '../services/buildAgent';
 import{saveCustomPrompt,getCustomPrompt,getApiUsage,getAllPersonaPics,savePersonaPic,getSetting,setSetting}from '../services/database';
@@ -71,8 +72,15 @@ export default function SettingsScreen({navigation}){
       setBeUrl(saved.url);setBeConfigured(true);
       const st=await runSync({full:true});
       setBeSync({lastSync:st.lastSync,error:st.error,running:st.running});
-      Alert.alert(st.error?'Connected · first sync failed':'Connected',st.error||'Backend linked. This device now syncs and routes AI calls through it.');
+      registerPushToken().catch(()=>{});
+      Alert.alert(st.error?'Connected · first sync failed':'Connected',st.error||'Backend linked. This device now syncs, routes AI calls through it, and gets scheduled nudges.');
     }catch(e){Alert.alert('Backend',e.message);}
+    finally{setBeBusy(false);}
+  }
+  async function testPush(){
+    setBeBusy(true);
+    try{await registerPushToken();const r=await sendTestPush();Alert.alert('Test sent',`Pushed to ${r.devices} device${r.devices===1?'':'s'}. It should arrive in a few seconds.`);}
+    catch(e){Alert.alert('Test push',e.message);}
     finally{setBeBusy(false);}
   }
   async function syncNow(){
@@ -86,6 +94,7 @@ export default function SettingsScreen({navigation}){
     finally{setBeBusy(false);}
   }
   async function disconnectBackend(){
+    await unregisterPushToken().catch(()=>{});
     await clearBackend();setBeConfigured(false);setBeToken('');setBeSync({lastSync:0,error:null,running:false});
     Alert.alert('Disconnected','Backend removed. This device is fully local again.');
   }
@@ -303,10 +312,13 @@ export default function SettingsScreen({navigation}){
               <TouchableOpacity style={[s.saveBtn,{flex:1,marginTop:0,backgroundColor:'#111',borderWidth:1,borderColor:'#333'}]} onPress={syncNow} disabled={beBusy}><Text style={[s.saveBtnT,{color:'#E8C98A'}]}>SYNC NOW</Text></TouchableOpacity>
               <TouchableOpacity style={[s.saveBtn,{flex:1,marginTop:0,backgroundColor:'#111',borderWidth:1,borderColor:'#333'}]} onPress={fullResync} disabled={beBusy}><Text style={[s.saveBtnT,{color:'#E8C98A'}]}>FULL RESYNC</Text></TouchableOpacity>
             </View>}
+            {beConfigured&&<TouchableOpacity style={[s.saveBtn,{backgroundColor:'#111',borderWidth:1,borderColor:'#333',marginTop:10}]} onPress={testPush} disabled={beBusy}>
+              <Text style={[s.saveBtnT,{color:'#E8C98A'}]}>SEND TEST PUSH</Text>
+            </TouchableOpacity>}
             {beConfigured&&<TouchableOpacity style={[s.saveBtn,{backgroundColor:'#111',borderWidth:1,borderColor:'#333',marginTop:10}]} onPress={disconnectBackend}>
               <Text style={[s.saveBtnT,{color:'#E05555'}]}>DISCONNECT</Text>
             </TouchableOpacity>}
-            <Text style={[s.secSub,{marginTop:20,marginBottom:0}]}>The token must match the server's SYNC_TOKEN secret exactly. Every device you connect with the same URL and token shares one dataset, last write wins.</Text>
+            <Text style={[s.secSub,{marginTop:20,marginBottom:0}]}>The token must match the server's SYNC_TOKEN secret exactly. Every device you connect with the same URL and token shares one dataset, last write wins. Nudges (morning briefing, routine and streak reminders, build-pipeline alerts) are sent by the server on a schedule.</Text>
           </View>}
           {tab==='AI'&&<View>
             <Text style={s.secTitle}>AI BEHAVIOR</Text>

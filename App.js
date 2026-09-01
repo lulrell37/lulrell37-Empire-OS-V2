@@ -21,6 +21,7 @@ import SettingsScreen from './src/screens/SettingsScreen';
 import{initDatabase}from './src/services/database';
 import{loadKeys}from './src/services/keyStore';
 import{runSync,initSyncStatus}from './src/services/sync';
+import{registerPushToken}from './src/services/push';
 import{tlInit}from './src/services/tradeLocker';
 import{getAllPersonaPics}from './src/services/database';
 import useEmpireStore from './src/store/useEmpireStore';
@@ -42,6 +43,7 @@ export default function App(){
         tlInit().catch(()=>{}); // learn the TradeLocker login state + warm the session
         await initSyncStatus().catch(()=>{});
         runSync().catch(()=>{}); // no-op unless a backend is configured
+        registerPushToken().catch(()=>{}); // no-op unless a backend is configured
       }
       catch(e){console.warn('Init error:',e);reportError('Init error: '+e.message);}
       finally{setIsReady(true);await SplashScreen.hideAsync();}

@@ -28,6 +28,8 @@ Key pinned native-module versions for SDK 51:
 | react-native-gesture-handler | ~2.16.1 |
 | react-native-svg | 15.2.0 |
 | expo-av | ~14.0.7 |
+| expo-notifications | ~0.28.19 |
+| expo-device | ~6.0.2 |
 
 ## Builds
 

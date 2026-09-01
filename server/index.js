@@ -1,7 +1,9 @@
 require('dotenv').config();
 const express = require('express');
+const cron = require('node-cron');
 const db = require('./db');
 const auth = require('./auth');
+const { runNudgeCycle } = require('./pushSender');
 
 const app = express();
 app.disable('x-powered-by');
@@ -28,8 +30,22 @@ const PORT = process.env.PORT || 3000;
 db.init()
   .then(() => {
     app.listen(PORT, '0.0.0.0', () => console.log(`Empire OS backend listening on :${PORT}`));
+    startNudgeCron();
   })
   .catch((e) => {
     console.error('DB init failed:', e.message);
     process.exit(1);
   });
+
+// The scheduled nudge sender. Ticks every 30 minutes; each nudge's own time
+// window + push_log keep it to one send per occurrence. Set NUDGES=off to
+// disable (e.g. for a second instance or local dev).
+function startNudgeCron() {
+  if (process.env.NUDGES === 'off') return console.log('nudge cron disabled (NUDGES=off)');
+  cron.schedule('*/30 * * * *', () => {
+    runNudgeCycle()
+      .then((r) => { if (r.sent.length) console.log('nudges sent:', r.sent.join(', ')); })
+      .catch((e) => console.error('nudge cycle failed:', e.message));
+  });
+  console.log('nudge cron scheduled (every 30m)');
+}
