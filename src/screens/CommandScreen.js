@@ -71,6 +71,7 @@ export default function CommandScreen({navigation}){
   const voicePausedRef=useRef(false);
   const silenceTimerRef=useRef(null);
   const hasVoicedRef=useRef(false);
+  const recBusyRef=useRef(false); // true while a recorder is preparing OR being torn down
   const{addRelay}=useEmpireStore();
   const isFocused=useIsFocused();
 
@@ -88,10 +89,10 @@ export default function CommandScreen({navigation}){
     if(!handsFree||voicePaused)return;
     if(loading||recording||!isFocused)return;
     const t=setTimeout(()=>{
-      if(handsFreeRef.current&&!loadingRef.current&&!recordingRef.current&&!voicePausedRef.current&&!soundRef.current){
+      if(handsFreeRef.current&&!loadingRef.current&&!recordingRef.current&&!recBusyRef.current&&!voicePausedRef.current&&!soundRef.current){
         startRecording();
       }
-    },450);
+    },500);
     return()=>clearTimeout(t);
   },[handsFree,voicePaused,loading,recording,isFocused]);// eslint-disable-line react-hooks/exhaustive-deps
   useEffect(()=>{if(mode==='direct')loadHistory(activePersona);},[activePersona,mode]);
@@ -410,9 +411,11 @@ export default function CommandScreen({navigation}){
   }
 
   async function startRecording(){
+    if(recBusyRef.current||recordingRef.current)return; // one already live or tearing down
+    recBusyRef.current=true;
     try{
       const{status}=await Audio.requestPermissionsAsync();
-      if(status!=='granted'){Alert.alert('Permission','Microphone access required.');return;}
+      if(status!=='granted'){Alert.alert('Permission','Microphone access required.');recBusyRef.current=false;return;}
       await Audio.setAudioModeAsync({allowsRecordingIOS:true,playsInSilentModeIOS:true});
       const rec=new Audio.Recording();
       hasVoicedRef.current=false;
@@ -423,35 +426,49 @@ export default function CommandScreen({navigation}){
       await rec.startAsync();
       recordingRef.current=rec;
       setRecording(true);
-    }catch(e){Alert.alert('Error','Could not start recording: '+e.message);}
+      recBusyRef.current=false;
+    }catch(e){
+      recBusyRef.current=false;
+      try{await Audio.setAudioModeAsync({allowsRecordingIOS:false,playsInSilentModeIOS:true});}catch{}
+      // "Only one Recording object can be prepared at a given time" — a previous
+      // recorder hasn't finished unloading. Stay quiet and let the loop retry.
+      if(!/only one recording|prepared/i.test(String(e&&e.message))){
+        Alert.alert('Error','Could not start recording: '+e.message);
+      }else if(handsFreeRef.current){
+        setTimeout(()=>maybeAutoListen(),700);
+      }
+    }
   }
 
   async function stopRecording(){
+    clearSilenceTimer();
+    setRecording(false);
+    const rec=recordingRef.current;
+    if(!rec)return;
+    recordingRef.current=null;
+    recBusyRef.current=true; // block the loop until this recorder is fully gone
+    let uri=null;
     try{
-      clearSilenceTimer();
-      setRecording(false);
-      if(!recordingRef.current)return;
-      const rec=recordingRef.current;
-      recordingRef.current=null;
-      await new Promise(r=>setTimeout(r,500)); // keep recording a moment so the last word + a tail of silence make it into the clip
-      await rec.stopAndUnloadAsync();
-      const uri=rec.getURI();
-      if(!uri)return;
-      setLoading(true);
-      try{
-        const transcript=await transcribeAudio(uri);
-        if(transcript){
-          const isGroup=mode!=='direct';
-          const userMsg={id:Date.now().toString(),role:'user',content:transcript,persona:'user'};
-          if(isGroup)setGroupMessages(prev=>[...prev,userMsg]);
-          else{setMessages(prev=>[...prev,userMsg]);await saveMessage(activePersona,'user',transcript,'direct');}
-          await runRound(transcript,isGroup);
-        }else{
-          setLoading(false);
-          maybeAutoListen();
-        }
-      }catch(e){Alert.alert('Voice Error',e.message);setLoading(false);maybeAutoListen();}
-    }catch(e){setLoading(false);Alert.alert('Error',e.message);}
+      await new Promise(r=>setTimeout(r,200)); // small tail so a trailing word isn't clipped
+      await Promise.race([rec.stopAndUnloadAsync(),new Promise(r=>setTimeout(r,3000))]);
+      uri=rec.getURI();
+    }catch(e){/* recorder already gone */}
+    recBusyRef.current=false;
+    if(!uri){maybeAutoListen();return;}
+    setLoading(true);
+    try{
+      const transcript=await transcribeAudio(uri);
+      if(transcript){
+        const isGroup=mode!=='direct';
+        const userMsg={id:Date.now().toString(),role:'user',content:transcript,persona:'user'};
+        if(isGroup)setGroupMessages(prev=>[...prev,userMsg]);
+        else{setMessages(prev=>[...prev,userMsg]);await saveMessage(activePersona,'user',transcript,'direct');}
+        await runRound(transcript,isGroup);
+      }else{
+        setLoading(false);
+        maybeAutoListen();
+      }
+    }catch(e){Alert.alert('Voice Error',e.message);setLoading(false);maybeAutoListen();}
   }
 
   async function pickImage(){
@@ -460,8 +477,8 @@ export default function CommandScreen({navigation}){
       if(status!=='granted'){Alert.alert('Permission','Photo library access required.');return;}
       const result=await ImagePicker.launchImageLibraryAsync({mediaTypes:ImagePicker.MediaTypeOptions.Images,quality:0.8});
       if(!result.canceled&&result.assets[0]){
-        const msg=`[Image attached]\n${input.trim()||'What do you see in this image?'}`;
-        setInput('');
+        const msg=`[Image attached]\n${(inputRef.current||input).trim()||'What do you see in this image?'}`;
+        setInput('');inputRef.current='';try{textInputRef.current?.clear();}catch{}
         const userMsg={id:Date.now().toString(),role:'user',content:msg,persona:'user',image:result.assets[0].uri};
         const isGroup=mode!=='direct';
         if(isGroup)setGroupMessages(prev=>[...prev,userMsg]);
@@ -476,8 +493,8 @@ export default function CommandScreen({navigation}){
       const result=await DocumentPicker.getDocumentAsync({type:'*/*',copyToCacheDirectory:true});
       if(!result.canceled&&result.assets[0]){
         const doc=result.assets[0];
-        const msg=`[Document: ${doc.name}]\n${input.trim()||'Analyze this document.'}`;
-        setInput('');
+        const msg=`[Document: ${doc.name}]\n${(inputRef.current||input).trim()||'Analyze this document.'}`;
+        setInput('');inputRef.current='';try{textInputRef.current?.clear();}catch{}
         const userMsg={id:Date.now().toString(),role:'user',content:msg,persona:'user'};
         const isGroup=mode!=='direct';
         if(isGroup)setGroupMessages(prev=>[...prev,userMsg]);
@@ -498,8 +515,8 @@ export default function CommandScreen({navigation}){
     try{
       const photo=await cameraRef.takePictureAsync({quality:0.8});
       setShowCamera(false);
-      const msg=`[Photo taken]\n${input.trim()||'What do you see in this photo?'}`;
-      setInput('');
+      const msg=`[Photo taken]\n${(inputRef.current||input).trim()||'What do you see in this photo?'}`;
+      setInput('');inputRef.current='';try{textInputRef.current?.clear();}catch{}
       const userMsg={id:Date.now().toString(),role:'user',content:msg,persona:'user',image:photo.uri};
       const isGroup=mode!=='direct';
       if(isGroup)setGroupMessages(prev=>[...prev,userMsg]);
@@ -516,13 +533,15 @@ export default function CommandScreen({navigation}){
   const launchGroupFromOrb=useCallback((ids)=>{setCustomPersonas(ids);setMode('custom');setView('text');},[]);
 
   async function send(){
-    // Blur first so the keyboard commits any word still in the IME's compose
-    // buffer, then wait a beat for that final onChangeText to land before reading.
+    // The input is uncontrolled (no `value` prop) so Android never drops the last
+    // keystroke to a state/native race. inputRef holds the live text; blur once to
+    // flush any IME composition, then read it.
     try{textInputRef.current?.blur();}catch{}
-    Keyboard.dismiss();
-    await new Promise(r=>setTimeout(r,60));
+    await new Promise(r=>setTimeout(r,40));
     const text=(inputRef.current||input).trim();if(!text||loading)return;
-    inputRef.current='';setInput('');abortRef.current?.abort();stopAudio();
+    inputRef.current='';setInput('');
+    try{textInputRef.current?.clear();}catch{}
+    Keyboard.dismiss();abortRef.current?.abort();stopAudio();
     const isGroup=mode!=='direct';
     const userMsg={id:Date.now().toString(),role:'user',content:text,persona:'user'};
     if(isGroup)setGroupMessages(prev=>[...prev,userMsg]);
@@ -612,8 +631,14 @@ export default function CommandScreen({navigation}){
         await handleCommands(response,pid,cmdCallbacks);
         if(willVoice){
           patch(m=>({...m,content:display,revealed:0,streaming:true}));
-          const{finalText}=await speakWithReveal(display,p,msgId,isGroup);
-          if(!isGroup)await saveMessage(pid,'assistant',finalText,'direct');
+          await speakWithReveal(display,p,msgId,isGroup);
+          // speakWithReveal only drives the reveal animation — the reply text is
+          // always the full `display`. Settle the bubble on it regardless of how
+          // the reveal ended, unless the user has moved on.
+          if(!myAbort.signal.aborted){
+            patch(m=>({...m,content:display,revealed:display.length,streaming:false}));
+            if(!isGroup)await saveMessage(pid,'assistant',display,'direct');
+          }
         }else{
           vizRef.speaking=false;vizRef.amplitude=0;
           patch(m=>({...m,content:display,revealed:display.length,streaming:false}));
@@ -844,7 +869,7 @@ export default function CommandScreen({navigation}){
       <KeyboardAvoidingView behavior={Platform.OS==='ios'?'padding':'height'}>
         <View style={s.inputArea}>
           <View style={s.inputRow}>
-            <TextInput ref={textInputRef} style={s.input} value={input} onChangeText={t=>{inputRef.current=t;setInput(t);}} placeholder="Speak your directive..." placeholderTextColor="#333" multiline maxLength={2000} autoCorrect={false} autoComplete="off" autoCapitalize="sentences"/>
+            <TextInput ref={textInputRef} style={s.input} defaultValue="" onChangeText={t=>{inputRef.current=t;setInput(t);}} placeholder="Speak your directive..." placeholderTextColor="#333" multiline maxLength={2000} autoCorrect={false} autoComplete="off" autoCapitalize="sentences" spellCheck={false}/>
             <TouchableOpacity style={[s.sendBtn,{backgroundColor:mode==='direct'?cp.color:'#E8C98A'}]} onPress={send} disabled={loading||!input.trim()}>
               <Text style={s.sendT}>SEND</Text>
             </TouchableOpacity>

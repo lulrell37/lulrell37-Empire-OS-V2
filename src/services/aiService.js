@@ -67,24 +67,31 @@ function xhrStream({url,headers,body,signal,onEvent}){
     xhr.setRequestHeader('Accept','text/event-stream');
     for(const key in headers)xhr.setRequestHeader(key,headers[key]);
     let seen=0,failed=null;
-    const pump=()=>{
+    const handleLine=(line)=>{
+      line=line.trim();
+      if(!line.startsWith('data:'))return;
+      const payload=line.slice(5).trim();
+      if(!payload||payload==='[DONE]')return;
+      let json;try{json=JSON.parse(payload);}catch{return;}
+      try{onEvent(json);}catch(err){failed=err;try{xhr.abort();}catch{}}
+    };
+    const pump=(final)=>{
       if(failed)return;
       const buf=xhr.responseText||'';
       let nl;
       while((nl=buf.indexOf('\n',seen))>=0){
-        const line=buf.slice(seen,nl).trim();
+        handleLine(buf.slice(seen,nl));
         seen=nl+1;
-        if(!line.startsWith('data:'))continue;
-        const payload=line.slice(5).trim();
-        if(!payload||payload==='[DONE]')continue;
-        let json;try{json=JSON.parse(payload);}catch{continue;}
-        try{onEvent(json);}catch(err){failed=err;try{xhr.abort();}catch{}return;}
+        if(failed)return;
       }
+      // On the last read, flush a final line that has no newline terminator —
+      // some servers don't send a trailing \n, which was dropping the last token.
+      if(final&&seen<buf.length){handleLine(buf.slice(seen));seen=buf.length;}
     };
-    xhr.onprogress=pump;
-    xhr.onreadystatechange=()=>{if(xhr.readyState===3)pump();}; // RN delivers partial text here
+    xhr.onprogress=()=>pump(false);
+    xhr.onreadystatechange=()=>{if(xhr.readyState===3)pump(false);}; // RN delivers partial text here
     xhr.onload=()=>{
-      pump();
+      pump(true);
       if(failed)return reject(failed);
       if(xhr.status>=200&&xhr.status<300)resolve();
       else reject(new Error(`HTTP ${xhr.status}: ${String(xhr.responseText||'').substring(0,160)}`));
