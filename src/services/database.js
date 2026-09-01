@@ -18,6 +18,7 @@ export async function initDatabase(){
     CREATE TABLE IF NOT EXISTS app_settings(key TEXT PRIMARY KEY,value TEXT);
     CREATE TABLE IF NOT EXISTS expenses(id INTEGER PRIMARY KEY AUTOINCREMENT,amount REAL,category TEXT,note TEXT,date TEXT,created_at INTEGER);
     CREATE TABLE IF NOT EXISTS important_dates(id INTEGER PRIMARY KEY AUTOINCREMENT,label TEXT,date TEXT,note TEXT,created_at INTEGER);
+    CREATE TABLE IF NOT EXISTS build_jobs(issue_number INTEGER PRIMARY KEY,pr_number INTEGER,spec TEXT,state TEXT,question TEXT,last_comment_id INTEGER DEFAULT 0,title TEXT,created_at INTEGER,updated_at INTEGER);
   `);
   await migrateHudColumns();
   await migratePersonaMemory();
@@ -358,3 +359,27 @@ export async function saveCustomPrompt(persona,prompt){await db.runAsync('INSERT
 export async function getCustomPrompt(persona){const r=await db.getFirstAsync('SELECT prompt FROM custom_prompts WHERE persona=?',[persona]);return r?.prompt||null;}
 export async function trackApiUsage(provider,tokensIn,tokensOut){const today=getTodayStr();const ex=await db.getFirstAsync('SELECT * FROM api_usage WHERE provider=? AND date=?',[provider,today]);if(ex){await db.runAsync('UPDATE api_usage SET tokens_in=tokens_in+?,tokens_out=tokens_out+? WHERE id=?',[tokensIn,tokensOut,ex.id]);}else{await db.runAsync('INSERT INTO api_usage(provider,tokens_in,tokens_out,date,created_at) VALUES(?,?,?,?,?)',[provider,tokensIn,tokensOut,today,Date.now()]);}}
 export async function getApiUsage(){return await db.getAllAsync('SELECT * FROM api_usage ORDER BY date DESC LIMIT 30');}
+
+// --- Build jobs (JARVIS build pipeline) ---
+// state: queued | working | question | pr_open | merging | pushed | failed | cancelled
+const BUILD_TERMINAL=['pushed','failed','cancelled'];
+export async function addBuildJob({issueNumber,spec,title,state='queued'}){
+  const now=Date.now();
+  await db.runAsync(
+    'INSERT OR REPLACE INTO build_jobs(issue_number,pr_number,spec,state,question,last_comment_id,title,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)',
+    [issueNumber,null,spec||'',state,null,0,title||'',now,now],
+  );
+  return issueNumber;
+}
+export async function updateBuildJob(issueNumber,patch){
+  const keys=Object.keys(patch);
+  if(!keys.length)return;
+  const fields=keys.map(k=>`${k}=?`).join(',');
+  await db.runAsync(`UPDATE build_jobs SET ${fields},updated_at=? WHERE issue_number=?`,[...keys.map(k=>patch[k]),Date.now(),issueNumber]);
+}
+export async function getBuildJobs(limit=40){return await db.getAllAsync('SELECT * FROM build_jobs ORDER BY created_at DESC LIMIT ?',[limit]);}
+export async function getActiveBuildJobs(){
+  const q=BUILD_TERMINAL.map(()=>'?').join(',');
+  return await db.getAllAsync(`SELECT * FROM build_jobs WHERE state NOT IN (${q}) ORDER BY created_at DESC`,BUILD_TERMINAL);
+}
+export async function getBuildJob(issueNumber){return await db.getFirstAsync('SELECT * FROM build_jobs WHERE issue_number=?',[issueNumber]);}

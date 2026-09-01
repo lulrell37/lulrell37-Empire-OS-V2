@@ -2,15 +2,16 @@ import React,{useState,useEffect}from 'react';
 import{View,Text,StyleSheet,TextInput,TouchableOpacity,ScrollView,Alert,KeyboardAvoidingView,Platform,Image}from 'react-native';
 import{SafeAreaView}from 'react-native-safe-area-context';
 import*as ImagePicker from 'expo-image-picker';
-import{saveKeys,loadKeys,saveGoogleToken,loadGoogleToken,clearGoogleToken,saveTradeCreds,loadTradeCreds,clearTradeCreds}from '../services/keyStore';
+import{saveKeys,loadKeys,saveGoogleToken,loadGoogleToken,clearGoogleToken,saveTradeCreds,loadTradeCreds,clearTradeCreds,saveGitHubToken,loadGitHubToken,clearGitHubToken}from '../services/keyStore';
 import{tlConnect,tlReset}from '../services/tradeLocker';
+import{ghVerify}from '../services/buildAgent';
 import TradeStatus from '../components/TradeStatus';
 import{saveCustomPrompt,getCustomPrompt,getApiUsage,getAllPersonaPics,savePersonaPic,getSetting,setSetting}from '../services/database';
 import{getCrashLog,clearCrashLog}from '../services/crashLog';
 import{PERSONA_LIST,getPersona}from '../personas/personas';
 import{useGoogleAuth}from '../services/googleAuth';
 import useEmpireStore from '../store/useEmpireStore';
-const TABS=['KEYS','GOOGLE','TRADING','AI','PROFILES','PROMPTS','USAGE','DIAGNOSTICS'];
+const TABS=['KEYS','GOOGLE','TRADING','DEV','AI','PROFILES','PROMPTS','USAGE','DIAGNOSTICS'];
 export default function SettingsScreen({navigation}){
   const[tab,setTab]=useState('KEYS');
   const[claude,setClaude]=useState('');const[grok,setGrok]=useState('');const[openai,setOpenai]=useState('');const[elevenlabs,setElevenlabs]=useState('');const[meshy,setMeshy]=useState('');
@@ -25,6 +26,9 @@ export default function SettingsScreen({navigation}){
   const[tl,setTl]=useState({email:'',password:'',server:'',env:'demo'});
   const[tlBusy,setTlBusy]=useState(false);
   const[tlAccount,setTlAccount]=useState(null);
+  const[ghToken,setGhToken]=useState('');
+  const[ghBusy,setGhBusy]=useState(false);
+  const[ghStatus,setGhStatus]=useState(null); // {ok,repo,error}
   const{personaPics,setPersonaPics}=useEmpireStore();
   const[request,response,promptAsync]=useGoogleAuth();
   useEffect(()=>{loadAll();},[]);
@@ -46,6 +50,7 @@ export default function SettingsScreen({navigation}){
     setMemoryRecall((await getSetting('memory_recall','1'))==='1');
     setDeepConfirm((await getSetting('deep_research_confirm','1'))==='1');
     const tc=await loadTradeCreds();if(tc)setTl({email:tc.email||'',password:tc.password||'',server:tc.server||'',env:tc.env||'demo'});
+    const gt=await loadGitHubToken();if(gt){setGhToken(gt);ghVerify().then(setGhStatus);}
     setCrashes(await getCrashLog().catch(()=>[]));
   }
   async function connectTradeLocker(){
@@ -63,6 +68,20 @@ export default function SettingsScreen({navigation}){
   async function disconnectTradeLocker(){
     await clearTradeCreds();tlReset();setTlAccount(null);setTl({email:'',password:'',server:'',env:'demo'});
     Alert.alert('Disconnected','TradeLocker login removed.');
+  }
+  async function connectGitHub(){
+    if(!ghToken.trim()){Alert.alert('Required','Paste a GitHub token first.');return;}
+    setGhBusy(true);
+    try{
+      await saveGitHubToken(ghToken.trim());
+      const st=await ghVerify();
+      setGhStatus(st);
+      Alert.alert(st.ok?'Connected':'Not connected',st.ok?`Linked to ${st.repo}. JARVIS can now send build requests.`:st.error);
+    }finally{setGhBusy(false);}
+  }
+  async function disconnectGitHub(){
+    await clearGitHubToken();setGhToken('');setGhStatus(null);
+    Alert.alert('Disconnected','GitHub token removed. JARVIS can no longer file build requests.');
   }
   async function toggleMemoryRecall(){const nv=!memoryRecall;setMemoryRecall(nv);await setSetting('memory_recall',nv?'1':'0');}
   async function toggleDeepConfirm(){const nv=!deepConfirm;setDeepConfirm(nv);await setSetting('deep_research_confirm',nv?'1':'0');}
@@ -197,6 +216,24 @@ export default function SettingsScreen({navigation}){
             <TouchableOpacity style={[s.saveBtn,{backgroundColor:'#111',borderWidth:1,borderColor:'#333',marginTop:10}]} onPress={disconnectTradeLocker}>
               <Text style={[s.saveBtnT,{color:'#E05555'}]}>DISCONNECT</Text>
             </TouchableOpacity>
+          </View>}
+          {tab==='DEV'&&<View>
+            <Text style={s.secTitle}>BUILD PIPELINE</Text>
+            <Text style={s.secSub}>JARVIS files what you ask for as a GitHub issue; Claude Code implements it, opens a pull request, and JARVIS relays the questions and tells you when it's shipped. Runs only while the app is open. Every run bills your Anthropic key.</Text>
+            {ghStatus&&<View style={[s.tlAcctCard,{marginTop:0,marginBottom:16,borderColor:ghStatus.ok?'#2c4a38':'#4a2c2c'}]}>
+              <Text style={[s.tlAcctLine,{color:ghStatus.ok?'#5FA779':'#C7614B'}]}>{ghStatus.ok?`CONNECTED · ${ghStatus.repo}`:`NOT CONNECTED · ${ghStatus.error}`}</Text>
+            </View>}
+            <View style={s.keyField}>
+              <Text style={s.keyLabel}>GITHUB TOKEN</Text>
+              <TextInput style={s.keyInput} value={ghToken} onChangeText={setGhToken} placeholder="github_pat_…" placeholderTextColor="#1A1A1A" secureTextEntry autoCapitalize="none" autoCorrect={false}/>
+            </View>
+            <TouchableOpacity style={s.saveBtn} onPress={connectGitHub} disabled={ghBusy}>
+              <Text style={s.saveBtnT}>{ghBusy?'CHECKING…':'CONNECT'}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[s.saveBtn,{backgroundColor:'#111',borderWidth:1,borderColor:'#333',marginTop:10}]} onPress={disconnectGitHub}>
+              <Text style={[s.saveBtnT,{color:'#E05555'}]}>DISCONNECT</Text>
+            </TouchableOpacity>
+            <Text style={[s.secSub,{marginTop:20,marginBottom:0}]}>ONE-TIME GITHUB SETUP{'\n'}1 · Repo → Settings → Secrets and variables → Actions → add ANTHROPIC_API_KEY (sk-ant-…). Without it Claude Code can't run.{'\n'}2 · Repo → Settings → Actions → General → enable "Allow GitHub Actions to create and approve pull requests."{'\n'}3 · github.com/settings/tokens → fine-grained token, this repo only, with Contents + Issues + Pull requests set to Read and write. Paste it above.</Text>
           </View>}
           {tab==='AI'&&<View>
             <Text style={s.secTitle}>AI BEHAVIOR</Text>

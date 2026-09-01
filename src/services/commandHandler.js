@@ -53,6 +53,19 @@ export async function handleCommands(response,personaId,callbacks={}){
   for(const m of response.matchAll(/\[DEEP_RESEARCH:\s*([^\]]+)\]/gi)){
     if(m[1]?.trim())callbacks.onDeepResearch?.(m[1].trim());
   }
+  // --- JARVIS build pipeline ---
+  for(const m of response.matchAll(/\[BUILD_REQUEST:\s*([^\]]+)\]/gi)){
+    if(m[1]?.trim())callbacks.onBuildRequest?.({spec:m[1].trim()});
+  }
+  for(const m of response.matchAll(/\[BUILD_REPLY:\s*#?(\d+)\s*\|\s*([^\]]+)\]/gi)){
+    callbacks.onBuildReply?.({issueNumber:parseInt(m[1],10),text:m[2].trim()});
+  }
+  for(const m of response.matchAll(/\[BUILD_MERGE:\s*#?(\d+)\]/gi)){
+    callbacks.onBuildMerge?.({issueNumber:parseInt(m[1],10)});
+  }
+  for(const m of response.matchAll(/\[BUILD_CANCEL:\s*#?(\d+)\]/gi)){
+    callbacks.onBuildCancel?.({issueNumber:parseInt(m[1],10)});
+  }
   for(const m of response.matchAll(/\[SHOW_CHART:\s*([^\]]+)\]/gi)){
     if(m[1]?.trim())callbacks.onShowChart?.(m[1].trim());
   }
@@ -140,5 +153,7 @@ export function stripCommands(text){
     .replace(/\[TRADE_SCAN\]/gi,'').replace(/\[TRADE_REVIEW\]/gi,'').replace(/\[TRADE_PROPOSE:[^\]]*\]/gi,'').replace(/\[TRADE_CLOSE:[^\]]*\]/gi,'')
     .replace(/\[ADD_EXPENSE:[^\]]*\]/gi,'').replace(/\[ADD_DATE:[^\]]*\]/gi,'').replace(/\[EXPENSE_SUMMARY\]/gi,'')
     .replace(/\[SHOW_CHART:[^\]]*\]/gi,'')
+    .replace(/\[BUILD_REQUEST:[^\]]*\]/gi,'').replace(/\[BUILD_REPLY:[^\]]*\]/gi,'')
+    .replace(/\[BUILD_MERGE:[^\]]*\]/gi,'').replace(/\[BUILD_CANCEL:[^\]]*\]/gi,'').replace(/\[BUILD_STATUS\]/gi,'')
     .replace(/\[SEND_SMS:[^\]]*\]/gi,'').trim();
 }

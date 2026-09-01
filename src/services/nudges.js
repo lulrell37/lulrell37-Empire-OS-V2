@@ -2,7 +2,7 @@
 // data (tasks, routine, streak, important dates). Surfaced both in the Command
 // screen strip and injected into every persona's context so they can raise
 // things before being asked. In-app only; real push needs expo-notifications.
-import{getTasks,getHudState,getUpcomingDates}from './database';
+import{getTasks,getHudState,getUpcomingDates,getActiveBuildJobs}from './database';
 
 export async function computeNudges(){
   const out=[];
@@ -34,6 +34,13 @@ export async function computeNudges(){
   try{
     const d=await getUpcomingDates(3);
     for(const x of d)out.push({key:'date-'+x.id,text:`${x.label} ${x.daysOut===0?'today':x.daysOut===1?'tomorrow':`in ${x.daysOut}d`}`});
+  }catch{}
+
+  try{
+    for(const j of await getActiveBuildJobs()){
+      if(j.state==='question')out.push({key:'build-q-'+j.issue_number,text:`Claude Code needs your answer on #${j.issue_number}`});
+      else if(j.state==='pr_open')out.push({key:'build-pr-'+j.issue_number,text:`PR #${j.pr_number} ready to merge`});
+    }
   }catch{}
 
   return out;

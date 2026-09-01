@@ -6,12 +6,12 @@ import Svg,{Circle,Defs,LinearGradient,Stop}from 'react-native-svg';
 import{Feather}from '@expo/vector-icons';
 import{getHudState,updateHudState,getTasks,addTask,updateTask,deleteTask,completeTask,getBusinessesWithRevenue,setBusinessTarget,addRevenue,updateEmpireScore,getMorningRoutine,saveMorningRoutine,getBatmanTemplate,saveBatmanTemplate,getHudLayout,setPanelLayout,DEFAULT_BATMAN}from '../services/database';
 import{colors,space,radius,type,FONTS}from '../theme';
-import{PANEL_META,BriefingPanel,BusinessPanel,TasksPanel,RoutinePanel,BatmanPanel,DailyPanel,MarketPanel}from './hud/panels';
+import{PANEL_META,BriefingPanel,BusinessPanel,TasksPanel,RoutinePanel,BatmanPanel,DailyPanel,MarketPanel,BuildBoardPanel}from './hud/panels';
 import FloatingCard from './hud/FloatingCard';
 import Boundary from './hud/Boundary';
 const{width}=Dimensions.get('window');
 const RS=196,ST=6,CI=2*Math.PI*((RS-ST)/2);
-const PANELS=['briefing','businesses','tasks','routine','batman','daily','market'];
+const PANELS=['briefing','businesses','tasks','routine','batman','daily','market','build'];
 
 export default function HUDScreen({navigation}){
   const[hud,setHud]=useState(null);
@@ -196,6 +196,7 @@ export default function HUDScreen({navigation}){
       case 'batman':return <BatmanPanel template={batmanTemplate} done={batman} today={todayBatman} onToggleDay={toggleBatman} onSaveTemplate={handleSaveBatman} onEditingChange={setPanelEditing}/>;
       case 'daily':return <DailyPanel hud={hud}/>;
       case 'market':return <Boundary label="The market panel"><MarketPanel/></Boundary>;
+      case 'build':return <Boundary label="The build panel"><BuildBoardPanel/></Boundary>;
       default:return null;
     }
   }

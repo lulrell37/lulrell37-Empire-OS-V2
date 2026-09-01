@@ -11,6 +11,8 @@ import{colors,space,radius,type,FONTS}from '../../theme';
 import{tlStatus,tlQuote,tlPositions,tlClosePosition}from '../../services/tradeLocker';
 import TradeStatus from '../../components/TradeStatus';
 import{reconcile as reconcileJournal}from '../../services/tradeJournal';
+import{getBuildJobs}from '../../services/database';
+import{pollBuildJobs}from '../../services/buildJobs';
 
 const{width}=Dimensions.get('window');
 export const PANEL_META={
@@ -21,6 +23,7 @@ export const PANEL_META={
   batman:{title:'BATMAN PROTOCOL'},
   daily:{title:'DAILY'},
   market:{title:'GOLD · MARKET'},
+  build:{title:'BUILD PIPELINE'},
 };
 export const newRoutineId=()=>'r_'+Date.now().toString(36)+Math.random().toString(36).slice(2,6);
 
@@ -315,6 +318,55 @@ export function MarketPanel(){
     </>
   );
 }
+
+// Read-only board of every JARVIS build request and its state. The network
+// reconcile against GitHub runs here too (only while the HUD is focused), so the
+// board and its nudges stay current even when you're not in the JARVIS chat.
+export function BuildBoardPanel(){
+  const[jobs,setJobs]=useState([]);
+  const alive=useRef(true);
+  const focused=useIsFocused();
+
+  const load=useCallback(async()=>{
+    try{const j=await getBuildJobs(30);if(alive.current)setJobs(j);}catch{}
+  },[]);
+
+  useFocusEffect(useCallback(()=>{
+    alive.current=true;
+    const run=async()=>{try{await pollBuildJobs();}catch{}await load();};
+    run();
+    const iv=setInterval(run,15000);
+    return()=>{alive.current=false;clearInterval(iv);};
+  },[load]));
+
+  if(!jobs.length)return <Text style={ps.emptyText}>No build requests yet. Ask JARVIS to change the app.</Text>;
+
+  const label={queued:'QUEUED',working:'WORKING',question:'NEEDS YOU',pr_open:'PR READY',merging:'MERGING…',pushed:'PUSHED',failed:'FAILED',cancelled:'ABANDONED'};
+  const color={queued:colors.textDim,working:colors.warn,question:colors.danger,pr_open:colors.online,merging:colors.warn,pushed:colors.online,failed:colors.danger,cancelled:colors.textFaint};
+
+  return(
+    <>
+      {jobs.map(j=>(
+        <View key={j.issue_number} style={bs.row}>
+          <View style={bs.top}>
+            <Text style={[bs.state,{color:color[j.state]||colors.textDim}]}>{label[j.state]||j.state}</Text>
+            <Text style={bs.issue}>#{j.issue_number}{j.pr_number?` · PR #${j.pr_number}`:''}</Text>
+          </View>
+          <Text style={bs.title} numberOfLines={2}>{j.title||j.spec||''}</Text>
+          {j.state==='question'&&!!j.question&&<Text style={bs.q} numberOfLines={3}>{j.question}</Text>}
+        </View>
+      ))}
+    </>
+  );
+}
+const bs=StyleSheet.create({
+  row:{paddingVertical:space.md,borderBottomWidth:1,borderBottomColor:colors.hairline,gap:3},
+  top:{flexDirection:'row',alignItems:'center',gap:space.sm},
+  state:{fontFamily:FONTS.monoMed,fontSize:8,letterSpacing:1.5},
+  issue:{fontFamily:FONTS.mono,fontSize:8,color:colors.textDim},
+  title:{fontFamily:FONTS.mono,fontSize:11,color:colors.text,lineHeight:15},
+  q:{fontFamily:FONTS.mono,fontSize:9,color:colors.danger,lineHeight:13},
+});
 
 export const ps=StyleSheet.create({
   headRow:{flexDirection:'row',justifyContent:'space-between',alignItems:'center',marginBottom:space.lg},

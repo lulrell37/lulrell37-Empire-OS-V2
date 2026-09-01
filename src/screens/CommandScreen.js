@@ -10,7 +10,9 @@ import*as FileSystem from 'expo-file-system';
 import{PERSONA_LIST,getPersona}from '../personas/personas';
 import{callPersona,textToSpeech,transcribeAudio,queryMemory,webSearch,personaSystemPrompt,deepResearchStart,deepResearchPoll}from '../services/aiService';
 import{handleCommands,stripCommands}from '../services/commandHandler';
-import{getMessages,saveMessage,getAllPersonaPics,savePersonaMemory,getSetting,getExpenseSummary}from '../services/database';
+import{getMessages,saveMessage,getAllPersonaPics,savePersonaMemory,getSetting,getExpenseSummary,addBuildJob,updateBuildJob,getBuildJob,getBuildJobs}from '../services/database';
+import{fileBuildRequest,replyToBuild,mergeBuild,cancelBuild}from '../services/buildAgent';
+import{pollBuildJobs}from '../services/buildJobs';
 import{tlSnapshot,tlFormatSnapshot,tlPlaceOrder,tlClosePosition,tlPositions,tlQuote,tlVolatility,validateProposal,MAX_QTY}from '../services/tradeLocker';
 import{logFired as logFiredTrade,formatReview as formatTradeReview}from '../services/tradeJournal';
 import{loadKeys}from '../services/keyStore';
@@ -20,6 +22,7 @@ import OrbZoom from './command/OrbZoom';
 import ChartOverlay from './command/ChartOverlay';
 import TradePanel from './command/TradePanel';
 import TradeStatus from '../components/TradeStatus';
+import BuildPanel from './command/BuildPanel';
 import NudgeBar from './command/NudgeBar';
 import{parseChartSpec}from '../services/chartSpec';
 
@@ -645,6 +648,14 @@ export default function CommandScreen({navigation}){
         if(/\[TRADE_REVIEW\]/i.test(response)&&!myAbort.signal.aborted){
           try{injections.push(await formatTradeReview(12));}catch(e){injections.push('TRADE REVIEW: failed — '+e.message);}
         }
+        if(/\[BUILD_STATUS\]/i.test(response)&&!myAbort.signal.aborted){
+          try{
+            const jobs=await getBuildJobs(20);
+            injections.push(jobs.length
+              ?'BUILD JOBS:\n'+jobs.map(j=>`  #${j.issue_number} [${j.state}] ${j.title||j.spec?.slice(0,60)||''}${j.pr_number?` · PR #${j.pr_number}`:''}${j.state==='question'&&j.question?`\n     Claude Code asked: ${j.question.slice(0,300)}`:''}`).join('\n')
+              :'BUILD JOBS: none filed yet.');
+          }catch(e){injections.push('BUILD STATUS: failed — '+e.message);}
+        }
         if(/\[EXPENSE_SUMMARY\]/i.test(response)){
           try{const es=await getExpenseSummary();injections.push(`EXPENSES ${es.month} — total ${es.total.toFixed(2)}:\n${es.byCategory.map(c=>`  ${c.category}: ${c.total.toFixed(2)} (${c.n})`).join('\n')||'  (none logged)'}`);}
           catch(e){injections.push('EXPENSE SUMMARY: failed — '+e.message);}
@@ -670,6 +681,10 @@ export default function CommandScreen({navigation}){
           onDeepResearch:(topic)=>startDeepResearch(topic,pid),
           onShowChart:(raw)=>{const spec=parseChartSpec(raw);if(spec.valid){setChartOverlay(spec);setView('viz');}},
           onShowDiagram:()=>navigation.navigate('Laboratory'),
+          onBuildRequest:({spec})=>confirmBuildRequest(spec),
+          onBuildReply:({issueNumber,text})=>sendBuildReply(issueNumber,text),
+          onBuildMerge:({issueNumber})=>confirmBuildMerge(issueNumber),
+          onBuildCancel:({issueNumber})=>confirmBuildCancel(issueNumber),
         };
         if(injections.length&&!myAbort.signal.aborted){
           await handleCommands(response,pid,cmdCallbacks);
@@ -773,6 +788,81 @@ export default function CommandScreen({navigation}){
     const iv=setInterval(tick,15000);tick();
     return()=>{stop=true;clearInterval(iv);};
   },[deepResearch?.id]);// eslint-disable-line react-hooks/exhaustive-deps
+
+  // --- JARVIS build pipeline ---
+  function confirmBuildRequest(spec){
+    const preview=spec.length>1000?spec.slice(0,1000)+'…':spec;
+    Alert.alert('File this build request?',`Claude Code will implement it and open a pull request. This bills your Anthropic key.\n\n${preview}`,[
+      {text:'Cancel',style:'cancel'},
+      {text:'File it',onPress:async()=>{
+        try{
+          const{issueNumber,title}=await fileBuildRequest(spec);
+          await addBuildJob({issueNumber,spec,title});
+          pushSystemMsg(`— BUILD REQUEST FILED · #${issueNumber} — Claude Code is picking it up.`);
+        }catch(e){pushSystemMsg(`Couldn't file the build request: ${e.message}`);}
+      }},
+    ]);
+  }
+  async function sendBuildReply(issueNumber,text){
+    try{
+      await replyToBuild(issueNumber,text);
+      await updateBuildJob(issueNumber,{state:'working',question:null});
+      pushSystemMsg(`— Sent to Claude Code on #${issueNumber}: "${text}" —`);
+    }catch(e){pushSystemMsg(`Couldn't send that to Claude Code: ${e.message}`);}
+  }
+  function confirmBuildMerge(issueNumber){
+    (async()=>{
+      const job=await getBuildJob(issueNumber);
+      if(!job?.pr_number){pushSystemMsg(`No pull request on #${issueNumber} yet.`);return;}
+      Alert.alert('Merge and ship?',`Merge PR #${job.pr_number} into main. This pushes to main and starts an APK build.`,[
+        {text:'Cancel',style:'cancel'},
+        {text:'Merge',onPress:async()=>{
+          try{
+            await updateBuildJob(issueNumber,{state:'merging'});
+            await mergeBuild(job.pr_number);
+            await updateBuildJob(issueNumber,{state:'pushed'});
+            pushSystemMsg(`— MERGED & PUSHED · PR #${job.pr_number} · APK build started —`);
+          }catch(e){
+            await updateBuildJob(issueNumber,{state:'pr_open'});
+            pushSystemMsg(`Merge failed: ${e.message}`);
+          }
+        }},
+      ]);
+    })();
+  }
+  function confirmBuildCancel(issueNumber){
+    (async()=>{
+      const job=await getBuildJob(issueNumber);
+      Alert.alert('Abandon this request?',`Close issue #${issueNumber}${job?.pr_number?` and PR #${job.pr_number}`:''}.`,[
+        {text:'Keep',style:'cancel'},
+        {text:'Abandon',style:'destructive',onPress:async()=>{
+          try{await cancelBuild(issueNumber,job?.pr_number);}catch{}
+          await updateBuildJob(issueNumber,{state:'cancelled'});
+          pushSystemMsg(`— Build request #${issueNumber} abandoned —`);
+        }},
+      ]);
+    })();
+  }
+  useEffect(()=>{
+    if(!isFocused)return;
+    let stop=false;
+    const tick=async()=>{
+      if(stop)return;
+      try{
+        const events=await pollBuildJobs();
+        if(stop||!events.length)return;
+        for(const ev of events){
+          const n=ev.job.issue_number;
+          if(ev.type==='question')pushSystemMsg(`— Claude Code is asking about #${n} —\n${ev.text}`);
+          else if(ev.type==='pr_open')pushSystemMsg(`— PR #${ev.job.pr_number} ready on #${n}: ${ev.text} — tell JARVIS to ship it, or open the Build panel.`);
+          else if(ev.type==='pushed')pushSystemMsg(`— #${n} MERGED & PUSHED — APK build started.`);
+          else if(ev.type==='failed')pushSystemMsg(`— #${n}: ${ev.text} —`);
+        }
+      }catch{/* keep polling */}
+    };
+    const iv=setInterval(tick,15000);tick();
+    return()=>{stop=true;clearInterval(iv);};
+  },[isFocused]);// eslint-disable-line react-hooks/exhaustive-deps
 
   async function confirmTrade(){
     if(!tradeProposal||tradeBusy)return;
@@ -906,6 +996,7 @@ export default function CommandScreen({navigation}){
 
       {mode==='direct'&&activePersona==='atlas'&&<TradeStatus active={isFocused} showDetail style={{marginHorizontal:10,marginTop:6}}/>}
       {mode==='direct'&&activePersona==='atlas'&&<TradePanel active={isFocused} onEvent={pushSystemMsg}/>}
+      {mode==='direct'&&activePersona==='jarvis'&&<BuildPanel active={isFocused} onMerge={confirmBuildMerge} onCancel={confirmBuildCancel}/>}
 
       {deepResearch&&<View style={s.deepCard}>
         <ActivityIndicator size="small" color="#5B8DEF"/>

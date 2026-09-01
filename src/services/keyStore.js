@@ -12,3 +12,10 @@ export async function clearGoogleToken(){await SecureStore.deleteItemAsync(GOOGL
 export async function saveTradeCreds(creds){await SecureStore.setItemAsync(TRADE_KEY,JSON.stringify(creds));}
 export async function loadTradeCreds(){try{const v=await SecureStore.getItemAsync(TRADE_KEY);return v?JSON.parse(v):null;}catch{return null;}}
 export async function clearTradeCreds(){await SecureStore.deleteItemAsync(TRADE_KEY);}
+
+// GitHub fine-grained PAT for the JARVIS build pipeline (Contents/Issues/PRs: RW
+// on the Empire OS repo). Stored as a bare token string.
+const GITHUB_KEY='empire_os_github';
+export async function saveGitHubToken(token){await SecureStore.setItemAsync(GITHUB_KEY,String(token||''));}
+export async function loadGitHubToken(){try{return(await SecureStore.getItemAsync(GITHUB_KEY))||null;}catch{return null;}}
+export async function clearGitHubToken(){await SecureStore.deleteItemAsync(GITHUB_KEY);}
