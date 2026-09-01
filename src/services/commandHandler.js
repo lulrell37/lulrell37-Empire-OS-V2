@@ -150,7 +150,7 @@ export function stripCommands(text){
     .replace(/\[RELAY_TO:[^\]]*\]/gi,'').replace(/\[SEARCH_WEB:[^\]]*\]/gi,'')
     .replace(/\[READ_CALENDAR\]/gi,'').replace(/\[READ_EMAIL\]/gi,'')
     .replace(/\[MEMORY_QUERY:[^\]]*\]/gi,'').replace(/\[DEEP_RESEARCH:[^\]]*\]/gi,'')
-    .replace(/\[TRADE_SCAN\]/gi,'').replace(/\[TRADE_REVIEW\]/gi,'').replace(/\[TRADE_PROPOSE:[^\]]*\]/gi,'').replace(/\[TRADE_CLOSE:[^\]]*\]/gi,'')
+    .replace(/\[TRADE_SCAN\]/gi,'').replace(/\[TRADE_PROPOSE:[^\]]*\]/gi,'').replace(/\[TRADE_CLOSE:[^\]]*\]/gi,'')
     .replace(/\[ADD_EXPENSE:[^\]]*\]/gi,'').replace(/\[ADD_DATE:[^\]]*\]/gi,'').replace(/\[EXPENSE_SUMMARY\]/gi,'')
     .replace(/\[SHOW_CHART:[^\]]*\]/gi,'')
     .replace(/\[BUILD_REQUEST:[^\]]*\]/gi,'').replace(/\[BUILD_REPLY:[^\]]*\]/gi,'')

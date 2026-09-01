@@ -4,9 +4,8 @@
 import React,{useState,useEffect,useRef,useCallback}from 'react';
 import{View,Text,StyleSheet,TouchableOpacity,ActivityIndicator}from 'react-native';
 import{tlPositions,tlQuote,tlClosePosition,tlStatus}from '../../services/tradeLocker';
-import{reconcile as reconcileJournal}from '../../services/tradeJournal';
 
-const POLL_MS=9000; // gentle — a chatty client trips Cloudflare's 1015 rate limit
+const POLL_MS=4500;
 
 export default function TradePanel({active,onEvent}){
   const[positions,setPositions]=useState([]);
@@ -21,13 +20,10 @@ export default function TradePanel({active,onEvent}){
     try{
       const[ps,q]=await Promise.all([tlPositions(),tlQuote('XAUUSD').catch(()=>null)]);
       if(!alive.current)return;
-      const openPs=ps.filter(p=>String(p.tradableInstrumentId)&&Number(p.qty)>0);
-      setPositions(openPs);
+      setPositions(ps.filter(p=>String(p.tradableInstrumentId)&&Number(p.qty)>0));
       if(q)setQuote(q);
-      // Feed the journal so Atlas sees how its trades actually resolved.
-      reconcileJournal(openPs).then(closed=>{if(closed)onEvent?.('— A trade closed · logged to Atlas\'s journal —');}).catch(()=>{});
     }catch{}
-  },[onEvent]);
+  },[]);
 
   useEffect(()=>{
     alive.current=true;
