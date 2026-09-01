@@ -1,12 +1,14 @@
 // The persona's memory, two ways:
-//   GRAPH — a network: a glowing core, one hub per category, one node per stored
-//           exchange orbiting its hub. Pinch out / + to drill toward the centre
-//           of what you're looking at (all hubs -> one hub -> one memory).
+//   GRAPH — a brain: a silhouette with sulci and a central fissure, one lobe per
+//           category sitting inside it, one neuron per stored exchange clustered
+//           around its lobe, white-matter tracts between lobes with signals
+//           travelling along them. Pinch out / + drills toward the centre of what
+//           you're looking at (all lobes -> one lobe -> one memory).
 //   LIST  — the same memories as dated cards, filterable by category.
 // Both share one category selection and one tap target (onNode).
 import React,{useState,useMemo,useRef,useImperativeHandle,forwardRef,useCallback,useEffect}from 'react';
 import{View,Text,StyleSheet,ScrollView,ActivityIndicator,PanResponder,TouchableOpacity,Animated}from 'react-native';
-import Svg,{Circle,Line,G,Text as SvgText,Defs,RadialGradient,Stop}from 'react-native-svg';
+import Svg,{Circle,Line,Path,G,Text as SvgText,Defs,RadialGradient,Stop}from 'react-native-svg';
 import{CATEGORIES}from '../../services/memoryCategories';
 import{colors,space,radius,FONTS}from '../../theme';
 import MemoryList from './MemoryList';
@@ -23,6 +25,71 @@ function lighten(hex,amt){
   return `#${m(r)}${m(g)}${m(b)}`;
 }
 
+// A top-down brain silhouette as a polygon: an oval with a fuller frontal lobe,
+// temporal-lobe bumps low on each side, and a small brain-stem notch at the base.
+function brainPolygon(cx,cy,rx,ry){
+  const N=76,p=[];
+  for(let i=0;i<N;i++){
+    const t=i/N*Math.PI*2;                    // 0 = top (frontal), PI = base (occipital)
+    let r=1
+      +0.055*Math.cos(t)                       // frontal lobe fuller than the back
+      +0.05*Math.cos(t*2)                      // flatten the sides a touch (oval, not round)
+      -0.028*Math.cos(t*4);
+    r+=0.07*Math.exp(-((t-Math.PI*0.72)**2)/0.13);  // right temporal bump
+    r+=0.07*Math.exp(-((t-Math.PI*1.28)**2)/0.13);  // left temporal bump
+    r-=0.06*Math.exp(-((t-Math.PI)**2)/0.02);        // brain-stem notch at the base
+    p.push({x:cx+Math.sin(t)*rx*r,y:cy-Math.cos(t)*ry*r});
+  }
+  return p;
+}
+
+// Closed Catmull-Rom -> cubic Bezier path through the points.
+function smoothClosed(p){
+  const n=p.length;
+  let d=`M ${p[0].x.toFixed(1)} ${p[0].y.toFixed(1)} `;
+  for(let i=0;i<n;i++){
+    const a=p[(i-1+n)%n],b=p[i],c=p[(i+1)%n],e=p[(i+2)%n];
+    d+=`C ${(b.x+(c.x-a.x)/6).toFixed(1)} ${(b.y+(c.y-a.y)/6).toFixed(1)} `
+      +`${(c.x-(e.x-b.x)/6).toFixed(1)} ${(c.y-(e.y-b.y)/6).toFixed(1)} `
+      +`${c.x.toFixed(1)} ${c.y.toFixed(1)} `;
+  }
+  return d+'Z';
+}
+
+function pointInPoly(x,y,poly){
+  let inside=false;
+  for(let i=0,j=poly.length-1;i<poly.length;j=i++){
+    const xi=poly[i].x,yi=poly[i].y,xj=poly[j].x,yj=poly[j].y;
+    if(((yi>y)!==(yj>y))&&(x<((xj-xi)*(y-yi))/((yj-yi)||1e-9)+xi))inside=!inside;
+  }
+  return inside;
+}
+
+// Pull (x,y) back along the line to (tx,ty) until it sits inside the silhouette.
+function clampInto(x,y,poly,tx,ty){
+  if(pointInPoly(x,y,poly))return{x,y};
+  let lo=0,hi=1;
+  for(let k=0;k<14;k++){const t=(lo+hi)/2;pointInPoly(tx+(x-tx)*t,ty+(y-ty)*t,poly)?lo=t:hi=t;}
+  const t=lo*0.9;
+  return{x:tx+(x-tx)*t,y:ty+(y-ty)*t};
+}
+
+// Quadratic Bezier path from A to B, bowed sideways by k*len.
+function arcPath(ax,ay,bx,by,k){
+  const mx=(ax+bx)/2,my=(ay+by)/2;
+  const nx=-(by-ay),ny=bx-ax,len=Math.hypot(nx,ny)||1;
+  return{d:`M ${ax.toFixed(1)} ${ay.toFixed(1)} Q ${(mx+nx/len*len*k).toFixed(1)} ${(my+ny/len*len*k).toFixed(1)} ${bx.toFixed(1)} ${by.toFixed(1)}`,
+    ctrl:{x:mx+nx/len*len*k,y:my+ny/len*len*k}};
+}
+
+// 6 sample points along a quadratic Bezier — for animating a signal dot.
+function quadSamples(ax,ay,cx,cy,bx,by){
+  const px=[],py=[];
+  for(let i=0;i<=5;i++){const t=i/5,u=1-t;
+    px.push(u*u*ax+2*u*t*cx+t*t*bx);py.push(u*u*ay+2*u*t*cy+t*t*by);}
+  return{px,py};
+}
+
 function BrainWebInner({persona,memories,onNode,onExit},ref){
   const[mode,setMode]=useState('graph');   // 'graph' | 'list'
   const[focus,setFocus]=useState(null);     // category key, or null for the whole web
@@ -35,6 +102,7 @@ function BrainWebInner({persona,memories,onNode,onExit},ref){
   const pinch=useRef({d0:0,d1:0,cx:0,cy:0});
   const fade=useRef(new Animated.Value(0)).current;
   const pulse=useRef(new Animated.Value(0)).current;
+  const sig=useRef([0,1,2].map(()=>new Animated.Value(0))).current; // signal dots along tracts
 
   const groups=useMemo(()=>{
     if(!memories)return[];
@@ -46,36 +114,90 @@ function BrainWebInner({persona,memories,onNode,onExit},ref){
 
   useEffect(()=>{
     Animated.timing(fade,{toValue:1,duration:420,useNativeDriver:true}).start();
-    const loop=Animated.loop(Animated.sequence([
+    const loops=[Animated.loop(Animated.sequence([
       Animated.timing(pulse,{toValue:1,duration:2600,useNativeDriver:false}),
       Animated.timing(pulse,{toValue:0,duration:2600,useNativeDriver:false}),
-    ]));
-    loop.start();
-    return()=>loop.stop();
-  },[fade,pulse]);
+    ]))];
+    sig.forEach((v,k)=>loops.push(Animated.loop(Animated.sequence([
+      Animated.delay(k*900),
+      Animated.timing(v,{toValue:1,duration:2400,useNativeDriver:false}),
+      Animated.timing(v,{toValue:0,duration:0,useNativeDriver:false}),
+      Animated.delay(1600),
+    ]))));
+    loops.forEach(l=>l.start());
+    return()=>loops.forEach(l=>l.stop());
+  },[fade,pulse,sig]);
 
   const layout=useMemo(()=>{
     if(!groups.length)return null;
-    const maxCount=Math.max(...groups.map(g=>g.count));
-    const spreadOf=(count)=>34+Math.sqrt(count)*22;
-    const hubRing=140+groups.length*10+Math.sqrt(maxCount)*10;
-    const pad=spreadOf(maxCount)+70;
-    const sizePx=Math.max(360,(hubRing+pad)*2);
+    const n=groups.length;
+    const sizePx=Math.max(420,320+n*46+Math.sqrt(total)*10);
     const cx=sizePx/2,cy=sizePx/2;
+    const rx=sizePx*0.40,ry=sizePx*0.44;                 // brain half-extents
+    const poly=brainPolygon(cx,cy,rx,ry);
+    const outline=smoothClosed(poly);
+
+    // central fissure — a soft S down the midline
+    let fissure=`M ${cx.toFixed(1)} ${(cy-ry*0.82).toFixed(1)} `;
+    for(let j=1;j<=12;j++){
+      const yy=cy-ry*0.82+j/12*ry*1.64;
+      const xx=cx+Math.sin(j*0.85)*rx*0.055;
+      fissure+=`Q ${(cx+Math.sin((j-0.5)*0.85)*rx*0.09).toFixed(1)} ${(yy-ry*0.068).toFixed(1)} ${xx.toFixed(1)} ${yy.toFixed(1)} `;
+    }
+    // sulci — mirrored wavy folds
+    const sulci=[];
+    for(const sgn of[-1,1])for(let k=0;k<6;k++){
+      const fy=cy-ry*0.62+(k+0.5)/6*ry*1.24;
+      const x0=cx+sgn*rx*0.10,x1=cx+sgn*rx*(0.62+0.22*Math.sin(k*1.3));
+      let d=`M ${x0.toFixed(1)} ${fy.toFixed(1)} `;
+      for(let j=1;j<=5;j++){
+        const xx=x0+(x1-x0)*j/5;
+        const yy=fy+Math.sin(j*1.8+k*2.1+sgn)*ry*0.045;
+        const cxp=x0+(x1-x0)*(j-0.5)/5;
+        const cyp=fy+Math.sin((j-0.5)*1.8+k*2.1+sgn)*ry*0.045+((j%2)?1:-1)*ry*0.03;
+        d+=`Q ${cxp.toFixed(1)} ${cyp.toFixed(1)} ${xx.toFixed(1)} ${yy.toFixed(1)} `;
+      }
+      sulci.push(d);
+    }
+
+    // hubs = lobes: serpentine down the two hemispheres, kept inside the silhouette
+    const perSide=Math.ceil(n/2);
     const hubs=groups.map((g,i)=>{
-      const a=(i/groups.length)*Math.PI*2-Math.PI/2;
-      const hx=cx+Math.cos(a)*hubRing;
-      const hy=cy+Math.sin(a)*hubRing;
-      const shown=g.memories.slice(0,300);
-      const spread=spreadOf(shown.length);
+      const side=i%2===0?-1:1;
+      const row=Math.floor(i/2);
+      const frac=(row+0.6)/perSide;
+      let hx=cx+side*rx*(0.15+0.32*Math.sin(frac*Math.PI));
+      let hy=cy-ry*0.66+frac*ry*1.32;
+      ({x:hx,y:hy}=clampInto(hx,hy,poly,cx,cy));
+      const shown=g.memories.slice(0,260);
+      const spread=26+Math.sqrt(shown.length)*15;
       const nodes=shown.map((m,j)=>{
-        const r=spread*Math.sqrt((j+0.55)/shown.length);
-        const na=j*GOLDEN+a;
-        return{m,x:hx+Math.cos(na)*r,y:hy+Math.sin(na)*r,rad:4.2+Math.min(3.5,70/shown.length)};
+        const rr=spread*Math.sqrt((j+0.6)/shown.length);
+        const na=j*GOLDEN+i;
+        let x=hx+Math.cos(na)*rr,y=hy+Math.sin(na)*rr*0.9;
+        ({x,y}=clampInto(x,y,poly,hx,hy));
+        return{m,x,y,rad:3.4+Math.min(2.6,55/shown.length)};
       });
-      return{...g,hx,hy,hubRad:6+Math.sqrt(g.count)*1.7,nodes};
+      return{...g,hx,hy,hubRad:5.5+Math.sqrt(g.count)*1.5,nodes};
     });
-    return{size:sizePx,cx,cy,hubs,coreRad:22+Math.log2(total+1)*3};
+
+    // white-matter tracts: each hub to its two nearest neighbours (dedup)
+    const edges=[],seen=new Set();
+    hubs.forEach((h,i)=>{
+      const near=hubs.map((o,j)=>({j,d:Math.hypot(o.hx-h.hx,o.hy-h.hy)}))
+        .filter(o=>o.j!==i).sort((a,b)=>a.d-b.d).slice(0,2);
+      for(const o of near){
+        const key=i<o.j?`${i}-${o.j}`:`${o.j}-${i}`;
+        if(seen.has(key))continue;seen.add(key);
+        const a=hubs[i],b=hubs[o.j];
+        const arc=arcPath(a.hx,a.hy,b.hx,b.hy,0.12);
+        edges.push({key,color:a.color,color2:b.color,d:arc.d,
+          samples:quadSamples(a.hx,a.hy,arc.ctrl.x,arc.ctrl.y,b.hx,b.hy)});
+      }
+    });
+
+    return{size:sizePx,cx,cy,rx,ry,poly,outline,fissure,sulci,hubs,edges,
+      coreRad:14+Math.log2(total+1)*2.4};
   },[groups,total]);
 
   const target=useCallback((centroid)=>{
@@ -216,68 +338,85 @@ function BrainWebInner({persona,memories,onNode,onExit},ref){
               scrollEventThrottle={32} onScroll={e=>{scroll.current.x=e.nativeEvent.contentOffset.x;}}>
               {layout&&<Svg width={layout.size*zoom} height={layout.size*zoom}>
                 <Defs>
-                  <RadialGradient id="vignette" cx="50%" cy="50%" r="50%">
+                  <RadialGradient id="brainFill" cx="50%" cy="45%" r="58%">
                     <Stop offset="0" stopColor={persona.color} stopOpacity="0.09"/>
-                    <Stop offset="0.55" stopColor={persona.color} stopOpacity="0.02"/>
+                    <Stop offset="0.62" stopColor={persona.color} stopOpacity="0.03"/>
                     <Stop offset="1" stopColor={persona.color} stopOpacity="0"/>
                   </RadialGradient>
                   <RadialGradient id="coreGlow" cx="50%" cy="50%" r="50%">
-                    <Stop offset="0" stopColor={persona.color} stopOpacity="0.5"/>
+                    <Stop offset="0" stopColor={persona.color} stopOpacity="0.42"/>
                     <Stop offset="1" stopColor={persona.color} stopOpacity="0"/>
                   </RadialGradient>
-                  <RadialGradient id="coreFill" cx="42%" cy="38%" r="65%">
-                    <Stop offset="0" stopColor={lighten(persona.color,0.7)} stopOpacity="1"/>
-                    <Stop offset="0.5" stopColor={persona.color} stopOpacity="0.95"/>
-                    <Stop offset="1" stopColor={persona.color} stopOpacity="0.5"/>
-                  </RadialGradient>
                   {layout.hubs.map(h=>(
-                    <RadialGradient key={'ng'+h.key} id={`node-${h.key}`} cx="38%" cy="35%" r="70%">
-                      <Stop offset="0" stopColor={lighten(h.color,0.55)} stopOpacity="1"/>
-                      <Stop offset="0.55" stopColor={h.color} stopOpacity="0.95"/>
-                      <Stop offset="1" stopColor={h.color} stopOpacity="0.55"/>
+                    <RadialGradient key={'ng'+h.key} id={`node-${h.key}`} cx="38%" cy="34%" r="70%">
+                      <Stop offset="0" stopColor={lighten(h.color,0.6)} stopOpacity="1"/>
+                      <Stop offset="0.5" stopColor={h.color} stopOpacity="0.95"/>
+                      <Stop offset="1" stopColor={h.color} stopOpacity="0.4"/>
                     </RadialGradient>
                   ))}
                   {layout.hubs.map(h=>(
                     <RadialGradient key={'hg'+h.key} id={`halo-${h.key}`} cx="50%" cy="50%" r="50%">
-                      <Stop offset="0" stopColor={h.color} stopOpacity="0.28"/>
+                      <Stop offset="0" stopColor={h.color} stopOpacity="0.3"/>
                       <Stop offset="1" stopColor={h.color} stopOpacity="0"/>
                     </RadialGradient>
                   ))}
                 </Defs>
                 <G scale={zoom}>
-                  <Circle cx={layout.cx} cy={layout.cy} r={layout.size/2} fill="url(#vignette)"/>
-                  <ACircle cx={layout.cx} cy={layout.cy} r={layout.coreRad*5} fill="url(#coreGlow)" opacity={coreGlow}/>
-                  {layout.hubs.map(h=>(
-                    <Line key={'l'+h.key} x1={layout.cx} y1={layout.cy} x2={h.hx} y2={h.hy}
-                      stroke={h.color} strokeWidth={1} opacity={focus&&focus!==h.key?0.03:0.16}/>
+                  <Path d={layout.outline} fill="url(#brainFill)"/>
+                  <Path d={layout.outline} fill="none" stroke={persona.color} strokeWidth={12} opacity={0.045}/>
+                  <Path d={layout.outline} fill="none" stroke={persona.color} strokeWidth={4} opacity={0.1}/>
+                  <Path d={layout.outline} fill="none" stroke={lighten(persona.color,0.25)} strokeWidth={1.3} opacity={0.5}/>
+                  {layout.sulci.map((d,i)=>(
+                    <Path key={'su'+i} d={d} fill="none" stroke={persona.color} strokeWidth={0.8} opacity={0.13}/>
                   ))}
+                  <Path d={layout.fissure} fill="none" stroke={persona.color} strokeWidth={1.4} opacity={0.28}/>
+
+                  {layout.edges.map(e=>(
+                    <Path key={e.key} d={e.d} fill="none" stroke={e.color} strokeWidth={1} opacity={focus?0.05:0.2}/>
+                  ))}
+                  <ACircle cx={layout.cx} cy={layout.cy} r={layout.coreRad*4.5} fill="url(#coreGlow)" opacity={coreGlow}/>
+
                   {layout.hubs.map(h=>{
                     const dim=focus&&focus!==h.key;
                     return(
-                      <G key={'g'+h.key} opacity={dim?0.06:1}>
-                        <Circle cx={h.hx} cy={h.hy} r={h.hubRad*6} fill={`url(#halo-${h.key})`}/>
+                      <G key={'g'+h.key} opacity={dim?0.08:1}>
+                        <Circle cx={h.hx} cy={h.hy} r={h.hubRad*7} fill={`url(#halo-${h.key})`}/>
                         {h.nodes.map((n,i)=>(
-                          <Line key={'nl'+i} x1={h.hx} y1={h.hy} x2={n.x} y2={n.y} stroke={h.color} strokeWidth={0.5} opacity={0.2}/>
+                          <Line key={'nl'+i} x1={h.hx} y1={h.hy} x2={n.x} y2={n.y} stroke={h.color} strokeWidth={0.45} opacity={0.15}/>
                         ))}
                         {h.nodes.map((n,i)=>(
                           <Circle key={'n'+i} cx={n.x} cy={n.y} r={n.rad*1.15} fill={`url(#node-${h.key})`}
-                            opacity={0.55+((i*GOLDEN)%1)*0.4} onPress={()=>onNode&&onNode(n.m)}/>
+                            opacity={0.5+((i*GOLDEN)%1)*0.45} onPress={()=>onNode&&onNode(n.m)}/>
                         ))}
-                        <Circle cx={h.hx} cy={h.hy} r={h.hubRad*2.1} fill={`url(#halo-${h.key})`}/>
+                        <Circle cx={h.hx} cy={h.hy} r={h.hubRad*2} fill={`url(#halo-${h.key})`}/>
                         <Circle cx={h.hx} cy={h.hy} r={h.hubRad} fill={`url(#node-${h.key})`}
-                          stroke={lighten(h.color,0.4)} strokeWidth={0.75} onPress={()=>pickCategory(h.key)}/>
-                        <Circle cx={h.hx-h.hubRad*0.3} cy={h.hy-h.hubRad*0.32} r={h.hubRad*0.28} fill={lighten(h.color,0.85)} opacity={0.9}/>
-                        <SvgText x={h.hx} y={h.hy-h.hubRad-8} fill={dim?h.color:lighten(h.color,0.25)} fontSize={8.5} fontFamily={FONTS.mono}
-                          textAnchor="middle" opacity={dim?0.3:0.95}>{`${h.label.toUpperCase()}  ${h.count}`}</SvgText>
+                          stroke={lighten(h.color,0.45)} strokeWidth={0.8} onPress={()=>pickCategory(h.key)}/>
+                        <Circle cx={h.hx-h.hubRad*0.3} cy={h.hy-h.hubRad*0.32} r={h.hubRad*0.26} fill={lighten(h.color,0.9)} opacity={0.9}/>
                       </G>
                     );
                   })}
-                  <Circle cx={layout.cx} cy={layout.cy} r={layout.coreRad*1.9} fill="url(#coreGlow)" opacity={0.5}/>
-                  <Circle cx={layout.cx} cy={layout.cy} r={layout.coreRad} fill="url(#coreFill)"/>
-                  <Circle cx={layout.cx} cy={layout.cy} r={layout.coreRad} fill="none" stroke={lighten(persona.color,0.5)} strokeWidth={1}/>
-                  <Circle cx={layout.cx} cy={layout.cy} r={layout.coreRad+6} fill="none" stroke={persona.color} strokeWidth={0.6} opacity={0.35}/>
-                  <SvgText x={layout.cx} y={layout.cy+4.5} fill={colors.bg} fontSize={13} fontWeight="700"
+
+                  {layout.edges.slice(0,3).map((e,k)=>(
+                    <ACircle key={'sig'+k} r={2.2} fill={lighten(e.color,0.55)}
+                      opacity={sig[k].interpolate({inputRange:[0,0.12,0.88,1],outputRange:[0,1,1,0]})}
+                      cx={sig[k].interpolate({inputRange:[0,0.2,0.4,0.6,0.8,1],outputRange:e.samples.px})}
+                      cy={sig[k].interpolate({inputRange:[0,0.2,0.4,0.6,0.8,1],outputRange:e.samples.py})}/>
+                  ))}
+
+                  <Circle cx={layout.cx} cy={layout.cy} r={layout.coreRad} fill={colors.bg} opacity={0.82}/>
+                  <Circle cx={layout.cx} cy={layout.cy} r={layout.coreRad} fill="none" stroke={persona.color} strokeWidth={1.4}/>
+                  <SvgText x={layout.cx} y={layout.cy+4} fill={persona.color} fontSize={12} fontWeight="700"
                     fontFamily={FONTS.mono} textAnchor="middle">{persona.icon}</SvgText>
+
+                  {layout.hubs.map(h=>{
+                    const dim=focus&&focus!==h.key;
+                    return(
+                      <SvgText key={'t'+h.key} x={h.hx} y={h.hy-h.hubRad-7} fill={dim?h.color:lighten(h.color,0.3)}
+                        fontSize={8} fontFamily={FONTS.mono} textAnchor="middle" opacity={dim?0.25:0.9}>
+                        {`${h.label.toUpperCase()}  ${h.count}`}
+                      </SvgText>
+                    );
+                  })}
                 </G>
               </Svg>}
             </ScrollView>
