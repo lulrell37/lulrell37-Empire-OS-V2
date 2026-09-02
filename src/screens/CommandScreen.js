@@ -16,7 +16,7 @@ import{googleReadInjections,googleWriteCommands}from '../services/googleCommands
 import{getMessages,saveMessage,getAllPersonaPics,savePersonaMemory,getSetting,getExpenseSummary,addBuildJob,updateBuildJob,getBuildJob,getBuildJobs}from '../services/database';
 import{fileBuildRequest,replyToBuild,mergeBuild,cancelBuild}from '../services/buildAgent';
 import{pollBuildJobs}from '../services/buildJobs';
-import{tlSnapshot,tlFormatSnapshot,tlPlaceOrder,tlClosePosition,tlModifyPosition,tlPositions,MAX_QTY}from '../services/tradeLocker';
+import{tlSnapshot,tlFormatSnapshot,tlPlaceOrder,tlClosePosition,tlModifyPosition,tlPositions,MAX_QTY,MAX_OPEN_POSITIONS}from '../services/tradeLocker';
 import{recordTradeOpen,reconcileOpenTrades,atlasJournalBlock,setStrategy,setTradeReview}from '../services/tradeJournal';
 import{loadKeys}from '../services/keyStore';
 import useEmpireStore from '../store/useEmpireStore';
@@ -82,6 +82,7 @@ export default function CommandScreen({navigation}){
   const inputRef=useRef('');       // mirrors `input` so send() never misses a pending keystroke
   const textInputRef=useRef(null);
   const flatRef=useRef(null);
+  const atBottomRef=useRef(true);   // is the chat scrolled to (near) the bottom?
   const abortRef=useRef(null);
   const contRef=useRef(false);
   const soundRef=useRef(null);
@@ -866,6 +867,7 @@ export default function CommandScreen({navigation}){
     inputRef.current='';setInput('');
     try{textInputRef.current?.clear();}catch{}
     Keyboard.dismiss();abortRef.current?.abort();stopAudio();
+    atBottomRef.current=true;   // sending your own message always snaps the chat down
     const isGroup=mode!=='direct';
     const userMsg={id:Date.now().toString(),role:'user',content:text,persona:'user'};
     if(isGroup)setGroupMessages(prev=>[...prev,userMsg]);
@@ -1019,7 +1021,7 @@ export default function CommandScreen({navigation}){
       const freeze=(m)=>m.streaming?{...m,streaming:false,revealed:(m.content||'').length}:m;
       setMessages(prev=>prev.map(freeze));setGroupMessages(prev=>prev.map(freeze));
       vizRef.speaking=false;vizRef.amplitude=0;
-      setTimeout(()=>flatRef.current?.scrollToEnd({animated:true}),100);
+      if(atBottomRef.current)setTimeout(()=>flatRef.current?.scrollToEnd({animated:true}),100);
     }
     if(contRef.current&&abortRef.current===myAbort&&!myAbort.signal.aborted)setTimeout(()=>{if(contRef.current)runRound('[Continue. Be brief.]',true);},1200);
   }
@@ -1238,6 +1240,11 @@ export default function CommandScreen({navigation}){
     const{symbol,side,stopLoss,takeProfit,qty,pid}=tradeProposal;
     const sym=symbol||'XAUUSD';
     try{
+      const open=await tlPositions().catch(()=>[]);
+      if(open.length>=MAX_OPEN_POSITIONS){
+        pushSystemMsg(`— ${MAX_OPEN_POSITIONS} positions already open — close one before adding another —`);
+        setTradeBusy(false);setTradeProposal(null);return;
+      }
       const r=await tlPlaceOrder({symbol:sym,side,qty:Math.min(qty||MAX_QTY,MAX_QTY),stopLoss,takeProfit});
       pushSystemMsg(`— ORDER SENT · ${r.side.toUpperCase()} ${r.qty} ${sym} · SL ${r.stopLoss??'—'} · TP ${r.takeProfit??'—'} · #${r.orderId||'?'} —`);
       savePersonaMemory(pid||'atlas',`YOU: [confirmed trade]\nA.T.L.A.S.: order sent ${r.side} ${r.qty} ${sym} SL ${r.stopLoss} TP ${r.takeProfit}`).catch(()=>{});
@@ -1369,7 +1376,13 @@ export default function CommandScreen({navigation}){
         />
         )
       ):(
-        <FlatList ref={flatRef} data={displayMessages} keyExtractor={i=>i.id} renderItem={renderMsg} contentContainerStyle={s.msgList} style={{flex:1}} onContentSizeChange={()=>flatRef.current?.scrollToEnd({animated:true})}/>
+        <FlatList ref={flatRef} data={displayMessages} keyExtractor={i=>i.id} renderItem={renderMsg} contentContainerStyle={s.msgList} style={{flex:1}}
+          scrollEventThrottle={16}
+          onScroll={e=>{
+            const{contentOffset,contentSize,layoutMeasurement}=e.nativeEvent;
+            atBottomRef.current=(contentSize.height-contentOffset.y-layoutMeasurement.height)<120;
+          }}
+          onContentSizeChange={()=>{if(atBottomRef.current)flatRef.current?.scrollToEnd({animated:true});}}/>
       )}
 
       {loading&&(<View style={s.thinking}>
