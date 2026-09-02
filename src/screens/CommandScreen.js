@@ -10,6 +10,7 @@ import*as FileSystem from 'expo-file-system';
 import{PERSONA_LIST,getPersona}from '../personas/personas';
 import{callPersona,textToSpeech,transcribeAudio,queryMemory,webSearch,personaSystemPrompt,deepResearchStart,deepResearchPoll}from '../services/aiService';
 import{handleCommands,stripCommands}from '../services/commandHandler';
+import{googleReadInjections,googleWriteCommands}from '../services/googleCommands';
 import{getMessages,saveMessage,getAllPersonaPics,savePersonaMemory,getSetting,getExpenseSummary,addBuildJob,updateBuildJob,getBuildJob,getBuildJobs}from '../services/database';
 import{fileBuildRequest,replyToBuild,mergeBuild,cancelBuild}from '../services/buildAgent';
 import{pollBuildJobs}from '../services/buildJobs';
@@ -26,11 +27,17 @@ import NudgeBar from './command/NudgeBar';
 import{parseChartSpec}from '../services/chartSpec';
 
 const TEAM_PHOTO=require('../../assets/teamphoto.png');
-const HANDS_FREE_SILENCE_MS=2200;   // quiet for this long AFTER real speech -> stop (allow mid-sentence pauses)
-const HANDS_FREE_VOICE_DB=-42;      // metering above this counts as "talking"
-const HANDS_FREE_MAX_MS=18000;      // hard cap on one hands-free take
-const HANDS_FREE_NOMETER_MS=6000;   // devices that don't report metering -> fixed take
-const HANDS_FREE_NOVOICE_MS=4500;   // mic open this long with no voice at all -> give up, discard the take
+const HANDS_FREE_SILENCE_MS=3000;   // quiet for this long AFTER real speech -> stop (allow mid-sentence pauses)
+const HANDS_FREE_VOICE_DB=-47;      // metering above this counts as "talking"
+const HANDS_FREE_MAX_MS=30000;      // hard cap on one hands-free take
+const HANDS_FREE_NOMETER_MS=8000;   // devices that don't report metering -> fixed take
+const HANDS_FREE_NOVOICE_MS=7000;   // mic open this long with no voice at all -> give up, discard the take
+const MANUAL_MAX_MS=120000;         // manual SPEAK take: 2-min safety backstop only (user taps STOP REC)
+// Faster models for voice turns (lower latency to first audio). Gated behind the
+// voice_fast_model setting; grok is omitted so ROGUE keeps grok-3-latest.
+const VOICE_MODELS={claude:'claude-haiku-4-5',openai:'gpt-4o-mini'};
+const PLAYBACK_WEDGE_MS=4000;       // playback position frozen this long -> treat as finished
+const PLAYBACK_MAX_MS=20000;        // absolute ceiling on one spoken segment
 // Synthetic speech-loudness envelope for the persona orb (no real FFT in Expo).
 function synthAmp(){
   const t=Date.now()/1000;
@@ -62,6 +69,10 @@ export default function CommandScreen({navigation}){
   const[tradeBusy,setTradeBusy]=useState(false);
   const[deepResearch,setDeepResearch]=useState(null); // {id,topic,pid,status}
   const[chartOverlay,setChartOverlay]=useState(null); // parsed chart spec shown over the orb
+  const[googleAction,setGoogleAction]=useState(null); // pending Google action awaiting a confirm tap
+  const[googleBusy,setGoogleBusy]=useState(false);
+  const googleActionRef=useRef(null);
+  const googleQueueRef=useRef([]);
   const vizRef=useRef({speaking:false,amplitude:0,color:'#E8C98A',personaId:'jarvis'}).current;
   const inputRef=useRef('');       // mirrors `input` so send() never misses a pending keystroke
   const textInputRef=useRef(null);
@@ -70,6 +81,17 @@ export default function CommandScreen({navigation}){
   const contRef=useRef(false);
   const soundRef=useRef(null);
   const speakCancelRef=useRef(null); // stops the in-progress voice+text reveal
+  // --- streamed sentence-chunked TTS (ElevenLabs personas, voice on) ---
+  const streamSpeakActiveRef=useRef(false);
+  const ttsTextQueueRef=useRef([]);   // [{text,idx}] sentences waiting to be synthesized
+  const ttsAudioQueueRef=useRef([]);  // [{uri,text,idx}] synthesized, waiting to play
+  const ttsInputClosedRef=useRef(false); // LLM stream finished, no more sentences coming
+  const ttsSynthBusyRef=useRef(false);
+  const ttsSpokenRef=useRef('');      // text already voiced — drives the reveal
+  const ttsCancelRef=useRef(false);
+  const ttsGenRef=useRef(0);         // bumped each reply so a stale pump can't write into the next
+  const ttsPlayedCountRef=useRef(0); // audio segments actually played this reply
+  const voiceFastRef=useRef('1');
   const recordingRef=useRef(null);
   const araWsRef=useRef(null);
   const araChunksRef=useRef([]);
@@ -83,6 +105,7 @@ export default function CommandScreen({navigation}){
   const recBusyRef=useRef(false); // true while a recorder is preparing OR being torn down
   const recPollRef=useRef(null);  // interval polling the recorder's metering
   const recStartRef=useRef(0);
+  const manualRef=useRef(false); // true while the current take was started by the SPEAK button
   const{addRelay}=useEmpireStore();
   const isFocused=useIsFocused();
 
@@ -91,6 +114,7 @@ export default function CommandScreen({navigation}){
   useEffect(()=>{if(!vizRef.speaking){vizRef.personaId=activePersona;vizRef.color=getPersona(activePersona).color;}},[activePersona]);// eslint-disable-line react-hooks/exhaustive-deps
   useEffect(()=>{loadingRef.current=loading;},[loading]);
   useEffect(()=>{voicePausedRef.current=voicePaused;},[voicePaused]);
+  useEffect(()=>{getSetting('voice_fast_model','1').then(v=>{voiceFastRef.current=v;}).catch(()=>{});},[]);
   // Continuous-voice loop: the single source of truth for re-opening the mic.
   // Whenever hands-free is on and nothing is thinking, speaking or already
   // recording, listen again. Playback callbacks null soundRef and clear loading;
@@ -108,17 +132,18 @@ export default function CommandScreen({navigation}){
   },[handsFree,voicePaused,loading,recording,isFocused]);// eslint-disable-line react-hooks/exhaustive-deps
   useEffect(()=>{if(mode==='direct')loadHistory(activePersona);},[activePersona,mode]);
   useEffect(()=>{
-    Audio.setAudioModeAsync({allowsRecordingIOS:true,playsInSilentModeIOS:true});
+    audioModeForRecording();
     loadPics();
     return()=>{
       // Full teardown — a half-lived timer / socket / sound is a common crash source.
       clearSilenceTimer();
       clearRecPoll();
       handsFreeRef.current=false;
+      manualRef.current=false;
       try{abortRef.current?.abort();}catch{}
       try{speakCancelRef.current?.();}catch{}
       if(recordingRef.current){try{recordingRef.current.stopAndUnloadAsync();}catch{}recordingRef.current=null;}
-      if(soundRef.current){const snd=soundRef.current;soundRef.current=null;try{snd.stopAsync();snd.unloadAsync();}catch{}}
+      clearSound();
       if(araWsRef.current){try{araWsRef.current.close();}catch{}araWsRef.current=null;}
       try{Speech.stop();}catch{}
     };
@@ -145,6 +170,29 @@ export default function CommandScreen({navigation}){
   function clearRecPoll(){
     if(recPollRef.current){clearInterval(recPollRef.current);recPollRef.current=null;}
   }
+  const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+  async function waitUntil(cond,timeout=3000){
+    const t0=Date.now();
+    while(!cond()&&Date.now()-t0<timeout)await sleep(50);
+    return cond();
+  }
+  async function audioModeForPlayback(){
+    try{await Audio.setAudioModeAsync({playsInSilentModeIOS:true,allowsRecordingIOS:false});}catch{}
+  }
+  async function audioModeForRecording(){
+    try{await Audio.setAudioModeAsync({playsInSilentModeIOS:true,allowsRecordingIOS:true});}catch{}
+  }
+  // The single teardown path for a playback Sound. Nulls soundRef FIRST so the
+  // continuous-voice effect / maybeAutoListen can't stay wedged behind a dead
+  // sound, then best-effort detaches + stops + unloads.
+  async function clearSound(){
+    const snd=soundRef.current;
+    soundRef.current=null;
+    if(!snd)return;
+    try{snd.setOnPlaybackStatusUpdate(null);}catch{}
+    try{await snd.stopAsync();}catch{}
+    try{await snd.unloadAsync();}catch{}
+  }
 
   // Called ~4x/second from a poll of the recorder's status. Decides when the
   // hands-free take is done.
@@ -155,7 +203,12 @@ export default function CommandScreen({navigation}){
     const m=(typeof status.metering==='number')?status.metering:null;
 
     // Hard cap — never let a take run away.
-    if(elapsed>HANDS_FREE_MAX_MS){stopRecording();return;}
+    if(elapsed>(manualRef.current?MANUAL_MAX_MS:HANDS_FREE_MAX_MS)){stopRecording();return;}
+
+    // Manual SPEAK take: no auto-stop at all — the user ends it with STOP REC.
+    // Everything below (no-meter fixed take, voice-detect discard, silence timer)
+    // is hands-free only.
+    if(manualRef.current)return;
 
     // Device reports no metering → fall back to a fixed-length take.
     if(m===null){
@@ -169,7 +222,7 @@ export default function CommandScreen({navigation}){
     const talking=m>HANDS_FREE_VOICE_DB;
     if(talking){
       voicedCountRef.current+=1;
-      if(voicedCountRef.current>=2)hasVoicedRef.current=true;
+      hasVoicedRef.current=true; // one real poll above threshold is enough at -47 dB
     }
 
     // Never actually heard the user — don't ship silence to Whisper (it
@@ -187,6 +240,15 @@ export default function CommandScreen({navigation}){
         if(recordingRef.current)stopRecording();
       },HANDS_FREE_SILENCE_MS);
     }
+  }
+
+  // Options for callPersona on a voice turn: a faster model + tighter length so
+  // the persona starts talking sooner. Off when voice is off or the setting is
+  // disabled; per-persona `voiceModel` (personas.js) can override or opt out.
+  function voiceModelOpts(p){
+    if(!(voiceOn&&!voiceMuted)||voiceFastRef.current!=='1')return{};
+    const model=p.voiceModel||VOICE_MODELS[p.api];
+    return model?{model,maxTokens:800}:{maxTokens:900};
   }
 
   function maybeAutoListen(){
@@ -296,29 +358,28 @@ export default function CommandScreen({navigation}){
     if(voicePaused)return;
     speakCancelRef.current?.();
     try{
-      if(soundRef.current){try{await soundRef.current.stopAsync();await soundRef.current.unloadAsync();}catch{}soundRef.current=null;}
+      await clearSound();
+      await waitUntil(()=>!recBusyRef.current,3000);
+      await audioModeForPlayback();
       if(persona.id==='ara'){
         const result=await araGrokVoice(text);
         soundRef.current=result?.sound||null;
-        if(soundRef.current)soundRef.current.setOnPlaybackStatusUpdate(st=>{if(st.didJustFinish){const snd=soundRef.current;soundRef.current=null;try{snd?.unloadAsync();}catch{}maybeAutoListen();}});
+        if(soundRef.current)soundRef.current.setOnPlaybackStatusUpdate(st=>{if(st.didJustFinish){clearSound();maybeAutoListen();}});
         else maybeAutoListen();
       }else if(persona.elevenlabsVoiceId){
         const uri=await textToSpeech(text,persona.elevenlabsVoiceId,persona.name);
         if(uri){
-          await Audio.setAudioModeAsync({playsInSilentModeIOS:true,allowsRecordingIOS:false});
+          await audioModeForPlayback();
           const{sound}=await Audio.Sound.createAsync({uri},{shouldPlay:true});
           soundRef.current=sound;
-          sound.setOnPlaybackStatusUpdate(st=>{if(st.didJustFinish){soundRef.current=null;try{sound.unloadAsync();}catch{}maybeAutoListen();}});
+          sound.setOnPlaybackStatusUpdate(st=>{if(st.didJustFinish){clearSound();maybeAutoListen();}});
         }else{
-          Alert.alert('Voice Debug','textToSpeech returned null for '+persona.name);
-          maybeAutoListen();
+          Speech.speak(text.substring(0,500),{language:'en-US',rate:0.95,onDone:()=>maybeAutoListen(),onStopped:()=>maybeAutoListen()});
         }
       }else{
-        Alert.alert('Voice Debug','No elevenlabsVoiceId for '+persona.name+' — falling back to native speech');
         Speech.speak(text.substring(0,500),{language:'en-US',rate:0.95,onDone:()=>maybeAutoListen(),onStopped:()=>maybeAutoListen()});
       }
     }catch(err){
-      Alert.alert('Voice Debug — Exception',persona.name+': '+err.message);
       Speech.speak(text.substring(0,500),{language:'en-US',rate:0.95,onDone:()=>maybeAutoListen(),onStopped:()=>maybeAutoListen()});
     }
   }
@@ -345,15 +406,16 @@ export default function CommandScreen({navigation}){
       maybeAutoListen();
       return{revealed:text.length,completed:true,finalText:text};
     }
-    if(soundRef.current){try{await soundRef.current.stopAsync();await soundRef.current.unloadAsync();}catch{}soundRef.current=null;}
+    await clearSound();
 
     return new Promise((resolve)=>{
       let settled=false,cancelled=false,timer=null,safety=null,lastRevealed=0,fullText=text;
+      let lastPos=-1,lastPosAt=Date.now(),failCount=0,durKnown=false;
       const cleanup=()=>{if(timer){clearInterval(timer);timer=null;}if(safety){clearTimeout(safety);safety=null;}speakCancelRef.current=null;};
       const done=(completed)=>{
         if(settled)return;settled=true;cleanup();
         vizRef.speaking=false;
-        if(soundRef.current){const snd=soundRef.current;soundRef.current=null;try{snd.stopAsync();snd.unloadAsync();}catch{}}
+        clearSound();
         const revealed=completed?fullText.length:lastRevealed;
         const finalText=completed?fullText:(fullText.slice(0,revealed).trim()+(revealed<fullText.length?' …':''));
         patch(m=>({...m,content:finalText,revealed:finalText.length,streaming:false}));
@@ -364,14 +426,28 @@ export default function CommandScreen({navigation}){
 
       const startTimer=(sound,timeline)=>{
         vizRef.speaking=true;
+        lastPos=-1;lastPosAt=Date.now();failCount=0;
+        // Pre-duration ceiling: only covers a Sound that never loads / never
+        // starts. Replaced by dur+3s once the real length is known (uncapped —
+        // a long reply must be allowed to finish). Mid-playback wedges are
+        // caught by the position-stall watchdog below, whatever the length.
+        safety=setTimeout(()=>done(true),25000);
         timer=setInterval(async()=>{
           if(cancelled)return;
           if(abortRef.current?.signal.aborted){done(false);return;}
-          let st;try{st=await sound.getStatusAsync();}catch{return;}
+          if(voicePausedRef.current){lastPosAt=Date.now();return;} // don't count a deliberate pause as a stall
+          let st;
+          try{st=await sound.getStatusAsync();failCount=0;}
+          catch{if(++failCount>=10){done(true);}return;}
           if(!st?.isLoaded)return;
           if(st.isPlaying)vizRef.amplitude=synthAmp();
           const pos=st.positionMillis||0,dur=st.durationMillis||0;
-          if(!safety&&dur>0)safety=setTimeout(()=>done(true),dur+2500);
+          if(dur>0&&!durKnown){durKnown=true;if(safety)clearTimeout(safety);safety=setTimeout(()=>done(true),dur+3000);}
+          // Position-stall watchdog: if playback claims to be running but the
+          // clock hasn't moved for PLAYBACK_WEDGE_MS (past a short load grace),
+          // treat it as finished. Position-based, so long healthy audio is fine.
+          if(pos!==lastPos){lastPos=pos;lastPosAt=Date.now();}
+          else if(!st.didJustFinish&&pos>0&&Date.now()-lastPosAt>PLAYBACK_WEDGE_MS){done(true);return;}
           let target;
           if(timeline&&timeline.length){
             let c=0;for(const e of timeline){if(e.atMs<=pos)c=e.chars;else break;}
@@ -398,6 +474,12 @@ export default function CommandScreen({navigation}){
 
       (async()=>{
         try{
+          // Make sure any just-finished recorder is fully gone and the iOS audio
+          // session is in playback mode BEFORE the first Sound is created —
+          // otherwise the first voiced reply silently fails to play.
+          await waitUntil(()=>!recBusyRef.current,3000);
+          await audioModeForPlayback();
+          await sleep(60);
           let sound=null,timeline=null;
           if(persona.id==='ara'){
             const r=await araGrokVoice(fullText);
@@ -406,9 +488,14 @@ export default function CommandScreen({navigation}){
           }else if(persona.elevenlabsVoiceId){
             const uri=await textToSpeech(fullText,persona.elevenlabsVoiceId,persona.name);
             if(uri){
-              await Audio.setAudioModeAsync({playsInSilentModeIOS:true,allowsRecordingIOS:false});
-              const created=await Audio.Sound.createAsync({uri},{shouldPlay:true,progressUpdateIntervalMillis:80});
+              const created=await Audio.Sound.createAsync({uri},{shouldPlay:false,progressUpdateIntervalMillis:80});
               sound=created.sound;
+              try{
+                await sound.playAsync();
+                await sleep(250);
+                const st=await sound.getStatusAsync();
+                if(st.isLoaded&&!st.isPlaying&&!st.didJustFinish){await sound.setPositionAsync(0);await sound.playAsync();}
+              }catch{}
             }
           }
           if(cancelled||settled){if(sound){try{await sound.stopAsync();await sound.unloadAsync();}catch{}}return;}
@@ -422,9 +509,148 @@ export default function CommandScreen({navigation}){
     });
   }
 
+  // ---- Streamed sentence-chunked TTS (ElevenLabs personas, voice on) -------
+  // Instead of one TTS call for the whole reply, chop it into sentences and
+  // synthesize + play them back to back. First audio lands after ~one sentence.
+  function resetStreamSpeak(){
+    ttsGenRef.current+=1;
+    ttsTextQueueRef.current=[];
+    ttsAudioQueueRef.current=[];
+    ttsInputClosedRef.current=false;
+    ttsSynthBusyRef.current=false;
+    ttsSpokenRef.current='';
+    ttsCancelRef.current=false;
+    ttsPlayedCountRef.current=0;
+    streamSpeakActiveRef.current=true;
+    return ttsGenRef.current;
+  }
+  // Complete sentences of `clean` starting after `consumedLen`. Fragments below
+  // ~24 chars (and common abbreviations like "Mr.") are merged forward so we
+  // never synthesize a stray "Mr." on its own. flush=true also takes the tail.
+  function sliceSentences(clean,consumedLen,flush){
+    const rest=clean.slice(consumedLen);
+    const segs=[];
+    const ABBR=/(?:^|\s)(mr|mrs|ms|dr|sr|jr|st|vs|etc|no|inc|co|fig|eg|ie|approx|a\.m|p\.m)\.$/i;
+    let cut=0,pending='';
+    const re=/[.!?…](?:["')\]]+)?(?:\s|$)|\n+/g;
+    let m;
+    while((m=re.exec(rest))){
+      const end=m.index+m[0].length;
+      pending+=rest.slice(cut,end);
+      cut=end;
+      const t=pending.trim();
+      if(t.length>=24&&!ABBR.test(t)){segs.push(t);pending='';}
+    }
+    if(flush){
+      pending+=rest.slice(cut);
+      cut=rest.length;
+      const t=pending.trim();
+      if(t)segs.push(t);
+      pending='';
+    }
+    // `consumed` only advances past text we actually emitted as segments.
+    return{segments:segs,consumed:consumedLen+cut-pending.length};
+  }
+  async function ttsSynthPump(persona,gen){
+    if(ttsSynthBusyRef.current)return;
+    ttsSynthBusyRef.current=true;
+    const live=()=>gen===ttsGenRef.current&&!ttsCancelRef.current;
+    try{
+      while(live()){
+        if(ttsAudioQueueRef.current.length>=2){await sleep(120);continue;} // stay ~1 ahead
+        const next=ttsTextQueueRef.current.shift();
+        if(!next){
+          if(ttsInputClosedRef.current)break;
+          await sleep(80);continue;
+        }
+        const peek=ttsTextQueueRef.current[0]?.text||'';
+        let uri=null;
+        try{
+          uri=await textToSpeech(next.text,persona.elevenlabsVoiceId,persona.name,{
+            signal:abortRef.current?.signal,previousText:ttsSpokenRef.current,nextText:peek,
+          });
+        }catch{}
+        if(!live())break;
+        ttsAudioQueueRef.current.push({uri:uri||null,text:next.text});
+      }
+    }finally{if(gen===ttsGenRef.current)ttsSynthBusyRef.current=false;}
+  }
+  function ttsPlayPump(persona,patch,gen){
+    return new Promise((resolve)=>{
+      let stopped=false;
+      const finish=()=>{if(stopped)return;stopped=true;if(gen===ttsGenRef.current)speakCancelRef.current=null;vizRef.speaking=false;vizRef.amplitude=0;maybeAutoListen();resolve();};
+      speakCancelRef.current=()=>{ttsCancelRef.current=true;finish();};
+      (async()=>{
+       try{
+        vizRef.speaking=true;
+        await waitUntil(()=>!recBusyRef.current,3000);
+        await audioModeForPlayback();
+        while(gen===ttsGenRef.current&&!ttsCancelRef.current&&!abortRef.current?.signal.aborted){
+          const item=ttsAudioQueueRef.current.shift();
+          if(!item){
+            if(ttsInputClosedRef.current&&!ttsSynthBusyRef.current&&!ttsTextQueueRef.current.length)break;
+            await sleep(100);continue;
+          }
+          const base=ttsSpokenRef.current.length;
+          const sep=ttsSpokenRef.current?' ':'';
+          if(item.uri){
+            try{
+              const created=await Audio.Sound.createAsync({uri:item.uri},{shouldPlay:false,progressUpdateIntervalMillis:80});
+              soundRef.current=created.sound;
+              await created.sound.playAsync();
+              ttsPlayedCountRef.current+=1;
+              const t0=Date.now();let lastPos=-1,lastAt=Date.now();
+              while(gen===ttsGenRef.current&&!ttsCancelRef.current&&!abortRef.current?.signal.aborted){
+                if(voicePausedRef.current){lastAt=Date.now();await sleep(120);continue;}
+                let st;try{st=await created.sound.getStatusAsync();}catch{break;}
+                if(!st?.isLoaded)break;
+                if(st.isPlaying)vizRef.amplitude=synthAmp();
+                const pos=st.positionMillis||0,dur=st.durationMillis||0;
+                const frac=dur>0?Math.min(1,pos/dur):0;
+                patch(m=>({...m,revealed:Math.min((m.content||'').length,base+Math.ceil(item.text.length*frac))}));
+                if(st.didJustFinish)break;
+                if(pos!==lastPos){lastPos=pos;lastAt=Date.now();}
+                else if(pos>0&&Date.now()-lastAt>PLAYBACK_WEDGE_MS)break;
+                if(Date.now()-t0>PLAYBACK_MAX_MS)break;
+                await sleep(80);
+              }
+            }catch{}
+            await clearSound();
+          }
+          ttsSpokenRef.current+=sep+item.text;
+          patch(m=>({...m,revealed:Math.min((m.content||'').length,ttsSpokenRef.current.length)}));
+        }
+       }catch{}
+       finally{finish();}
+      })();
+    });
+  }
+  // Speak `display` for an ElevenLabs persona via the chunked pipeline. Resolves
+  // when playback has fully drained (or was cancelled / aborted).
+  async function streamSpeak(display,persona,patch){
+    const gen=resetStreamSpeak();
+    patch(m=>({...m,content:display,revealed:0,streaming:true}));
+    const{segments}=sliceSentences(display,0,true);
+    for(const s of segments)ttsTextQueueRef.current.push({text:s});
+    ttsInputClosedRef.current=true;
+    if(!segments.length){if(gen===ttsGenRef.current)streamSpeakActiveRef.current=false;return;}
+    ttsSynthPump(persona,gen).catch(()=>{});
+    await ttsPlayPump(persona,patch,gen);
+    if(gen!==ttsGenRef.current)return; // a newer reply has taken over
+    // Every segment failed to synthesize (e.g. ElevenLabs down) — rather than
+    // leave the reply silent, read it once with the native voice.
+    if(ttsPlayedCountRef.current===0&&!ttsCancelRef.current&&!abortRef.current?.signal.aborted){
+      try{await new Promise(res=>{Speech.speak(display.slice(0,700),{language:'en-US',rate:0.95,onDone:res,onStopped:res});setTimeout(res,Math.min(60000,display.length*70+4000));});}catch{}
+    }
+    streamSpeakActiveRef.current=false;
+    ttsCancelRef.current=false;
+  }
+
   function stopAudio(){
     speakCancelRef.current?.();
-    if(soundRef.current){try{soundRef.current.stopAsync();}catch{}soundRef.current=null;}
+    ttsCancelRef.current=true;
+    ttsTextQueueRef.current=[];ttsAudioQueueRef.current=[];
+    clearSound(); // nulls soundRef synchronously, then unloads
     if(araWsRef.current){try{araWsRef.current.close();}catch{}araWsRef.current=null;}
     Speech.stop();
   }
@@ -453,13 +679,13 @@ export default function CommandScreen({navigation}){
     });
   }
 
-  async function startRecording(){
+  async function startRecording(opts={}){
     if(recBusyRef.current||recordingRef.current)return; // one already live or tearing down
     recBusyRef.current=true;
     try{
       const{status}=await Audio.requestPermissionsAsync();
       if(status!=='granted'){Alert.alert('Permission','Microphone access required.');recBusyRef.current=false;return;}
-      await Audio.setAudioModeAsync({allowsRecordingIOS:true,playsInSilentModeIOS:true});
+      await audioModeForRecording();
       const rec=new Audio.Recording();
       hasVoicedRef.current=false;
       voicedCountRef.current=0;
@@ -471,6 +697,7 @@ export default function CommandScreen({navigation}){
       recordingRef.current=rec;
       recStartRef.current=Date.now();
       hasVoicedRef.current=false;
+      manualRef.current=!!opts.manual;
       setRecording(true);
       recBusyRef.current=false;
       // Poll the recorder ourselves — setOnRecordingStatusUpdate is unreliable
@@ -502,13 +729,18 @@ export default function CommandScreen({navigation}){
     recordingRef.current=null;
     recBusyRef.current=true; // block the loop until this recorder is fully gone
     const wasEmpty=emptyTakeRef.current;
+    const wasManual=manualRef.current;
     emptyTakeRef.current=false;
+    manualRef.current=false;
     let uri=null;
     try{
-      await new Promise(r=>setTimeout(r,300)); // small tail so a trailing word isn't clipped
-      await Promise.race([rec.stopAndUnloadAsync(),new Promise(r=>setTimeout(r,3000))]);
+      // Tail so the last word isn't clipped. Hands-free already recorded
+      // HANDS_FREE_SILENCE_MS of trailing audio; a manual take has none.
+      await sleep(wasManual?800:400);
+      await Promise.race([rec.stopAndUnloadAsync().catch(()=>{}),sleep(6000)]);
       uri=rec.getURI();
     }catch(e){/* recorder already gone */}
+    await sleep(120); // let iOS settle the audio session category before playback
     recBusyRef.current=false;
     // Hands-free take that never heard a voice — drop it, don't transcribe silence.
     if(wasEmpty||!uri){maybeAutoListen();return;}
@@ -662,7 +894,8 @@ export default function CommandScreen({navigation}){
           const shown=(stripCommands(raw)||'').replace(/\[[A-Z_]+:?[^\]]*$/,'').trimEnd();
           patch(m=>({...m,content:shown,revealed:shown.length}));
         };
-        let response=await callPersona(pid,hist,myAbort.signal,onDelta);
+        const streamVoice=willVoice&&!!p.elevenlabsVoiceId&&p.id!=='ara';
+        let response=await callPersona(pid,hist,myAbort.signal,onDelta,voiceModelOpts(p));
         // Second-pass tools: the persona emits a lookup tag on pass 1, we gather
         // the data, then it re-answers with everything in hand. One pass only.
         const injections=[];
@@ -706,6 +939,10 @@ export default function CommandScreen({navigation}){
             catch(e){injections.push(`WEB SEARCH — "${q}": (failed: ${e.message})`);}
           }
         }
+        try{
+          const gReads=await googleReadInjections(response);
+          if(gReads.length){toolLabel='◇ checking Google…';injections.push(...gReads);}
+        }catch(e){/* never let a Google read break the turn */}
         const cmdCallbacks={
           onRelay:({target,message})=>addRelay(target,`[From ${p.name}]: ${message}`),
           onTradePropose:(prop)=>setTradeProposal({...prop,pid}),
@@ -725,18 +962,23 @@ export default function CommandScreen({navigation}){
           const hist2=[...hist,{role:'assistant',content:response},{role:'user',content:`[TOOL RESULTS — answer my previous message using this. Do not mention the lookup mechanism.\n\n${injections.join('\n\n---\n\n')}\n]`}];
           raw='';lastPatch=0;
           patch(m=>({...m,content:'',revealed:0,streaming:!willVoice}));
-          response=await callPersona(pid,hist2,myAbort.signal,willVoice?null:onDelta,{skipSave:true});
+          response=await callPersona(pid,hist2,myAbort.signal,willVoice?null:onDelta,{skipSave:true,...voiceModelOpts(p)});
           savePersonaMemory(pid,`YOU: ${text}\n${p.name}: ${stripCommands(response)||response}`).catch(()=>{});
         }
         const display=stripCommands(response)||response;
         if(display)replies.push({name:p.name,text:display});
         await handleCommands(response,pid,cmdCallbacks);
+        try{
+          const gw=await googleWriteCommands(response,{onConfirm:queueGoogleAction});
+          for(const line of gw.immediate)pushSystemMsg(line);
+        }catch(e){pushSystemMsg('Google action failed: '+e.message);}
         if(willVoice){
           patch(m=>({...m,content:display,revealed:0,streaming:true}));
-          await speakWithReveal(display,p,msgId,isGroup);
-          // speakWithReveal only drives the reveal animation — the reply text is
-          // always the full `display`. Settle the bubble on it regardless of how
-          // the reveal ended, unless the user has moved on.
+          if(streamVoice)await streamSpeak(display,p,patch);
+          else await speakWithReveal(display,p,msgId,isGroup);
+          // The spoken helpers only drive the reveal animation — the reply text
+          // is always the full `display`. Settle the bubble on it regardless of
+          // how the reveal ended, unless the user has moved on.
           if(!myAbort.signal.aborted){
             patch(m=>({...m,content:display,revealed:display.length,streaming:false}));
             if(!isGroup)await saveMessage(pid,'assistant',display,'direct');
@@ -753,6 +995,7 @@ export default function CommandScreen({navigation}){
         const err={id:Date.now().toString(),role:'system',content:`Error: ${e.message}`,persona:'system'};
         if(isGroup)setGroupMessages(prev=>[...prev,err]);else setMessages(prev=>[...prev,err]);
       }
+      if(!streamSpeakActiveRef.current)clearSound();
       maybeAutoListen();
     }finally{
       if(abortRef.current===myAbort)setLoading(false);
@@ -768,6 +1011,29 @@ export default function CommandScreen({navigation}){
   function pushSystemMsg(content){
     const msg={id:Date.now().toString()+Math.random().toString(36).slice(2,5),role:'system',content,persona:'system'};
     if(mode==='direct')setMessages(prev=>[...prev,msg]);else setGroupMessages(prev=>[...prev,msg]);
+  }
+  // A persona proposed a Google action that needs a confirm tap (send email,
+  // delete). One card at a time; extras queue.
+  function queueGoogleAction(a){
+    if(googleActionRef.current){googleQueueRef.current.push(a);return;}
+    googleActionRef.current=a;setGoogleAction(a);
+  }
+  function advanceGoogle(){
+    const next=googleQueueRef.current.shift()||null;
+    googleActionRef.current=next;setGoogleAction(next);
+  }
+  async function runGoogleAction(){
+    const a=googleActionRef.current;
+    if(!a)return;
+    setGoogleBusy(true);
+    try{const r=await a.run();pushSystemMsg(typeof r==='string'?r:`— ${a.label} done —`);}
+    catch(e){pushSystemMsg(`⚠️ ${a.label} failed: ${e.message}`);}
+    finally{setGoogleBusy(false);advanceGoogle();}
+  }
+  function cancelGoogleAction(){
+    const label=googleActionRef.current?.label||'Action';
+    pushSystemMsg(`— ${label} cancelled —`);
+    advanceGoogle();
   }
   async function closePosition(id){
     try{
@@ -1058,7 +1324,7 @@ export default function CommandScreen({navigation}){
             </TouchableOpacity>
           </View>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.inputActions}>
-            <TouchableOpacity style={[s.iact,recording&&{borderColor:'#E05555',backgroundColor:'#E0555511'}]} onPress={recording?stopRecording:startRecording}>
+            <TouchableOpacity style={[s.iact,recording&&{borderColor:'#E05555',backgroundColor:'#E0555511'}]} onPress={()=>recording?stopRecording():startRecording({manual:true})}>
               <View style={[s.iactDot,recording&&{backgroundColor:'#E05555'}]}/>
               <Text style={[s.iactT,recording&&{color:'#E05555'}]}>{recording?'STOP REC':'SPEAK'}</Text>
             </TouchableOpacity>
@@ -1121,6 +1387,23 @@ export default function CommandScreen({navigation}){
               <Text style={[s.modalBtnT,{color:'#555'}]}>CANCEL</Text>
             </TouchableOpacity>
           </View>
+        </View></View>
+      </Modal>
+
+      <Modal visible={!!googleAction} transparent animationType="fade" onRequestClose={cancelGoogleAction}>
+        <View style={s.modalOver}><View style={s.tradeCard}>
+          <Text style={s.tradeTitle}>{(googleAction?.label||'').toUpperCase()}</Text>
+          {googleAction&&<>
+            <Text style={[s.tradeNote,{fontSize:11,color:'#AAA',lineHeight:16}]}>{googleAction.detail}</Text>
+            <View style={{flexDirection:'row',gap:10,marginTop:16}}>
+              <TouchableOpacity style={[s.modalBtn,{backgroundColor:'#00CED1'}]} disabled={googleBusy} onPress={runGoogleAction}>
+                <Text style={[s.modalBtnT,{color:'#000'}]}>{googleBusy?'WORKING…':'CONFIRM'}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[s.modalBtn,{backgroundColor:'#111',borderWidth:1,borderColor:'#333'}]} onPress={cancelGoogleAction}>
+                <Text style={[s.modalBtnT,{color:'#555'}]}>CANCEL</Text>
+              </TouchableOpacity>
+            </View>
+          </>}
         </View></View>
       </Modal>
 

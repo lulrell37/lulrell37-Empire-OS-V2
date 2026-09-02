@@ -1,4 +1,4 @@
-import{loadKeys,loadBackend}from './keyStore';
+import{loadKeys,loadBackend,loadGoogleToken}from './keyStore';
 import{getPersonaMemory,getMemoriesByPersona,savePersonaMemory,getHudState,getTasks,trackApiUsage,getCustomPrompt,getUpcomingDates}from './database';
 import*as FileSystem from 'expo-file-system';
 import{Alert}from 'react-native';
@@ -46,6 +46,20 @@ async function buildSys(personaId,persona,convo=[]){
   sys+=`\n\n[MEMORY RECALL: The memory block below holds what is most relevant right now. If you need to recall something specific from past conversations that is NOT shown there, emit [MEMORY_QUERY: your precise question] and your memory index will answer it before you reply. Use it sparingly, only when it matters. Never mention this mechanism to Mr. Burrus — just recall.]`;
   sys+=`\n\n[CHARTS: When numbers would land better as a picture, emit [SHOW_CHART: type | title | data]. type = line, area, bar, or pie. data = "label:value, label:value, ..." for one series, or "A=x:1,y:2; B=x:3,y:4" for several. It takes over the visualization panel until Mr. Burrus closes it. Use it when it genuinely helps — trends, breakdowns, comparisons — not for one or two numbers.]`;
   sys+=`\n\n[CURRENT DATE & TIME: ${timeStr} ${tz} | LOCATION: Waldorf, MD]`;
+  try{
+    const gt=await loadGoogleToken();
+    if(gt?.accessToken){
+      sys+=`\n\n[GOOGLE — connected. Use these when they genuinely help; results come back before you answer; never mention the mechanism:
+ EMAIL: [READ_EMAIL] | [SEND_EMAIL: to | subject | body] (Mr. Burrus taps to confirm before it sends)
+ CALENDAR: [READ_CALENDAR] | [READ_CALENDAR: 30] | [READ_CALENDAR: 2026-08-01 | 30] | [CREATE_EVENT: Title | 2026-06-01T14:00 | 60] | [DELETE_EVENT: id] (confirmed)
+ DRIVE NOTES: [LIST_NOTES] | [LIST_NOTES: 50] | [SEARCH_DRIVE: keyword] | [READ_NOTE: name] | [READ_FILE_ID: fileId] | [CREATE_NOTE: title | content] | [EDIT_NOTE: fileId | content] | [DELETE_FILE: fileId] (confirmed)
+ SHEETS: [CREATE_SHEET: title | col1,col2 | val1,val2]
+ TASKS: [READ_TASKS] | [CREATE_TASK: title | notes | due] | [COMPLETE_TASK: name] | [DELETE_TASK: name] — these also sync to the app's own task list
+ OTHER: [SET_REMINDER: text | YYYY-MM-DD] | [SYNC_AND_SAVE]]`;
+    }else{
+      sys+=`\n\n[GOOGLE: not connected. If Mr. Burrus asks about email, calendar, Drive or Google tasks, tell him to link his account in Settings → GOOGLE.]`;
+    }
+  }catch{}
   const hud=await getHudState();const tasks=await getTasks();
   if(hud){
     let routineDone={};try{routineDone=JSON.parse(hud.morning_routine_done||'{}');}catch{}
@@ -135,13 +149,14 @@ export async function callPersona(personaId,messages,signal=null,onDelta=null,op
   const sys=await buildSys(personaId,persona,messages);
   const hist=messages.slice(-20).map(m=>({role:m.role==='system'?'user':m.role,content:m.content}));
   const stream=typeof onDelta==='function';
+  const maxTokens=opts.maxTokens||1500;
   let response='';
   const emit=(t)=>{if(t){response+=t;if(stream){try{onDelta(t);}catch{}}}};
   if(persona.api==='claude'){
     const{base,auth}=await aiRoute('claude',k?.claude,'Claude');
     const url=base+'/v1/messages';
     const headers={'Content-Type':'application/json',...auth};
-    const body=JSON.stringify({model:persona.model||'claude-sonnet-4-6',max_tokens:1500,system:sys,messages:hist,stream});
+    const body=JSON.stringify({model:opts.model||persona.model||'claude-sonnet-4-6',max_tokens:maxTokens,system:sys,messages:hist,stream});
     if(stream){
       let tin=0,tout=0;
       await xhrStream({url,headers,body,signal,onEvent:(e)=>{
@@ -162,7 +177,7 @@ export async function callPersona(personaId,messages,signal=null,onDelta=null,op
     const{base,auth}=await aiRoute('grok',k?.grok,'Grok');
     const url=base+'/v1/chat/completions';
     const headers={'Content-Type':'application/json',...auth};
-    const body=JSON.stringify({model:persona.model||'grok-3-latest',max_tokens:1500,messages:[{role:'system',content:sys},...hist],stream});
+    const body=JSON.stringify({model:opts.model||persona.model||'grok-3-latest',max_tokens:maxTokens,messages:[{role:'system',content:sys},...hist],stream});
     if(stream){
       await xhrStream({url,headers,body,signal,onEvent:(e)=>{
         const c=e.choices?.[0]?.delta?.content;if(c)emit(c);
@@ -179,7 +194,7 @@ export async function callPersona(personaId,messages,signal=null,onDelta=null,op
     const{base,auth}=await aiRoute('openai',k?.openai,'OpenAI');
     const url=base+'/v1/chat/completions';
     const headers={'Content-Type':'application/json',...auth};
-    const body=JSON.stringify({model:persona.model||'gpt-4o',max_tokens:1500,messages:[{role:'system',content:sys},...hist],stream,...(stream?{stream_options:{include_usage:true}}:{})});
+    const body=JSON.stringify({model:opts.model||persona.model||'gpt-4o',max_tokens:maxTokens,messages:[{role:'system',content:sys},...hist],stream,...(stream?{stream_options:{include_usage:true}}:{})});
     if(stream){
       await xhrStream({url,headers,body,signal,onEvent:(e)=>{
         const c=e.choices?.[0]?.delta?.content;if(c)emit(c);
@@ -283,26 +298,48 @@ export async function deepResearchPoll(id){
   const text=d.output_text||(d.output||[]).flatMap(o=>(o.content||[]).filter(c=>c.type==='output_text').map(c=>c.text)).join('\n');
   return{status:'completed',text:text||'(Deep Research returned no text)'};
 }
-export async function textToSpeech(text,voiceId,personaName){
+// Synthesize `text` in a persona's ElevenLabs voice -> local .mp3 URI (or null).
+// opts: { signal, previousText, nextText } — previous/next give the flash model
+// the surrounding context so per-sentence chunks keep their prosody.
+// Retries once on a transient failure before giving up (a dropped TTS call is
+// what makes a persona fall back to the flat native voice mid-answer).
+export async function textToSpeech(text,voiceId,personaName,opts={}){
   const k=await ensureKeys();
   const be=await loadBackend();
-  if(!be&&!k?.elevenlabs){Alert.alert('ElevenLabs Error','No API key found');return null;}
-  if(!voiceId){Alert.alert('ElevenLabs Error','No voiceId provided for this persona');return null;}
+  if(!be&&!k?.elevenlabs)return null;
+  if(!voiceId)return null;
   const clean=text.replace(/\[[^\]]*\]/g,'').replace(/[*#`]/g,'').trim().substring(0,2000);
   if(!clean)return null;
-  try{
-    const{base,auth}=await aiRoute('elevenlabs',k?.elevenlabs,'ElevenLabs');
-    const res=await fetch(`${base}/v1/text-to-speech/${voiceId}`,{method:'POST',headers:{'Content-Type':'application/json',...auth},body:JSON.stringify({text:clean,model_id:'eleven_turbo_v2_5',voice_settings:{stability:0.5,similarity_boost:0.8}})});
-    if(!res.ok){const e=await res.text();Alert.alert('ElevenLabs API Error',`Status ${res.status}: ${e.substring(0,150)}`);return null;}
-    const arrayBuffer=await res.arrayBuffer();
-    const bytes=new Uint8Array(arrayBuffer);
-    let binary='';
-    for(let i=0;i<bytes.length;i+=8192)binary+=String.fromCharCode.apply(null,bytes.subarray(i,i+8192));
-    const base64=btoa(binary);
-    const uri=FileSystem.cacheDirectory+'tts_'+Date.now()+'.mp3';
-    await FileSystem.writeAsStringAsync(uri,base64,{encoding:FileSystem.EncodingType.Base64});
-    return uri;
-  }catch(err){Alert.alert('ElevenLabs Exception',err.message);return null;}
+  const body={
+    text:clean,
+    model_id:'eleven_flash_v2_5',
+    voice_settings:{stability:0.5,similarity_boost:0.8},
+  };
+  if(opts.previousText)body.previous_text=String(opts.previousText).slice(-500);
+  if(opts.nextText)body.next_text=String(opts.nextText).slice(0,500);
+  for(let attempt=0;attempt<2;attempt++){
+    try{
+      const{base,auth}=await aiRoute('elevenlabs',k?.elevenlabs,'ElevenLabs');
+      const res=await fetch(`${base}/v1/text-to-speech/${voiceId}`,{method:'POST',headers:{'Content-Type':'application/json',...auth},body:JSON.stringify(body),signal:opts.signal});
+      if(!res.ok){
+        if(attempt===0&&(res.status===429||res.status>=500))continue;
+        return null;
+      }
+      const arrayBuffer=await res.arrayBuffer();
+      const bytes=new Uint8Array(arrayBuffer);
+      let binary='';
+      for(let i=0;i<bytes.length;i+=8192)binary+=String.fromCharCode.apply(null,bytes.subarray(i,i+8192));
+      const base64=btoa(binary);
+      const uri=FileSystem.cacheDirectory+'tts_'+Date.now()+'_'+Math.random().toString(36).slice(2,7)+'.mp3';
+      await FileSystem.writeAsStringAsync(uri,base64,{encoding:FileSystem.EncodingType.Base64});
+      return uri;
+    }catch(err){
+      if(err?.name==='AbortError')return null;
+      if(attempt===0)continue;
+      return null;
+    }
+  }
+  return null;
 }
 export async function transcribeAudio(audioUri){
   const k=await ensureKeys();

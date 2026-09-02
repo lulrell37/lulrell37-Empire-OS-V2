@@ -1,4 +1,5 @@
 import{addTask,updateTask,completeTask,deleteTask,saveNote,getNote,addRevenue,getTasks,getHudState,updateHudState,setRoutineDone,addRoutineItem,removeRoutineItem,renameRoutineItem,setBatmanDay,getBusinessTargets,setBusinessTarget,setPanelLayout,addExpense,addImportantDate}from './database';
+import*as gtask from './googleClient';
 import useEmpireStore from '../store/useEmpireStore';
 const HUD_PANELS=['briefing','businesses','tasks','routine','batman','daily'];
 const PANEL_ALIASES=[['brief','briefing'],['business','businesses'],['revenue','businesses'],['empire','businesses'],['task','tasks'],['routine','routine'],['morning','routine'],['batman','batman'],['protocol','batman'],['training','batman'],['daily','daily'],['word','daily'],['verse','daily'],['fact','daily']];
@@ -15,15 +16,28 @@ export async function handleCommands(response,personaId,callbacks={}){
     const id=await addTask(title,m[2]?.trim()||'',m[3]?.trim()||null);
     callbacks.onTaskAdded?.({id,title});
   }
+  // [CREATE_TASK: title | notes | due-date] — distinct from [ADD_TASK]; mirrors
+  // to Google Tasks as well as the app's own synced task list.
+  for(const m of response.matchAll(/\[CREATE_TASK:\s*([^|\]]+?)(?:\|([^|\]]+))?(?:\|([^\]]+))?\]/gi)){
+    const title=m[1]?.trim();if(!title)continue;
+    const notes=m[2]?.trim()||'',due=m[3]?.trim()||null;
+    const id=await addTask(title,notes,due);
+    callbacks.onTaskAdded?.({id,title});
+    gtask.taskCreate({title,notes,due}).catch(()=>{});
+  }
   for(const m of response.matchAll(/\[COMPLETE_TASK:\s*([^\]]+)\]/gi)){
+    const name=m[1].trim();
     const tasks=await getTasks(true);
-    const task=tasks.find(t=>t.title.toLowerCase().includes(m[1].trim().toLowerCase()));
+    const task=tasks.find(t=>t.title.toLowerCase().includes(name.toLowerCase()));
     if(task){await completeTask(task.id);callbacks.onTaskCompleted?.(task);}
+    gtask.taskComplete(name).catch(()=>{}); // best-effort Google Tasks mirror (title-matched)
   }
   for(const m of response.matchAll(/\[DELETE_TASK:\s*([^\]]+)\]/gi)){
+    const name=m[1].trim();
     const tasks=await getTasks(true);
-    const task=tasks.find(t=>t.title.toLowerCase().includes(m[1].trim().toLowerCase()));
+    const task=tasks.find(t=>t.title.toLowerCase().includes(name.toLowerCase()));
     if(task){await deleteTask(task.id);callbacks.onTaskDeleted?.(task);}
+    gtask.taskDelete(name).catch(()=>{}); // best-effort Google Tasks mirror
   }
   for(const m of response.matchAll(/\[TASK_EDIT:\s*([^|\]]+)\|([^\]]+)\]/gi)){
     const tasks=await getTasks(true);
@@ -160,5 +174,14 @@ export function stripCommands(text){
     .replace(/\[SHOW_CHART:[^\]]*\]/gi,'')
     .replace(/\[BUILD_REQUEST:[^\]]*\]/gi,'').replace(/\[BUILD_REPLY:[^\]]*\]/gi,'')
     .replace(/\[BUILD_MERGE:[^\]]*\]/gi,'').replace(/\[BUILD_CANCEL:[^\]]*\]/gi,'').replace(/\[BUILD_STATUS\]/gi,'')
-    .replace(/\[SEND_SMS:[^\]]*\]/gi,'').trim();
+    .replace(/\[SEND_SMS:[^\]]*\]/gi,'')
+    .replace(/\[CREATE_EVENT:[^\]]*\]/gi,'').replace(/\[DELETE_EVENT:[^\]]*\]/gi,'')
+    .replace(/\[LIST_NOTES(?::[^\]]*)?\]/gi,'').replace(/\[SEARCH_DRIVE:[^\]]*\]/gi,'')
+    .replace(/\[READ_FILE_ID:[^\]]*\]/gi,'').replace(/\[CREATE_NOTE:[^\]]*\]/gi,'')
+    .replace(/\[EDIT_NOTE:[^\]]*\]/gi,'').replace(/\[DELETE_FILE:[^\]]*\]/gi,'')
+    .replace(/\[CREATE_SHEET:[^\]]*\]/gi,'').replace(/\[SEND_EMAIL:[^\]]*\]/gi,'')
+    .replace(/\[READ_TASKS\]/gi,'').replace(/\[CREATE_TASK:[^\]]*\]/gi,'')
+    .replace(/\[SET_REMINDER:[^\]]*\]/gi,'').replace(/\[SYNC_AND_SAVE\]/gi,'')
+    .replace(/\[READ_CALENDAR(?::[^\]]*)?\]/gi,'').replace(/\[LIST_NOTES\]/gi,'')
+    .trim();
 }
