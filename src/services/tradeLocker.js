@@ -19,9 +19,23 @@ const RES_MS={'1m':60e3,'5m':300e3,'15m':900e3,'30m':1800e3,'1H':3600e3,'4H':144
 export const MAX_QTY=0.01; // hard lot cap — user-set, enforced on every order
 export const MAX_OPEN_POSITIONS=5; // most positions Atlas may run at once
 
-const session={token:null,refresh:null,exp:0,env:'demo',accountId:null,accNum:null,instruments:{},instrumentList:null};
+const session={token:null,refresh:null,exp:0,env:'demo',accountId:null,accNum:null,instruments:{},instrumentList:null,rateLimitedUntil:0};
 
 function base(){return BASE[session.env]||BASE.demo;}
+
+const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));
+
+// Short-TTL cache for market reads (quotes, candles). A full analysis scan asks
+// for the same context quotes over and over; without this a 4-symbol scan fires
+// 40+ requests in a couple of seconds and Cloudflare answers with 1015.
+const mdCache={};
+async function cachedRead(key,ttlMs,fn){
+  const hit=mdCache[key];
+  if(hit&&Date.now()-hit.t<ttlMs)return hit.v;
+  const v=await fn();
+  mdCache[key]={t:Date.now(),v};
+  return v;
+}
 
 async function authenticate(){
   const creds=await loadTradeCreds();
@@ -55,15 +69,48 @@ function qs(query){
   return parts.length?'?'+parts.join('&'):'';
 }
 
-async function api(path,{method='GET',body,query}={}){
+// Cloudflare error 1015 = rate limited. It comes back as HTTP 429, or as a 403/
+// 503 challenge page whose body mentions it.
+function looksRateLimited(status,text){
+  return status===429
+    ||((status===403||status===503)&&/\b1015\b|rate.?limit|too many request|just a moment|attention required/i.test(text||''));
+}
+
+let apiChain=Promise.resolve();
+let lastCallAt=0;
+const MIN_GAP_MS=170;   // ~6 req/s ceiling — keeps bursts under Cloudflare's limit
+
+async function rawApi(path,{method='GET',body,query}={}){
   const t=await token();
   const headers={'Authorization':'Bearer '+t,'Content-Type':'application/json'};
   if(session.accNum!=null)headers.accNum=String(session.accNum);
-  const res=await fetch(base()+path+qs(query),{method,headers,body:body?JSON.stringify(body):undefined});
-  const text=await res.text();
-  let json;try{json=text?JSON.parse(text):{};}catch{json={raw:text};}
-  if(!res.ok||json.s==='error')throw new Error(`TradeLocker ${method} ${path}: ${(json.errmsg||text||res.status).toString().slice(0,140)}`);
-  return json;
+  for(let attempt=0;;attempt++){
+    const res=await fetch(base()+path+qs(query),{method,headers,body:body?JSON.stringify(body):undefined});
+    const text=await res.text();
+    if(looksRateLimited(res.status,text)){
+      session.rateLimitedUntil=Date.now()+10000;
+      if(attempt>=3)throw new Error(`TradeLocker rate-limited (Cloudflare 1015) on ${method} ${path}`);
+      const ra=Number(res.headers?.get?.('retry-after'))*1000;
+      await sleep(ra>0?Math.min(ra,15000):800*Math.pow(2,attempt));
+      continue;
+    }
+    let json;try{json=text?JSON.parse(text):{};}catch{json={raw:text};}
+    if(!res.ok||json.s==='error')throw new Error(`TradeLocker ${method} ${path}: ${(json.errmsg||text||res.status).toString().slice(0,140)}`);
+    return json;
+  }
+}
+
+// Every call goes through one chain with a minimum gap between requests, so a
+// scan that needs 40 reads spreads them over ~7s instead of hammering at once.
+function api(path,opts){
+  const run=apiChain.then(async()=>{
+    const wait=MIN_GAP_MS-(Date.now()-lastCallAt);
+    if(wait>0)await sleep(wait);
+    lastCallAt=Date.now();
+    return rawApi(path,opts);
+  });
+  apiChain=run.then(()=>{},()=>{});   // never let a rejection break the chain
+  return run;
 }
 
 // --- Public surface ---
@@ -79,16 +126,25 @@ export async function tlConnect(){
   return{accountId:a.id,accNum:a.accNum,name:a.name,currency:a.currency,balance:a.accountBalance??a.aaccountBalance,status:a.status,env:session.env};
 }
 
-export function tlStatus(){return{connected:!!session.accountId,env:session.env,accountId:session.accountId};}
+export function tlStatus(){
+  return{
+    connected:!!session.accountId,
+    env:session.env,
+    accountId:session.accountId,
+    rateLimited:Date.now()<session.rateLimitedUntil,
+  };
+}
 
 async function ensureAccount(){if(!session.accountId)await tlConnect();}
 
 export async function tlAccountState(){
   await ensureAccount();
-  const j=await api(`/trade/accounts/${session.accountId}/state`);
-  const arr=j.d?.accountDetailsData||[];
-  const out={};ACCOUNT_COLS.forEach((c,i)=>{out[c]=arr[i];});
-  return out;
+  return cachedRead('state',2500,async()=>{
+    const j=await api(`/trade/accounts/${session.accountId}/state`);
+    const arr=j.d?.accountDetailsData||[];
+    const out={};ACCOUNT_COLS.forEach((c,i)=>{out[c]=arr[i];});
+    return out;
+  });
 }
 
 // The full tradable-instrument list for the account, cached per session.
@@ -139,29 +195,39 @@ export async function tlInstrument(symbol='XAUUSD'){
 }
 
 export async function tlQuote(symbol='XAUUSD'){
-  const m=await tlInstrument(symbol);
-  const j=await api('/trade/quotes',{query:{routeId:m.infoRouteId,tradableInstrumentId:m.id}});
-  const d=j.d||{};
-  return{symbol,bid:d.bp,ask:d.ap,mid:d.bp!=null&&d.ap!=null?(d.bp+d.ap)/2:null,ts:Date.now()};
+  return cachedRead('q:'+symbol.toUpperCase(),7000,async()=>{
+    const m=await tlInstrument(symbol);
+    const j=await api('/trade/quotes',{query:{routeId:m.infoRouteId,tradableInstrumentId:m.id}});
+    const d=j.d||{};
+    return{symbol,bid:d.bp,ask:d.ap,mid:d.bp!=null&&d.ap!=null?(d.bp+d.ap)/2:null,ts:Date.now()};
+  });
 }
 
 export async function tlHistory(symbol='XAUUSD',resolution='1H',bars=120){
-  const m=await tlInstrument(symbol);
-  const step=RES_MS[resolution]||RES_MS['1H'];
-  const to=Date.now();
-  const from=to-step*Math.min(bars,20000);
-  const j=await api('/trade/history',{query:{routeId:m.infoRouteId,tradableInstrumentId:m.id,resolution,from,to}});
-  return(j.d?.barDetails||[]).map(b=>({t:b.t,o:b.o,h:b.h,l:b.l,c:b.c,v:b.v}));
+  return cachedRead(`h:${symbol.toUpperCase()}:${resolution}:${bars}`,20000,async()=>{
+    const m=await tlInstrument(symbol);
+    const step=RES_MS[resolution]||RES_MS['1H'];
+    const to=Date.now();
+    const from=to-step*Math.min(bars,20000);
+    const j=await api('/trade/history',{query:{routeId:m.infoRouteId,tradableInstrumentId:m.id,resolution,from,to}});
+    return(j.d?.barDetails||[]).map(b=>({t:b.t,o:b.o,h:b.h,l:b.l,c:b.c,v:b.v}));
+  });
 }
 
 export async function tlPositions(){
   await ensureAccount();
-  const j=await api(`/trade/accounts/${session.accountId}/positions`);
-  return(j.d?.positions||[]).map(row=>{
-    const o={};POSITION_COLS.forEach((c,i)=>{o[c]=row[i];});
-    return o;
+  return cachedRead('positions',2500,async()=>{
+    const j=await api(`/trade/accounts/${session.accountId}/positions`);
+    return(j.d?.positions||[]).map(row=>{
+      const o={};POSITION_COLS.forEach((c,i)=>{o[c]=row[i];});
+      return o;
+    });
   });
 }
+
+// Drop the cached account/positions snapshot right after we change something,
+// so the next read reflects the order we just sent.
+export function tlBustPositions(){delete mdCache['positions'];delete mdCache['state'];}
 
 // Column order for /ordersHistory rows. Pulled from /trade/config the first time
 // (the shape varies by broker); the fallback below matches the public docs.
@@ -208,12 +274,14 @@ export async function tlPlaceOrder({symbol='XAUUSD',side,qty=MAX_QTY,stopLoss,ta
   if(stopLoss!=null){body.stopLoss=Number(stopLoss);body.stopLossType='absolute';}
   if(takeProfit!=null){body.takeProfit=Number(takeProfit);body.takeProfitType='absolute';}
   const j=await api(`/trade/accounts/${session.accountId}/orders`,{method:'POST',body});
+  tlBustPositions();
   return{orderId:j.d?.orderId,qty:q,side,symbol,stopLoss,takeProfit};
 }
 
 export async function tlClosePosition(positionId,qty=0){
   await ensureAccount();
   await api(`/trade/positions/${positionId}`,{method:'DELETE',body:{qty:Number(qty)||0}});
+  tlBustPositions();
   return{closed:positionId};
 }
 
@@ -223,10 +291,11 @@ export async function tlModifyPosition(positionId,{stopLoss,takeProfit}={}){
   if(stopLoss!==undefined)body.stopLoss=stopLoss===null?null:Number(stopLoss);
   if(takeProfit!==undefined)body.takeProfit=takeProfit===null?null:Number(takeProfit);
   await api(`/trade/positions/${positionId}`,{method:'PATCH',body});
+  tlBustPositions();
   return{modified:positionId};
 }
 
-export function tlReset(){session.token=null;session.refresh=null;session.exp=0;session.accountId=null;session.accNum=null;session.instruments={};session.instrumentList=null;}
+export function tlReset(){session.token=null;session.refresh=null;session.exp=0;session.accountId=null;session.accNum=null;session.instruments={};session.instrumentList=null;session.rateLimitedUntil=0;for(const k in mdCache)delete mdCache[k];}
 
 // --- Analysis snapshot: everything Atlas needs to form a view on a pair ---
 

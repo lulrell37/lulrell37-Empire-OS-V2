@@ -11,16 +11,17 @@ import{colors,FONTS,radius,space}from '../theme';
 const TONE={
   live:{dot:colors.online,text:colors.online,border:colors.onlineDim},
   connecting:{dot:colors.warn,text:colors.warn,border:'rgba(217,164,65,0.35)'},
+  limited:{dot:colors.warn,text:colors.warn,border:'rgba(217,164,65,0.35)'},
   offline:{dot:colors.danger,text:colors.danger,border:'rgba(199,97,75,0.4)'},
   unconfigured:{dot:colors.textFaint,text:colors.textDim,border:colors.hairline},
 };
-const LABEL={live:'LIVE',connecting:'CONNECTING',offline:'OFFLINE',unconfigured:'NO LOGIN'};
+const LABEL={live:'LIVE',connecting:'CONNECTING',limited:'RATE-LIMITED',offline:'OFFLINE',unconfigured:'NO LOGIN'};
 
 const POLL_MS=4000; // sync read only — no network
 
 export default function TradeStatus({active=true,style,onPress}){
   const st=tlStatus();
-  const[state,setState]=useState(st.connected?'live':'connecting');
+  const[state,setState]=useState(st.connected?(st.rateLimited?'limited':'live'):'connecting');
   const[env,setEnv]=useState(st.env);
   const alive=useRef(true);
 
@@ -30,13 +31,13 @@ export default function TradeStatus({active=true,style,onPress}){
     if(!tlStatus().connected){
       setState('connecting');
       tlConnect()
-        .then(a=>{if(alive.current){setState('live');setEnv(a?.env||tlStatus().env);}})
+        .then(a=>{if(alive.current){setState(tlStatus().rateLimited?'limited':'live');setEnv(a?.env||tlStatus().env);}})
         .catch(e=>{if(alive.current)setState(/not connected|add your login/i.test(e?.message||'')?'unconfigured':'offline');});
     }
     const iv=setInterval(()=>{
       if(!alive.current)return;
       const s=tlStatus();
-      if(s.connected){setState('live');setEnv(s.env);}
+      if(s.connected){setState(s.rateLimited?'limited':'live');setEnv(s.env);}
     },POLL_MS);
     return()=>{alive.current=false;clearInterval(iv);};
   },[active]);
