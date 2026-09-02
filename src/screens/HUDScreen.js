@@ -4,7 +4,7 @@ import{SafeAreaView}from 'react-native-safe-area-context';
 import{useFocusEffect}from '@react-navigation/native';
 import Svg,{Circle,Defs,LinearGradient,Stop}from 'react-native-svg';
 import{Feather}from '@expo/vector-icons';
-import{getHudState,updateHudState,getTasks,addTask,updateTask,deleteTask,completeTask,getBusinessesWithRevenue,setBusinessTarget,addRevenue,updateEmpireScore,getMorningRoutine,saveMorningRoutine,getBatmanTemplate,saveBatmanTemplate,getHudLayout,setPanelLayout,DEFAULT_BATMAN}from '../services/database';
+import{getHudState,updateHudState,getTasks,addTask,updateTask,deleteTask,completeTask,getBusinessesWithRevenue,setBusinessTarget,addRevenue,updateEmpireScore,getMorningRoutine,saveMorningRoutine,getBatmanTemplate,saveBatmanTemplate,getHudLayout,setPanelLayout,ensureHudState,DEFAULT_BATMAN}from '../services/database';
 import{colors,space,radius,type,FONTS}from '../theme';
 import{PANEL_META,BriefingPanel,AgendaPanel,BusinessPanel,TasksPanel,RoutinePanel,BatmanPanel,DailyPanel,MarketPanel,BuildBoardPanel}from './hud/panels';
 import FloatingCard from './hud/FloatingCard';
@@ -39,16 +39,19 @@ export default function HUDScreen({navigation}){
   useFocusEffect(useCallback(()=>{if(!busyRef.current)load();},[]));
 
   async function load(){
+    await ensureHudState(); // roll the day over (score -> 0, checkboxes cleared) if it's a new day
     const h=await getHudState();
     const t=await getTasks();
     const b=await getBusinessesWithRevenue();
     const{items,done}=await getMorningRoutine();
     const bt=await getBatmanTemplate();
     const lay=await getHudLayout();
+    let bat={};try{bat=JSON.parse(h?.batman_protocol||'{}');}catch{}
     setHud(h);setTasks(t);setBusinesses(b);
     setRoutineItems(items);setRoutine(done);
-    setBatmanTemplate(bt);setLayout(lay);
-    try{setBatman(JSON.parse(h?.batman_protocol||'{}'));}catch{setBatman({});}
+    setBatmanTemplate(bt);setLayout(lay);setBatman(bat);
+    // Keep the score a true reflection of what's checked (0 when nothing is done today).
+    recalcScore(done,bat,t,items.length);
   }
 
   const maxZ=()=>Math.max(0,...PANELS.map(p=>layout[p]?.z||0));
@@ -74,13 +77,16 @@ export default function HUDScreen({navigation}){
     await setPanelLayout(key,patch);
   }
 
+  // Score starts at 0 each day and is earned purely from what's checked:
+  //   morning routine 35 · today's workout 30 · tasks 35  (max 100)
   async function recalcScore(r,b,t,routineLen=routineItems.length){
     const rd=Object.values(r).filter(Boolean).length;
-    const bd=Object.values(b).filter(Boolean).length>0?1:0;
+    const workoutDone=Object.values(b).filter(Boolean).length>0?1:0;
     const td=t.filter(x=>x.completed).length;
     const tt=t.length;
     const rRatio=routineLen>0?Math.min(1,rd/routineLen):0;
-    const sc=Math.round(Math.min(100,25+rRatio*30+(bd*25)+(tt>0?(td/tt)*20:0)));
+    const taskRatio=tt>0?td/tt:1; // nothing to do counts as done
+    const sc=Math.round(Math.min(100,rRatio*35+workoutDone*30+taskRatio*35));
     setHud(prev=>({...prev,empire_score:sc}));
     await updateEmpireScore(sc);
   }
@@ -189,7 +195,7 @@ export default function HUDScreen({navigation}){
 
   function renderPanel(key){
     switch(key){
-      case 'briefing':return <BriefingPanel tasksDone={tasksDone} tasksTotal={tasks.length} routineDone={routineDone} routineTotal={routineItems.length} todayBatman={todayBatman}/>;
+      case 'briefing':return <BriefingPanel tasksDone={tasksDone} tasksTotal={tasks.length} routineDone={routineDone} routineTotal={routineItems.length} todayBatman={todayBatman} workoutDone={!!(todayBatman&&batman[todayBatman.day])} onToggleWorkout={()=>todayBatman&&toggleBatman(todayBatman.day)}/>;
       case 'agenda':return <Boundary label="The agenda panel"><AgendaPanel/></Boundary>;
       case 'businesses':return <BusinessPanel businesses={businesses} onOpenBiz={openBizModal}/>;
       case 'tasks':return <TasksPanel tasks={openTasks} onComplete={doneTask} onEdit={openTaskEdit} onAdd={()=>setShowAddTask(true)}/>;

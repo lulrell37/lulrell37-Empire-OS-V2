@@ -146,7 +146,7 @@ export const DEFAULT_BATMAN=[
 ];
 function routineId(i=0){return 'r_'+Date.now().toString(36)+i.toString(36)+Math.random().toString(36).slice(2,5);}
 function buildDefaultRoutine(){return DEFAULT_ROUTINE_LABELS.map((label,i)=>({id:routineId(i),label}));}
-async function ensureHudState(){
+export async function ensureHudState(){
   const today=getTodayStr();
   const ex=await db.getFirstAsync('SELECT * FROM hud_state WHERE id=1');
   if(!ex){

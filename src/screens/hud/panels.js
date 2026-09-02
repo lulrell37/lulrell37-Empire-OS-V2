@@ -31,7 +31,7 @@ export const PANEL_META={
 };
 export const newRoutineId=()=>'r_'+Date.now().toString(36)+Math.random().toString(36).slice(2,6);
 
-export function BriefingPanel({tasksDone,tasksTotal,routineDone,routineTotal,todayBatman}){
+export function BriefingPanel({tasksDone,tasksTotal,routineDone,routineTotal,todayBatman,workoutDone,onToggleWorkout}){
   return(
     <>
       <View style={ps.briefRow}>
@@ -48,14 +48,15 @@ export function BriefingPanel({tasksDone,tasksTotal,routineDone,routineTotal,tod
           <Text style={ps.briefSub}>{routineTotal>0&&routineDone>=routineTotal?'Fully complete':'Keep going'}</Text>
         </View>
       </View>
-      <View style={ps.briefRow}>
+      <TouchableOpacity style={ps.briefRow} onPress={onToggleWorkout} activeOpacity={0.7}>
         <View style={ps.briefIcon}><Feather name="activity" size={15} color={colors.brass}/></View>
         <View style={{flex:1}}>
           <Text style={ps.briefMain}>{todayBatman?.label}</Text>
-          <Text style={ps.briefSub}>{todayBatman?.desc}</Text>
+          <Text style={ps.briefSub}>{workoutDone?'Workout complete':(todayBatman?.desc||'Tap when done')}</Text>
         </View>
-      </View>
-      <Text style={ps.briefNote}>Calendar and email require Google Sign-In — not yet connected on this device.</Text>
+        <Feather name={workoutDone?'check-circle':'circle'} size={17} color={workoutDone?colors.online:colors.textFaint}/>
+      </TouchableOpacity>
+      <Text style={ps.briefNote}>Weather, calendar, inbox and tasks are on the AGENDA panel — swipe right.</Text>
     </>
   );
 }
