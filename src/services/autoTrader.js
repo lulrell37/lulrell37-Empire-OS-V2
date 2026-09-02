@@ -9,7 +9,7 @@
 // This is a deliberately unguarded experiment: no daily caps, no loss
 // kill-switch. The ONE hard rule is env must be 'demo' — the loop refuses to
 // place a single order on a live account and stops itself if it sees one.
-import{tlStatus,tlSnapshot,tlFormatSnapshot,tlPlaceOrder,tlClosePosition,tlPositions,tlInstrumentsById,MAX_QTY}from './tradeLocker';
+import{tlStatus,tlSnapshot,tlFormatSnapshot,tlPlaceOrder,tlClosePosition,tlModifyPosition,tlPositions,tlInstrumentsById,MAX_QTY}from './tradeLocker';
 import{autoTradeDecision}from './aiService';
 import{reconcileOpenTrades,formatTradeRecord,getStrategy,recordTradeOpen}from './tradeJournal';
 import{getSetting,saveMessage,savePersonaMemory}from './database';
@@ -61,6 +61,16 @@ async function runOnce(){
       let dec;
       try{dec=await autoTradeDecision({symbol:sym,snapshot:tlFormatSnapshot(snap),record,strategy,positions:posText});}
       catch(e){emit(`AUTO ${sym} — decision failed: ${e.message}`);continue;}
+
+      // Break-even management runs alongside whatever else she decides.
+      if(Array.isArray(dec.breakevenIds)&&dec.breakevenIds.length){
+        for(const id of dec.breakevenIds){
+          const pos=positions.find(p=>String(p.id)===String(id));
+          if(!pos||Number(pos.unrealizedPl)<=0)continue; // only protect a winner
+          try{await tlModifyPosition(id,{stopLoss:Number(pos.avgPrice)});emit(`AUTO · #${id} ${sym} stop → break-even${dec.rationale?` — ${dec.rationale}`:''}`);}
+          catch(e){emit(`AUTO break-even #${id} failed: ${e.message}`);}
+        }
+      }
 
       if(dec.action==='close'&&Array.isArray(dec.closeIds)&&dec.closeIds.length){
         for(const id of dec.closeIds){

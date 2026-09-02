@@ -69,6 +69,13 @@ export async function handleCommands(response,personaId,callbacks={}){
   for(const m of response.matchAll(/\[TRADE_CLOSE:\s*([^\]]+)\]/gi)){
     callbacks.onTradeClose?.(m[1].trim());
   }
+  // [TRADE_BREAKEVEN: positionId] — move that position's stop to entry.
+  // Optional lock-in in price units: [TRADE_BREAKEVEN: id | 3.0] leaves the
+  // stop 3.0 in profit. [TRADE_BREAKEVEN: all] does every open position.
+  for(const m of response.matchAll(/\[TRADE_BREAKEVEN:\s*([A-Za-z0-9]+)\s*(?:\|\s*([0-9.]+))?\]/gi)){
+    const off=m[2]?parseFloat(m[2]):0;
+    callbacks.onTradeBreakeven?.({id:m[1].trim(),offset:isNaN(off)?0:off});
+  }
   // [STRATEGY_UPDATE: full replacement text] — Atlas rewrites her trading playbook
   for(const m of response.matchAll(/\[STRATEGY_UPDATE:\s*([\s\S]+?)\]/gi)){
     if(m[1]?.trim())callbacks.onStrategyUpdate?.(m[1].trim());
@@ -178,6 +185,7 @@ export function stripCommands(text){
     .replace(/\[READ_CALENDAR\]/gi,'').replace(/\[READ_EMAIL\]/gi,'')
     .replace(/\[MEMORY_QUERY:[^\]]*\]/gi,'').replace(/\[DEEP_RESEARCH:[^\]]*\]/gi,'')
     .replace(/\[TRADE_SCAN(?::[^\]]*)?\]/gi,'').replace(/\[TRADE_PROPOSE:[^\]]*\]/gi,'').replace(/\[TRADE_CLOSE:[^\]]*\]/gi,'')
+    .replace(/\[TRADE_BREAKEVEN:[^\]]*\]/gi,'')
     .replace(/\[STRATEGY_UPDATE:[\s\S]*?\]/gi,'').replace(/\[TRADE_REVIEW:[^\]]*\]/gi,'')
     .replace(/\[ADD_EXPENSE:[^\]]*\]/gi,'').replace(/\[ADD_DATE:[^\]]*\]/gi,'').replace(/\[EXPENSE_SUMMARY\]/gi,'')
     .replace(/\[SHOW_CHART:[^\]]*\]/gi,'')

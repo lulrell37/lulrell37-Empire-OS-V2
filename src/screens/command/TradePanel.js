@@ -3,7 +3,7 @@
 // the background, so nothing here runs once the app is closed.
 import React,{useState,useEffect,useRef,useCallback}from 'react';
 import{View,Text,StyleSheet,TouchableOpacity,ActivityIndicator}from 'react-native';
-import{tlPositions,tlClosePosition,tlStatus,tlInstrumentsById}from '../../services/tradeLocker';
+import{tlPositions,tlClosePosition,tlModifyPosition,tlStatus,tlInstrumentsById}from '../../services/tradeLocker';
 import{reconcileOpenTrades}from '../../services/tradeJournal';
 
 const POLL_MS=4500;
@@ -52,6 +52,16 @@ export default function TradePanel({active,onEvent}){
     finally{setBusy(null);}
   }
 
+  async function breakeven(p){
+    setBusy(p.id);
+    try{
+      await tlModifyPosition(p.id,{stopLoss:Number(p.avgPrice)});
+      onEvent?.(`— #${p.id} stop → break-even —`);
+      await poll();
+    }catch(e){onEvent?.(`Break-even failed: ${e.message}`);}
+    finally{setBusy(null);}
+  }
+
   if(!positions.length)return null;
 
   const totalPl=positions.reduce((a,p)=>a+(Number(p.unrealizedPl)||0),0);
@@ -75,6 +85,11 @@ export default function TradePanel({active,onEvent}){
               <Text style={[s.side,{color:p.side==='buy'?'#5FA779':'#C7614B'}]}>{p.side==='buy'?'▲':'▼'} {p.qty}</Text>
               <Text style={s.entry}>{sym?`${sym} `:''}@ {Number(p.avgPrice).toFixed(2)}</Text>
               <Text style={[s.pl,{color:pl>=0?'#5FA779':'#C7614B'}]}>{pl>=0?'+':''}{pl.toFixed(2)}</Text>
+              {pl>0&&(
+                <TouchableOpacity style={s.beBtn} disabled={!!busy} onPress={()=>breakeven(p)}>
+                  {busy===p.id?<ActivityIndicator size="small" color="#D4A017"/>:<Text style={s.beT}>B/E</Text>}
+                </TouchableOpacity>
+              )}
               <TouchableOpacity style={s.closeBtn} disabled={!!busy} onPress={()=>close(p.id)}>
                 {busy===p.id?<ActivityIndicator size="small" color="#C7614B"/>:<Text style={s.closeT}>CLOSE</Text>}
               </TouchableOpacity>
@@ -103,6 +118,8 @@ const s=StyleSheet.create({
   pl:{fontFamily:'monospace',fontSize:11,fontWeight:'700',width:76,textAlign:'right'},
   closeBtn:{borderWidth:1,borderColor:'#C7614B55',borderRadius:4,paddingHorizontal:8,paddingVertical:3,minWidth:52,alignItems:'center'},
   closeT:{fontFamily:'monospace',fontSize:8,color:'#C7614B',letterSpacing:1},
+  beBtn:{borderWidth:1,borderColor:'#D4A01755',borderRadius:4,paddingHorizontal:8,paddingVertical:3,minWidth:38,alignItems:'center'},
+  beT:{fontFamily:'monospace',fontSize:8,color:'#D4A017',letterSpacing:1},
   closeAll:{alignItems:'center',paddingVertical:8,borderTopWidth:1,borderTopColor:'#141210'},
   closeAllT:{fontFamily:'monospace',fontSize:9,color:'#C7614B',letterSpacing:2},
 });

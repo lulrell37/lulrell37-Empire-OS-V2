@@ -16,7 +16,7 @@ import{googleReadInjections,googleWriteCommands}from '../services/googleCommands
 import{getMessages,saveMessage,getAllPersonaPics,savePersonaMemory,getSetting,getExpenseSummary,addBuildJob,updateBuildJob,getBuildJob,getBuildJobs}from '../services/database';
 import{fileBuildRequest,replyToBuild,mergeBuild,cancelBuild}from '../services/buildAgent';
 import{pollBuildJobs}from '../services/buildJobs';
-import{tlSnapshot,tlFormatSnapshot,tlPlaceOrder,tlClosePosition,tlPositions,MAX_QTY}from '../services/tradeLocker';
+import{tlSnapshot,tlFormatSnapshot,tlPlaceOrder,tlClosePosition,tlModifyPosition,tlPositions,MAX_QTY}from '../services/tradeLocker';
 import{recordTradeOpen,reconcileOpenTrades,atlasJournalBlock,setStrategy,setTradeReview}from '../services/tradeJournal';
 import{loadKeys}from '../services/keyStore';
 import useEmpireStore from '../store/useEmpireStore';
@@ -957,6 +957,7 @@ export default function CommandScreen({navigation}){
           onRelay:({target,message})=>addRelay(target,`[From ${p.name}]: ${message}`),
           onTradePropose:(prop)=>setTradeProposal({...prop,pid}),
           onTradeClose:(id)=>closePosition(id),
+          onTradeBreakeven:({id,offset})=>moveToBreakeven(id,offset),
           onStrategyUpdate:(text)=>{setStrategy(text).then(()=>pushSystemMsg('— A.T.L.A.S. updated her strategy —')).catch(()=>{});},
           onTradeReview:({id,note})=>{setTradeReview(id,note).catch(()=>{});},
           onDeepResearch:(topic)=>startDeepResearch(topic,pid),
@@ -1062,6 +1063,30 @@ export default function CommandScreen({navigation}){
       }
     }catch(e){pushSystemMsg(`Close failed: ${e.message}`);}
     setTimeout(()=>reconcileOpenTrades().catch(()=>{}),4000);
+  }
+  // Move a position's stop to its entry (or `offset` price-units into profit).
+  // Only touches trades already in profit — a break-even stop on a losing trade
+  // would sit the wrong side of price and the broker would reject it anyway.
+  async function moveToBreakeven(id,offset=0){
+    try{
+      const all=await tlPositions();
+      const isAll=String(id).toLowerCase()==='all';
+      const targets=isAll?all:all.filter(p=>String(p.id)===String(id));
+      if(!targets.length){pushSystemMsg(isAll?`— break-even: nothing open —`:`— break-even: no open position ${id} —`);return;}
+      const off=Number(offset)||0;
+      let moved=0;
+      for(const pos of targets){
+        if(Number(pos.unrealizedPl)<=0){pushSystemMsg(`— #${pos.id} isn't in profit yet — stop left as is —`);continue;}
+        const isBuy=String(pos.side).toLowerCase().startsWith('b');
+        const be=+(Number(pos.avgPrice)+(isBuy?off:-off)).toFixed(5);
+        try{
+          await tlModifyPosition(pos.id,{stopLoss:be});
+          moved++;
+          pushSystemMsg(`— #${pos.id} stop → ${be}${off?` (+${off} locked in)`:' · break-even'} —`);
+        }catch(e){pushSystemMsg(`Break-even #${pos.id} failed: ${e.message}`);}
+      }
+      if(moved)setTimeout(()=>reconcileOpenTrades().catch(()=>{}),4000);
+    }catch(e){pushSystemMsg(`Break-even failed: ${e.message}`);}
   }
   function startDeepResearch(topic,pid){
     if(deepResearch){pushSystemMsg('Deep research is already running — one at a time.');return;}

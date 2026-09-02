@@ -275,8 +275,8 @@ export async function autoTradeDecision({symbol,snapshot,record,strategy,positio
   const sys=`You are A.T.L.A.S., running UNATTENDED on a DEMO trading account. No human reviews your call before it fires. Every order is 0.01 lot.
 Look at ${symbol} right now and decide. Doing NOTHING is the right answer most of the time — only act on a real, high-conviction edge that fits your strategy and your record. Stops and targets go off structure, tight, as concrete prices.
 Reply with ONLY a JSON object, no prose, no code fence:
-{"action":"enter"|"close"|"none","side":"buy"|"sell","stopLoss":<price>,"takeProfit":<price>,"setup":"scalp|swing|<label>","rationale":"<=140 chars","closeIds":["<id>"]}
-Use "enter" to open one position, "close" to close open positions by id, "none" to wait. Omit fields that don't apply. If unsure: {"action":"none"}.`;
+{"action":"enter"|"close"|"none","side":"buy"|"sell","stopLoss":<price>,"takeProfit":<price>,"setup":"scalp|swing|<label>","rationale":"<=140 chars","closeIds":["<id>"],"breakevenIds":["<id>"]}
+Use "enter" to open one position, "close" to close open positions by id, "none" to wait. "breakevenIds" moves those open positions' stops to entry — only positions already comfortably in profit — and may accompany any action. Omit fields that don't apply. If unsure: {"action":"none"}.`;
   const user=`MARKET SNAPSHOT ${symbol}:\n${snapshot}\n\nYOUR TRADE RECORD:\n${record||'(none yet)'}\n\nYOUR STRATEGY:\n${strategy||'(none yet)'}\n\nYOUR OPEN POSITIONS ON ${symbol}:\n${positions||'none'}`;
   const res=await fetch(base+'/v1/messages',{method:'POST',headers:{'Content-Type':'application/json',...auth},body:JSON.stringify({
     model:'claude-sonnet-4-6',max_tokens:400,system:sys,messages:[{role:'user',content:user}],
