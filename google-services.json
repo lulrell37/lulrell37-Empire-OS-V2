@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "477537032212",
+    "project_id": "empire-os-cf327",
+    "storage_bucket": "empire-os-cf327.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:477537032212:android:1573a6928a600061432f01",
+        "android_client_info": {
+          "package_name": "com.lulrell37.empireos"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAhINOjEsl6MwX9l9zVQvL9AZ1T64KsJw8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

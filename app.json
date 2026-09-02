@@ -8,6 +8,7 @@
     "scheme": "empireos",
     "android": {
       "package": "com.lulrell37.empireos",
+      "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
         "backgroundColor": "#000000"
       }
