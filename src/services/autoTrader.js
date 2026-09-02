@@ -9,7 +9,7 @@
 // This is a deliberately unguarded experiment: no daily caps, no loss
 // kill-switch. The ONE hard rule is env must be 'demo' — the loop refuses to
 // place a single order on a live account and stops itself if it sees one.
-import{tlStatus,tlSnapshot,tlFormatSnapshot,tlPlaceOrder,tlClosePosition,tlModifyPosition,tlPositions,tlInstrumentsById,MAX_QTY}from './tradeLocker';
+import{tlStatus,tlSnapshot,tlFormatSnapshot,tlPlaceOrder,tlClosePosition,tlModifyPosition,tlPositions,tlInstrumentsById,MAX_QTY,MAX_OPEN_POSITIONS}from './tradeLocker';
 import{autoTradeDecision}from './aiService';
 import{reconcileOpenTrades,formatTradeRecord,getStrategy,recordTradeOpen}from './tradeJournal';
 import{getSetting,saveMessage,savePersonaMemory}from './database';
@@ -49,6 +49,7 @@ async function runOnce(){
     const idToSym=await tlInstrumentsById().catch(()=>({}));
     const symOf=p=>String(idToSym[String(p.tradableInstrumentId)]||'').toUpperCase();
     const openSyms=new Set(positions.map(symOf));
+    let openCount=positions.length;   // grows as we open this cycle; capped at MAX_OPEN_POSITIONS
     const record=await formatTradeRecord().catch(()=>'');
     const strategy=await getStrategy().catch(()=>'');
 
@@ -82,12 +83,13 @@ async function runOnce(){
 
       if(dec.action==='enter'&&(dec.side==='buy'||dec.side==='sell')){
         if(openSyms.has(sym))continue; // already in this pair — don't stack
+        if(openCount>=MAX_OPEN_POSITIONS){emit(`AUTO · skipped ${sym} — ${MAX_OPEN_POSITIONS} positions already open`);continue;}
         const price=snap.quote?.mid??(dec.side==='buy'?snap.quote?.ask:snap.quote?.bid);
         try{
           const r=await tlPlaceOrder({symbol:sym,side:dec.side,qty:MAX_QTY,stopLoss:dec.stopLoss,takeProfit:dec.takeProfit});
           await recordTradeOpen({symbol:sym,side:r.side,qty:r.qty,entry:price,stopLoss:dec.stopLoss,takeProfit:dec.takeProfit,
             rationale:dec.rationale||'auto-trade',orderId:r.orderId,setup:dec.setup,auto:true}).catch(()=>{});
-          openSyms.add(sym);
+          openSyms.add(sym);openCount++;
           emit(`AUTO · ${r.side.toUpperCase()} ${r.qty} ${sym} @ ~${price??'mkt'} · SL ${dec.stopLoss??'—'} TP ${dec.takeProfit??'—'}${dec.rationale?` — ${dec.rationale}`:''}`);
           savePersonaMemory('atlas',`[auto-trade] opened ${r.side} ${sym} @ ~${price??'mkt'} — ${dec.rationale||''}`).catch(()=>{});
         }catch(e){emit(`AUTO ${sym} order failed: ${e.message}`);}
