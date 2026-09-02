@@ -15,6 +15,7 @@ import{getMessages,saveMessage,getAllPersonaPics,savePersonaMemory,getSetting,ge
 import{fileBuildRequest,replyToBuild,mergeBuild,cancelBuild}from '../services/buildAgent';
 import{pollBuildJobs}from '../services/buildJobs';
 import{tlSnapshot,tlFormatSnapshot,tlPlaceOrder,tlClosePosition,tlPositions,MAX_QTY}from '../services/tradeLocker';
+import{recordTradeOpen,reconcileOpenTrades,atlasJournalBlock,setStrategy,setTradeReview}from '../services/tradeJournal';
 import{loadKeys}from '../services/keyStore';
 import useEmpireStore from '../store/useEmpireStore';
 import{useIsFocused}from '@react-navigation/native';
@@ -22,6 +23,7 @@ import OrbZoom from './command/OrbZoom';
 import ChartOverlay from './command/ChartOverlay';
 import TradePanel from './command/TradePanel';
 import TradeStatus from '../components/TradeStatus';
+import TradeRecordBar from './command/TradeRecordBar';
 import BuildPanel from './command/BuildPanel';
 import NudgeBar from './command/NudgeBar';
 import{parseChartSpec}from '../services/chartSpec';
@@ -918,6 +920,8 @@ export default function CommandScreen({navigation}){
             try{injections.push(`MARKET SNAPSHOT ${sym}:\n`+tlFormatSnapshot(await tlSnapshot(sym)));}
             catch(e){injections.push(`MARKET SNAPSHOT ${sym}: failed — `+e.message);}
           }
+          try{await reconcileOpenTrades();injections.push(await atlasJournalBlock());}
+          catch(e){/* journal is best-effort — never block a scan */}
         }
         if(/\[BUILD_STATUS\]/i.test(response)&&!myAbort.signal.aborted){
           try{
@@ -947,6 +951,8 @@ export default function CommandScreen({navigation}){
           onRelay:({target,message})=>addRelay(target,`[From ${p.name}]: ${message}`),
           onTradePropose:(prop)=>setTradeProposal({...prop,pid}),
           onTradeClose:(id)=>closePosition(id),
+          onStrategyUpdate:(text)=>{setStrategy(text).then(()=>pushSystemMsg('— A.T.L.A.S. updated her strategy —')).catch(()=>{});},
+          onTradeReview:({id,note})=>{setTradeReview(id,note).catch(()=>{});},
           onDeepResearch:(topic)=>startDeepResearch(topic,pid),
           onShowChart:(raw)=>{const spec=parseChartSpec(raw);if(spec.valid){setChartOverlay(spec);setView('viz');}},
           onShowDiagram:()=>navigation.navigate('Laboratory'),
@@ -1046,6 +1052,7 @@ export default function CommandScreen({navigation}){
         pushSystemMsg(`— CLOSE ORDER SENT · position ${id} —`);
       }
     }catch(e){pushSystemMsg(`Close failed: ${e.message}`);}
+    setTimeout(()=>reconcileOpenTrades().catch(()=>{}),4000);
   }
   function startDeepResearch(topic,pid){
     if(deepResearch){pushSystemMsg('Deep Research already running — one at a time.');return;}
@@ -1171,6 +1178,8 @@ export default function CommandScreen({navigation}){
       const r=await tlPlaceOrder({symbol:sym,side,qty:Math.min(qty||MAX_QTY,MAX_QTY),stopLoss,takeProfit});
       pushSystemMsg(`— ORDER SENT · ${r.side.toUpperCase()} ${r.qty} ${sym} · SL ${r.stopLoss??'—'} · TP ${r.takeProfit??'—'} · #${r.orderId||'?'} —`);
       savePersonaMemory(pid||'atlas',`YOU: [confirmed trade]\nA.T.L.A.S.: order sent ${r.side} ${r.qty} ${sym} SL ${r.stopLoss} TP ${r.takeProfit}`).catch(()=>{});
+      recordTradeOpen({symbol:sym,side:r.side,qty:r.qty,entry:tradeProposal.entry,stopLoss,takeProfit,rationale:tradeProposal.rationale,orderId:r.orderId}).catch(()=>{});
+      setTimeout(()=>reconcileOpenTrades().catch(()=>{}),6000);
     }catch(e){pushSystemMsg(`Order failed: ${e.message}`);}
     finally{setTradeBusy(false);setTradeProposal(null);}
   }
@@ -1273,6 +1282,7 @@ export default function CommandScreen({navigation}){
       )}
 
       {mode==='direct'&&activePersona==='atlas'&&<TradeStatus active={isFocused} style={{marginHorizontal:10,marginTop:6}}/>}
+      {mode==='direct'&&activePersona==='atlas'&&<TradeRecordBar active={isFocused} style={{marginHorizontal:10,marginTop:6}}/>}
       {mode==='direct'&&activePersona==='atlas'&&<TradePanel active={isFocused} onEvent={pushSystemMsg}/>}
       {mode==='direct'&&activePersona==='jarvis'&&<BuildPanel active={isFocused} onMerge={confirmBuildMerge} onCancel={confirmBuildCancel}/>}
 

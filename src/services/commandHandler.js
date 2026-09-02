@@ -69,6 +69,14 @@ export async function handleCommands(response,personaId,callbacks={}){
   for(const m of response.matchAll(/\[TRADE_CLOSE:\s*([^\]]+)\]/gi)){
     callbacks.onTradeClose?.(m[1].trim());
   }
+  // [STRATEGY_UPDATE: full replacement text] — Atlas rewrites her trading playbook
+  for(const m of response.matchAll(/\[STRATEGY_UPDATE:\s*([\s\S]+?)\]/gi)){
+    if(m[1]?.trim())callbacks.onStrategyUpdate?.(m[1].trim());
+  }
+  // [TRADE_REVIEW: tradeId | one-line note] — Atlas annotates a closed trade
+  for(const m of response.matchAll(/\[TRADE_REVIEW:\s*#?(\d+)\s*\|\s*([^\]]+)\]/gi)){
+    callbacks.onTradeReview?.({id:parseInt(m[1],10),note:m[2].trim()});
+  }
   for(const m of response.matchAll(/\[DEEP_RESEARCH:\s*([^\]]+)\]/gi)){
     if(m[1]?.trim())callbacks.onDeepResearch?.(m[1].trim());
   }
@@ -170,6 +178,7 @@ export function stripCommands(text){
     .replace(/\[READ_CALENDAR\]/gi,'').replace(/\[READ_EMAIL\]/gi,'')
     .replace(/\[MEMORY_QUERY:[^\]]*\]/gi,'').replace(/\[DEEP_RESEARCH:[^\]]*\]/gi,'')
     .replace(/\[TRADE_SCAN(?::[^\]]*)?\]/gi,'').replace(/\[TRADE_PROPOSE:[^\]]*\]/gi,'').replace(/\[TRADE_CLOSE:[^\]]*\]/gi,'')
+    .replace(/\[STRATEGY_UPDATE:[\s\S]*?\]/gi,'').replace(/\[TRADE_REVIEW:[^\]]*\]/gi,'')
     .replace(/\[ADD_EXPENSE:[^\]]*\]/gi,'').replace(/\[ADD_DATE:[^\]]*\]/gi,'').replace(/\[EXPENSE_SUMMARY\]/gi,'')
     .replace(/\[SHOW_CHART:[^\]]*\]/gi,'')
     .replace(/\[BUILD_REQUEST:[^\]]*\]/gi,'').replace(/\[BUILD_REPLY:[^\]]*\]/gi,'')

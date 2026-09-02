@@ -162,6 +162,37 @@ export async function tlPositions(){
   });
 }
 
+// Column order for /ordersHistory rows. Pulled from /trade/config the first time
+// (the shape varies by broker); the fallback below matches the public docs.
+const HISTORY_COLS_FALLBACK=['id','tradableInstrumentId','routeId','type','side','status','qty','filledQty','avgPrice','price','stopPrice','validity','expireDate','position','stopLoss','stopLossType','takeProfit','takeProfitType','strategyId','createdDate','lastModified','isOpen','executionInfo','positionNetPl','positionGrossPl','commission','swap'];
+let historyCols=null;
+async function loadHistoryCols(){
+  if(historyCols)return historyCols;
+  try{
+    const j=await api('/trade/config');
+    const cfg=j.d?.ordersHistoryConfig;
+    const arr=Array.isArray(cfg)?cfg:(cfg?.columns||cfg?.fields);
+    if(Array.isArray(arr)&&arr.length)historyCols=arr.map(c=>String(c.id||c.key||c.name||c));
+  }catch{}
+  historyCols=historyCols||HISTORY_COLS_FALLBACK;
+  return historyCols;
+}
+
+// Filled / closed order rows, newest-relevant first. Used by the trade journal to
+// reconcile a position's realized P/L once it leaves the open-positions list.
+export async function tlOrdersHistory(){
+  await ensureAccount();
+  const j=await api(`/trade/accounts/${session.accountId}/ordersHistory`);
+  const cols=await loadHistoryCols();
+  const rows=j.d?.ordersHistory||j.d?.orders||j.d||[];
+  if(!Array.isArray(rows))return[];
+  return rows.map(row=>{
+    if(!Array.isArray(row))return row; // already an object on some brokers
+    const o={};cols.forEach((c,i)=>{o[c]=row[i];});
+    return o;
+  });
+}
+
 // Market order with absolute SL/TP prices. qty is clamped to MAX_QTY.
 export async function tlPlaceOrder({symbol='XAUUSD',side,qty=MAX_QTY,stopLoss,takeProfit}){
   await ensureAccount();

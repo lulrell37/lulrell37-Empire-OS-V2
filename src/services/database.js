@@ -20,6 +20,7 @@ export async function initDatabase(){
     CREATE TABLE IF NOT EXISTS expenses(id INTEGER PRIMARY KEY AUTOINCREMENT,amount REAL,category TEXT,note TEXT,date TEXT,created_at INTEGER);
     CREATE TABLE IF NOT EXISTS important_dates(id INTEGER PRIMARY KEY AUTOINCREMENT,label TEXT,date TEXT,note TEXT,created_at INTEGER);
     CREATE TABLE IF NOT EXISTS build_jobs(issue_number INTEGER PRIMARY KEY,pr_number INTEGER,spec TEXT,state TEXT,question TEXT,last_comment_id INTEGER DEFAULT 0,title TEXT,created_at INTEGER,updated_at INTEGER);
+    CREATE TABLE IF NOT EXISTS trades(id INTEGER PRIMARY KEY AUTOINCREMENT,persona TEXT DEFAULT 'atlas',symbol TEXT,side TEXT,qty REAL,entry_ref REAL,entry_fill REAL,stop_loss REAL,take_profit REAL,setup TEXT,rationale TEXT,status TEXT DEFAULT 'open',order_id TEXT,position_id TEXT,opened_at INTEGER,closed_at INTEGER,exit_price REAL,realized_pl REAL,pl_estimated INTEGER DEFAULT 0,outcome TEXT,r_multiple REAL,review TEXT,misses INTEGER DEFAULT 0,last_unrealized REAL,created_at INTEGER,updated_at INTEGER);
   `);
   await migrateHudColumns();
   await migratePersonaMemory();
@@ -45,6 +46,7 @@ const SYNC_TABLES={
   expenses:'lower(hex(randomblob(16)))',
   important_dates:'lower(hex(randomblob(16)))',
   build_jobs:'CAST(NEW.issue_number AS TEXT)',
+  trades:'lower(hex(randomblob(16)))',
   business_targets:'NEW.business',
   custom_prompts:'NEW.persona',
   persona_pics:'NEW.persona',
@@ -415,6 +417,28 @@ export async function saveNote(title,content,persona=null){const now=Date.now();
 export async function getNote(title){return await db.getFirstAsync('SELECT * FROM notes WHERE title LIKE ?',['%'+title+'%']);}
 export async function getAllNotes(){return await db.getAllAsync('SELECT * FROM notes ORDER BY updated_at DESC');}
 export async function deleteNote(id){await db.runAsync('DELETE FROM notes WHERE id=?',[id]);}
+
+// --- Trade journal (Atlas) -------------------------------------------------
+// One row per trade Mr. Burrus confirmed. Opened on confirm; reconciled against
+// TradeLocker by tradeJournal.js as positions close. This is the record Atlas
+// reviews before proposing and learns her strategy from.
+const TRADE_FIELDS=['persona','symbol','side','qty','entry_ref','entry_fill','stop_loss','take_profit','setup','rationale','status','order_id','position_id','opened_at','closed_at','exit_price','realized_pl','pl_estimated','outcome','r_multiple','review','misses','last_unrealized'];
+export async function insertTrade(t){
+  const now=Date.now();
+  const cols=TRADE_FIELDS.filter(k=>t[k]!==undefined);
+  const sql=`INSERT INTO trades(${cols.join(',')},created_at,updated_at) VALUES(${cols.map(()=>'?').join(',')},?,?)`;
+  const r=await db.runAsync(sql,[...cols.map(k=>t[k]),now,now]);
+  return r.lastInsertRowId;
+}
+export async function updateTrade(id,patch){
+  const cols=Object.keys(patch).filter(k=>TRADE_FIELDS.includes(k));
+  if(!cols.length)return;
+  await db.runAsync(`UPDATE trades SET ${cols.map(c=>c+'=?').join(',')} WHERE id=?`,[...cols.map(c=>patch[c]),id]);
+}
+export async function getOpenTrades(persona='atlas'){return await db.getAllAsync('SELECT * FROM trades WHERE persona=? AND status=? ORDER BY opened_at ASC',[persona,'open']);}
+export async function getClosedTrades(persona='atlas',limit=40){return await db.getAllAsync('SELECT * FROM trades WHERE persona=? AND status IN (?,?) ORDER BY COALESCE(closed_at,opened_at) DESC LIMIT ?',[persona,'closed','unknown',limit]);}
+export async function getTradeById(id){return await db.getFirstAsync('SELECT * FROM trades WHERE id=?',[id]);}
+export async function getAllTrades(persona='atlas',limit=200){return await db.getAllAsync('SELECT * FROM trades WHERE persona=? ORDER BY opened_at DESC LIMIT ?',[persona,limit]);}
 export async function savePersonaPic(persona,picData){await db.runAsync('INSERT INTO persona_pics(persona,pic_data) VALUES(?,?) ON CONFLICT(persona) DO UPDATE SET pic_data=excluded.pic_data',[persona,picData]);}
 export async function getPersonaPic(persona){const r=await db.getFirstAsync('SELECT pic_data FROM persona_pics WHERE persona=?',[persona]);return r?.pic_data||null;}
 export async function getAllPersonaPics(){const rows=await db.getAllAsync('SELECT * FROM persona_pics');const map={};rows.forEach(r=>{map[r.persona]=r.pic_data;});return map;}

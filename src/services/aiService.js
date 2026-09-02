@@ -45,6 +45,7 @@ async function buildSys(personaId,persona,convo=[]){
   sys+=`\n\n[RESPONSE STYLE: Reply directly to what Mr. Burrus just said. Do not open with a status briefing, HUD summary, morning-routine readout, or any unprompted overview unless he explicitly asks for one. Skip "here is where things stand" preambles — answer the message and stop.]`;
   sys+=`\n\n[MEMORY RECALL: The memory block below holds what is most relevant right now. If you need to recall something specific from past conversations that is NOT shown there, emit [MEMORY_QUERY: your precise question] and your memory index will answer it before you reply. Use it sparingly, only when it matters. Never mention this mechanism to Mr. Burrus — just recall.]`;
   sys+=`\n\n[CHARTS: When numbers would land better as a picture, emit [SHOW_CHART: type | title | data]. type = line, area, bar, or pie. data = "label:value, label:value, ..." for one series, or "A=x:1,y:2; B=x:3,y:4" for several. It takes over the visualization panel until Mr. Burrus closes it. Use it when it genuinely helps — trends, breakdowns, comparisons — not for one or two numbers.]`;
+  sys+=`\n\n[WEB: You can search the live web. Emit [SEARCH_WEB: your query] (up to 2 per turn) whenever the answer depends on current facts, prices, news, dates, people, products, or anything you're not certain is still accurate — the results come back before you reply. Prefer searching over guessing or hedging. Don't mention the mechanism; just use what you find, with source names inline.]`;
   sys+=`\n\n[CURRENT DATE & TIME: ${timeStr} ${tz} | LOCATION: Waldorf, MD]`;
   try{
     const gt=await loadGoogleToken();
@@ -53,6 +54,7 @@ async function buildSys(personaId,persona,convo=[]){
  EMAIL: [READ_EMAIL] | [SEND_EMAIL: to | subject | body] (Mr. Burrus taps to confirm before it sends)
  CALENDAR: [READ_CALENDAR] | [READ_CALENDAR: 30] | [READ_CALENDAR: 2026-08-01 | 30] | [CREATE_EVENT: Title | 2026-06-01T14:00 | 60] | [DELETE_EVENT: id] (confirmed)
  DRIVE NOTES: [LIST_NOTES] | [LIST_NOTES: 50] | [SEARCH_DRIVE: keyword] | [READ_NOTE: name] | [READ_FILE_ID: fileId] | [CREATE_NOTE: title | content] | [EDIT_NOTE: fileId | content] | [DELETE_FILE: fileId] (confirmed)
+   Long docs come back one page at a time and the result says so — get the next page with [READ_NOTE: name | 2] (then | 3, …) or pull the whole thing with [READ_NOTE: name | all]. Same | 2 / | all works on [READ_FILE_ID: id | 2].
  SHEETS: [CREATE_SHEET: title | col1,col2 | val1,val2]
  TASKS: [READ_TASKS] | [CREATE_TASK: title | notes | due] | [COMPLETE_TASK: name] | [DELETE_TASK: name] — these also sync to the app's own task list
  OTHER: [SET_REMINDER: text | YYYY-MM-DD] | [SYNC_AND_SAVE]]`;

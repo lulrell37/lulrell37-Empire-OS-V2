@@ -163,7 +163,12 @@ async function driveFindByName(name){
   return(data.files||[])[0]||null;
 }
 
-export async function driveRead({name,fileId}){
+// Long documents are paged so one read can't blow out the context window.
+// page = 1,2,3… returns that PAGE_CHARS-sized slice; page='all' returns the
+// whole doc up to ALL_CAP. The footer tells the caller how to get the rest.
+const PAGE_CHARS=16000;
+const ALL_CAP=60000;
+export async function driveRead({name,fileId,page=1}){
   let file=null;
   if(fileId)file=await gapi(`/drive/v3/files/${fileId}`,{query:{fields:'id,name,mimeType'}});
   else if(name){
@@ -175,7 +180,31 @@ export async function driveRead({name,fileId}){
     text=await gapi(`/drive/v3/files/${file.id}/export`,{query:{mimeType:'text/plain'},raw:true});
   else
     text=await gapi(`/drive/v3/files/${file.id}`,{query:{alt:'media'},raw:true});
-  return `Note "${file.name}" [id:${file.id}]:\n${(text||'').slice(0,4000)}`;
+  return sliceDoc(`Note "${file.name}" [id:${file.id}]`,text||'',page,name||file.name);
+}
+
+// Shared by driveRead and the local-note fallback in googleCommands.js.
+export function sliceDoc(header,full,page,refName){
+  const total=full.length;
+  const ref=refName||(header.match(/"([^"]+)"/)||[])[1]||'the note';
+  if(String(page).toLowerCase()==='all'){
+    const body=full.slice(0,ALL_CAP);
+    const tail=total>ALL_CAP?`\n\n[--- truncated at ${ALL_CAP.toLocaleString()} of ${total.toLocaleString()} chars; ask again by section name for the rest ---]`:'';
+    return `${header} — full document, ${total.toLocaleString()} chars:\n${body}${tail}`;
+  }
+  const p=Math.max(1,parseInt(page,10)||1);
+  const start=(p-1)*PAGE_CHARS;
+  if(start>=total&&total>0)return `${header} — page ${p} is past the end (document is ${total.toLocaleString()} chars, ${Math.ceil(total/PAGE_CHARS)} page(s)).`;
+  const body=full.slice(start,start+PAGE_CHARS);
+  const pages=Math.max(1,Math.ceil(total/PAGE_CHARS));
+  let foot='';
+  if(pages>1){
+    const remaining=Math.max(0,total-(start+body.length));
+    foot=remaining>0
+      ? `\n\n[--- page ${p}/${pages}, ${remaining.toLocaleString()} chars remain. Re-issue the same read tag for "${ref}" with " | ${p+1}" for the next page, or " | all" for the whole document. ---]`
+      : `\n\n[--- page ${p}/${pages} — end of document ---]`;
+  }
+  return `${header}${pages>1?` — page ${p}/${pages}`:''}:\n${body}${foot}`;
 }
 
 export async function driveCreate({title,content}){

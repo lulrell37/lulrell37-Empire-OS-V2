@@ -4,8 +4,10 @@
 import React,{useState,useEffect,useRef,useCallback}from 'react';
 import{View,Text,StyleSheet,TouchableOpacity,ActivityIndicator}from 'react-native';
 import{tlPositions,tlClosePosition,tlStatus,tlInstrumentsById}from '../../services/tradeLocker';
+import{reconcileOpenTrades}from '../../services/tradeJournal';
 
 const POLL_MS=4500;
+const RECONCILE_MS=20000; // fold closed trades into the journal at most this often
 
 export default function TradePanel({active,onEvent}){
   const[positions,setPositions]=useState([]);
@@ -14,6 +16,7 @@ export default function TradePanel({active,onEvent}){
   const[collapsed,setCollapsed]=useState(false);
   const timer=useRef(null);
   const alive=useRef(true);
+  const lastReconcile=useRef(0);
 
   const poll=useCallback(async()=>{
     if(!tlStatus().connected)return;
@@ -22,6 +25,10 @@ export default function TradePanel({active,onEvent}){
       if(!alive.current)return;
       const open=ps.filter(p=>String(p.tradableInstrumentId)&&Number(p.qty)>0);
       setPositions(open);
+      if(Date.now()-lastReconcile.current>RECONCILE_MS){
+        lastReconcile.current=Date.now();
+        reconcileOpenTrades().catch(()=>{});
+      }
       if(open.length&&!Object.keys(names).length){
         tlInstrumentsById().then(m=>{if(alive.current)setNames(m);}).catch(()=>{});
       }

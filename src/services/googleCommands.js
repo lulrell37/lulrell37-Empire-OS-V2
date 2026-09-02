@@ -11,6 +11,15 @@ import*as g from './googleClient';
 import{addImportantDate,getTasks,getNote}from './database';
 import{runSync}from './sync';
 
+// "Learning Everything | 2" or "abc123 | all" -> { ref, page }. A trailing
+// "| <number>" or "| all" is a page selector; anything else is part of the name.
+function splitPageArg(raw){
+  const s=String(raw||'').trim();
+  const m=s.match(/^(.*?)\s*\|\s*(\d+|all)\s*$/i);
+  if(m)return{ref:m[1].trim(),page:m[2].toLowerCase()};
+  return{ref:s,page:1};
+}
+
 // ---- reads ---------------------------------------------------------------
 export async function googleReadInjections(text){
   const out=[];
@@ -41,18 +50,20 @@ export async function googleReadInjections(text){
   for(const m of t.matchAll(/\[SEARCH_DRIVE:\s*([^\]]+)\]/ig))
     await push('DRIVE SEARCH',()=>g.driveSearch(m[1].trim()));
   for(const m of t.matchAll(/\[READ_NOTE:\s*([^\]]+)\]/ig)){
-    const name=m[1].trim();
+    const {ref:name,page}=splitPageArg(m[1]);
     await push('NOTE',async()=>{
-      try{return await g.driveRead({name});}
+      try{return await g.driveRead({name,page});}
       catch(e){
         const local=await getNote(name).catch(()=>null);
-        if(local)return `Note "${local.title}" (local):\n${(local.content||'').slice(0,4000)}`;
+        if(local)return g.sliceDoc(`Note "${local.title}" (local)`,local.content||'',page,name);
         throw e;
       }
     });
   }
-  for(const m of t.matchAll(/\[READ_FILE_ID:\s*([^\]]+)\]/ig))
-    await push('DRIVE FILE',()=>g.driveRead({fileId:m[1].trim()}));
+  for(const m of t.matchAll(/\[READ_FILE_ID:\s*([^\]]+)\]/ig)){
+    const {ref:fileId,page}=splitPageArg(m[1]);
+    await push('DRIVE FILE',()=>g.driveRead({fileId,page}));
+  }
 
   if(/\[READ_TASKS\]/i.test(t)){
     await push('TASKS',async()=>{

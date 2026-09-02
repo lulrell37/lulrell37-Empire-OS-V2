@@ -3,12 +3,14 @@
 //   1 finger  drag ....... orbit the city
 //   2 fingers drag ....... move through the city (pan across the ground)
 //   pinch ................ zoom; zoom right into a landmark to open its screen
+//   mouse wheel .......... zoom (Samsung DeX / any attached mouse) — see the
+//                          invisible ScrollView catcher below, same trick as OrbZoom
 //
 // Built procedurally from three.js primitives, rendered with the shared holo
 // material (src/screens/command/holoMaterial.js) so it matches the Laboratory
 // diagram. No bundled model — ships as an OTA update.
 import React,{useRef,useState,useCallback,useMemo,useEffect}from 'react';
-import{View,Text,StyleSheet,TouchableOpacity,Dimensions,ActivityIndicator,Animated,Easing}from 'react-native';
+import{View,Text,StyleSheet,TouchableOpacity,Dimensions,ActivityIndicator,Animated,Easing,Platform,ScrollView}from 'react-native';
 import{SafeAreaView}from 'react-native-safe-area-context';
 import{useFocusEffect}from '@react-navigation/native';
 import{GLView}from 'expo-gl';
@@ -195,6 +197,42 @@ function EmpireCity({navigation}){
     active:true,idle:0,entering:null,navigated:false,
     vw:Dimensions.get('window').width,vh:Dimensions.get('window').height,
   }).current;
+
+  // --- mouse-wheel zoom (DeX / attached mouse) ---------------------------
+  // RN has no `wheel` event on a plain View and Gesture.Pinch never fires from a
+  // wheel, so on Android we park an invisible ScrollView behind the GLView and
+  // turn its scroll delta into engine.dolly. On web we bind a real wheel event.
+  const containerRef=useRef(null);
+  const wheelScrollRef=useRef(null);
+  const wheelY=useRef(0);
+  const WHEEL_MID=600;
+
+  const applyWheelZoom=useCallback((delta)=>{
+    if(!delta)return;
+    const lo=engine.minR-engine.baseR,hi=engine.maxR-engine.baseR;
+    engine.dolly=Math.max(lo,Math.min(hi,engine.dolly+delta*0.02));
+    engine.idle=0;
+  },[engine]);
+
+  const onWheelScroll=useCallback((e)=>{
+    const y=e.nativeEvent.contentOffset.y;
+    const dy=y-wheelY.current;
+    wheelY.current=y;
+    applyWheelZoom(dy);
+    if(Math.abs(y-WHEEL_MID)>480){
+      wheelY.current=WHEEL_MID;
+      requestAnimationFrame(()=>wheelScrollRef.current&&wheelScrollRef.current.scrollTo({y:WHEEL_MID,animated:false}));
+    }
+  },[applyWheelZoom]);
+
+  useEffect(()=>{
+    if(Platform.OS!=='web')return;
+    const node=containerRef.current;
+    if(!node||!node.addEventListener)return;
+    const onWheel=(ev)=>{if(ev.preventDefault)ev.preventDefault();applyWheelZoom(ev.deltaY);};
+    node.addEventListener('wheel',onWheel,{passive:false});
+    return()=>node.removeEventListener('wheel',onWheel);
+  },[applyWheelZoom]);
 
   useEffect(()=>{getHudState().then(h=>{if(h)setHudState(h);}).catch(()=>{});},[]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -403,7 +441,14 @@ function EmpireCity({navigation}){
   }
 
   return(
-    <View style={s.container} onLayout={e=>{const{width,height}=e.nativeEvent.layout;engine.vw=width;engine.vh=height;}}>
+    <View ref={containerRef} style={s.container} onLayout={e=>{const{width,height}=e.nativeEvent.layout;engine.vw=width;engine.vh=height;}}>
+      {Platform.OS==='android'&&(
+        <ScrollView ref={wheelScrollRef} style={StyleSheet.absoluteFill}
+          contentContainerStyle={{height:WHEEL_MID*2+Dimensions.get('window').height}}
+          showsVerticalScrollIndicator={false} scrollEventThrottle={16}
+          contentOffset={{x:0,y:WHEEL_MID}} onScroll={onWheelScroll}
+          onContentSizeChange={()=>{wheelY.current=WHEEL_MID;wheelScrollRef.current&&wheelScrollRef.current.scrollTo({y:WHEEL_MID,animated:false});}}/>
+      )}
       <GestureDetector gesture={gesture}>
         <GLView style={StyleSheet.absoluteFill} onContextCreate={onContextCreate}/>
       </GestureDetector>
