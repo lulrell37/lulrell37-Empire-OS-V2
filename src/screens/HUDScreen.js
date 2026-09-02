@@ -5,7 +5,7 @@ import{useFocusEffect}from '@react-navigation/native';
 import Svg,{Circle,Defs,LinearGradient,Stop}from 'react-native-svg';
 import{Feather}from '@expo/vector-icons';
 import{getHudState,updateHudState,getTasks,addTask,updateTask,deleteTask,completeTask,getBusinessesWithRevenue,setBusinessTarget,addRevenue,updateEmpireScore,getMorningRoutine,saveMorningRoutine,getBatmanTemplate,saveBatmanTemplate,getHudLayout,setPanelLayout,ensureHudState,DEFAULT_BATMAN}from '../services/database';
-import{googleConnected,hudTasksList,hudTaskCreate,hudTaskSetDone,hudTaskRename,hudTaskDelete}from '../services/googleClient';
+import{loadHudTasks,addHudTask,setHudTaskDone,renameHudTask,deleteHudTask}from '../services/hudTasks';
 import{colors,space,radius,type,FONTS}from '../theme';
 import{PANEL_META,BriefingPanel,AgendaPanel,BusinessPanel,TasksPanel,RoutinePanel,BatmanPanel,DailyPanel,MarketPanel,BuildBoardPanel}from './hud/panels';
 import FloatingCard from './hud/FloatingCard';
@@ -39,27 +39,10 @@ export default function HUDScreen({navigation}){
 
   useFocusEffect(useCallback(()=>{if(!busyRef.current)load();},[]));
 
-  // Tasks = Google Tasks (when connected) merged with any local-only tasks.
-  // Google items carry `gid`; adds/edits/completes route back to Google.
-  async function loadTasks(){
-    let local=[];
-    try{local=(await getTasks()).map(t=>({...t,gid:null}));}catch{}
-    let connected=false;
-    try{connected=await googleConnected();}catch{}
-    if(!connected)return local;
-    try{
-      const g=(await hudTasksList()).map(t=>({
-        id:'g:'+t.id,gid:t.id,title:t.title,due:t.due,completed:t.completed,notes:'',
-      }));
-      const seen=new Set(local.map(t=>(t.title||'').trim().toLowerCase()));
-      return[...g.filter(t=>!seen.has((t.title||'').trim().toLowerCase())),...local];
-    }catch{return local;}
-  }
-
   async function load(){
     await ensureHudState(); // roll the day over (score -> 0, checkboxes cleared) if it's a new day
     const h=await getHudState();
-    const t=await loadTasks();
+    const t=await loadHudTasks();
     const b=await getBusinessesWithRevenue();
     const{items,done}=await getMorningRoutine();
     const bt=await getBatmanTemplate();
@@ -125,35 +108,27 @@ export default function HUDScreen({navigation}){
     const title=newTask.trim();
     if(!title)return;
     setNewTask('');setShowAddTask(false);
-    let added=false;
-    try{if(await googleConnected()){await hudTaskCreate(title);added=true;}}catch{}
-    if(!added)await addTask(title);
-    const t=await loadTasks();setTasks(t);
+    await addHudTask(title);
+    const t=await loadHudTasks();setTasks(t);
     recalcScore(routine,batman,t);
   }
   async function doneTask(t){
-    if(t&&t.gid){try{await hudTaskSetDone(t.gid,true);}catch{}}
-    else if(t){await completeTask(t.id);}
-    const list=await loadTasks();setTasks(list);
+    await setHudTaskDone(t,true);
+    const list=await loadHudTasks();setTasks(list);
     recalcScore(routine,batman,list);
   }
   function openTaskEdit(t){setTaskEdit(t);setTaskEditInput(t.title);}
   async function saveTaskEdit(){
     if(!taskEdit)return;
-    const title=taskEditInput.trim();
-    if(title){
-      if(taskEdit.gid){try{await hudTaskRename(taskEdit.gid,title);}catch{}}
-      else await updateTask(taskEdit.id,title,taskEdit.notes||'');
-    }
+    await renameHudTask(taskEdit,taskEditInput);
     setTaskEdit(null);
-    const t=await loadTasks();setTasks(t);
+    const t=await loadHudTasks();setTasks(t);
   }
   async function removeTask(){
     if(!taskEdit)return;
-    if(taskEdit.gid){try{await hudTaskDelete(taskEdit.gid);}catch{}}
-    else await deleteTask(taskEdit.id);
+    await deleteHudTask(taskEdit);
     setTaskEdit(null);
-    const t=await loadTasks();setTasks(t);
+    const t=await loadHudTasks();setTasks(t);
     recalcScore(routine,batman,t);
   }
   async function handleSaveRoutine(clean){

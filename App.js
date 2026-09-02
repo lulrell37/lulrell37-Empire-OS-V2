@@ -4,7 +4,7 @@ import ErrorBanner,{reportError}from './ErrorBanner';
 import React,{useEffect,useState}from 'react';
 import{AppState}from 'react-native';
 import{StatusBar}from 'expo-status-bar';
-import{NavigationContainer}from '@react-navigation/native';
+import{NavigationContainer,createNavigationContainerRef}from '@react-navigation/native';
 import{createNativeStackNavigator}from '@react-navigation/native-stack';
 import*as SplashScreen from 'expo-splash-screen';
 import*as Font from 'expo-font';
@@ -28,8 +28,10 @@ import{refreshDailyBriefing}from './src/services/dailyBriefing';
 import{getAllPersonaPics}from './src/services/database';
 import useEmpireStore from './src/store/useEmpireStore';
 import{recentCrashCount}from './src/services/crashLog';
+import HudFloatLayer from './src/screens/hud/HudFloatLayer';
 SplashScreen.preventAutoHideAsync();
 const Stack=createNativeStackNavigator();
+const navigationRef=createNavigationContainerRef();
 const NAV_STATE_KEY='EMPIRE_OS_NAV_STATE_V2';
 export default function App(){
   const[isReady,setIsReady]=useState(false);
@@ -89,6 +91,7 @@ export default function App(){
     <GestureHandlerRootView style={{flex:1}}>
       <SafeAreaProvider>
         <NavigationContainer
+          ref={navigationRef}
           initialState={initialNavState}
           onStateChange={(state)=>{AsyncStorage.setItem(NAV_STATE_KEY,JSON.stringify(state)).catch(()=>{});}}
         >
@@ -101,6 +104,7 @@ export default function App(){
             <Stack.Screen name="Laboratory" component={LaboratoryScreen}/>
             <Stack.Screen name="Settings" component={SettingsScreen}/>
           </Stack.Navigator>
+          <HudFloatLayer navRef={navigationRef}/>
         </NavigationContainer>
       </SafeAreaProvider>
     </GestureHandlerRootView>

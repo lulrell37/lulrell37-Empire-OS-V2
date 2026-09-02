@@ -2,11 +2,10 @@
 // scroll wrapper) so the same component works docked in the carousel or inside
 // a floating card. Routine and Batman own their edit-mode state locally and
 // report results up via onSave / onSaveTemplate.
-import React,{useState,useRef,useCallback}from 'react';
+import React,{useState,useRef,useEffect,useCallback}from 'react';
 import{View,Text,StyleSheet,TouchableOpacity,TextInput,Dimensions,ActivityIndicator}from 'react-native';
 import Svg,{Circle}from 'react-native-svg';
 import{Feather}from '@expo/vector-icons';
-import{useFocusEffect,useIsFocused}from '@react-navigation/native';
 import{colors,space,radius,type,FONTS}from '../../theme';
 import{tlStatus,tlQuote,tlPositions,tlClosePosition,tlInstrumentsById}from '../../services/tradeLocker';
 import{getBuildJobs,getSetting,getAllTrades,getTasks}from '../../services/database';
@@ -250,7 +249,7 @@ export function DailyPanel({hud,onRefreshed}){
 }
 
 // Weather + Google (calendar, inbox) + tasks — the "what's on today" panel.
-export function AgendaPanel(){
+export function AgendaPanel({active=true}){
   const[wx,setWx]=useState(null);
   const[gConn,setGConn]=useState(null);
   const[events,setEvents]=useState([]);
@@ -277,12 +276,13 @@ export function AgendaPanel(){
     if(alive.current)setTasks(app.slice(0,8));
   },[]);
 
-  useFocusEffect(useCallback(()=>{
+  useEffect(()=>{
+    if(!active)return;
     alive.current=true;
     load();
     const iv=setInterval(load,60000);
     return()=>{alive.current=false;clearInterval(iv);};
-  },[load]));
+  },[active,load]);
 
   return(
     <>
@@ -341,7 +341,7 @@ export function AgendaPanel(){
 
 // XAUUSD spot as a market-pulse headline + every open position (any pair).
 // Polls only while the HUD is focused — nothing runs in the background.
-export function MarketPanel(){
+export function MarketPanel({active=true}){
   const[quote,setQuote]=useState(null);
   const[positions,setPositions]=useState([]);
   const[names,setNames]=useState({});
@@ -379,12 +379,13 @@ export function MarketPanel(){
     }catch{}
   },[names]);
 
-  useFocusEffect(useCallback(()=>{
+  useEffect(()=>{
+    if(!active)return;
     alive.current=true;
     poll();
     const iv=setInterval(poll,9000);
     return()=>{alive.current=false;clearInterval(iv);};
-  },[poll]));
+  },[active,poll]);
 
   async function close(id){
     setBusy(id);
@@ -472,22 +473,22 @@ export function MarketPanel(){
 // Read-only board of every JARVIS build request and its state. The network
 // reconcile against GitHub runs here too (only while the HUD is focused), so the
 // board and its nudges stay current even when you're not in the JARVIS chat.
-export function BuildBoardPanel(){
+export function BuildBoardPanel({active=true}){
   const[jobs,setJobs]=useState([]);
   const alive=useRef(true);
-  const focused=useIsFocused();
 
   const load=useCallback(async()=>{
     try{const j=await getBuildJobs(30);if(alive.current)setJobs(j);}catch{}
   },[]);
 
-  useFocusEffect(useCallback(()=>{
+  useEffect(()=>{
+    if(!active)return;
     alive.current=true;
     const run=async()=>{try{await pollBuildJobs();}catch{}await load();};
     run();
     const iv=setInterval(run,15000);
     return()=>{alive.current=false;clearInterval(iv);};
-  },[load]));
+  },[active,load]);
 
   if(!jobs.length)return <Text style={ps.emptyText}>No build requests yet. Ask JARVIS to change the app.</Text>;
 
