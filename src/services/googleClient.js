@@ -107,6 +107,32 @@ export async function tasksListRaw(){
   }catch{return[];}
 }
 
+// --- Google Tasks, for the HUD tasks panel (real ids, two-way) --------------
+// Open tasks plus anything completed today, so the HUD can show progress and
+// keep a just-ticked item visible until the next reload.
+export async function hudTasksList(){
+  const startOfDay=new Date();startOfDay.setHours(0,0,0,0);
+  const data=await gapi('/tasks/v1/lists/@default/tasks',{query:{
+    showCompleted:'true',showHidden:'true',completedMin:startOfDay.toISOString(),maxResults:100,
+  }});
+  return(data.items||[])
+    .filter(t=>t.status!=='completed'||(t.completed&&new Date(t.completed)>=startOfDay))
+    .map(t=>({id:t.id,title:t.title||'',due:t.due?t.due.slice(0,10):null,completed:t.status==='completed'}));
+}
+export async function hudTaskCreate(title){
+  const j=await gapi('/tasks/v1/lists/@default/tasks',{method:'POST',json:{title:String(title||'').trim()}});
+  return{id:j.id,title:j.title};
+}
+export async function hudTaskSetDone(id,done){
+  await gapi(`/tasks/v1/lists/@default/tasks/${id}`,{method:'PATCH',json:{status:done?'completed':'needsAction'}});
+}
+export async function hudTaskRename(id,title){
+  await gapi(`/tasks/v1/lists/@default/tasks/${id}`,{method:'PATCH',json:{title:String(title||'').trim()}});
+}
+export async function hudTaskDelete(id){
+  await gapi(`/tasks/v1/lists/@default/tasks/${id}`,{method:'DELETE'});
+}
+
 // --- Gmail -----------------------------------------------------------------
 export async function gmailUnread(max=10){
   const list=await gapi('/gmail/v1/users/me/messages',{query:{q:'is:unread in:inbox',maxResults:max}});

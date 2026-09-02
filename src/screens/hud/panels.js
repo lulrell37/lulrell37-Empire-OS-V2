@@ -97,9 +97,10 @@ export function TasksPanel({tasks,onComplete,onEdit,onAdd}){
         </TouchableOpacity>
       </View>
       {tasks.map(t=>(
-        <TouchableOpacity key={t.id} style={ps.taskRow} onPress={()=>onComplete(t.id)} onLongPress={()=>onEdit(t)} delayLongPress={300} activeOpacity={0.6}>
-          <Feather name="circle" size={17} color={colors.textDim}/>
+        <TouchableOpacity key={t.id} style={ps.taskRow} onPress={()=>onComplete(t)} onLongPress={()=>onEdit(t)} delayLongPress={300} activeOpacity={0.6}>
+          <Feather name="circle" size={17} color={t.gid?colors.gold:colors.textDim}/>
           <Text style={ps.taskName}>{t.title}</Text>
+          {t.gid?<Text style={ps.taskSrc}>G</Text>:null}
           <Feather name="more-vertical" size={13} color={colors.textFaint}/>
         </TouchableOpacity>
       ))}
@@ -543,6 +544,7 @@ export const ps=StyleSheet.create({
   taskRow:{flexDirection:'row',alignItems:'center',gap:space.md,paddingVertical:space.md,borderBottomWidth:1,borderBottomColor:colors.hairline},
   taskName:{fontFamily:FONTS.mono,fontSize:13,color:colors.text,flex:1,letterSpacing:0.2},
   taskNameDone:{color:colors.textFaint,textDecorationLine:'line-through'},
+  taskSrc:{fontFamily:FONTS.monoMed,fontSize:7,color:colors.gold,letterSpacing:1,marginRight:2},
   emptyText:{...type.meta,color:colors.textFaint,marginTop:space.md},
   hintText:{...type.meta,color:colors.textFaint,marginTop:space.md,letterSpacing:0.5},
 
