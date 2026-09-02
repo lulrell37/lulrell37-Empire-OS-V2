@@ -1,5 +1,5 @@
 // The orb screen as one continuous zoom:
-//   persona sphere  ->  the persona you zoomed into  ->  its memory web  ->  a memory
+//   persona sphere  ->  the persona you zoomed into  ->  its memory spiral  ->  a memory
 // Pinch out drills in toward wherever your fingers are; pinch in backs out.
 // Each level change animates. The + / - buttons and the mouse wheel (web) do the
 // same. `level` is owned by the parent so it survives the viz/chat toggle.
@@ -9,13 +9,13 @@
 import React,{useState,useEffect,useMemo,useCallback,useRef,useImperativeHandle,forwardRef}from 'react';
 import{View,Text,StyleSheet,TouchableOpacity,ActivityIndicator,Dimensions,Platform,Animated,PanResponder,Image,Easing,ScrollView}from 'react-native';
 import PersonaOrb from './PersonaOrb';
-import BrainWeb from './BrainWeb';
+import MemorySpiral from './MemorySpiral';
 import MemoryPopup from './MemoryPopup';
 import Boundary from '../hud/Boundary';
 import{getMemoriesByPersona,deletePersonaMemory}from '../../services/database';
 import{getPersona,PERSONA_LIST}from '../../personas/personas';
 
-const LEVELS=['group','orb','brain'];
+const LEVELS=['group','orb','memory'];
 const WHEEL_MID=600;// px of scroll slack on each side of the invisible wheel-catcher
 
 const SAMP=[],SIN=[],COS=[];
@@ -44,7 +44,7 @@ export default function OrbZoom({personaId,color,active,vizRef,personaPics={},on
   const wheelScrollRef=useRef(null);
   const wheelY=useRef(0);
   const pinchRef=useRef({d0:0,d1:0});
-  const brainRef=useRef(null);
+  const memRef=useRef(null);
   const sphereRef=useRef(null);
   const levelRef=useRef(level);
   const dirRef=useRef(1);
@@ -84,7 +84,7 @@ export default function OrbZoom({personaId,color,active,vizRef,personaPics={},on
     didMount.current=true;
     setMemories(null);reload();
   },[personaId,reload]);// eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(()=>{if(level==='brain')reload();},[level,reload]);
+  useEffect(()=>{if(level==='memory')reload();},[level,reload]);
   useEffect(()=>()=>{
     if(undoTimer.current){clearTimeout(undoTimer.current);if(pendingRef.current)deletePersonaMemory(pendingRef.current.id).catch(()=>{});}
   },[]);
@@ -99,14 +99,14 @@ export default function OrbZoom({personaId,color,active,vizRef,personaPics={},on
       const id=(sphereRef.current&&sphereRef.current.pickAt(c?c.x:null,c?c.y:null))||PERSONA_LIST[0].id;
       pick(id);return;
     }
-    if(cur==='orb'){setLvl('brain',1);return;}
-    if(cur==='brain'){brainRef.current&&brainRef.current.drillIn(c);return;}
+    if(cur==='orb'){setLvl('memory',1);return;}
+    if(cur==='memory'){memRef.current&&memRef.current.drillIn(c);return;}
   },[pick,setLvl]);
 
   const shallower=useCallback(()=>{
     const cur=levelRef.current;
-    if(cur==='brain'){
-      if(brainRef.current&&brainRef.current.drillOut())return;
+    if(cur==='memory'){
+      if(memRef.current&&memRef.current.drillOut())return;
       setLvl('orb',-1);return;
     }
     if(cur==='orb'){setLvl('group',-1);return;}
@@ -114,8 +114,8 @@ export default function OrbZoom({personaId,color,active,vizRef,personaPics={},on
   },[setLvl,onZoomOut]);
 
   const stagePan=useMemo(()=>PanResponder.create({
-    onStartShouldSetPanResponderCapture:(e)=>!!e.nativeEvent.touches&&e.nativeEvent.touches.length===2&&levelRef.current!=='brain',
-    onMoveShouldSetPanResponderCapture:(e)=>!!e.nativeEvent.touches&&e.nativeEvent.touches.length===2&&levelRef.current!=='brain',
+    onStartShouldSetPanResponderCapture:(e)=>!!e.nativeEvent.touches&&e.nativeEvent.touches.length===2&&levelRef.current!=='memory',
+    onMoveShouldSetPanResponderCapture:(e)=>!!e.nativeEvent.touches&&e.nativeEvent.touches.length===2&&levelRef.current!=='memory',
     onPanResponderGrant:(e)=>{
       const t=e.nativeEvent.touches;
       if(t&&t.length===2){
@@ -224,15 +224,15 @@ export default function OrbZoom({personaId,color,active,vizRef,personaPics={},on
         {level==='orb'&&(
           <Boundary label="The visualization"><PersonaOrb viz={vizRef} color={color} active={active}/></Boundary>
         )}
-        {level==='brain'&&(
-          <Boundary label="The memory web">
-            <BrainWeb ref={brainRef} persona={persona} memories={memories}
+        {level==='memory'&&(
+          <Boundary label="The memory spiral">
+            <MemorySpiral ref={memRef} persona={persona} memories={memories}
               onNode={m=>setMemory(m)} onExit={()=>setLvl('orb',-1)}/>
           </Boundary>
         )}
       </Animated.View>
 
-      {memories===null&&level==='brain'&&<View style={s.loading}><ActivityIndicator color={color}/></View>}
+      {memories===null&&level==='memory'&&<View style={s.loading}><ActivityIndicator color={color}/></View>}
 
       <View style={s.rail} pointerEvents="none">
         <Text style={[s.railLabel,{color}]}>

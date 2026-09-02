@@ -1,4 +1,4 @@
-// The list view of a persona's memory — the calm twin of the brain-web graph.
+// The list view of a persona's memory — the calm twin of the spiral graph.
 // Same data, same tap target (onNode). Grouped by day, newest first, with a
 // coloured category rail on every card.
 import React,{useMemo}from 'react';
