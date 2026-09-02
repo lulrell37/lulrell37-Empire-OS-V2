@@ -16,7 +16,6 @@ import{colors,space,radius,FONTS}from '../../theme';
 import MemoryList from './MemoryList';
 
 const ACircle=Animated.createAnimatedComponent(Circle);
-const AG=Animated.createAnimatedComponent(G);
 const SPIN_MS=190000;   // one clockwise turn of the spiral — slow, like a galaxy
 const MAX_NODES=420;   // cap the drawn beads; LIST view still shows every memory
 const SAMPLES=44;      // points sampled along the thread for the travelling dot
@@ -71,7 +70,7 @@ function MemorySpiralInner({persona,memories,onNode,onExit},ref){
       Animated.timing(comet,{toValue:0,duration:0,useNativeDriver:false}),
       Animated.delay(500),
     ]));
-    const spinLoop=Animated.loop(Animated.timing(spin,{toValue:1,duration:SPIN_MS,easing:Easing.linear,useNativeDriver:false}));
+    const spinLoop=Animated.loop(Animated.timing(spin,{toValue:1,duration:SPIN_MS,easing:Easing.linear,useNativeDriver:true}));
     pulseLoop.start();cometLoop.start();spinLoop.start();
     return()=>{pulseLoop.stop();cometLoop.stop();spinLoop.stop();};
   },[fade,pulse,comet,spin]);
@@ -241,7 +240,7 @@ function MemorySpiralInner({persona,memories,onNode,onExit},ref){
   );
 
   const coreGlow=pulse.interpolate({inputRange:[0,1],outputRange:[0.10,0.24]});
-  const spinDeg=spin.interpolate({inputRange:[0,1],outputRange:[0,360]});
+  const spinDeg=spin.interpolate({inputRange:[0,1],outputRange:['0deg','360deg']});
   const cometOpacity=comet.interpolate({inputRange:[0,0.05,0.9,1],outputRange:[0,1,1,0]});
   const cometIn=Array.from({length:SAMPLES},(_,i)=>i/(SAMPLES-1));
 
@@ -300,7 +299,29 @@ function MemorySpiralInner({persona,memories,onNode,onExit},ref){
           {layout&&(
             <Animated.View style={{width:layout.size,height:layout.size,
               transform:[{translateX:tx},{translateY:ty},{scale:sc}]}}>
-              <Svg width={layout.size} height={layout.size}>
+
+              {/* spinning layer — turns about its own centre, i.e. the persona */}
+              <Animated.View style={[StyleSheet.absoluteFill,{transform:[{rotate:spinDeg}]}]}>
+                <Svg width={layout.size} height={layout.size}>
+                  <G>
+                    <Path d={layout.thread} fill="none" stroke={persona.color}
+                      strokeWidth={1} strokeLinejoin="round" opacity={focus?0.06:0.16}/>
+                    <ACircle r={2.4} fill={lighten(persona.color,0.5)} opacity={cometOpacity}
+                      cx={comet.interpolate({inputRange:cometIn,outputRange:layout.comet.px})}
+                      cy={comet.interpolate({inputRange:cometIn,outputRange:layout.comet.py})}/>
+                    {layout.nodes.map(n=>{
+                      const dim=focus&&(n.m.category||'personal')!==focus;
+                      return(
+                        <Circle key={n.m.id} cx={n.x} cy={n.y} r={n.rad*(dim?0.7:1.15)}
+                          fill={n.color} opacity={dim?0.12:0.92} onPress={()=>onNode&&onNode(n.m)}/>
+                      );
+                    })}
+                  </G>
+                </Svg>
+              </Animated.View>
+
+              {/* static layer — persona orb + glow stay put while the arm turns */}
+              <Svg width={layout.size} height={layout.size} style={StyleSheet.absoluteFill} pointerEvents="none">
                 <Defs>
                   <RadialGradient id="ms-core" cx="50%" cy="50%" r="50%">
                     <Stop offset="0" stopColor={persona.color} stopOpacity="0.42"/>
@@ -309,25 +330,6 @@ function MemorySpiralInner({persona,memories,onNode,onExit},ref){
                 </Defs>
                 <G>
                   <ACircle cx={layout.cx} cy={layout.cy} r={layout.coreRad*3.6} fill="url(#ms-core)" opacity={coreGlow}/>
-
-                  {/* the whole spiral turns slowly around the persona, like a galaxy */}
-                  <AG rotation={spinDeg} originX={layout.cx} originY={layout.cy}>
-                    <Path d={layout.thread} fill="none" stroke={persona.color}
-                      strokeWidth={1} strokeLinejoin="round" opacity={focus?0.06:0.16}/>
-
-                    <ACircle r={2.4} fill={lighten(persona.color,0.5)} opacity={cometOpacity}
-                      cx={comet.interpolate({inputRange:cometIn,outputRange:layout.comet.px})}
-                      cy={comet.interpolate({inputRange:cometIn,outputRange:layout.comet.py})}/>
-
-                    {layout.nodes.map(n=>{
-                      const dim=focus&&(n.m.category||'personal')!==focus;
-                      return(
-                        <Circle key={n.m.id} cx={n.x} cy={n.y} r={n.rad*(dim?0.7:1.15)}
-                          fill={n.color} opacity={dim?0.12:0.92} onPress={()=>onNode&&onNode(n.m)}/>
-                      );
-                    })}
-                  </AG>
-
                   <Circle cx={layout.cx} cy={layout.cy} r={layout.coreRad} fill={colors.bg} opacity={0.9}/>
                   <Circle cx={layout.cx} cy={layout.cy} r={layout.coreRad} fill="none" stroke={persona.color} strokeWidth={1.5}/>
                   <SvgText x={layout.cx} y={layout.cy+4} fill={persona.color} fontSize={13} fontWeight="700"
