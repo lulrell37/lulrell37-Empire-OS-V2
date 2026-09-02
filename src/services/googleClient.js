@@ -108,16 +108,13 @@ export async function tasksListRaw(){
 }
 
 // --- Google Tasks, for the HUD tasks panel (real ids, two-way) --------------
-// Open tasks plus anything completed today, so the HUD can show progress and
-// keep a just-ticked item visible until the next reload.
+// Just the open tasks. (Do NOT pass completedMin — the Tasks API treats it as a
+// filter and drops every not-yet-done task, which left the panel empty.)
 export async function hudTasksList(){
-  const startOfDay=new Date();startOfDay.setHours(0,0,0,0);
-  const data=await gapi('/tasks/v1/lists/@default/tasks',{query:{
-    showCompleted:'true',showHidden:'true',completedMin:startOfDay.toISOString(),maxResults:100,
-  }});
+  const data=await gapi('/tasks/v1/lists/@default/tasks',{query:{showCompleted:'false',maxResults:100}});
   return(data.items||[])
-    .filter(t=>t.status!=='completed'||(t.completed&&new Date(t.completed)>=startOfDay))
-    .map(t=>({id:t.id,title:t.title||'',due:t.due?t.due.slice(0,10):null,completed:t.status==='completed'}));
+    .filter(t=>t.status!=='completed')
+    .map(t=>({id:t.id,title:t.title||'',due:t.due?t.due.slice(0,10):null,completed:false}));
 }
 export async function hudTaskCreate(title){
   const j=await gapi('/tasks/v1/lists/@default/tasks',{method:'POST',json:{title:String(title||'').trim()}});
