@@ -4,8 +4,8 @@
 //           the orb, newest out on the rim). Bead colour = memory category, so
 //           the type is readable at a glance. The more memories there are, the
 //           more turns the thread takes and the wider the whole structure grows.
-//           Pinch out / + zooms in toward your fingers; pinch again on a bead
-//           opens it. Pinch in / - backs out.
+//           Pinch (or + / -) zooms smoothly toward your fingers; drag to pan
+//           once you're in. Tap a bead to open it. Pinch back out to leave.
 //   LIST  — the same memories as dated cards, filterable by category.
 // Both share one category filter (the chips) and one tap target (onNode).
 import React,{useState,useMemo,useRef,useEffect,useCallback,useImperativeHandle,forwardRef}from 'react';
@@ -17,7 +17,7 @@ import MemoryList from './MemoryList';
 
 const ACircle=Animated.createAnimatedComponent(Circle);
 const AG=Animated.createAnimatedComponent(G);
-const SPIN_MS=150000;   // one full turn of the spiral — slow, like a galaxy
+const SPIN_MS=190000;   // one clockwise turn of the spiral — slow, like a galaxy
 const MAX_NODES=420;   // cap the drawn beads; LIST view still shows every memory
 const SAMPLES=44;      // points sampled along the thread for the travelling dot
 
@@ -33,17 +33,23 @@ function lighten(hex,amt){
 function MemorySpiralInner({persona,memories,onNode,onExit},ref){
   const[mode,setMode]=useState('graph');   // 'graph' | 'list'
   const[focus,setFocus]=useState(null);     // category key filter, or null
-  const[zoom,setZoom]=useState(1);
-  const vp=useRef({w:0,h:0});
-  const scroll=useRef({x:0,y:0});
-  const origin=useRef({x:0,y:0});
-  const rootRef=useRef(null),vRef=useRef(null),hRef=useRef(null);
-  const pinch=useRef({d0:0,d1:0,cx:0,cy:0});
+  const[vpSize,setVpSize]=useState({w:0,h:0});   // for the fit-to-view calc
+  const origin=useRef({x:0,y:0});           // root position in the window
+  const stageBox=useRef({x:0,y:0,width:0,height:0});
+  const rootRef=useRef(null);
   const fade=useRef(new Animated.Value(0)).current;
   const pulse=useRef(new Animated.Value(0)).current;
   const comet=useRef(new Animated.Value(0)).current;
   const spin=useRef(new Animated.Value(0)).current;
-  const spinFrac=useRef(0);   // live 0..1 turn fraction, for hit-testing the spun beads
+
+  // Continuous pan/zoom of the spiral, driven straight onto the native thread so
+  // the pinch tracks the fingers instead of jumping between fixed steps.
+  const sc=useRef(new Animated.Value(1)).current;   // absolute on-screen scale
+  const tx=useRef(new Animated.Value(0)).current;
+  const ty=useRef(new Animated.Value(0)).current;
+  const view=useRef({s:1,x:0,y:0});                 // committed transform
+  const fitRef=useRef(1);
+  const gest=useRef(null);                          // live gesture bookkeeping
 
   const groups=useMemo(()=>{
     if(!memories)return[];
@@ -66,9 +72,8 @@ function MemorySpiralInner({persona,memories,onNode,onExit},ref){
       Animated.delay(500),
     ]));
     const spinLoop=Animated.loop(Animated.timing(spin,{toValue:1,duration:SPIN_MS,easing:Easing.linear,useNativeDriver:false}));
-    const spinId=spin.addListener(({value})=>{spinFrac.current=value;});
     pulseLoop.start();cometLoop.start();spinLoop.start();
-    return()=>{pulseLoop.stop();cometLoop.stop();spinLoop.stop();spin.removeListener(spinId);};
+    return()=>{pulseLoop.stop();cometLoop.stop();spinLoop.stop();};
   },[fade,pulse,comet,spin]);
 
   // The spiral. An Archimedean spiral r = b·θ, with θ chosen per bead so the
@@ -79,10 +84,11 @@ function MemorySpiralInner({persona,memories,onNode,onExit},ref){
     const chron=[...memories].reverse();          // stored newest-first -> oldest-first
     const shown=chron.slice(-MAX_NODES);          // keep the most recent, still oldest-first
     const N=shown.length;
-    const ARM=27;                                 // px between successive spiral arms
-    const D=24;                                   // arc-length gap between beads
-    const R0=30;                                  // clear radius around the persona orb
-    const TH0=Math.PI*2.2;                        // start ~1 turn out from dead centre
+    const coreRad=16+Math.log2(total+1)*1.6;      // persona orb radius
+    const ARM=24;                                 // px between successive spiral arms
+    const D=20;                                   // arc-length gap between beads
+    const R0=coreRad+6;                           // first loop hugs the persona orb
+    const TH0=Math.PI*0.35;                       // start just outside the orb, not a turn out
     const b=ARM/(2*Math.PI);
     const raw=shown.map((m,k)=>{
       const th=Math.sqrt(TH0*TH0+(2*k*D)/b);
@@ -109,73 +115,121 @@ function MemorySpiralInner({persona,memories,onNode,onExit},ref){
       const a=nodes[lo]||{x:cx,y:cy},c=nodes[hi]||a;
       px.push(a.x+(c.x-a.x)*frac);py.push(a.y+(c.y-a.y)*frac);
     }
-    return{size,cx,cy,nodes,thread,comet:{px,py},coreRad:16+Math.log2(total+1)*1.6};
+    return{size,cx,cy,nodes,thread,comet:{px,py},coreRad};
   },[memories,total]);
 
-  const worldTarget=useCallback((centroid)=>{
-    const z=zoom||1;
-    if(centroid&&typeof centroid.x==='number')
-      return{x:(scroll.current.x+centroid.x)/z,y:(scroll.current.y+Math.max(0,centroid.y-34))/z};
-    return{x:(scroll.current.x+(vp.current.w||1)/2)/z,y:(scroll.current.y+(vp.current.h||1)/2)/z};
-  },[zoom]);
-  const scrollTo=useCallback((sx,sy)=>{
-    hRef.current?.scrollTo?.({x:Math.max(0,sx),animated:true});
-    vRef.current?.scrollTo?.({y:Math.max(0,sy),animated:true});
-  },[]);
+  // Shrink the whole spiral to fit the visible stage, so the slow rotation turns
+  // it in place instead of sweeping the outer arm off-screen. Zoom rides on top.
+  const fit=useMemo(()=>{
+    if(!layout||!vpSize.w)return 1;
+    const box=Math.min(vpSize.w,Math.max(140,vpSize.h-96))-16;
+    return Math.max(0.25,Math.min(1,box/layout.size));
+  },[layout,vpSize]);
+  const MAX_ZOOM=4;   // how far past fit a pinch can go
 
-  const drillIn=useCallback((centroid)=>{
-    if(mode!=='graph'||!layout)return;
-    const c=worldTarget(centroid);
-    if(zoom<1.85){
-      const nz=1.85;setZoom(nz);
-      scrollTo(c.x*nz-(vp.current.w||1)/2,c.y*nz-(vp.current.h||1)/2);
-      return;
+  // Re-anchor to the fit baseline whenever it changes (first layout, new data),
+  // unless the user is currently zoomed in.
+  useEffect(()=>{
+    const atRest=fitRef.current===1||Math.abs(view.current.s-fitRef.current)<0.02;
+    fitRef.current=fit;
+    if(atRest){
+      view.current={s:fit,x:0,y:0};
+      sc.setValue(fit);tx.setValue(0);ty.setValue(0);
     }
-    // already zoomed -> open the nearest bead. The beads are drawn rotated by
-    // the galaxy spin, so undo that rotation on the tap point before matching.
-    const a=-spinFrac.current*2*Math.PI,ca=Math.cos(a),sa=Math.sin(a);
-    const dx=c.x-layout.cx,dy=c.y-layout.cy;
-    const px=layout.cx+dx*ca-dy*sa,py=layout.cy+dx*sa+dy*ca;
-    let best=null,bd=Infinity;
-    for(const n of layout.nodes){
-      if(focus&&(n.m.category||'personal')!==focus)continue;
-      const dd=Math.hypot(n.x-px,n.y-py);
-      if(dd<bd){bd=dd;best=n;}
-    }
-    if(best&&onNode)onNode(best.m);
-  },[mode,layout,zoom,focus,worldTarget,scrollTo,onNode]);
+  },[fit,sc,tx,ty]);
+
+  const clampPan=useCallback((s,x,y)=>{
+    if(!layout)return{x:0,y:0};
+    const mx=Math.max(0,(layout.size*s-stageBox.current.width)/2);
+    const my=Math.max(0,(layout.size*s-stageBox.current.height)/2);
+    return{x:Math.max(-mx,Math.min(mx,x)),y:Math.max(-my,Math.min(my,y))};
+  },[layout]);
+
+  const animateTo=useCallback((s,x,y,dur=240)=>{
+    view.current={s,x,y};
+    const cfg={duration:dur,easing:Easing.out(Easing.cubic),useNativeDriver:true};
+    Animated.timing(sc,{toValue:s,...cfg}).start();
+    Animated.timing(tx,{toValue:x,...cfg}).start();
+    Animated.timing(ty,{toValue:y,...cfg}).start();
+  },[sc,tx,ty]);
+
+  const drillIn=useCallback(()=>{
+    if(mode!=='graph')return;
+    const s=Math.min(fitRef.current*MAX_ZOOM,view.current.s*1.6);
+    const p=clampPan(s,view.current.x,view.current.y);
+    animateTo(s,p.x,p.y);
+  },[mode,clampPan,animateTo]);
 
   const drillOut=useCallback(()=>{
-    if(zoom>1){setZoom(1);return true;}
+    if(view.current.s>fitRef.current*1.05){
+      const s=Math.max(fitRef.current,view.current.s/1.6);
+      const p=s<=fitRef.current*1.02?{x:0,y:0}:clampPan(s,view.current.x,view.current.y);
+      animateTo(s,p.x,p.y);
+      return true;
+    }
     if(focus){setFocus(null);return true;}
     onExit&&onExit();
     return false;
-  },[zoom,focus,onExit]);
+  },[focus,onExit,clampPan,animateTo]);
 
   useImperativeHandle(ref,()=>({drillIn,drillOut}),[drillIn,drillOut]);
 
+  const stageCenter=()=>({
+    x:stageBox.current.x+stageBox.current.width/2,
+    y:stageBox.current.y+stageBox.current.height/2,
+  });
+
   const pan=useMemo(()=>PanResponder.create({
-    onStartShouldSetPanResponderCapture:(e)=>mode==='graph'&&e.nativeEvent.touches?.length===2,
-    onMoveShouldSetPanResponderCapture:(e)=>mode==='graph'&&e.nativeEvent.touches?.length===2,
+    onStartShouldSetPanResponderCapture:(e)=>mode==='graph'&&(e.nativeEvent.touches?.length||0)>=2,
+    onMoveShouldSetPanResponderCapture:(e)=>mode==='graph'&&(e.nativeEvent.touches?.length||0)>=2,
+    onMoveShouldSetPanResponder:(e,g)=>mode==='graph'&&(e.nativeEvent.touches?.length||0)===1
+      &&view.current.s>fitRef.current*1.05&&(Math.abs(g.dx)>4||Math.abs(g.dy)>4),
     onPanResponderGrant:(e)=>{
-      const t=e.nativeEvent.touches;
-      if(t&&t.length===2){
+      const t=e.nativeEvent.touches,o=origin.current;
+      sc.stopAnimation();tx.stopAnimation();ty.stopAnimation();
+      if(t&&t.length>=2){
         const d=Math.hypot(t[0].pageX-t[1].pageX,t[0].pageY-t[1].pageY);
-        pinch.current={d0:d,d1:d,
-          cx:(t[0].pageX+t[1].pageX)/2-origin.current.x,
-          cy:(t[0].pageY+t[1].pageY)/2-origin.current.y};
+        gest.current={kind:'pinch',d0:d,s0:view.current.s,x0:view.current.x,y0:view.current.y,lastR:1,
+          fx:(t[0].pageX+t[1].pageX)/2-o.x,fy:(t[0].pageY+t[1].pageY)/2-o.y};
+      }else if(t&&t.length===1){
+        gest.current={kind:'drag',px:t[0].pageX,py:t[0].pageY,x0:view.current.x,y0:view.current.y};
       }
     },
     onPanResponderMove:(e)=>{
+      const gc=gest.current;if(!gc)return;
       const t=e.nativeEvent.touches;
-      if(t&&t.length===2)pinch.current.d1=Math.hypot(t[0].pageX-t[1].pageX,t[0].pageY-t[1].pageY);
+      if(gc.kind==='pinch'&&t&&t.length>=2){
+        const d=Math.hypot(t[0].pageX-t[1].pageX,t[0].pageY-t[1].pageY);
+        const lo=fitRef.current,hi=fitRef.current*MAX_ZOOM;
+        const s=Math.max(lo,Math.min(hi,gc.s0*(d/gc.d0)));
+        const ratio=s/gc.s0;gc.lastR=d/gc.d0;
+        const c=stageCenter();
+        const dxF=gc.fx-c.x,dyF=gc.fy-c.y;
+        sc.setValue(s);
+        tx.setValue(gc.x0*ratio+dxF*(1-ratio));
+        ty.setValue(gc.y0*ratio+dyF*(1-ratio));
+      }else if(gc.kind==='drag'&&t&&t.length===1){
+        tx.setValue(gc.x0+(t[0].pageX-gc.px));
+        ty.setValue(gc.y0+(t[0].pageY-gc.py));
+      }
     },
     onPanResponderRelease:()=>{
-      const{d0,d1,cx,cy}=pinch.current;pinch.current={d0:0,d1:0,cx:0,cy:0};
-      if(d0>0&&d1>0){const r=d1/d0;if(r>1.22)drillIn({x:cx,y:cy});else if(r<0.82)drillOut();}
+      const gc=gest.current;gest.current=null;if(!gc)return;
+      sc.stopAnimation(s=>{
+        tx.stopAnimation(x=>{
+          ty.stopAnimation(y=>{
+            const p=clampPan(s,x,y);
+            view.current={s,x:p.x,y:p.y};
+            if(p.x!==x)Animated.spring(tx,{toValue:p.x,useNativeDriver:true}).start();
+            if(p.y!==y)Animated.spring(ty,{toValue:p.y,useNativeDriver:true}).start();
+            // pinched all the way out and kept squeezing -> leave the spiral
+            if(gc.kind==='pinch'&&s<=fitRef.current*1.02&&gc.lastR<0.9)drillOut();
+          });
+        });
+      });
     },
     onPanResponderTerminationRequest:()=>false,
-  }),[mode,drillIn,drillOut]);
+  }),[mode,clampPan,drillOut,sc,tx,ty]);
 
   if(memories==null)return(<View style={s.center}><ActivityIndicator color={persona.color}/></View>);
   if(total===0)return(
@@ -194,7 +248,8 @@ function MemorySpiralInner({persona,memories,onNode,onExit},ref){
   return(
     <View ref={rootRef} style={s.wrap} {...(mode==='graph'?pan.panHandlers:{})}
       onLayout={e=>{
-        vp.current={w:e.nativeEvent.layout.width,h:e.nativeEvent.layout.height};
+        const{width,height}=e.nativeEvent.layout;
+        setVpSize(p=>(p.w===width&&p.h===height?p:{w:width,h:height}));
         rootRef.current?.measureInWindow?.((x,y)=>{origin.current={x:x||0,y:y||0};});
       }}>
 
@@ -209,7 +264,11 @@ function MemorySpiralInner({persona,memories,onNode,onExit},ref){
         <View style={s.seg}>
           {['graph','list'].map(mo=>(
             <TouchableOpacity key={mo} style={[s.segBtn,mode===mo&&{backgroundColor:persona.color+'1F',borderColor:persona.color+'66'}]}
-              onPress={()=>{setMode(mo);setZoom(1);}}>
+              onPress={()=>{
+                setMode(mo);
+                view.current={s:fitRef.current,x:0,y:0};
+                sc.setValue(fitRef.current);tx.setValue(0);ty.setValue(0);
+              }}>
               <Text style={[s.segT,mode===mo&&{color:persona.color}]}>{mo.toUpperCase()}</Text>
             </TouchableOpacity>
           ))}
@@ -236,19 +295,19 @@ function MemorySpiralInner({persona,memories,onNode,onExit},ref){
           <MemoryList memories={memories} onNode={onNode} filter={focus}/>
         </Animated.View>
       ):(
-        <Animated.View style={{flex:1,opacity:fade}}>
-          <ScrollView ref={vRef} style={{flex:1}} contentContainerStyle={s.stage} showsVerticalScrollIndicator={false}
-            scrollEventThrottle={32} onScroll={e=>{scroll.current.y=e.nativeEvent.contentOffset.y;}}>
-            <ScrollView ref={hRef} horizontal contentContainerStyle={s.stage} showsHorizontalScrollIndicator={false}
-              scrollEventThrottle={32} onScroll={e=>{scroll.current.x=e.nativeEvent.contentOffset.x;}}>
-              {layout&&<Svg width={layout.size*zoom} height={layout.size*zoom}>
+        <Animated.View style={[s.stage,{opacity:fade}]}
+          onLayout={e=>{stageBox.current=e.nativeEvent.layout;}}>
+          {layout&&(
+            <Animated.View style={{width:layout.size,height:layout.size,
+              transform:[{translateX:tx},{translateY:ty},{scale:sc}]}}>
+              <Svg width={layout.size} height={layout.size}>
                 <Defs>
                   <RadialGradient id="ms-core" cx="50%" cy="50%" r="50%">
                     <Stop offset="0" stopColor={persona.color} stopOpacity="0.42"/>
                     <Stop offset="1" stopColor={persona.color} stopOpacity="0"/>
                   </RadialGradient>
                 </Defs>
-                <G scale={zoom}>
+                <G>
                   <ACircle cx={layout.cx} cy={layout.cy} r={layout.coreRad*3.6} fill="url(#ms-core)" opacity={coreGlow}/>
 
                   {/* the whole spiral turns slowly around the persona, like a galaxy */}
@@ -274,9 +333,9 @@ function MemorySpiralInner({persona,memories,onNode,onExit},ref){
                   <SvgText x={layout.cx} y={layout.cy+4} fill={persona.color} fontSize={13} fontWeight="700"
                     fontFamily={FONTS.mono} textAnchor="middle">{persona.icon}</SvgText>
                 </G>
-              </Svg>}
-            </ScrollView>
-          </ScrollView>
+              </Svg>
+            </Animated.View>
+          )}
         </Animated.View>
       )}
     </View>
@@ -310,5 +369,5 @@ const s=StyleSheet.create({
   chipT:{fontFamily:FONTS.mono,fontSize:8,letterSpacing:1.5},
   chipN:{fontFamily:FONTS.monoMed,fontSize:8,letterSpacing:0.5},
 
-  stage:{alignItems:'center',justifyContent:'center',minWidth:'100%',minHeight:'100%'},
+  stage:{flex:1,alignItems:'center',justifyContent:'center',overflow:'hidden'},
 });
