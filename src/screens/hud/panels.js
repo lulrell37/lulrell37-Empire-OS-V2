@@ -9,7 +9,9 @@ import{Feather}from '@expo/vector-icons';
 import{useFocusEffect,useIsFocused}from '@react-navigation/native';
 import{colors,space,radius,type,FONTS}from '../../theme';
 import{tlStatus,tlQuote,tlPositions,tlClosePosition,tlInstrumentsById}from '../../services/tradeLocker';
-import{getBuildJobs}from '../../services/database';
+import{getBuildJobs,getSetting,getAllTrades}from '../../services/database';
+import{tradeRecord}from '../../services/tradeJournal';
+import{autoTraderRunning}from '../../services/autoTrader';
 import{pollBuildJobs}from '../../services/buildJobs';
 
 const{width}=Dimensions.get('window');
@@ -237,6 +239,7 @@ export function MarketPanel(){
   const[names,setNames]=useState({});
   const[connected,setConnected]=useState(true);
   const[busy,setBusy]=useState(null);
+  const[auto,setAuto]=useState(null); // {on,syms,every,rec,recent}
   const alive=useRef(true);
 
   const poll=useCallback(async()=>{
@@ -251,6 +254,20 @@ export function MarketPanel(){
       if(open.length&&!Object.keys(names).length){
         tlInstrumentsById().then(m=>{if(alive.current)setNames(m);}).catch(()=>{});
       }
+    }catch{}
+    try{
+      const[on,syms,every,rec,all]=await Promise.all([
+        getSetting('auto_trade','0'),
+        getSetting('auto_trade_symbols','XAUUSD, EURUSD, GBPJPY, BTCUSD'),
+        getSetting('auto_trade_interval_min','5'),
+        tradeRecord({}).catch(()=>null),
+        getAllTrades('atlas',60).catch(()=>[]),
+      ]);
+      if(!alive.current)return;
+      setAuto({
+        on:on==='1',live:autoTraderRunning(),syms,every,rec,
+        recent:(all||[]).filter(t=>t.auto).slice(0,3),
+      });
     }catch{}
   },[names]);
 
@@ -277,8 +294,34 @@ export function MarketPanel(){
     </View>
   );
 
+  const rec=auto?.rec;
   return(
     <>
+      {auto&&(
+        <View style={ps.autoBox}>
+          <View style={ps.autoTopRow}>
+            <Text style={[ps.autoTag,{color:auto.on?colors.online:colors.textFaint}]}>
+              {auto.on?(auto.live?'● A.T.L.A.S. AUTO-TRADE':'○ AUTO-TRADE (paused — app foreground only)'):'○ AUTO-TRADE OFF'}
+            </Text>
+          </View>
+          {auto.on&&<Text style={ps.autoMeta}>{auto.syms} · every {auto.every}m</Text>}
+          {rec&&(rec.count>0||rec.openCount>0)&&(
+            <Text style={ps.autoRec}>
+              {rec.wins}W–{rec.losses}L{rec.be?`–${rec.be}BE`:''}
+              {rec.winRate!=null?` · ${rec.winRate}%`:''}
+              {` · net ${rec.net>=0?'+':''}${rec.net}`}
+              {rec.openCount?` · ${rec.openCount} open`:''}
+            </Text>
+          )}
+          {auto.recent.map(t=>(
+            <Text key={t.id} style={ps.autoLine} numberOfLines={1}>
+              ⟳ #{t.id} {t.symbol} {t.side} {t.status==='closed'?(t.outcome||'').toUpperCase():t.status.toUpperCase()}
+              {t.realized_pl!=null?` ${t.realized_pl>=0?'+':''}${t.realized_pl}`:''}
+            </Text>
+          ))}
+        </View>
+      )}
+
       <View style={ps.mktQuoteRow}>
         <View>
           <Text style={ps.mktLabel}>XAUUSD</Text>
@@ -435,4 +478,10 @@ export const ps=StyleSheet.create({
   mktPl:{fontFamily:FONTS.monoMed,fontSize:11,fontWeight:'700',width:70,textAlign:'right'},
   mktClose:{borderWidth:1,borderColor:'rgba(199,97,75,0.4)',borderRadius:radius.sm,paddingHorizontal:8,paddingVertical:4,minWidth:52,alignItems:'center'},
   mktCloseT:{fontFamily:FONTS.mono,fontSize:8,color:colors.danger,letterSpacing:1},
+  autoBox:{borderWidth:1,borderColor:colors.hairline,borderRadius:radius.sm,padding:space.md,marginBottom:space.lg,gap:3,backgroundColor:'rgba(212,160,23,0.04)'},
+  autoTopRow:{flexDirection:'row',justifyContent:'space-between',alignItems:'center'},
+  autoTag:{fontFamily:FONTS.mono,fontSize:8.5,letterSpacing:1.5},
+  autoMeta:{fontFamily:FONTS.mono,fontSize:8,color:colors.textFaint,letterSpacing:0.5},
+  autoRec:{fontFamily:FONTS.monoMed,fontSize:9,color:colors.textDim,letterSpacing:0.5,marginTop:2},
+  autoLine:{fontFamily:FONTS.mono,fontSize:8,color:colors.textMuted,letterSpacing:0.3},
 });
