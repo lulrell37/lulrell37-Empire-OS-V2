@@ -7,6 +7,7 @@ import{runSync,pingBackend,initSyncStatus}from '../services/sync';
 import{registerPushToken,unregisterPushToken,sendTestPush}from '../services/push';
 import{tlConnect,tlReset}from '../services/tradeLocker';
 import{refreshAutoTrader}from '../services/autoTrader';
+import{resetWeather}from '../services/weather';
 import{ghVerify}from '../services/buildAgent';
 import{saveCustomPrompt,getCustomPrompt,getApiUsage,getAllPersonaPics,savePersonaPic,getSetting,setSetting}from '../services/database';
 import{getCrashLog,clearCrashLog}from '../services/crashLog';
@@ -32,6 +33,7 @@ export default function SettingsScreen({navigation}){
   const[autoTrade,setAutoTrade]=useState(false);
   const[autoSyms,setAutoSyms]=useState('XAUUSD, EURUSD, GBPJPY, BTCUSD');
   const[autoEvery,setAutoEvery]=useState('5');
+  const[weatherPlace,setWeatherPlace]=useState('Waldorf, MD');
   const[ghToken,setGhToken]=useState('');
   const[ghBusy,setGhBusy]=useState(false);
   const[ghStatus,setGhStatus]=useState(null); // {ok,repo,error}
@@ -67,6 +69,7 @@ export default function SettingsScreen({navigation}){
     setAutoTrade((await getSetting('auto_trade','0'))==='1');
     setAutoSyms(await getSetting('auto_trade_symbols','XAUUSD, EURUSD, GBPJPY, BTCUSD'));
     setAutoEvery(await getSetting('auto_trade_interval_min','5'));
+    setWeatherPlace(await getSetting('weather_place','Waldorf, MD'));
     const gt=await loadGitHubToken();if(gt){setGhToken(gt);ghVerify().then(setGhStatus);}
     const be=await loadBackend();if(be){setBeUrl(be.url);setBeToken(be.token);setBeConfigured(true);}
     const st=await initSyncStatus().catch(()=>null);if(st)setBeSync({lastSync:st.lastSync,error:st.error,running:st.running});
@@ -127,6 +130,7 @@ export default function SettingsScreen({navigation}){
     await refreshAutoTrader().catch(()=>{});
   }
   async function saveAutoSyms(){await setSetting('auto_trade_symbols',autoSyms.trim()||'XAUUSD');await refreshAutoTrader().catch(()=>{});}
+  async function saveWeatherPlace(){await setSetting('weather_place',weatherPlace.trim()||'Waldorf, MD');await setSetting('weather_geo','');resetWeather();}
   async function saveAutoEvery(){
     const n=Math.max(1,parseInt(autoEvery,10)||5);
     setAutoEvery(String(n));await setSetting('auto_trade_interval_min',String(n));await refreshAutoTrader().catch(()=>{});
@@ -271,6 +275,13 @@ export default function SettingsScreen({navigation}){
               )}
             </View>
             <Text style={s.googleNote}>The access token is refreshed automatically in the background using a stored refresh token — no need to reconnect unless you revoke access from your Google account.</Text>
+
+            <Text style={[s.secTitle,{marginTop:28}]}>HUD AGENDA</Text>
+            <Text style={s.secSub}>The AGENDA panel shows weather, your next calendar events, unread inbox, and tasks. Weather uses Open-Meteo (no key needed).</Text>
+            <View style={s.keyField}>
+              <Text style={s.keyLabel}>WEATHER LOCATION</Text>
+              <TextInput style={s.keyInput} value={weatherPlace} onChangeText={setWeatherPlace} onBlur={saveWeatherPlace} placeholder="Waldorf, MD" placeholderTextColor="#1A1A1A" autoCorrect={false}/>
+            </View>
           </View>}
           {tab==='TRADING'&&<View>
             <Text style={s.secTitle}>TRADELOCKER</Text>

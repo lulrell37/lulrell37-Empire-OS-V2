@@ -62,6 +62,51 @@ export async function googleConnected(){
   try{return !!(await getFreshGoogleToken());}catch{return false;}
 }
 
+// --- Structured reads for the HUD (arrays, not the AI-facing strings) -------
+
+export async function gmailUnreadList(max=6){
+  const list=await gapi('/gmail/v1/users/me/messages',{query:{q:'is:unread in:inbox',maxResults:max}});
+  const ids=(list.messages||[]).map(m=>m.id);
+  const total=list.resultSizeEstimate??ids.length;
+  const rows=[];
+  for(const id of ids){
+    try{
+      const m=await gapi(`/gmail/v1/users/me/messages/${id}`,{query:{format:'metadata',metadataHeaders:['From','Subject']}});
+      const hdr={};
+      for(const x of(m.payload?.headers||[]))hdr[x.name.toLowerCase()]=x.value;
+      const from=(hdr.from||'').replace(/\s*<[^>]*>/,'').replace(/"/g,'').trim()||hdr.from||'?';
+      rows.push({from,subject:hdr.subject||'(no subject)',snippet:(m.snippet||'').slice(0,120)});
+    }catch{}
+  }
+  return{count:total,messages:rows};
+}
+
+export async function calendarEvents({days=3}={}){
+  const start=new Date();
+  const data=await gapi('/calendar/v3/calendars/primary/events',{query:{
+    timeMin:start.toISOString(),timeMax:new Date(start.getTime()+days*86400000).toISOString(),
+    singleEvents:'true',orderBy:'startTime',maxResults:12,
+  }});
+  return(data.items||[]).map(e=>{
+    const iso=e.start?.dateTime||e.start?.date;
+    const d=new Date(iso);
+    const allDay=!e.start?.dateTime;
+    const now=new Date();
+    const sameDay=d.toDateString()===now.toDateString();
+    const when=allDay
+      ?(sameDay?'Today':d.toLocaleDateString('en-US',{weekday:'short',day:'numeric'}))+' · all day'
+      :(sameDay?'':d.toLocaleDateString('en-US',{weekday:'short'})+' ')+d.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
+    return{when,title:e.summary||'(no title)',location:e.location||'',allDay,ts:d.getTime()};
+  });
+}
+
+export async function tasksListRaw(){
+  try{
+    const data=await gapi('/tasks/v1/lists/@default/tasks',{query:{showCompleted:'false',maxResults:100}});
+    return(data.items||[]).filter(t=>t.status!=='completed').map(t=>({title:t.title||'',due:t.due?t.due.slice(0,10):null}));
+  }catch{return[];}
+}
+
 // --- Gmail -----------------------------------------------------------------
 export async function gmailUnread(max=10){
   const list=await gapi('/gmail/v1/users/me/messages',{query:{q:'is:unread in:inbox',maxResults:max}});

@@ -9,15 +9,18 @@ import{Feather}from '@expo/vector-icons';
 import{useFocusEffect,useIsFocused}from '@react-navigation/native';
 import{colors,space,radius,type,FONTS}from '../../theme';
 import{tlStatus,tlQuote,tlPositions,tlClosePosition,tlInstrumentsById}from '../../services/tradeLocker';
-import{getBuildJobs,getSetting,getAllTrades}from '../../services/database';
+import{getBuildJobs,getSetting,getAllTrades,getTasks}from '../../services/database';
 import{tradeRecord}from '../../services/tradeJournal';
 import{autoTraderRunning}from '../../services/autoTrader';
 import{refreshDailyBriefing}from '../../services/dailyBriefing';
+import{googleConnected,calendarEvents,gmailUnreadList,tasksListRaw}from '../../services/googleClient';
+import{getWeather}from '../../services/weather';
 import{pollBuildJobs}from '../../services/buildJobs';
 
 const{width}=Dimensions.get('window');
 export const PANEL_META={
   briefing:{title:'BRIEFING'},
+  agenda:{title:'AGENDA'},
   businesses:{title:'THE EMPIRE'},
   tasks:{title:'TASKS'},
   routine:{title:'MORNING ROUTINE'},
@@ -239,6 +242,96 @@ export function DailyPanel({hud,onRefreshed}){
       <View style={[ps.wvfSection,ps.wvfSectionLast]}>
         <Text style={ps.wvfLabel}>FACT OF THE DAY</Text>
         <Text style={ps.wvfText}>{hud?.fact_of_day||'—'}</Text>
+      </View>
+    </>
+  );
+}
+
+// Weather + Google (calendar, inbox) + tasks — the "what's on today" panel.
+export function AgendaPanel(){
+  const[wx,setWx]=useState(null);
+  const[gConn,setGConn]=useState(null);
+  const[events,setEvents]=useState([]);
+  const[mail,setMail]=useState(null);
+  const[tasks,setTasks]=useState([]);
+  const alive=useRef(true);
+
+  const load=useCallback(async()=>{
+    getWeather().then(w=>{if(alive.current)setWx(w);}).catch(()=>{});
+    let app=[];
+    try{app=(await getTasks()).map(t=>({title:t.title,due:null,src:'app'}));}catch{}
+    const conn=await googleConnected().catch(()=>false);
+    if(!alive.current)return;
+    setGConn(conn);
+    if(conn){
+      calendarEvents({days:3}).then(e=>{if(alive.current)setEvents(e);}).catch(()=>{});
+      gmailUnreadList(5).then(m=>{if(alive.current)setMail(m);}).catch(()=>{});
+      try{
+        const g=(await tasksListRaw()).map(t=>({title:t.title,due:t.due,src:'g'}));
+        const seen=new Set(app.map(t=>t.title.toLowerCase()));
+        app=[...app,...g.filter(t=>!seen.has(t.title.toLowerCase()))];
+      }catch{}
+    }
+    if(alive.current)setTasks(app.slice(0,8));
+  },[]);
+
+  useFocusEffect(useCallback(()=>{
+    alive.current=true;
+    load();
+    const iv=setInterval(load,60000);
+    return()=>{alive.current=false;clearInterval(iv);};
+  },[load]));
+
+  return(
+    <>
+      <View style={ps.wxRow}>
+        {wx?(
+          <>
+            <Text style={ps.wxIcon}>{wx.icon}</Text>
+            <View style={{flex:1}}>
+              <Text style={ps.wxTemp}>{wx.tempF}°<Text style={ps.wxDesc}>  {wx.desc}</Text></Text>
+              <Text style={ps.wxSub}>{wx.place} · H {wx.hiF}° L {wx.loF}°{wx.rainPct!=null?` · ${wx.rainPct}% rain`:''} · wind {wx.windMph} mph</Text>
+            </View>
+          </>
+        ):<Text style={ps.emptyText}>Weather unavailable.</Text>}
+      </View>
+
+      <View style={ps.agSection}>
+        <Text style={ps.wvfLabel}>CALENDAR</Text>
+        {gConn==null?(
+          <Text style={ps.emptyText}>…</Text>
+        ):gConn===false?(
+          <Text style={ps.emptyText}>Connect Google in Settings › Google.</Text>
+        ):events.length?events.slice(0,5).map((e,i)=>(
+          <View key={i} style={ps.agRow}>
+            <Text style={ps.agWhen}>{e.when}</Text>
+            <Text style={ps.agTitle} numberOfLines={1}>{e.title}{e.location?`  · ${e.location}`:''}</Text>
+          </View>
+        )):<Text style={ps.emptyText}>Nothing scheduled.</Text>}
+      </View>
+
+      <View style={ps.agSection}>
+        <Text style={ps.wvfLabel}>INBOX{mail?`  ·  ${mail.count} UNREAD`:''}</Text>
+        {gConn==null?(
+          <Text style={ps.emptyText}>…</Text>
+        ):gConn===false?(
+          <Text style={ps.emptyText}>Not connected.</Text>
+        ):mail&&mail.messages.length?mail.messages.map((m,i)=>(
+          <View key={i} style={ps.agRow}>
+            <Text style={ps.agFrom} numberOfLines={1}>{m.from}</Text>
+            <Text style={ps.agTitle} numberOfLines={1}>{m.subject}</Text>
+          </View>
+        )):<Text style={ps.emptyText}>{mail?'Inbox clear.':'—'}</Text>}
+      </View>
+
+      <View style={[ps.agSection,ps.wvfSectionLast]}>
+        <Text style={ps.wvfLabel}>TASKS{tasks.length?`  ·  ${tasks.length}`:''}</Text>
+        {tasks.length?tasks.map((t,i)=>(
+          <View key={i} style={ps.agRow}>
+            <Text style={ps.agDot}>{t.src==='g'?'○':'·'}</Text>
+            <Text style={ps.agTitle} numberOfLines={1}>{t.title}{t.due?`  (due ${t.due})`:''}</Text>
+          </View>
+        )):<Text style={ps.emptyText}>No open tasks.</Text>}
       </View>
     </>
   );
@@ -478,6 +571,18 @@ export const ps=StyleSheet.create({
   wvfText:{fontFamily:FONTS.mono,fontSize:12,color:colors.textMuted,lineHeight:19,letterSpacing:0.2},
   verseText:{...type.verse,marginBottom:space.sm},
   verseRef:{fontFamily:FONTS.mono,fontSize:9,color:colors.textDim,letterSpacing:2},
+
+  wxRow:{flexDirection:'row',alignItems:'center',gap:space.md,paddingBottom:space.lg,borderBottomWidth:1,borderBottomColor:colors.hairline},
+  wxIcon:{fontSize:26},
+  wxTemp:{fontFamily:FONTS.displaySemi,fontSize:22,color:colors.goldBright,letterSpacing:0.5},
+  wxDesc:{fontFamily:FONTS.mono,fontSize:10,color:colors.textDim,letterSpacing:0.5},
+  wxSub:{fontFamily:FONTS.mono,fontSize:8.5,color:colors.textMuted,letterSpacing:0.3,marginTop:2},
+  agSection:{paddingVertical:space.lg,borderBottomWidth:1,borderBottomColor:colors.hairline},
+  agRow:{flexDirection:'row',alignItems:'baseline',gap:space.sm,paddingVertical:3},
+  agWhen:{fontFamily:FONTS.monoMed,fontSize:9,color:colors.gold,letterSpacing:0.3,width:96},
+  agFrom:{fontFamily:FONTS.monoMed,fontSize:9,color:colors.textDim,letterSpacing:0.3,width:96},
+  agDot:{fontFamily:FONTS.mono,fontSize:10,color:colors.textFaint,width:12,textAlign:'center'},
+  agTitle:{fontFamily:FONTS.mono,fontSize:10,color:colors.textMuted,letterSpacing:0.2,flex:1},
 
   mktHint:{fontFamily:FONTS.mono,fontSize:9,color:colors.textFaint,textAlign:'center',lineHeight:15,letterSpacing:0.5},
   mktQuoteRow:{flexDirection:'row',justifyContent:'space-between',alignItems:'flex-start',paddingBottom:space.lg,borderBottomWidth:1,borderBottomColor:colors.hairline},
