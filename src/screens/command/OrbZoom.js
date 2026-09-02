@@ -7,7 +7,7 @@
 // Built entirely on React Native's own Animated + PanResponder — no reanimated
 // worklets, which is what hard-crashed the earlier 3D version.
 import React,{useState,useEffect,useMemo,useCallback,useRef,useImperativeHandle,forwardRef}from 'react';
-import{View,Text,StyleSheet,TouchableOpacity,ActivityIndicator,Dimensions,Platform,Animated,PanResponder,Image,Easing}from 'react-native';
+import{View,Text,StyleSheet,TouchableOpacity,ActivityIndicator,Dimensions,Platform,Animated,PanResponder,Image,Easing,ScrollView}from 'react-native';
 import PersonaOrb from './PersonaOrb';
 import BrainWeb from './BrainWeb';
 import MemoryPopup from './MemoryPopup';
@@ -16,6 +16,7 @@ import{getMemoriesByPersona,deletePersonaMemory}from '../../services/database';
 import{getPersona,PERSONA_LIST}from '../../personas/personas';
 
 const LEVELS=['group','orb','brain'];
+const WHEEL_MID=600;// px of scroll slack on each side of the invisible wheel-catcher
 
 const SAMP=[],SIN=[],COS=[];
 for(let k=0;k<=480;k++){const v=-12*Math.PI+(24*Math.PI)*(k/480);SAMP.push(v);SIN.push(Math.sin(v));COS.push(Math.cos(v));}
@@ -40,6 +41,8 @@ export default function OrbZoom({personaId,color,active,vizRef,personaPics={},on
   const didMount=useRef(false);
   const wrapRef=useRef(null);
   const wheelAcc=useRef(0);
+  const wheelScrollRef=useRef(null);
+  const wheelY=useRef(0);
   const pinchRef=useRef({d0:0,d1:0});
   const brainRef=useRef(null);
   const sphereRef=useRef(null);
@@ -164,6 +167,26 @@ export default function OrbZoom({personaId,color,active,vizRef,personaPics={},on
     return()=>node.removeEventListener('wheel',onWheel);
   },[deeper,shallower]);
 
+  // Android (Samsung DeX / any attached mouse): RN has no `wheel` event on a
+  // plain View, but a ScrollView still scrolls from mouse-wheel ACTION_SCROLL
+  // motion events. We park an invisible full-bleed ScrollView *behind* the
+  // content (wheel events fall through to it since nothing in front consumes
+  // them), read its scroll delta, and turn each notch into a level change —
+  // then snap it back to the middle so there's always slack both ways.
+  const recenterWheel=useCallback(()=>{
+    wheelAcc.current=0;wheelY.current=WHEEL_MID;
+    requestAnimationFrame(()=>wheelScrollRef.current&&wheelScrollRef.current.scrollTo({y:WHEEL_MID,animated:false}));
+  },[]);
+  const onWheelScroll=useCallback((e)=>{
+    const y=e.nativeEvent.contentOffset.y;
+    const dy=y-wheelY.current;
+    wheelY.current=y;
+    if(!dy)return;
+    wheelAcc.current+=dy;
+    if(wheelAcc.current<-90){deeper();recenterWheel();}
+    else if(wheelAcc.current>90){shallower();recenterWheel();}
+  },[deeper,shallower,recenterWheel]);
+
   function removeMemory(mem){
     if(!mem)return;
     if(pendingRef.current){clearTimeout(undoTimer.current);deletePersonaMemory(pendingRef.current.id).catch(()=>{});}
@@ -187,6 +210,13 @@ export default function OrbZoom({personaId,color,active,vizRef,personaPics={},on
       onLayout={()=>{wrapRef.current&&wrapRef.current.measureInWindow&&wrapRef.current.measureInWindow((x,y,w,h)=>{
         originRef.current={x:x||0,y:y||0};if(w&&h)sizeRef.current={w,h};
       });}}>
+      {Platform.OS==='android'&&(
+        <ScrollView ref={wheelScrollRef} style={StyleSheet.absoluteFill}
+          contentContainerStyle={{height:WHEEL_MID*2+Dimensions.get('window').height}}
+          showsVerticalScrollIndicator={false} scrollEventThrottle={16}
+          contentOffset={{x:0,y:WHEEL_MID}} onScroll={onWheelScroll}
+          onContentSizeChange={()=>{wheelY.current=WHEEL_MID;wheelScrollRef.current&&wheelScrollRef.current.scrollTo({y:WHEEL_MID,animated:false});}}/>
+      )}
       <Animated.View style={{flex:1,opacity:morph.opacity,transform:[{translateX:pinchTX},{translateY:pinchTY},{scale:contentScale}]}}>
         {level==='group'&&(
           <PersonaSphere ref={sphereRef} activeId={personaId} pics={personaPics} onPick={pick} onLaunch={launch}/>
