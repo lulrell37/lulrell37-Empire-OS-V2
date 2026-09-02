@@ -514,9 +514,13 @@ export default function CommandScreen({navigation}){
     });
   }
 
-  // ---- Streamed sentence-chunked TTS (ElevenLabs personas, voice on) -------
-  // Instead of one TTS call for the whole reply, chop it into sentences and
-  // synthesize + play them back to back. First audio lands after ~one sentence.
+  // ---- Streamed sentence-chunked TTS — NO LONGER ROUTED TO (see runRound) --
+  // Chopped the reply into sentences and synthesized + played them back to
+  // back: first audio landed after ~one sentence, but every sentence boundary
+  // had an audible gap (teardown + reload of a fresh Audio.Sound, plus each
+  // sentence being its own ElevenLabs generation). speakWithReveal — one call,
+  // one clip — replaced it. Kept here in case the low-latency start is wanted
+  // back with proper double-buffering.
   function resetStreamSpeak(){
     ttsGenRef.current+=1;
     ttsTextQueueRef.current=[];
@@ -899,7 +903,6 @@ export default function CommandScreen({navigation}){
           const shown=(stripCommands(raw)||'').replace(/\[[A-Z_]+:?[^\]]*$/,'').trimEnd();
           patch(m=>({...m,content:shown,revealed:shown.length}));
         };
-        const streamVoice=willVoice&&!!p.elevenlabsVoiceId&&p.id!=='ara';
         let response=await callPersona(pid,hist,myAbort.signal,onDelta,voiceModelOpts(p));
         // Second-pass tools: the persona emits a lookup tag on pass 1, we gather
         // the data, then it re-answers with everything in hand. One pass only.
@@ -983,8 +986,11 @@ export default function CommandScreen({navigation}){
         }catch(e){pushSystemMsg('Google action failed: '+e.message);}
         if(willVoice){
           patch(m=>({...m,content:display,revealed:0,streaming:true}));
-          if(streamVoice)await streamSpeak(display,p,patch);
-          else await speakWithReveal(display,p,msgId,isGroup);
+          // One TTS call for the whole reply, played as a single clip — no gaps
+          // at sentence boundaries. (The per-sentence streamSpeak path below is
+          // no longer routed to: it started talking a beat sooner but left an
+          // audible pause between every sentence while the next clip loaded.)
+          await speakWithReveal(display,p,msgId,isGroup);
           // The spoken helpers only drive the reveal animation — the reply text
           // is always the full `display`. Settle the bubble on it regardless of
           // how the reveal ended, unless the user has moved on.
