@@ -24,6 +24,7 @@ import{runSync,initSyncStatus}from './src/services/sync';
 import{registerPushToken}from './src/services/push';
 import{tlInit}from './src/services/tradeLocker';
 import{startAutoTrader,stopAutoTrader}from './src/services/autoTrader';
+import{refreshDailyBriefing}from './src/services/dailyBriefing';
 import{getAllPersonaPics}from './src/services/database';
 import useEmpireStore from './src/store/useEmpireStore';
 import{recentCrashCount}from './src/services/crashLog';
@@ -67,8 +68,10 @@ export default function App(){
   },[]);
   useEffect(()=>{
     // Sync on every return to the foreground + a gentle background interval.
-    const sub=AppState.addEventListener('change',(st)=>{if(st==='active')runSync().catch(()=>{});});
+    const sub=AppState.addEventListener('change',(st)=>{if(st==='active'){runSync().catch(()=>{});refreshDailyBriefing().catch(()=>{});}});
     const iv=setInterval(()=>{runSync().catch(()=>{});},120000);
+    // Daily HUD content — Stephanie (word + fact), Abraham (verse). Once/day, no repeats.
+    setTimeout(()=>refreshDailyBriefing().catch(()=>{}),6000);
     return()=>{sub.remove();clearInterval(iv);};
   },[]);
   useEffect(()=>{

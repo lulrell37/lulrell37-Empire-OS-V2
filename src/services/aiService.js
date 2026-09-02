@@ -237,6 +237,36 @@ export async function queryMemory(personaId,question,signal=null){
   return d.content?.[0]?.text?.trim()||'(no recall)';
 }
 
+// Daily HUD content — one Claude call per item, in the relevant persona's voice.
+// kind: 'word' (S.T.E.P.H.A.N.I.E.), 'fact' (S.T.E.P.H.A.N.I.E.), 'verse' (Abraham).
+// `avoid` is the list of recently used values so nothing repeats.
+export async function dailyGenerate(kind,avoid=[]){
+  const k=await ensureKeys();
+  const{base,auth}=await aiRoute('claude',k?.claude,'Claude');
+  const seen=avoid.slice(0,320).join(' | ')||'(none yet)';
+  let sys,user;
+  if(kind==='word'){
+    sys=`You are S.T.E.P.H.A.N.I.E., Mr. Burrus's personal educator, choosing the HUD "Word of the Day". Pick ONE word that sharpens a sharp mind — precise, genuinely useful, a notch above everyday speech, not obscure trivia. Reply with ONLY a JSON object, no prose: {"word":"...","phonetic":"/.../","definition":"one clear sentence"}`;
+    user=`Do NOT repeat any of these already-used words: ${seen}`;
+  }else if(kind==='fact'){
+    sys=`You are S.T.E.P.H.A.N.I.E., Mr. Burrus's personal educator, choosing the HUD "Fact of the Day". Pick ONE true, genuinely interesting fact — science, history, systems, money, the natural world — the kind that makes you stop and think. One or two sentences. Reply with ONLY a JSON object: {"fact":"..."}`;
+    user=`Do NOT repeat any of these already-used facts: ${seen}`;
+  }else{
+    sys=`You are Abraham, Mr. Burrus's pastor, choosing the HUD "Verse of the Day" from the Holy Bible. Pick ONE verse that speaks to a man building an empire on faith — strength, wisdom, diligence, purpose, covenant, perseverance. Quote it faithfully (KJV or a faithful modern translation). Reply with ONLY a JSON object: {"text":"the verse text","ref":"Book Chapter:Verse"}`;
+    user=`Do NOT repeat any of these already-used references: ${seen}`;
+  }
+  const res=await fetch(base+'/v1/messages',{method:'POST',headers:{'Content-Type':'application/json',...auth},body:JSON.stringify({
+    model:'claude-sonnet-4-6',max_tokens:300,system:sys,messages:[{role:'user',content:user}],
+  })});
+  if(!res.ok)throw new Error(`daily ${kind}: ${apiErrorMessage(await res.text()).slice(0,100)}`);
+  const d=await res.json();
+  if(d.usage)await trackApiUsage('claude',d.usage.input_tokens||0,d.usage.output_tokens||0).catch(()=>{});
+  const raw=d.content?.[0]?.text?.trim()||'';
+  const m=raw.match(/\{[\s\S]*\}/);
+  if(!m)throw new Error(`daily ${kind}: no JSON in reply`);
+  return JSON.parse(m[0]);
+}
+
 // One unattended trading decision for A.T.L.A.S. — a single Claude call that
 // returns strict JSON. Used by the auto-trader loop (demo account only).
 export async function autoTradeDecision({symbol,snapshot,record,strategy,positions}){

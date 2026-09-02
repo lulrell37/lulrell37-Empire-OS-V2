@@ -194,7 +194,7 @@ export default function HUDScreen({navigation}){
       case 'tasks':return <TasksPanel tasks={openTasks} onComplete={doneTask} onEdit={openTaskEdit} onAdd={()=>setShowAddTask(true)}/>;
       case 'routine':return <RoutinePanel items={routineItems} done={routine} onToggle={toggleRoutine} onSave={handleSaveRoutine} onEditingChange={setPanelEditing}/>;
       case 'batman':return <BatmanPanel template={batmanTemplate} done={batman} today={todayBatman} onToggleDay={toggleBatman} onSaveTemplate={handleSaveBatman} onEditingChange={setPanelEditing}/>;
-      case 'daily':return <DailyPanel hud={hud}/>;
+      case 'daily':return <DailyPanel hud={hud} onRefreshed={load}/>;
       case 'market':return <Boundary label="The market panel"><MarketPanel/></Boundary>;
       case 'build':return <Boundary label="The build panel"><BuildBoardPanel/></Boundary>;
       default:return null;

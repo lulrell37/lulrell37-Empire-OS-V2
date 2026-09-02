@@ -12,6 +12,7 @@ import{tlStatus,tlQuote,tlPositions,tlClosePosition,tlInstrumentsById}from '../.
 import{getBuildJobs,getSetting,getAllTrades}from '../../services/database';
 import{tradeRecord}from '../../services/tradeJournal';
 import{autoTraderRunning}from '../../services/autoTrader';
+import{refreshDailyBriefing}from '../../services/dailyBriefing';
 import{pollBuildJobs}from '../../services/buildJobs';
 
 const{width}=Dimensions.get('window');
@@ -209,11 +210,23 @@ export function BatmanPanel({template,done,today,onToggleDay,onSaveTemplate,onEd
   );
 }
 
-export function DailyPanel({hud}){
+export function DailyPanel({hud,onRefreshed}){
+  const[busy,setBusy]=useState(false);
+  async function forceRefresh(){
+    if(busy)return;
+    setBusy(true);
+    try{await refreshDailyBriefing({force:true});onRefreshed&&onRefreshed();}catch{}
+    finally{setBusy(false);}
+  }
   return(
     <>
       <View style={ps.wvfSection}>
-        <Text style={ps.wvfLabel}>WORD OF THE DAY</Text>
+        <View style={ps.wvfHeadRow}>
+          <Text style={ps.wvfLabel}>WORD OF THE DAY</Text>
+          <TouchableOpacity onPress={forceRefresh} disabled={busy} hitSlop={{top:10,bottom:10,left:10,right:10}}>
+            {busy?<ActivityIndicator size="small" color={colors.textFaint}/>:<Feather name="refresh-cw" size={11} color={colors.textFaint}/>}
+          </TouchableOpacity>
+        </View>
         <Text style={ps.wordMain}>{hud?.word_of_day||'—'}</Text>
         <Text style={ps.wordPhon}>{hud?.word_phonetic||''}</Text>
         <Text style={ps.wvfText}>{hud?.word_def||''}</Text>
@@ -459,6 +472,7 @@ export const ps=StyleSheet.create({
   wvfSection:{paddingVertical:space.lg,borderBottomWidth:1,borderBottomColor:colors.hairline},
   wvfSectionLast:{borderBottomWidth:0},
   wvfLabel:{fontFamily:FONTS.mono,fontSize:8,letterSpacing:2.5,color:colors.textDim,marginBottom:space.md},
+  wvfHeadRow:{flexDirection:'row',justifyContent:'space-between',alignItems:'flex-start'},
   wordMain:{...type.word},
   wordPhon:{fontFamily:FONTS.mono,fontSize:10,color:colors.textDim,marginTop:4,marginBottom:space.sm,letterSpacing:0.5},
   wvfText:{fontFamily:FONTS.mono,fontSize:12,color:colors.textMuted,lineHeight:19,letterSpacing:0.2},

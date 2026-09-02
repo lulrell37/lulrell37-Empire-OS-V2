@@ -4,6 +4,7 @@ const cron = require('node-cron');
 const db = require('./db');
 const auth = require('./auth');
 const { runNudgeCycle } = require('./pushSender');
+const { runDailyBriefing } = require('./dailyBriefing');
 
 const app = express();
 app.disable('x-powered-by');
@@ -31,6 +32,7 @@ db.init()
   .then(() => {
     app.listen(PORT, '0.0.0.0', () => console.log(`Empire OS backend listening on :${PORT}`));
     startNudgeCron();
+    startDailyBriefingCron();
   })
   .catch((e) => {
     console.error('DB init failed:', e.message);
@@ -48,4 +50,18 @@ function startNudgeCron() {
       .catch((e) => console.error('nudge cycle failed:', e.message));
   });
   console.log('nudge cron scheduled (every 30m)');
+}
+
+// Daily HUD content — Word + Fact (S.T.E.P.H.A.N.I.E.) and Verse (Abraham).
+// 05:10 ET so it's ready before the owner's morning. Idempotent per day.
+function startDailyBriefingCron() {
+  if (process.env.DAILY_BRIEFING === 'off') return console.log('daily briefing cron disabled (DAILY_BRIEFING=off)');
+  if (!process.env.ANTHROPIC_API_KEY) return console.log('daily briefing cron off (no ANTHROPIC_API_KEY)');
+  cron.schedule('10 5 * * *', () => {
+    runDailyBriefing()
+      .then((r) => console.log('daily briefing:', JSON.stringify(r)))
+      .catch((e) => console.error('daily briefing failed:', e.message));
+  }, { timezone: 'America/New_York' });
+  runDailyBriefing().then((r) => console.log('daily briefing (startup):', JSON.stringify(r))).catch(() => {});
+  console.log('daily briefing cron scheduled (05:10 ET)');
 }
