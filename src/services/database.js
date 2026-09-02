@@ -21,6 +21,7 @@ export async function initDatabase(){
     CREATE TABLE IF NOT EXISTS important_dates(id INTEGER PRIMARY KEY AUTOINCREMENT,label TEXT,date TEXT,note TEXT,created_at INTEGER);
     CREATE TABLE IF NOT EXISTS build_jobs(issue_number INTEGER PRIMARY KEY,pr_number INTEGER,spec TEXT,state TEXT,question TEXT,last_comment_id INTEGER DEFAULT 0,title TEXT,created_at INTEGER,updated_at INTEGER);
     CREATE TABLE IF NOT EXISTS trades(id INTEGER PRIMARY KEY AUTOINCREMENT,persona TEXT DEFAULT 'atlas',symbol TEXT,side TEXT,qty REAL,entry_ref REAL,entry_fill REAL,stop_loss REAL,take_profit REAL,setup TEXT,rationale TEXT,status TEXT DEFAULT 'open',order_id TEXT,position_id TEXT,opened_at INTEGER,closed_at INTEGER,exit_price REAL,realized_pl REAL,pl_estimated INTEGER DEFAULT 0,outcome TEXT,r_multiple REAL,review TEXT,misses INTEGER DEFAULT 0,last_unrealized REAL,created_at INTEGER,updated_at INTEGER);
+    CREATE TABLE IF NOT EXISTS deep_research(id TEXT PRIMARY KEY,topic TEXT,persona TEXT,mode TEXT DEFAULT 'direct',model TEXT,status TEXT DEFAULT 'running',progress TEXT,result TEXT,error TEXT,started_at INTEGER,finished_at INTEGER,created_at INTEGER,updated_at INTEGER);
   `);
   await migrateHudColumns();
   await migratePersonaMemory();
@@ -439,6 +440,24 @@ export async function getOpenTrades(persona='atlas'){return await db.getAllAsync
 export async function getClosedTrades(persona='atlas',limit=40){return await db.getAllAsync('SELECT * FROM trades WHERE persona=? AND status IN (?,?) ORDER BY COALESCE(closed_at,opened_at) DESC LIMIT ?',[persona,'closed','unknown',limit]);}
 export async function getTradeById(id){return await db.getFirstAsync('SELECT * FROM trades WHERE id=?',[id]);}
 export async function getAllTrades(persona='atlas',limit=200){return await db.getAllAsync('SELECT * FROM trades WHERE persona=? ORDER BY opened_at DESC LIMIT ?',[persona,limit]);}
+
+// --- Deep Research jobs --------------------------------------------------
+// One row per OpenAI Deep Research run. Persisted so a job survives closing
+// the app — CommandScreen resumes polling on launch and delivers the result
+// into the starting persona's chat whenever it lands. Local only (not synced).
+export async function drInsert(r){
+  const now=Date.now();
+  await db.runAsync('INSERT OR REPLACE INTO deep_research(id,topic,persona,mode,model,status,started_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)',
+    [r.id,r.topic||'',r.persona||'ara',r.mode||'direct',r.model||'',r.status||'running',r.started_at||now,now,now]);
+}
+export async function drUpdate(id,patch){
+  const cols=Object.keys(patch);
+  if(!cols.length)return;
+  await db.runAsync(`UPDATE deep_research SET ${cols.map(c=>c+'=?').join(',')},updated_at=? WHERE id=?`,[...cols.map(c=>patch[c]),Date.now(),id]);
+}
+export async function drGet(id){return await db.getFirstAsync('SELECT * FROM deep_research WHERE id=?',[id]);}
+export async function drActive(){return await db.getFirstAsync("SELECT * FROM deep_research WHERE status='running' ORDER BY started_at DESC LIMIT 1");}
+export async function drRecent(n=10){return await db.getAllAsync('SELECT * FROM deep_research ORDER BY started_at DESC LIMIT ?',[n]);}
 export async function savePersonaPic(persona,picData){await db.runAsync('INSERT INTO persona_pics(persona,pic_data) VALUES(?,?) ON CONFLICT(persona) DO UPDATE SET pic_data=excluded.pic_data',[persona,picData]);}
 export async function getPersonaPic(persona){const r=await db.getFirstAsync('SELECT pic_data FROM persona_pics WHERE persona=?',[persona]);return r?.pic_data||null;}
 export async function getAllPersonaPics(){const rows=await db.getAllAsync('SELECT * FROM persona_pics');const map={};rows.forEach(r=>{map[r.persona]=r.pic_data;});return map;}

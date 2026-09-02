@@ -275,30 +275,68 @@ export async function webSearch(personaId,query,signal=null){
 }
 
 // Long-form autonomous research via OpenAI Deep Research. Runs for minutes —
-// started in the background, caller polls deepResearchPoll(id).
-export async function deepResearchStart(topic){
+// started in the background, caller polls deepResearchPoll(id). Orchestration,
+// persistence and delivery live in services/deepResearch.js.
+const DR_MODEL_CHAINS={
+  auto:['o3-deep-research','o4-mini-deep-research'],
+  'o3-deep-research':['o3-deep-research'],
+  'o4-mini-deep-research':['o4-mini-deep-research'],
+};
+function apiErrorMessage(raw){
+  try{const j=JSON.parse(raw);return j.error?.message||j.message||raw;}catch{return raw;}
+}
+// true when the failure is "this account can't use this model" — worth trying the next one
+function isModelAccessError(msg){
+  return /model.*(not found|does not exist|not available)|not found.*model|must be verified|verify your organization|verification|do not have access|unsupported model/i.test(msg||'');
+}
+
+export async function deepResearchStart(topic,pref='auto'){
   const k=await ensureKeys();
   const{base,auth}=await aiRoute('openai',k?.openai,'OpenAI');
-  const res=await fetch(base+'/v1/responses',{method:'POST',headers:{'Content-Type':'application/json',...auth},body:JSON.stringify({
-    model:'o3-deep-research',
-    input:`Research this thoroughly and return a structured brief with findings, key figures, and cited sources:\n\n${topic}`,
-    background:true,
-    tools:[{type:'web_search_preview'}],
-  })});
-  if(!res.ok)throw new Error(`Deep Research: ${(await res.text()).substring(0,120)}`);
-  const d=await res.json();
-  return d.id;
+  const chain=DR_MODEL_CHAINS[pref]||DR_MODEL_CHAINS.auto;
+  let lastErr='unknown error';
+  for(const model of chain){
+    const res=await fetch(base+'/v1/responses',{method:'POST',headers:{'Content-Type':'application/json',...auth},body:JSON.stringify({
+      model,
+      input:`Research this thoroughly and return a structured brief with findings, key figures, and cited sources:\n\n${topic}`,
+      background:true,
+      tools:[{type:'web_search_preview'}],
+    })});
+    if(res.ok){const d=await res.json();return{id:d.id,model};}
+    lastErr=apiErrorMessage(await res.text());
+    if(!isModelAccessError(lastErr))break; // a real error, not a model-availability one — stop
+  }
+  if(/verif/i.test(lastErr))
+    throw new Error(`Deep research needs OpenAI organization verification. Verify at platform.openai.com/settings/organization/general, then try again. (${lastErr.slice(0,120)})`);
+  if(isModelAccessError(lastErr))
+    throw new Error(`Your OpenAI account can't access the deep-research models (${chain.join(' or ')}). ${lastErr.slice(0,140)}`);
+  throw new Error(`Deep research failed to start: ${lastErr.slice(0,160)}`);
 }
+
+// Returns {status, text?, error?, progress:{searches,step}}.
 export async function deepResearchPoll(id){
   const k=await ensureKeys();
   const{base,auth}=await aiRoute('openai',k?.openai,'OpenAI');
   const res=await fetch(base+'/v1/responses/'+id,{headers:{...auth}});
-  if(!res.ok)throw new Error(`Deep Research poll: ${(await res.text()).substring(0,100)}`);
+  if(!res.ok)throw new Error(`Deep Research poll: ${apiErrorMessage(await res.text()).slice(0,120)}`);
   const d=await res.json();
-  if(d.status!=='completed')return{status:d.status};
-  if(d.usage)await trackApiUsage('openai',d.usage.input_tokens||0,d.usage.output_tokens||0).catch(()=>{});
-  const text=d.output_text||(d.output||[]).flatMap(o=>(o.content||[]).filter(c=>c.type==='output_text').map(c=>c.text)).join('\n');
-  return{status:'completed',text:text||'(Deep Research returned no text)'};
+  const out=Array.isArray(d.output)?d.output:[];
+  const searches=out.filter(o=>o.type==='web_search_call').length;
+  const lastReason=[...out].reverse().find(o=>o.type==='reasoning');
+  let step=lastReason?.summary;
+  if(Array.isArray(step))step=step.map(x=>x?.text||x).join(' ');
+  const progress={searches,step:typeof step==='string'?step.slice(0,140):''};
+
+  if(d.status==='completed'){
+    if(d.usage)await trackApiUsage('openai',d.usage.input_tokens||0,d.usage.output_tokens||0).catch(()=>{});
+    const text=d.output_text||out.flatMap(o=>(o.content||[]).filter(c=>c.type==='output_text').map(c=>c.text)).join('\n');
+    return{status:'completed',text:text||'(Deep Research returned no text)',progress};
+  }
+  if(d.status==='failed'||d.status==='cancelled'||d.status==='incomplete'){
+    return{status:d.status==='cancelled'?'cancelled':'failed',
+      error:d.error?.message||d.incomplete_details?.reason||d.status,progress};
+  }
+  return{status:d.status||'running',progress};
 }
 // Synthesize `text` in a persona's ElevenLabs voice -> local .mp3 URI (or null).
 // opts: { signal, previousText, nextText } — previous/next give the flash model

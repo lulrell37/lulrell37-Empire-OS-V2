@@ -8,7 +8,8 @@ import*as DocumentPicker from 'expo-document-picker';
 import{Camera}from 'expo-camera';
 import*as FileSystem from 'expo-file-system';
 import{PERSONA_LIST,getPersona}from '../personas/personas';
-import{callPersona,textToSpeech,transcribeAudio,queryMemory,webSearch,personaSystemPrompt,deepResearchStart,deepResearchPoll}from '../services/aiService';
+import{callPersona,textToSpeech,transcribeAudio,queryMemory,webSearch,personaSystemPrompt}from '../services/aiService';
+import{drStart,drGetActive,drTick,drDismiss,DR_POLL_MS}from '../services/deepResearch';
 import{handleCommands,stripCommands}from '../services/commandHandler';
 import{googleReadInjections,googleWriteCommands}from '../services/googleCommands';
 import{getMessages,saveMessage,getAllPersonaPics,savePersonaMemory,getSetting,getExpenseSummary,addBuildJob,updateBuildJob,getBuildJob,getBuildJobs}from '../services/database';
@@ -24,6 +25,7 @@ import ChartOverlay from './command/ChartOverlay';
 import TradePanel from './command/TradePanel';
 import TradeStatus from '../components/TradeStatus';
 import TradeRecordBar from './command/TradeRecordBar';
+import DeepResearchBanner from './command/DeepResearchBanner';
 import BuildPanel from './command/BuildPanel';
 import NudgeBar from './command/NudgeBar';
 import{parseChartSpec}from '../services/chartSpec';
@@ -69,7 +71,7 @@ export default function CommandScreen({navigation}){
   const[orbLevel,setOrbLevel]=useState('group'); // lifted so it survives the viz/text toggle
   const[tradeProposal,setTradeProposal]=useState(null); // {symbol,side,entry,stopLoss,takeProfit,qty,rationale,pid}
   const[tradeBusy,setTradeBusy]=useState(false);
-  const[deepResearch,setDeepResearch]=useState(null); // {id,topic,pid,status}
+  const[deepResearch,setDeepResearch]=useState(null); // deep_research row + progressObj; null when idle. Persisted — see services/deepResearch.js
   const[chartOverlay,setChartOverlay]=useState(null); // parsed chart spec shown over the orb
   const[googleAction,setGoogleAction]=useState(null); // pending Google action awaiting a confirm tap
   const[googleBusy,setGoogleBusy]=useState(false);
@@ -1055,13 +1057,14 @@ export default function CommandScreen({navigation}){
     setTimeout(()=>reconcileOpenTrades().catch(()=>{}),4000);
   }
   function startDeepResearch(topic,pid){
-    if(deepResearch){pushSystemMsg('Deep Research already running — one at a time.');return;}
+    if(deepResearch){pushSystemMsg('Deep research is already running — one at a time.');return;}
+    const persona=pid||activePersona;
     const go=async()=>{
       try{
-        pushSystemMsg(`— DEEP RESEARCH STARTED · ${topic} —`);
-        const id=await deepResearchStart(topic);
-        setDeepResearch({id,topic,pid:pid||'ara',status:'running'});
-      }catch(e){pushSystemMsg(`Deep Research failed to start: ${e.message}`);}
+        const row=await drStart({topic,persona,mode});
+        setDeepResearch(row);
+        pushSystemMsg(`— DEEP RESEARCH STARTED · ${getPersona(persona).name} · ${topic} —`);
+      }catch(e){pushSystemMsg(`Deep research failed to start: ${e.message}`);}
     };
     getSetting('deep_research_confirm','1').then(v=>{
       if(v==='1'){
@@ -1072,27 +1075,49 @@ export default function CommandScreen({navigation}){
       }else go();
     });
   }
+  // Resume a job that was still running when the app was last closed.
   useEffect(()=>{
-    if(!deepResearch?.id)return;
+    let cancelled=false;
+    drGetActive().then(row=>{
+      if(cancelled||!row)return;
+      if(row.status==='failed'){pushSystemMsg(`Deep research ${row.error?`failed: ${row.error}`:'timed out'}.`);return;}
+      setDeepResearch(row);
+    }).catch(()=>{});
+    return()=>{cancelled=true;};
+  },[]);// eslint-disable-line react-hooks/exhaustive-deps
+  // Poll the active job; deliver the result into the starting persona's chat.
+  useEffect(()=>{
+    if(!deepResearch?.id||deepResearch.status!=='running')return;
     let stop=false;
     const tick=async()=>{
       if(stop)return;
-      try{
-        const r=await deepResearchPoll(deepResearch.id);
-        if(stop)return;
-        if(r.status==='completed'){
-          const dm={id:Date.now().toString(),role:'assistant',content:r.text,persona:deepResearch.pid,revealed:r.text.length,streaming:false};
-          if(mode==='direct')setMessages(prev=>[...prev,dm]);else setGroupMessages(prev=>[...prev,dm]);
-          savePersonaMemory(deepResearch.pid,`YOU: [deep research] ${deepResearch.topic}\n${getPersona(deepResearch.pid).name}: ${r.text.slice(0,4000)}`).catch(()=>{});
-          setDeepResearch(null);
-        }else if(r.status==='failed'||r.status==='cancelled'){
-          pushSystemMsg(`Deep Research ${r.status}.`);setDeepResearch(null);
+      const{row,done,outcome,alreadyHandled}=await drTick(deepResearch);
+      if(stop)return;
+      if(!done){setDeepResearch(r=>r&&r.id===row.id?{...r,progressObj:row.progressObj}:r);return;}
+      setDeepResearch(null);
+      if(alreadyHandled)return; // a prior poll already delivered this one
+      const name=getPersona(row.persona).name;
+      if(outcome==='completed'){
+        if(mode==='direct'&&activePersona===row.persona){
+          setMessages(prev=>[...prev,{id:Date.now().toString(),role:'assistant',content:row.result,persona:row.persona,revealed:row.result.length,streaming:false}]);
+        }else{
+          pushSystemMsg(`— ${name} finished deep research on "${row.topic}" — open ${name}'s chat to read it —`);
         }
-      }catch(e){/* keep polling through transient errors */}
+      }else if(outcome==='cancelled'){
+        pushSystemMsg('Deep research was cancelled.');
+      }else{
+        pushSystemMsg('Deep research failed'+(row.error?`: ${row.error}`:'')+'.');
+      }
     };
-    const iv=setInterval(tick,15000);tick();
+    const iv=setInterval(tick,DR_POLL_MS);tick();
     return()=>{stop=true;clearInterval(iv);};
-  },[deepResearch?.id]);// eslint-disable-line react-hooks/exhaustive-deps
+  },[deepResearch?.id,deepResearch?.status,activePersona,mode]);// eslint-disable-line react-hooks/exhaustive-deps
+  function dismissDeepResearch(){
+    if(!deepResearch)return;
+    drDismiss(deepResearch.id);
+    setDeepResearch(null);
+    pushSystemMsg('Deep research dismissed — it keeps running on OpenAI but the app has stopped tracking it.');
+  }
 
   // --- JARVIS build pipeline ---
   function confirmBuildRequest(spec){
@@ -1286,13 +1311,7 @@ export default function CommandScreen({navigation}){
       {mode==='direct'&&activePersona==='atlas'&&<TradePanel active={isFocused} onEvent={pushSystemMsg}/>}
       {mode==='direct'&&activePersona==='jarvis'&&<BuildPanel active={isFocused} onMerge={confirmBuildMerge} onCancel={confirmBuildCancel}/>}
 
-      {deepResearch&&<View style={s.deepCard}>
-        <ActivityIndicator size="small" color="#5B8DEF"/>
-        <Text style={s.deepText} numberOfLines={1}>DEEP RESEARCH · {deepResearch.topic}</Text>
-        <TouchableOpacity onPress={()=>{setDeepResearch(null);pushSystemMsg('Deep Research dismissed (still running on OpenAI).');}}>
-          <Text style={s.deepX}>×</Text>
-        </TouchableOpacity>
-      </View>}
+      <DeepResearchBanner job={deepResearch} onDismiss={dismissDeepResearch}/>
 
       {view==='viz'?(
         chartOverlay?(
@@ -1531,7 +1550,4 @@ const s=StyleSheet.create({
   tradeV:{fontFamily:'monospace',fontSize:12,color:'#DDD',fontWeight:'700'},
   tradeRationale:{fontFamily:'monospace',fontSize:11,color:'#999',lineHeight:17,marginTop:12},
   tradeNote:{fontFamily:'monospace',fontSize:8,color:'#444',marginTop:10,letterSpacing:0.5},
-  deepCard:{flexDirection:'row',alignItems:'center',gap:10,marginHorizontal:10,marginTop:4,paddingHorizontal:12,paddingVertical:8,borderWidth:1,borderColor:'#1E2740',borderRadius:8,backgroundColor:'#070A10'},
-  deepText:{flex:1,fontFamily:'monospace',fontSize:9,color:'#5B8DEF',letterSpacing:1},
-  deepX:{color:'#555',fontSize:18,lineHeight:18},
 });
