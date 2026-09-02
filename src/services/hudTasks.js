@@ -12,7 +12,12 @@ export async function loadHudTasks(){
   try{connected=await googleConnected();}catch{}
   if(!connected)return local;
   try{
-    const g=(await hudTasksList()).map(t=>({
+    // Never let a slow/failed Google call block the HUD from rendering.
+    const raw=await Promise.race([
+      hudTasksList(),
+      new Promise((_,rej)=>setTimeout(()=>rej(new Error('google tasks timeout')),8000)),
+    ]);
+    const g=(raw||[]).map(t=>({
       id:'g:'+t.id,gid:t.id,title:t.title,due:t.due,completed:t.completed,notes:'',
     }));
     const seen=new Set(local.map(t=>(t.title||'').trim().toLowerCase()));
