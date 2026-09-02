@@ -20,11 +20,12 @@ export async function initDatabase(){
     CREATE TABLE IF NOT EXISTS expenses(id INTEGER PRIMARY KEY AUTOINCREMENT,amount REAL,category TEXT,note TEXT,date TEXT,created_at INTEGER);
     CREATE TABLE IF NOT EXISTS important_dates(id INTEGER PRIMARY KEY AUTOINCREMENT,label TEXT,date TEXT,note TEXT,created_at INTEGER);
     CREATE TABLE IF NOT EXISTS build_jobs(issue_number INTEGER PRIMARY KEY,pr_number INTEGER,spec TEXT,state TEXT,question TEXT,last_comment_id INTEGER DEFAULT 0,title TEXT,created_at INTEGER,updated_at INTEGER);
-    CREATE TABLE IF NOT EXISTS trades(id INTEGER PRIMARY KEY AUTOINCREMENT,persona TEXT DEFAULT 'atlas',symbol TEXT,side TEXT,qty REAL,entry_ref REAL,entry_fill REAL,stop_loss REAL,take_profit REAL,setup TEXT,rationale TEXT,status TEXT DEFAULT 'open',order_id TEXT,position_id TEXT,opened_at INTEGER,closed_at INTEGER,exit_price REAL,realized_pl REAL,pl_estimated INTEGER DEFAULT 0,outcome TEXT,r_multiple REAL,review TEXT,misses INTEGER DEFAULT 0,last_unrealized REAL,created_at INTEGER,updated_at INTEGER);
+    CREATE TABLE IF NOT EXISTS trades(id INTEGER PRIMARY KEY AUTOINCREMENT,persona TEXT DEFAULT 'atlas',symbol TEXT,side TEXT,qty REAL,entry_ref REAL,entry_fill REAL,stop_loss REAL,take_profit REAL,setup TEXT,rationale TEXT,status TEXT DEFAULT 'open',order_id TEXT,position_id TEXT,opened_at INTEGER,closed_at INTEGER,exit_price REAL,realized_pl REAL,pl_estimated INTEGER DEFAULT 0,outcome TEXT,r_multiple REAL,review TEXT,misses INTEGER DEFAULT 0,last_unrealized REAL,auto INTEGER DEFAULT 0,created_at INTEGER,updated_at INTEGER);
     CREATE TABLE IF NOT EXISTS deep_research(id TEXT PRIMARY KEY,topic TEXT,persona TEXT,mode TEXT DEFAULT 'direct',model TEXT,status TEXT DEFAULT 'running',progress TEXT,result TEXT,error TEXT,started_at INTEGER,finished_at INTEGER,created_at INTEGER,updated_at INTEGER);
   `);
   await migrateHudColumns();
   await migratePersonaMemory();
+  await migrateColumn('trades','auto','INTEGER DEFAULT 0');
   await ensureHudState();
   await ensureBusinessTargets();
   await initSync();
@@ -90,6 +91,13 @@ async function initSync(){
       BEGIN INSERT OR REPLACE INTO tombstones(table_name,sync_id,deleted_at) VALUES('${t}',OLD.sync_id,${NOW_MS}); END;
     `);
   }
+}
+// Add one column to an existing table if it isn't there yet (no-op on fresh installs).
+async function migrateColumn(table,col,decl){
+  try{
+    const cols=(await db.getAllAsync(`PRAGMA table_info(${table})`)).map(c=>c.name);
+    if(!cols.includes(col))await db.execAsync(`ALTER TABLE ${table} ADD COLUMN ${col} ${decl}`);
+  }catch{}
 }
 async function migrateHudColumns(){
   const cols=await db.getAllAsync('PRAGMA table_info(hud_state)');
@@ -423,7 +431,7 @@ export async function deleteNote(id){await db.runAsync('DELETE FROM notes WHERE 
 // One row per trade Mr. Burrus confirmed. Opened on confirm; reconciled against
 // TradeLocker by tradeJournal.js as positions close. This is the record Atlas
 // reviews before proposing and learns her strategy from.
-const TRADE_FIELDS=['persona','symbol','side','qty','entry_ref','entry_fill','stop_loss','take_profit','setup','rationale','status','order_id','position_id','opened_at','closed_at','exit_price','realized_pl','pl_estimated','outcome','r_multiple','review','misses','last_unrealized'];
+const TRADE_FIELDS=['persona','symbol','side','qty','entry_ref','entry_fill','stop_loss','take_profit','setup','rationale','status','order_id','position_id','opened_at','closed_at','exit_price','realized_pl','pl_estimated','outcome','r_multiple','review','misses','last_unrealized','auto'];
 export async function insertTrade(t){
   const now=Date.now();
   const cols=TRADE_FIELDS.filter(k=>t[k]!==undefined);

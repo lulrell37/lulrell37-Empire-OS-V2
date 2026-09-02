@@ -6,6 +6,7 @@ import{saveKeys,loadKeys,saveGoogleToken,loadGoogleToken,clearGoogleToken,saveTr
 import{runSync,pingBackend,initSyncStatus}from '../services/sync';
 import{registerPushToken,unregisterPushToken,sendTestPush}from '../services/push';
 import{tlConnect,tlReset}from '../services/tradeLocker';
+import{refreshAutoTrader}from '../services/autoTrader';
 import{ghVerify}from '../services/buildAgent';
 import{saveCustomPrompt,getCustomPrompt,getApiUsage,getAllPersonaPics,savePersonaPic,getSetting,setSetting}from '../services/database';
 import{getCrashLog,clearCrashLog}from '../services/crashLog';
@@ -28,6 +29,9 @@ export default function SettingsScreen({navigation}){
   const[tl,setTl]=useState({email:'',password:'',server:'',env:'demo'});
   const[tlBusy,setTlBusy]=useState(false);
   const[tlAccount,setTlAccount]=useState(null);
+  const[autoTrade,setAutoTrade]=useState(false);
+  const[autoSyms,setAutoSyms]=useState('XAUUSD, EURUSD, GBPJPY, BTCUSD');
+  const[autoEvery,setAutoEvery]=useState('5');
   const[ghToken,setGhToken]=useState('');
   const[ghBusy,setGhBusy]=useState(false);
   const[ghStatus,setGhStatus]=useState(null); // {ok,repo,error}
@@ -60,6 +64,9 @@ export default function SettingsScreen({navigation}){
     setDeepConfirm((await getSetting('deep_research_confirm','1'))==='1');
     setDeepModel(await getSetting('deep_research_model','auto'));
     const tc=await loadTradeCreds();if(tc)setTl({email:tc.email||'',password:tc.password||'',server:tc.server||'',env:tc.env||'demo'});
+    setAutoTrade((await getSetting('auto_trade','0'))==='1');
+    setAutoSyms(await getSetting('auto_trade_symbols','XAUUSD, EURUSD, GBPJPY, BTCUSD'));
+    setAutoEvery(await getSetting('auto_trade_interval_min','5'));
     const gt=await loadGitHubToken();if(gt){setGhToken(gt);ghVerify().then(setGhStatus);}
     const be=await loadBackend();if(be){setBeUrl(be.url);setBeToken(be.token);setBeConfigured(true);}
     const st=await initSyncStatus().catch(()=>null);if(st)setBeSync({lastSync:st.lastSync,error:st.error,running:st.running});
@@ -112,8 +119,21 @@ export default function SettingsScreen({navigation}){
     }catch(e){Alert.alert('TradeLocker',e.message);}
     finally{setTlBusy(false);}
   }
+  async function toggleAutoTrade(){
+    const nv=!autoTrade;
+    if(nv&&tl.env!=='demo'){Alert.alert('Demo only','Auto-trade runs on a demo account only. Switch TradeLocker to DEMO first.');return;}
+    setAutoTrade(nv);
+    await setSetting('auto_trade',nv?'1':'0');
+    await refreshAutoTrader().catch(()=>{});
+  }
+  async function saveAutoSyms(){await setSetting('auto_trade_symbols',autoSyms.trim()||'XAUUSD');await refreshAutoTrader().catch(()=>{});}
+  async function saveAutoEvery(){
+    const n=Math.max(1,parseInt(autoEvery,10)||5);
+    setAutoEvery(String(n));await setSetting('auto_trade_interval_min',String(n));await refreshAutoTrader().catch(()=>{});
+  }
   async function disconnectTradeLocker(){
     await clearTradeCreds();tlReset();setTlAccount(null);setTl({email:'',password:'',server:'',env:'demo'});
+    setAutoTrade(false);await setSetting('auto_trade','0');await refreshAutoTrader().catch(()=>{});
     Alert.alert('Disconnected','TradeLocker login removed.');
   }
   async function connectGitHub(){
@@ -278,6 +298,24 @@ export default function SettingsScreen({navigation}){
             <TouchableOpacity style={[s.saveBtn,{backgroundColor:'#111',borderWidth:1,borderColor:'#333',marginTop:10}]} onPress={disconnectTradeLocker}>
               <Text style={[s.saveBtnT,{color:'#E05555'}]}>DISCONNECT</Text>
             </TouchableOpacity>
+
+            <Text style={[s.secTitle,{marginTop:28}]}>A.T.L.A.S. AUTO-TRADE</Text>
+            <Text style={s.secSub}>Lets Atlas open and close 0.01-lot trades on her own while the app is open — no confirmation. DEMO ACCOUNT ONLY; the loop refuses to touch a live account. No caps or loss limit — this is an experiment to see how she does.</Text>
+            <TouchableOpacity style={s.toggleRow} onPress={toggleAutoTrade} activeOpacity={0.7}>
+              <View style={{flex:1,paddingRight:12}}>
+                <Text style={s.toggleLabel}>AUTONOMOUS TRADING</Text>
+                <Text style={s.toggleSub}>{autoTrade?`On — Atlas is watching ${autoSyms} every ${autoEvery} min.`:'Off — Atlas only trades when you confirm a proposal.'}</Text>
+              </View>
+              <View style={[s.switch,autoTrade&&s.switchOn]}><View style={[s.knob,autoTrade&&s.knobOn]}/></View>
+            </TouchableOpacity>
+            <View style={s.keyField}>
+              <Text style={s.keyLabel}>WATCHED SYMBOLS</Text>
+              <TextInput style={s.keyInput} value={autoSyms} onChangeText={setAutoSyms} onBlur={saveAutoSyms} placeholder="XAUUSD, EURUSD, GBPJPY" placeholderTextColor="#1A1A1A" autoCapitalize="characters" autoCorrect={false}/>
+            </View>
+            <View style={s.keyField}>
+              <Text style={s.keyLabel}>CHECK EVERY (MINUTES)</Text>
+              <TextInput style={s.keyInput} value={String(autoEvery)} onChangeText={setAutoEvery} onBlur={saveAutoEvery} placeholder="5" placeholderTextColor="#1A1A1A" keyboardType="number-pad"/>
+            </View>
           </View>}
           {tab==='DEV'&&<View>
             <Text style={s.secTitle}>BUILD PIPELINE</Text>

@@ -38,12 +38,13 @@ export async function setStrategy(text){
 }
 
 // --- recording -----------------------------------------------------------
-export async function recordTradeOpen({symbol,side,qty,entry,stopLoss,takeProfit,rationale,orderId,setup}){
+export async function recordTradeOpen({symbol,side,qty,entry,stopLoss,takeProfit,rationale,orderId,setup,auto}){
   return insertTrade({
     persona:'atlas',symbol:String(symbol||'').toUpperCase(),side,
     qty:num(qty),entry_ref:num(entry),stop_loss:num(stopLoss),take_profit:num(takeProfit),
     setup:setup||inferSetup(rationale),rationale:String(rationale||'').slice(0,400),
     status:'open',order_id:orderId!=null?String(orderId):null,opened_at:Date.now(),
+    auto:auto?1:0,
   });
 }
 
@@ -196,7 +197,7 @@ export async function formatTradeRecord(){
       const pl=t.realized_pl!=null?` ${t.realized_pl>=0?'+':''}${t.realized_pl}${t.pl_estimated?'~':''}`:'';
       const rr=t.r_multiple!=null?` (${t.r_multiple>=0?'+':''}${t.r_multiple}R)`:'';
       const rev=t.review?` · "${t.review}"`:'';
-      L.push(` • #${t.id} ${t.symbol} ${t.side} — ${tag}${pl}${rr}${rev}`);
+      L.push(` • #${t.id} ${t.auto?'[auto] ':''}${t.symbol} ${t.side} — ${tag}${pl}${rr}${rev}`);
     }
   }
   return L.join('\n');

@@ -23,6 +23,7 @@ import{loadKeys}from './src/services/keyStore';
 import{runSync,initSyncStatus}from './src/services/sync';
 import{registerPushToken}from './src/services/push';
 import{tlInit}from './src/services/tradeLocker';
+import{startAutoTrader,stopAutoTrader}from './src/services/autoTrader';
 import{getAllPersonaPics}from './src/services/database';
 import useEmpireStore from './src/store/useEmpireStore';
 import{recentCrashCount}from './src/services/crashLog';
@@ -69,6 +70,14 @@ export default function App(){
     const sub=AppState.addEventListener('change',(st)=>{if(st==='active')runSync().catch(()=>{});});
     const iv=setInterval(()=>{runSync().catch(()=>{});},120000);
     return()=>{sub.remove();clearInterval(iv);};
+  },[]);
+  useEffect(()=>{
+    // A.T.L.A.S. auto-trader — only actually runs when enabled in Settings (demo only).
+    startAutoTrader().catch(()=>{});
+    const sub=AppState.addEventListener('change',(st)=>{
+      if(st==='active')startAutoTrader().catch(()=>{});else stopAutoTrader();
+    });
+    return()=>{sub.remove();stopAutoTrader();};
   },[]);
   if(!isReady||!navReady)return null;
   return(

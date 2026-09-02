@@ -10,6 +10,7 @@ import*as FileSystem from 'expo-file-system';
 import{PERSONA_LIST,getPersona}from '../personas/personas';
 import{callPersona,textToSpeech,transcribeAudio,queryMemory,webSearch,personaSystemPrompt}from '../services/aiService';
 import{drStart,drGetActive,drTick,drDismiss,DR_POLL_MS}from '../services/deepResearch';
+import{onAutoTrade}from '../services/autoTrader';
 import{handleCommands,stripCommands}from '../services/commandHandler';
 import{googleReadInjections,googleWriteCommands}from '../services/googleCommands';
 import{getMessages,saveMessage,getAllPersonaPics,savePersonaMemory,getSetting,getExpenseSummary,addBuildJob,updateBuildJob,getBuildJob,getBuildJobs}from '../services/database';
@@ -1075,6 +1076,12 @@ export default function CommandScreen({navigation}){
       }else go();
     });
   }
+  // Live feed of A.T.L.A.S. auto-trade actions while you're on her screen.
+  useEffect(()=>{
+    return onAutoTrade((text)=>{
+      if(mode==='direct'&&activePersona==='atlas')pushSystemMsg(`— ${text} —`);
+    });
+  },[activePersona,mode]);// eslint-disable-line react-hooks/exhaustive-deps
   // Resume a job that was still running when the app was last closed.
   useEffect(()=>{
     let cancelled=false;

@@ -48,7 +48,7 @@ export default function TradeRecordBar({active=true,style}){
           {setups.length>0&&<Text style={s.bySetup}>{setups.map(([k,v])=>`${k}: ${v.wins}/${v.n} (${v.net>=0?'+':''}${v.net.toFixed(2)})`).join('   ')}</Text>}
           {(r.recent||[]).slice(0,5).map(t=>(
             <Text key={t.id} style={s.row} numberOfLines={1}>
-              #{t.id} {t.symbol} {t.side} — {(t.outcome||'?').toUpperCase()}
+              #{t.id} {t.auto?'⟳ ':''}{t.symbol} {t.side} — {(t.outcome||'?').toUpperCase()}
               {t.realized_pl!=null?`  ${t.realized_pl>=0?'+':''}${t.realized_pl}${t.pl_estimated?'~':''}`:''}
               {t.review?`  · ${t.review}`:''}
             </Text>

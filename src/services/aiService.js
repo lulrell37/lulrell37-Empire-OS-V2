@@ -237,6 +237,29 @@ export async function queryMemory(personaId,question,signal=null){
   return d.content?.[0]?.text?.trim()||'(no recall)';
 }
 
+// One unattended trading decision for A.T.L.A.S. — a single Claude call that
+// returns strict JSON. Used by the auto-trader loop (demo account only).
+export async function autoTradeDecision({symbol,snapshot,record,strategy,positions}){
+  const k=await ensureKeys();
+  const{base,auth}=await aiRoute('claude',k?.claude,'Claude');
+  const sys=`You are A.T.L.A.S., running UNATTENDED on a DEMO trading account. No human reviews your call before it fires. Every order is 0.01 lot.
+Look at ${symbol} right now and decide. Doing NOTHING is the right answer most of the time — only act on a real, high-conviction edge that fits your strategy and your record. Stops and targets go off structure, tight, as concrete prices.
+Reply with ONLY a JSON object, no prose, no code fence:
+{"action":"enter"|"close"|"none","side":"buy"|"sell","stopLoss":<price>,"takeProfit":<price>,"setup":"scalp|swing|<label>","rationale":"<=140 chars","closeIds":["<id>"]}
+Use "enter" to open one position, "close" to close open positions by id, "none" to wait. Omit fields that don't apply. If unsure: {"action":"none"}.`;
+  const user=`MARKET SNAPSHOT ${symbol}:\n${snapshot}\n\nYOUR TRADE RECORD:\n${record||'(none yet)'}\n\nYOUR STRATEGY:\n${strategy||'(none yet)'}\n\nYOUR OPEN POSITIONS ON ${symbol}:\n${positions||'none'}`;
+  const res=await fetch(base+'/v1/messages',{method:'POST',headers:{'Content-Type':'application/json',...auth},body:JSON.stringify({
+    model:'claude-sonnet-4-6',max_tokens:400,system:sys,messages:[{role:'user',content:user}],
+  })});
+  if(!res.ok)throw new Error(`auto-trade decision: ${apiErrorMessage(await res.text()).slice(0,100)}`);
+  const d=await res.json();
+  if(d.usage)await trackApiUsage('claude',d.usage.input_tokens||0,d.usage.output_tokens||0).catch(()=>{});
+  const raw=d.content?.[0]?.text?.trim()||'';
+  const m=raw.match(/\{[\s\S]*\}/);
+  if(!m)return{action:'none'};
+  try{return JSON.parse(m[0]);}catch{return{action:'none'};}
+}
+
 // Quick web search — a tight factual briefing, not deep research. Grok Live
 // Search for Grok personas, Claude's web_search tool otherwise.
 export async function webSearch(personaId,query,signal=null){
