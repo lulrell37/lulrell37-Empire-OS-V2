@@ -205,7 +205,7 @@ function EmpireCity({navigation}){
   const containerRef=useRef(null);
   const wheelScrollRef=useRef(null);
   const wheelY=useRef(0);
-  const WHEEL_MID=600;
+  const WHEEL_MID=1200;   // generous slack each way so one fast notch can't reach an edge
 
   const applyWheelZoom=useCallback((delta)=>{
     if(!delta)return;
@@ -214,16 +214,23 @@ function EmpireCity({navigation}){
     engine.idle=0;
   },[engine]);
 
+  const recenterWheel=useCallback(()=>{
+    wheelY.current=WHEEL_MID;
+    requestAnimationFrame(()=>wheelScrollRef.current&&wheelScrollRef.current.scrollTo({y:WHEEL_MID,animated:false}));
+  },[]);
+
   const onWheelScroll=useCallback((e)=>{
     const y=e.nativeEvent.contentOffset.y;
     const dy=y-wheelY.current;
+    if(!dy)return;                       // ignore the echo from our own recentre scrollTo
     wheelY.current=y;
     applyWheelZoom(dy);
-    if(Math.abs(y-WHEEL_MID)>480){
-      wheelY.current=WHEEL_MID;
-      requestAnimationFrame(()=>wheelScrollRef.current&&wheelScrollRef.current.scrollTo({y:WHEEL_MID,animated:false}));
-    }
-  },[applyWheelZoom]);
+    // Snap back to the middle after every notch, not just past a threshold —
+    // otherwise a fast spin drives the catcher to a content edge, where further
+    // scrolling that way yields no delta and the zoom silently dies until you
+    // spin back the other way.
+    recenterWheel();
+  },[applyWheelZoom,recenterWheel]);
 
   useEffect(()=>{
     if(Platform.OS!=='web')return;
@@ -445,9 +452,9 @@ function EmpireCity({navigation}){
       {Platform.OS==='android'&&(
         <ScrollView ref={wheelScrollRef} style={StyleSheet.absoluteFill}
           contentContainerStyle={{height:WHEEL_MID*2+Dimensions.get('window').height}}
-          showsVerticalScrollIndicator={false} scrollEventThrottle={16}
+          showsVerticalScrollIndicator={false} scrollEventThrottle={1}
           contentOffset={{x:0,y:WHEEL_MID}} onScroll={onWheelScroll}
-          onContentSizeChange={()=>{wheelY.current=WHEEL_MID;wheelScrollRef.current&&wheelScrollRef.current.scrollTo({y:WHEEL_MID,animated:false});}}/>
+          onContentSizeChange={()=>recenterWheel()}/>
       )}
       <GestureDetector gesture={gesture}>
         <GLView style={StyleSheet.absoluteFill} onContextCreate={onContextCreate}/>

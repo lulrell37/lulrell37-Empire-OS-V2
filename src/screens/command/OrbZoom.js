@@ -16,7 +16,7 @@ import{getMemoriesByPersona,deletePersonaMemory}from '../../services/database';
 import{getPersona,PERSONA_LIST}from '../../personas/personas';
 
 const LEVELS=['group','orb','memory'];
-const WHEEL_MID=600;// px of scroll slack on each side of the invisible wheel-catcher
+const WHEEL_MID=1200;// px of scroll slack each side of the wheel-catcher — big enough one fast notch can't reach an edge
 
 const SAMP=[],SIN=[],COS=[];
 for(let k=0;k<=480;k++){const v=-12*Math.PI+(24*Math.PI)*(k/480);SAMP.push(v);SIN.push(Math.sin(v));COS.push(Math.cos(v));}
@@ -185,6 +185,9 @@ export default function OrbZoom({personaId,color,active,vizRef,personaPics={},on
     wheelAcc.current+=dy;
     if(wheelAcc.current<-90){deeper();recenterWheel();}
     else if(wheelAcc.current>90){shallower();recenterWheel();}
+    // keep the catcher near the middle even between level changes, so a fast
+    // spin can't park it against a content edge where it stops reporting delta
+    else if(Math.abs(y-WHEEL_MID)>500)recenterWheel();
   },[deeper,shallower,recenterWheel]);
 
   function removeMemory(mem){
@@ -213,7 +216,7 @@ export default function OrbZoom({personaId,color,active,vizRef,personaPics={},on
       {Platform.OS==='android'&&(
         <ScrollView ref={wheelScrollRef} style={StyleSheet.absoluteFill}
           contentContainerStyle={{height:WHEEL_MID*2+Dimensions.get('window').height}}
-          showsVerticalScrollIndicator={false} scrollEventThrottle={16}
+          showsVerticalScrollIndicator={false} scrollEventThrottle={1}
           contentOffset={{x:0,y:WHEEL_MID}} onScroll={onWheelScroll}
           onContentSizeChange={()=>{wheelY.current=WHEEL_MID;wheelScrollRef.current&&wheelScrollRef.current.scrollTo({y:WHEEL_MID,animated:false});}}/>
       )}
