@@ -220,23 +220,21 @@ export async function tradeRecord({limit=40}={}){
   try{closed=await getClosedTrades('atlas',limit);}catch{}
   try{openCount=(await getOpenTrades('atlas')).length;}catch{}
   const scored=closed.filter(t=>t.status==='closed'&&t.outcome&&t.outcome!=='unknown');
-  // A breakeven trade risked and lost nothing — it counts on the win side, not
-  // as a loss and not as a wash. `won(t)` is the single source of truth for that.
-  const won=t=>t.outcome==='win'||t.outcome==='breakeven';
   const wins=scored.filter(t=>t.outcome==='win').length;
   const losses=scored.filter(t=>t.outcome==='loss').length;
   const be=scored.filter(t=>t.outcome==='breakeven').length;
   const net=+scored.reduce((a,t)=>a+(Number(t.realized_pl)||0),0).toFixed(2);
   const rs=scored.map(t=>Number(t.r_multiple)).filter(v=>!isNaN(v)&&v!==null);
   const avgR=rs.length?+(rs.reduce((a,v)=>a+v,0)/rs.length).toFixed(2):null;
-  const winRate=scored.length?Math.round((scored.filter(won).length/scored.length)*100):null;
+  // Break-even is neither a win nor a loss — it's out of the win rate entirely.
+  const winRate=(wins+losses)?Math.round((wins/(wins+losses))*100):null;
 
-  // current streak (consecutive wins-or-losses, newest first; BE counts as a win)
+  // current streak (consecutive same outcome, newest first, break-even ignored)
   let streak=0,streakType=null;
   for(const t of scored){
-    const o=won(t)?'win':'loss';
-    if(streakType==null){streakType=o;streak=1;}
-    else if(o===streakType)streak++;
+    if(t.outcome==='breakeven')continue;
+    if(streakType==null){streakType=t.outcome;streak=1;}
+    else if(t.outcome===streakType)streak++;
     else break;
   }
 
@@ -245,7 +243,7 @@ export async function tradeRecord({limit=40}={}){
     const k=t.setup||'other';
     (bySetup[k]||(bySetup[k]={n:0,wins:0,net:0}));
     bySetup[k].n++;
-    if(won(t))bySetup[k].wins++;
+    if(t.outcome==='win')bySetup[k].wins++;
     bySetup[k].net+=Number(t.realized_pl)||0;
   }
   return{count:scored.length,wins,losses,be,net,avgR,winRate,streak,streakType,openCount,bySetup,recent:closed.slice(0,8)};
@@ -256,7 +254,7 @@ export async function formatTradeRecord(){
   if(!r.count&&!r.openCount)return '(no trades recorded yet — this is where your history will build)';
   const L=[];
   if(r.count){
-    L.push(`Closed: ${r.count} | ${r.wins}W-${r.losses}L-${r.be}BE${r.winRate!=null?` (${r.winRate}% win — break-even counts as a win)`:''} | Net P/L: ${r.net>=0?'+':''}${r.net}${r.avgR!=null?` | Avg R: ${r.avgR>=0?'+':''}${r.avgR}`:''}`);
+    L.push(`Closed: ${r.count} | ${r.wins}W-${r.losses}L-${r.be}BE${r.winRate!=null?` (${r.winRate}% win — break-even is neither)`:''} | Net P/L: ${r.net>=0?'+':''}${r.net}${r.avgR!=null?` | Avg R: ${r.avgR>=0?'+':''}${r.avgR}`:''}`);
     if(r.streak>=2)L.push(`Current streak: ${r.streak}${r.streakType==='win'?'W':'L'}`);
     const setups=Object.entries(r.bySetup).map(([k,v])=>`${k} ${v.n} (${v.wins}W, ${v.net>=0?'+':''}${v.net.toFixed(2)})`);
     if(setups.length)L.push(`By setup: ${setups.join(' · ')}`);
