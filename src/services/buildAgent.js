@@ -126,9 +126,13 @@ export async function fileBuildRequest(spec,repo=DEFAULT_REPO){
   if(!clean)throw new Error('Empty build request.');
   const firstLine=clean.split('\n')[0].trim();
   const title=firstLine.length>90?firstLine.slice(0,87)+'…':firstLine;
+  const isClient=repo.owner!==DEFAULT_REPO.owner||repo.repo!==DEFAULT_REPO.repo;
+  const deployNote=isClient
+    ? '\n\nThis repo is deployed to Netlify. Make sure the build produces a static, hostable site and commit a `netlify.toml` at the repo root with the correct `[build] command` and `publish` directory for the stack you use (e.g. for a Next.js static export: command "npm run build", publish "out").'
+    : '';
   const issue=await gh(`${rp(repo)}/issues`,{method:'POST',body:{
     title:title||'Build request from Empire OS',
-    body:`@claude\n\n${clean}\n\nImplement this on a branch and open a pull request that closes this issue. If anything is ambiguous, ask here before writing code.\n\n<!-- filed by Empire OS -->`,
+    body:`@claude\n\n${clean}\n\nImplement this on a branch and open a pull request that closes this issue. If anything is ambiguous, ask here before writing code.${deployNote}\n\n<!-- filed by Empire OS -->`,
   }});
   return{issueNumber:issue.number,url:issue.html_url,title:issue.title};
 }
