@@ -10,7 +10,7 @@ import{Camera}from 'expo-camera';
 import*as FileSystem from 'expo-file-system';
 import{PERSONA_LIST,getPersona}from '../personas/personas';
 import{callPersona,textToSpeech,transcribeAudio,queryMemory,webSearch}from '../services/aiService';
-import{drStart,drGetActive,drTick,drDismiss,DR_POLL_MS}from '../services/deepResearch';
+import{drStart,drGetActive,drTick,drDismiss,drDeliverPending,DR_POLL_MS}from '../services/deepResearch';
 import{onAutoTrade}from '../services/autoTrader';
 import{handleCommands,stripCommands}from '../services/commandHandler';
 import{googleReadInjections,googleWriteCommands}from '../services/googleCommands';
@@ -1203,9 +1203,11 @@ export default function CommandScreen({navigation}){
       if(mode==='direct'&&activePersona==='atlas')pushSystemMsg(`— ${text} —`);
     });
   },[activePersona,mode]);// eslint-disable-line react-hooks/exhaustive-deps
-  // Resume a job that was still running when the app was last closed.
+  // Resume a job that was still running when the app was last closed, and
+  // back-deliver any finished job that never reached the persona's memory.
   useEffect(()=>{
     let cancelled=false;
+    drDeliverPending().catch(()=>{});
     drGetActive().then(row=>{
       if(cancelled||!row)return;
       if(row.status==='failed'){pushSystemMsg(`Deep research ${row.error?`failed: ${row.error}`:'timed out'}.`);return;}

@@ -26,6 +26,7 @@ export async function initDatabase(){
   await migrateHudColumns();
   await migratePersonaMemory();
   await migrateColumn('trades','auto','INTEGER DEFAULT 0');
+  await migrateColumn('deep_research','delivered','INTEGER DEFAULT 0');
   await ensureHudState();
   await ensureBusinessTargets();
   await initSync();

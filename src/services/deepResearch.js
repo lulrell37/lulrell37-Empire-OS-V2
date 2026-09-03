@@ -8,9 +8,26 @@
 //
 // Everything still runs only while the app is open; there is no server. A job
 // that never finishes is failed out after DR_TIMEOUT_MS.
-import{drInsert,drUpdate,drGet,drActive,drRecent,getSetting,saveMessage,savePersonaMemory}from './database';
+import{drInsert,drUpdate,drGet,drActive,drRecent,getSetting,saveMessage,savePersonaMemory,saveNote}from './database';
 import{deepResearchStart,deepResearchPoll}from './aiService';
 import{getPersona}from '../personas/personas';
+
+// Deliver a finished job exactly once — into the starting persona's chat, its
+// memory, and a Note any persona can [READ_NOTE]. Guarded by the `delivered`
+// flag so the poll/mount race can't skip it (or double it).
+async function deliverResult(id,persona,topic,text){
+  const row=await drGet(id).catch(()=>null);
+  if(!row||row.delivered)return;
+  const name=getPersona(persona).name;
+  const body=String(text||'');
+  if(!body)return;
+  await saveMessage(persona,'assistant',body,'direct').catch(()=>{});
+  await savePersonaMemory(persona,`YOU: [deep research] ${topic}\n${name}: ${body.slice(0,12000)}`).catch(()=>{});
+  // A Note survives even if memory retrieval misses it, and it's cross-persona.
+  await saveNote(`Deep Research — ${String(topic||'').slice(0,80)}`,
+    `Deep research requested via ${name} on ${new Date().toLocaleDateString()}.\nTopic: ${topic}\n\n${body}`,persona).catch(()=>{});
+  await drUpdate(id,{delivered:1}).catch(()=>{});
+}
 
 export const DR_POLL_MS=15000;
 export const DR_TIMEOUT_MS=2*60*60*1000; // 2 hours
@@ -51,6 +68,7 @@ export async function drTick(row){
   // persisted row is no longer 'running', don't poll or deliver again.
   const cur=await drGet(row.id).catch(()=>null);
   if(cur&&cur.status!=='running'){
+    if(cur.status==='done')await deliverResult(row.id,row.persona,row.topic,cur.result).catch(()=>{});
     return{row:{...row,status:cur.status,result:cur.result,error:cur.error},done:true,
       outcome:cur.status==='done'?'completed':cur.status,alreadyHandled:true};
   }
@@ -66,12 +84,11 @@ export async function drTick(row){
   if(r.status==='completed'){
     const claim=await drGet(row.id).catch(()=>null);
     if(claim&&claim.status!=='running'){
+      if(claim.status==='done')await deliverResult(row.id,row.persona,row.topic,claim.result).catch(()=>{});
       return{row:{...row,status:claim.status,result:claim.result},done:true,outcome:'completed',alreadyHandled:true};
     }
     await drUpdate(row.id,{status:'done',result:r.text,finished_at:Date.now()}).catch(()=>{});
-    await saveMessage(row.persona,'assistant',r.text,'direct').catch(()=>{});
-    await savePersonaMemory(row.persona,
-      `YOU: [deep research] ${row.topic}\n${getPersona(row.persona).name}: ${String(r.text).slice(0,4000)}`).catch(()=>{});
+    await deliverResult(row.id,row.persona,row.topic,r.text).catch(()=>{});
     return{row:{...row,status:'done',result:r.text},done:true,outcome:'completed'};
   }
   if(r.status==='failed'||r.status==='cancelled'){
@@ -88,6 +105,23 @@ export async function drDismiss(id){
 }
 
 export async function drHistory(n=8){return drRecent(n).catch(()=>[]);}
+
+// Deliver any finished job that never made it into memory — e.g. it completed
+// on a version before delivery was idempotent, or the app was closed at the
+// moment it landed. Safe to call on every launch; the `delivered` flag stops
+// repeats. Returns how many were delivered.
+export async function drDeliverPending(){
+  let rows=[];
+  try{rows=await drRecent(25);}catch{return 0;}
+  let n=0;
+  for(const r of rows){
+    if(r.status==='done'&&!r.delivered&&r.result){
+      await deliverResult(r.id,r.persona,r.topic,r.result).catch(()=>{});
+      n++;
+    }
+  }
+  return n;
+}
 
 export function drElapsedLabel(startedAt){
   const s=Math.max(0,Math.floor((Date.now()-(startedAt||Date.now()))/1000));

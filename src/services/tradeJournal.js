@@ -12,10 +12,48 @@
 //
 // formatRecord() + getStrategy() are what get injected into Atlas's context on
 // every [TRADE_SCAN] so she reviews her record and refines her strategy.
-import{insertTrade,updateTrade,getOpenTrades,getClosedTrades,getTradeById,saveNote,getNote}from './database';
+import{insertTrade,updateTrade,getOpenTrades,getClosedTrades,getAllTrades,getTradeById,saveNote,getNote}from './database';
 import{tlPositions,tlOrdersHistory,tlInstrumentsById}from './tradeLocker';
 
 export const STRATEGY_TITLE='A.T.L.A.S. — Winning Strategy';
+
+// One-time repair: an earlier version scored every closed trade a "win" because
+// it trusted a mis-mapped ordersHistory P/L column. Re-derive outcome from the
+// stored exit vs. entry price (side-adjusted) for any closed row where we have
+// both prices and the recorded outcome disagrees with the actual price move.
+let repaired=false;
+export async function repairTradeOutcomes(){
+  if(repaired)return{fixed:0};
+  repaired=true;
+  let rows=[];
+  try{rows=await getAllTrades('atlas',500);}catch{return{fixed:0};}
+  let fixed=0;
+  for(const t of rows){
+    if(t.status!=='closed'||!t.outcome||t.outcome==='unknown')continue;
+    const entry=num(t.entry_fill)??num(t.entry_ref);
+    const exit=num(t.exit_price);
+    const lastU=num(t.last_unrealized);
+    const mv=(entry!=null&&exit!=null)?((t.side==='buy'?1:-1)*(exit-entry)):null;
+    const tol=Math.abs(entry||1)*2e-4;
+    let should=null;
+    if(lastU!=null&&Math.abs(lastU)>0.01){
+      should=lastU>0?'win':'loss';
+      if(mv!=null&&Math.abs(mv)<=tol)should='breakeven';
+    }else if(mv!=null){
+      should=mv>tol?'win':(mv<-tol?'loss':'breakeven');
+    }
+    if(!should||should===t.outcome)continue;
+    const patch={outcome:should};
+    const dir=should==='win'?1:should==='loss'?-1:0;
+    if(dir!==0&&Math.sign(Number(t.realized_pl)||0)!==dir){
+      patch.realized_pl=lastU!=null&&Math.sign(lastU)===dir?+lastU.toFixed(2)
+        :(mv!=null?+(mv*(num(t.qty)||0.01)*100).toFixed(2):0);
+      patch.pl_estimated=1;
+    }
+    try{await updateTrade(t.id,patch);fixed++;}catch{}
+  }
+  return{fixed};
+}
 
 const PL_KEYS=['positionNetPl','positionGrossPl','netPl','pnl','profit','realizedPl','positionPnl'];
 const num=(v)=>{const n=Number(v);return isNaN(n)?null:n;};
@@ -57,6 +95,7 @@ export async function setTradeReview(id,note){
 
 // --- reconciliation ----------------------------------------------------------
 export async function reconcileOpenTrades(){
+  await repairTradeOutcomes().catch(()=>{});
   let open;
   try{open=await getOpenTrades('atlas');}catch{return{checked:0,closed:0};}
   if(!open.length)return{checked:0,closed:0};
@@ -114,31 +153,61 @@ export async function reconcileOpenTrades(){
     }
 
     // 3. position gone -> the trade closed. Score it.
+    //
+    // Outcome (win/loss/breakeven) is decided from the PRICE MOVE — exit vs.
+    // entry, adjusted for side — because it does not depend on the broker's
+    // ordersHistory column order, which varies by broker and was mis-mapping a
+    // timestamp/price field onto positionNetPl and marking every trade a win.
+    // The broker's P/L number is only used for the dollar figure, and only when
+    // its sign agrees with the price move.
     const rows=(await loadHistory()).filter(r=>{
       const pid=String(r.position??r.positionId??r.positionID??'');
       return pid&&pid===String(t.position_id);
     });
-    let realized=null,exit=null,estimated=0;
+    let exit=null,histPl=null;
     if(rows.length){
-      for(const r of rows){
-        for(const k of PL_KEYS){if(r[k]!=null&&num(r[k])!=null){realized=(realized||0)+num(r[k]);break;}}
-      }
-      const closer=rows.find(r=>r.side&&r.side!==t.side)||rows[rows.length-1];
+      const closer=rows.find(r=>r.side&&t.side&&r.side!==t.side)||rows[rows.length-1];
       exit=num(closer?.avgPrice)??num(closer?.price);
+      for(const k of PL_KEYS){
+        const v=num(closer?.[k]);
+        if(v!=null&&isFinite(v)&&Math.abs(v)<1e7){histPl=v;break;} // reject timestamp-sized junk
+      }
     }
-    if(realized==null){realized=num(t.last_unrealized)??0;estimated=1;}
 
     const entry=num(t.entry_fill)??num(t.entry_ref);
+    // price move in the trade's favour, per unit
+    const move=(exit!=null&&entry!=null)?((t.side==='buy'?1:-1)*(exit-entry)):null;
+    const beTol=Math.abs(entry||1)*2e-4;              // within ~2bp of entry = scratched to B/E
+    const lastU=num(t.last_unrealized);               // from the positions feed — reliable
+
+    let outcome,realized,estimated;
+    if(lastU!=null&&Math.abs(lastU)>0.01){
+      outcome=lastU>0?'win':'loss';
+      if(move!=null&&Math.abs(move)<=beTol)outcome='breakeven';
+      const agree=histPl!=null&&Math.sign(histPl)===Math.sign(lastU);
+      realized=agree?+histPl.toFixed(2):+lastU.toFixed(2);
+      estimated=agree?0:1;
+    }else if(move!=null){
+      outcome=move>beTol?'win':(move<-beTol?'loss':'breakeven');
+      const agree=histPl!=null&&(outcome==='breakeven'||Math.sign(histPl)===Math.sign(move));
+      realized=agree?+histPl.toFixed(2):+(move*(num(t.qty)||0.01)*100).toFixed(2);
+      estimated=agree?0:1;
+    }else if(histPl!=null){
+      realized=+histPl.toFixed(2);estimated=0;
+      outcome=realized>0.01?'win':(realized<-0.01?'loss':'breakeven');
+    }else{
+      realized=0;estimated=1;outcome='breakeven';
+    }
+
     let r_multiple=null;
     if(exit!=null&&entry!=null&&t.stop_loss!=null){
       const risk=t.side==='buy'?entry-t.stop_loss:t.stop_loss-entry;
       const reward=t.side==='buy'?exit-entry:entry-exit;
       if(risk>0)r_multiple=+(reward/risk).toFixed(2);
     }
-    const outcome=realized>0.01?'win':realized<-0.01?'loss':'breakeven';
     await updateTrade(t.id,{
       status:'closed',closed_at:Date.now(),exit_price:exit,
-      realized_pl:+realized.toFixed(2),pl_estimated:estimated,outcome,r_multiple,
+      realized_pl:realized,pl_estimated:estimated,outcome,r_multiple,
     });
     closed++;
   }
@@ -151,20 +220,23 @@ export async function tradeRecord({limit=40}={}){
   try{closed=await getClosedTrades('atlas',limit);}catch{}
   try{openCount=(await getOpenTrades('atlas')).length;}catch{}
   const scored=closed.filter(t=>t.status==='closed'&&t.outcome&&t.outcome!=='unknown');
+  // A breakeven trade risked and lost nothing — it counts on the win side, not
+  // as a loss and not as a wash. `won(t)` is the single source of truth for that.
+  const won=t=>t.outcome==='win'||t.outcome==='breakeven';
   const wins=scored.filter(t=>t.outcome==='win').length;
   const losses=scored.filter(t=>t.outcome==='loss').length;
   const be=scored.filter(t=>t.outcome==='breakeven').length;
   const net=+scored.reduce((a,t)=>a+(Number(t.realized_pl)||0),0).toFixed(2);
   const rs=scored.map(t=>Number(t.r_multiple)).filter(v=>!isNaN(v)&&v!==null);
   const avgR=rs.length?+(rs.reduce((a,v)=>a+v,0)/rs.length).toFixed(2):null;
-  const winRate=(wins+losses)?Math.round((wins/(wins+losses))*100):null;
+  const winRate=scored.length?Math.round((scored.filter(won).length/scored.length)*100):null;
 
-  // current streak (consecutive same outcome, newest first, ignoring BE)
+  // current streak (consecutive wins-or-losses, newest first; BE counts as a win)
   let streak=0,streakType=null;
   for(const t of scored){
-    if(t.outcome==='breakeven')continue;
-    if(streakType==null){streakType=t.outcome;streak=1;}
-    else if(t.outcome===streakType)streak++;
+    const o=won(t)?'win':'loss';
+    if(streakType==null){streakType=o;streak=1;}
+    else if(o===streakType)streak++;
     else break;
   }
 
@@ -173,7 +245,7 @@ export async function tradeRecord({limit=40}={}){
     const k=t.setup||'other';
     (bySetup[k]||(bySetup[k]={n:0,wins:0,net:0}));
     bySetup[k].n++;
-    if(t.outcome==='win')bySetup[k].wins++;
+    if(won(t))bySetup[k].wins++;
     bySetup[k].net+=Number(t.realized_pl)||0;
   }
   return{count:scored.length,wins,losses,be,net,avgR,winRate,streak,streakType,openCount,bySetup,recent:closed.slice(0,8)};
@@ -184,7 +256,7 @@ export async function formatTradeRecord(){
   if(!r.count&&!r.openCount)return '(no trades recorded yet — this is where your history will build)';
   const L=[];
   if(r.count){
-    L.push(`Closed: ${r.count} | ${r.wins}W-${r.losses}L-${r.be}BE${r.winRate!=null?` (${r.winRate}% win)`:''} | Net P/L: ${r.net>=0?'+':''}${r.net}${r.avgR!=null?` | Avg R: ${r.avgR>=0?'+':''}${r.avgR}`:''}`);
+    L.push(`Closed: ${r.count} | ${r.wins}W-${r.losses}L-${r.be}BE${r.winRate!=null?` (${r.winRate}% win — break-even counts as a win)`:''} | Net P/L: ${r.net>=0?'+':''}${r.net}${r.avgR!=null?` | Avg R: ${r.avgR>=0?'+':''}${r.avgR}`:''}`);
     if(r.streak>=2)L.push(`Current streak: ${r.streak}${r.streakType==='win'?'W':'L'}`);
     const setups=Object.entries(r.bySetup).map(([k,v])=>`${k} ${v.n} (${v.wins}W, ${v.net>=0?'+':''}${v.net.toFixed(2)})`);
     if(setups.length)L.push(`By setup: ${setups.join(' · ')}`);
