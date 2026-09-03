@@ -1,18 +1,27 @@
-import React,{useState,useEffect,useCallback,useRef}from 'react';
-import{View,Text,StyleSheet,ScrollView,TouchableOpacity,TextInput,Modal,Dimensions}from 'react-native';
+import React,{useState,useCallback,useRef}from 'react';
+import{View,Text,StyleSheet,ScrollView,TouchableOpacity,TextInput,Modal}from 'react-native';
 import{SafeAreaView}from 'react-native-safe-area-context';
 import{useFocusEffect}from '@react-navigation/native';
-import Svg,{Circle,Defs,LinearGradient,Stop}from 'react-native-svg';
 import{Feather}from '@expo/vector-icons';
-import{getHudState,updateHudState,getTasks,addTask,updateTask,deleteTask,completeTask,getBusinessesWithRevenue,setBusinessTarget,addRevenue,updateEmpireScore,getMorningRoutine,saveMorningRoutine,getBatmanTemplate,saveBatmanTemplate,getHudLayout,setPanelLayout,ensureHudState,DEFAULT_BATMAN}from '../services/database';
+import{getHudState,updateHudState,getTasks,getBusinessesWithRevenue,setBusinessTarget,addRevenue,updateEmpireScore,getMorningRoutine,saveMorningRoutine,getBatmanTemplate,saveBatmanTemplate,ensureHudState,DEFAULT_BATMAN}from '../services/database';
 import{loadHudTasks,addHudTask,setHudTaskDone,renameHudTask,deleteHudTask}from '../services/hudTasks';
-import{colors,space,radius,type,FONTS}from '../theme';
+import{colors,space,radius,FONTS}from '../theme';
 import{PANEL_META,BriefingPanel,AgendaPanel,BusinessPanel,TasksPanel,RoutinePanel,BatmanPanel,DailyPanel,MarketPanel,BuildBoardPanel}from './hud/panels';
-import FloatingCard from './hud/FloatingCard';
 import Boundary from './hud/Boundary';
-const{width}=Dimensions.get('window');
-const RS=196,ST=6,CI=2*Math.PI*((RS-ST)/2);
-const PANELS=['briefing','agenda','businesses','tasks','routine','batman','daily','market','build'];
+import{HudFrame,ScoreBar,TelemetryLine,HudModule,HudDivider,useHudPulse}from './hud/HudChrome';
+
+// Order the modules appear in the vertical scroll. [key, display label]
+const MODULES=[
+  ['briefing','BRIEFING'],
+  ['agenda','AGENDA'],
+  ['businesses','THE EMPIRE'],
+  ['tasks','TASKS'],
+  ['routine','MORNING ROUTINE'],
+  ['batman','BATMAN PROTOCOL'],
+  ['daily','DAILY'],
+  ['market','MARKET'],
+  ['build','BUILD PIPELINE'],
+];
 
 export default function HUDScreen({navigation}){
   const[hud,setHud]=useState(null);
@@ -24,7 +33,6 @@ export default function HUDScreen({navigation}){
   const[batman,setBatman]=useState({});             // { [day]: true }
   const[newTask,setNewTask]=useState('');
   const[showAddTask,setShowAddTask]=useState(false);
-  const[panelIndex,setPanelIndex]=useState(0);
   const[panelEditing,setPanelEditing]=useState(false);
   const[bizModal,setBizModal]=useState(null);
   const[bizTargetInput,setBizTargetInput]=useState('');
@@ -32,10 +40,9 @@ export default function HUDScreen({navigation}){
   const[bizLogInput,setBizLogInput]=useState('');
   const[taskEdit,setTaskEdit]=useState(null);
   const[taskEditInput,setTaskEditInput]=useState('');
-  const[layout,setLayout]=useState({});            // { [panel]: {detached,x,y,scale,z} }
-  const scrollRef=useRef(null);
   const busyRef=useRef(false);
   busyRef.current=panelEditing||showAddTask||!!taskEdit||!!bizModal;
+  const pulse=useHudPulse();
 
   useFocusEffect(useCallback(()=>{if(!busyRef.current)load();},[]));
 
@@ -46,36 +53,11 @@ export default function HUDScreen({navigation}){
     const b=await getBusinessesWithRevenue();
     const{items,done}=await getMorningRoutine();
     const bt=await getBatmanTemplate();
-    const lay=await getHudLayout();
     let bat={};try{bat=JSON.parse(h?.batman_protocol||'{}');}catch{}
     setHud(h);setTasks(t);setBusinesses(b);
     setRoutineItems(items);setRoutine(done);
-    setBatmanTemplate(bt);setLayout(lay);setBatman(bat);
-    // Keep the score a true reflection of what's checked (0 when nothing is done today).
+    setBatmanTemplate(bt);setBatman(bat);
     recalcScore(done,bat,t,items.length);
-  }
-
-  const maxZ=()=>Math.max(0,...PANELS.map(p=>layout[p]?.z||0));
-  async function detachPanel(key){
-    const n=PANELS.filter(p=>layout[p]?.detached).length;
-    const patch={detached:true,x:20+n*16,y:20+n*16,scale:layout[key]?.scale||1,z:maxZ()+1};
-    setLayout(l=>({...l,[key]:{...l[key],...patch}}));
-    await setPanelLayout(key,{detached:1,x:patch.x,y:patch.y,scale:patch.scale,z:patch.z});
-  }
-  async function dockPanel(key){
-    setLayout(l=>({...l,[key]:{...l[key],detached:false}}));
-    await setPanelLayout(key,{detached:0});
-  }
-  async function bringFront(key){
-    const top=maxZ();
-    if((layout[key]?.z||0)>=top)return;
-    const z=top+1;
-    setLayout(l=>({...l,[key]:{...l[key],z}}));
-    await setPanelLayout(key,{z});
-  }
-  async function persistPanel(key,patch){
-    setLayout(l=>({...l,[key]:{...l[key],...patch}}));
-    await setPanelLayout(key,patch);
   }
 
   // Score starts at 0 each day and is earned purely from what's checked:
@@ -162,37 +144,16 @@ export default function HUDScreen({navigation}){
     setBizModal(null);
     const b=await getBusinessesWithRevenue();setBusinesses(b);
   }
-  const visiblePanels=PANELS.filter(p=>!layout[p]?.detached);
-  const detachedPanels=PANELS.filter(p=>layout[p]?.detached);
-  useEffect(()=>{
-    if(panelIndex>visiblePanels.length-1){
-      const ni=Math.max(0,visiblePanels.length-1);
-      setPanelIndex(ni);
-      scrollRef.current?.scrollTo({x:ni*width,animated:false});
-    }
-  },[visiblePanels.length]); // eslint-disable-line react-hooks/exhaustive-deps
-  function goToPanel(i){
-    const idx=Math.max(0,Math.min(visiblePanels.length-1,i));
-    setPanelIndex(idx);
-    scrollRef.current?.scrollTo({x:idx*width,animated:true});
-  }
-  function onScrollEnd(e){
-    const idx=Math.max(0,Math.min(visiblePanels.length-1,Math.round(e.nativeEvent.contentOffset.x/width)));
-    setPanelIndex(idx);
-    scrollRef.current?.scrollTo({x:idx*width,animated:true});
-  }
 
   const score=hud?.empire_score||0;
   const streak=hud?.streak||0;
-  const scoreOffset=CI-(CI*score/100);
   const today=new Date().getDay();
   const todayIdx=today===0?6:today-1;
   const todayBatman=batmanTemplate[todayIdx]||DEFAULT_BATMAN[todayIdx];
   const routineDone=routineItems.filter(i=>routine[i.id]).length;
   const tasksDone=tasks.filter(t=>t.completed).length;
   const openTasks=tasks.filter(t=>!t.completed);
-  const statusIcon=score>=75?'trending-up':score>=50?'minus':'trending-down';
-  const statusText=score>=75?`${streak} DAY STREAK`:score>=50?'BUILDING TODAY':'STREAK AT RISK';
+  const statusText=score>=75?`${streak} DAY STREAK — HOLDING`:score>=50?'BUILDING TODAY':score>0?'STREAK AT RISK':'DAY NOT STARTED';
 
   function renderPanel(key){
     switch(key){
@@ -214,90 +175,39 @@ export default function HUDScreen({navigation}){
       <View style={s.header}>
         <TouchableOpacity style={s.brandRow} onPress={()=>navigation.navigate('Map')} hitSlop={{top:10,bottom:10,left:10,right:10}} activeOpacity={0.7}>
           <Feather name="chevron-left" size={15} color={colors.gold}/>
-          <Text style={s.brand}>EMPIRE OS</Text>
+          <Text style={s.brand}>♔ EMPIRE OS</Text>
         </TouchableOpacity>
         <View style={s.onlinePill}><View style={s.onlineDot}/><Text style={s.onlineText}>ONLINE</Text></View>
       </View>
 
-      <View style={s.reactorWrap}>
-        <View style={s.reactor}>
-          <Svg width={RS} height={RS}>
-            <Defs>
-              <LinearGradient id="reactorGrad" x1="0" y1="0" x2="1" y2="1">
-                <Stop offset="0" stopColor={colors.brass}/>
-                <Stop offset="0.55" stopColor={colors.gold}/>
-                <Stop offset="1" stopColor={colors.goldBright}/>
-              </LinearGradient>
-            </Defs>
-            <Circle cx={RS/2} cy={RS/2} r={(RS-ST)/2} stroke={colors.ringTrack} strokeWidth={ST} fill="none"/>
-            <Circle cx={RS/2} cy={RS/2} r={(RS-ST)/2} stroke="url(#reactorGrad)" strokeWidth={ST} fill="none" strokeDasharray={CI} strokeDashoffset={scoreOffset} strokeLinecap="round" rotation="-90" origin={`${RS/2},${RS/2}`}/>
-          </Svg>
-          <View style={s.reactorCore}>
-            <Text style={s.reactorScore}>{score}<Text style={s.reactorPct}>%</Text></Text>
-            <Text style={s.reactorLabel}>EMPIRE SCORE</Text>
-            <View style={s.reactorStatus}>
-              <Feather name={statusIcon} size={9} color={colors.online}/>
-              <Text style={s.reactorStatusText}>{statusText}</Text>
-            </View>
-          </View>
-        </View>
-      </View>
+      <TelemetryLine/>
 
-      <View style={s.dots}>
-        {visiblePanels.map((p,i)=>(
-          <TouchableOpacity key={p} onPress={()=>goToPanel(i)} style={[s.dot,panelIndex===i&&s.dotActive]}/>
+      <ScrollView
+        style={{flex:1}}
+        contentContainerStyle={s.scroll}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+      >
+        <ScoreBar
+          score={score} streak={streak}
+          routineDone={routineDone} routineTotal={routineItems.length}
+          tasksDone={tasksDone} tasksTotal={tasks.length}
+          statusText={statusText} pulse={pulse}
+        />
+
+        {MODULES.map(([key,label],i)=>(
+          <React.Fragment key={key}>
+            {i>0&&<HudDivider/>}
+            <HudModule index={String(i+1).padStart(2,'0')} label={label||PANEL_META[key]?.title} pulse={pulse}>
+              {renderPanel(key)}
+            </HudModule>
+          </React.Fragment>
         ))}
-      </View>
 
-      <View style={{flex:1}}>
-        <ScrollView
-          ref={scrollRef}
-          horizontal
-          pagingEnabled
-          snapToInterval={width}
-          snapToAlignment="start"
-          decelerationRate="fast"
-          disableIntervalMomentum
-          showsHorizontalScrollIndicator={false}
-          scrollEnabled={!panelEditing}
-          onMomentumScrollEnd={onScrollEnd}
-          style={{flex:1}}
-        >
-          {visiblePanels.map(key=>(
-            <ScrollView key={key} style={{width}} contentContainerStyle={s.panelContent} keyboardShouldPersistTaps="handled">
-              <View style={s.panelTopBar}>
-                <Text style={s.panelLabel}>{PANEL_META[key].title}</Text>
-                <TouchableOpacity onPress={()=>detachPanel(key)} hitSlop={{top:10,bottom:10,left:10,right:10}} activeOpacity={0.6}>
-                  <Feather name="maximize-2" size={13} color={colors.textDim}/>
-                </TouchableOpacity>
-              </View>
-              {renderPanel(key)}
-            </ScrollView>
-          ))}
-          {!visiblePanels.length&&(
-            <View style={[s.panelContent,{width,alignItems:'center',justifyContent:'center',flex:1}]}>
-              <Feather name="layout" size={22} color={colors.textFaint}/>
-              <Text style={s.allDetached}>Every panel is floating.{'\n'}Dock one to browse the carousel.</Text>
-            </View>
-          )}
-        </ScrollView>
-
-        <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
-          {detachedPanels.map(key=>(
-            <FloatingCard
-              key={key}
-              title={PANEL_META[key].title}
-              initial={layout[key]}
-              z={layout[key]?.z||0}
-              onFront={()=>bringFront(key)}
-              onPersist={(patch)=>persistPanel(key,patch)}
-              onDock={()=>dockPanel(key)}
-            >
-              {renderPanel(key)}
-            </FloatingCard>
-          ))}
+        <View style={s.footer}>
+          <Text style={s.footerText}>— END OF FEED —</Text>
         </View>
-      </View>
+      </ScrollView>
 
       <Modal visible={showAddTask} transparent animationType="slide">
         <View style={s.modalOver}><View style={s.modalContent}>
@@ -340,6 +250,8 @@ export default function HUDScreen({navigation}){
           </>}
         </View></View>
       </Modal>
+
+      <HudFrame pulse={pulse}/>
     </SafeAreaView>
   );
 }
@@ -348,28 +260,14 @@ const s=StyleSheet.create({
   container:{flex:1,backgroundColor:colors.bg},
   header:{flexDirection:'row',justifyContent:'space-between',alignItems:'center',paddingHorizontal:space.lg,paddingVertical:space.md,borderBottomWidth:1,borderBottomColor:colors.hairline},
   brandRow:{flexDirection:'row',alignItems:'center',gap:space.sm},
-  brand:{fontFamily:FONTS.monoMed,fontSize:13,color:colors.gold,letterSpacing:4},
+  brand:{fontFamily:FONTS.monoMed,fontSize:13,color:colors.gold,letterSpacing:3},
   onlinePill:{flexDirection:'row',alignItems:'center',gap:6,borderWidth:1,borderColor:colors.onlineDim,borderRadius:radius.pill,paddingHorizontal:space.sm,paddingVertical:3},
   onlineDot:{width:5,height:5,borderRadius:2.5,backgroundColor:colors.online},
   onlineText:{fontFamily:FONTS.mono,fontSize:7,color:colors.online,letterSpacing:2.5},
 
-  reactorWrap:{alignItems:'center',paddingTop:space.lg,paddingBottom:space.sm},
-  reactor:{width:RS,height:RS,alignItems:'center',justifyContent:'center'},
-  reactorCore:{position:'absolute',alignItems:'center',justifyContent:'center'},
-  reactorScore:{fontFamily:FONTS.displaySemi,fontSize:58,color:colors.goldBright,letterSpacing:1},
-  reactorPct:{fontFamily:FONTS.display,fontSize:22,color:colors.goldDim},
-  reactorLabel:{fontFamily:FONTS.mono,fontSize:8,color:colors.textDim,letterSpacing:4,marginTop:2},
-  reactorStatus:{flexDirection:'row',alignItems:'center',gap:5,marginTop:space.sm},
-  reactorStatusText:{fontFamily:FONTS.mono,fontSize:8,color:colors.online,letterSpacing:1.5},
-
-  dots:{flexDirection:'row',justifyContent:'center',gap:6,paddingVertical:space.md},
-  dot:{width:5,height:5,borderRadius:2.5,backgroundColor:colors.hairline},
-  dotActive:{backgroundColor:colors.gold,width:18,borderRadius:2.5},
-
-  panelContent:{paddingHorizontal:space.xl,paddingTop:space.xs,paddingBottom:space.xxxl},
-  panelTopBar:{flexDirection:'row',justifyContent:'space-between',alignItems:'center',marginBottom:space.lg},
-  panelLabel:{...type.label},
-  allDetached:{...type.meta,color:colors.textFaint,textAlign:'center',marginTop:space.md,lineHeight:16},
+  scroll:{paddingBottom:space.xxxl},
+  footer:{alignItems:'center',paddingVertical:space.xl},
+  footerText:{fontFamily:FONTS.mono,fontSize:7,color:colors.textFaint,letterSpacing:3},
 
   modalOver:{flex:1,backgroundColor:'rgba(0,0,0,0.92)',justifyContent:'flex-end'},
   modalContent:{backgroundColor:colors.card,borderTopWidth:1,borderTopColor:colors.hairlineGold,borderTopLeftRadius:radius.xl,borderTopRightRadius:radius.xl,padding:space.xl},

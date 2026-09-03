@@ -536,7 +536,7 @@ export const ps=StyleSheet.create({
   briefNote:{...type.meta,color:colors.textFaint,marginTop:space.xl,lineHeight:15},
 
   bizGrid:{flexDirection:'row',flexWrap:'wrap',rowGap:space.md,columnGap:space.sm},
-  bizItem:{width:(width-space.xl*2-space.sm*2)/3,alignItems:'center',paddingVertical:space.sm},
+  bizItem:{width:'31%',alignItems:'center',paddingVertical:space.sm},
   bizRing:{width:62,height:62,alignItems:'center',justifyContent:'center'},
   bizRingCore:{position:'absolute',alignItems:'center',justifyContent:'center'},
   bizPct:{fontFamily:FONTS.monoMed,fontSize:12,color:colors.text},

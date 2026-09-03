@@ -1,7 +1,7 @@
-// Renders detached HUD panels as floating cards over the whole app, so a
-// minimized panel stays on screen after you leave the HUD. On the HUD screen
-// itself this draws nothing — HUDScreen renders its own floating cards there,
-// and the two would otherwise stack.
+// Renders detached HUD panels as floating cards over the whole app, so a panel
+// JARVIS pops out with [HUD_DETACH] stays on screen after you leave the HUD. It
+// draws nothing on the HUD screen itself — every module is already in the HUD's
+// vertical feed there.
 import React,{useState,useEffect,useCallback}from 'react';
 import{View,StyleSheet}from 'react-native';
 import{getHudLayout,setPanelLayout}from '../../services/database';
