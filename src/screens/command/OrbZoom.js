@@ -31,7 +31,7 @@ const SPHERE_PTS=PERSONA_LIST.map((_,i)=>{
 
 function touchDist(t){return Math.hypot(t[0].pageX-t[1].pageX,t[0].pageY-t[1].pageY);}
 
-export default function OrbZoom({personaId,color,active,vizRef,personaPics={},onPickPersona,onLaunchGroup,onZoomOut,level='group',onLevelChange}){
+function OrbZoom({personaId,color,active,vizRef,personaPics={},onPickPersona,onLaunchGroup,onZoomOut,level='group',onLevelChange},ref){
   const persona=getPersona(personaId);
   const[memories,setMemories]=useState(null);
   const[memory,setMemory]=useState(null);
@@ -112,6 +112,20 @@ export default function OrbZoom({personaId,color,active,vizRef,personaPics={},on
     if(cur==='orb'){setLvl('group',-1);return;}
     if(cur==='group'){onZoomOut?.();return;} // zoom out past the sphere -> the city
   },[setLvl,onZoomOut]);
+
+  // Step back one zoom level (memory -> orb -> the persona sphere). Returns true
+  // if it consumed the back action, false when already at the sphere so the
+  // header's back button can leave for the city.
+  const back=useCallback(()=>{
+    const cur=levelRef.current;
+    if(cur==='memory'){
+      if(memRef.current&&memRef.current.drillOut())return true;
+      setLvl('orb',-1);return true;
+    }
+    if(cur==='orb'){setLvl('group',-1);return true;}
+    return false;
+  },[setLvl]);
+  useImperativeHandle(ref,()=>({back}),[back]);
 
   const stagePan=useMemo(()=>PanResponder.create({
     // Capture two-finger pinches at every level. On group/orb it's a discrete
@@ -423,6 +437,7 @@ function PersonaSphereInner({activeId,pics,onPick,onLaunch},ref){
   );
 }
 const PersonaSphere=forwardRef(PersonaSphereInner);
+export default forwardRef(OrbZoom);
 
 const s=StyleSheet.create({
   wrap:{flex:1},

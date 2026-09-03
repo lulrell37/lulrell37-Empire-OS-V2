@@ -1,5 +1,5 @@
 import React,{useState,useEffect,useRef,useCallback}from 'react';
-import{View,Text,StyleSheet,TextInput,TouchableOpacity,FlatList,KeyboardAvoidingView,Platform,ActivityIndicator,ScrollView,Modal,Image,Alert,Keyboard}from 'react-native';
+import{View,Text,StyleSheet,TextInput,TouchableOpacity,FlatList,KeyboardAvoidingView,Platform,ActivityIndicator,ScrollView,Modal,Image,Alert,Keyboard,BackHandler}from 'react-native';
 import{SafeAreaView}from 'react-native-safe-area-context';
 import{Audio}from 'expo-av';
 import*as Speech from 'expo-speech';
@@ -21,7 +21,7 @@ import{tlSnapshot,tlFormatSnapshot,tlPlaceOrder,tlClosePosition,tlModifyPosition
 import{recordTradeOpen,reconcileOpenTrades,atlasJournalBlock,setStrategy,setTradeReview}from '../services/tradeJournal';
 import{loadKeys,loadGitHubToken}from '../services/keyStore';
 import useEmpireStore from '../store/useEmpireStore';
-import{useIsFocused}from '@react-navigation/native';
+import{useIsFocused,useFocusEffect}from '@react-navigation/native';
 import OrbZoom from './command/OrbZoom';
 import ChartOverlay from './command/ChartOverlay';
 import TradePanel from './command/TradePanel';
@@ -72,6 +72,7 @@ export default function CommandScreen({navigation}){
   const[cameraRef,setCameraRef]=useState(null);
   const[view,setView]=useState('viz'); // viz | text
   const[orbLevel,setOrbLevel]=useState('group'); // lifted so it survives the viz/text toggle
+  const orbZoomRef=useRef(null);
   const[tradeProposal,setTradeProposal]=useState(null); // {symbol,side,entry,stopLoss,takeProfit,qty,rationale,pid}
   const[tradeBusy,setTradeBusy]=useState(false);
   const[deepResearch,setDeepResearch]=useState(null); // deep_research row + progressObj; null when idle. Persisted — see services/deepResearch.js
@@ -956,6 +957,20 @@ export default function CommandScreen({navigation}){
     navigation.navigate('Map');
   }
 
+  // Header back button: on the visualization, step back one zoom level
+  // (a memory -> the memory spiral -> the persona orb -> the persona sphere);
+  // only leave for the city once you're already at the sphere.
+  function handleBack(){
+    if(chartOverlay){setChartOverlay(null);return;}
+    if(view==='viz'&&orbZoomRef.current&&orbZoomRef.current.back())return;
+    goToCity();
+  }
+  // Android hardware back does the same thing.
+  useFocusEffect(useCallback(()=>{
+    const sub=BackHandler.addEventListener('hardwareBackPress',()=>{handleBack();return true;});
+    return()=>sub.remove();
+  },[view,chartOverlay]));// eslint-disable-line react-hooks/exhaustive-deps
+
   async function send(){
     // The input is uncontrolled (no `value` prop) so Android never drops the last
     // keystroke to a state/native race. inputRef holds the live text; blur once to
@@ -1630,8 +1645,8 @@ export default function CommandScreen({navigation}){
   return(
     <SafeAreaView style={s.container} edges={['top','bottom']}>
       <View style={s.header}>
-        <TouchableOpacity onPress={goToCity} hitSlop={{top:10,bottom:10,left:10,right:10}}>
-          <Text style={s.empireOS}>‹ EMPIRE OS</Text>
+        <TouchableOpacity onPress={handleBack} hitSlop={{top:10,bottom:10,left:10,right:10}}>
+          <Text style={s.empireOS}>‹ {view==='viz'&&orbLevel!=='group'?'BACK':'EMPIRE OS'}</Text>
         </TouchableOpacity>
         <View style={s.headerRight}>
           <View style={s.viewToggle}>
@@ -1695,6 +1710,7 @@ export default function CommandScreen({navigation}){
           <ChartOverlay spec={chartOverlay} accent={cp.color} onClose={()=>setChartOverlay(null)}/>
         ):(
         <OrbZoom
+          ref={orbZoomRef}
           personaId={activePersona}
           color={cp.color}
           active={isFocused}
