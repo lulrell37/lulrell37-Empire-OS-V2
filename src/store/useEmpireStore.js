@@ -17,5 +17,10 @@ const useEmpireStore=create((set,get)=>({
   addRelay:(personaId,message)=>set(s=>({relayInbox:{...s.relayInbox,[personaId]:[...(s.relayInbox[personaId]||[]),message]}})),
   clearRelay:(personaId)=>set(s=>({relayInbox:{...s.relayInbox,[personaId]:[]}})),
   diagramPrompt:'',setDiagramPrompt:(p)=>set({diagramPrompt:p||''}),
+  // Live problems surfaced in the top notification bar (NudgeBar). Keyed so the
+  // same issue can't stack; cleared when the matching thing succeeds.
+  firmIssues:{}, // {key:{text,detail,severity}}
+  flagFirmIssue:(key,text,detail=null,severity='error')=>set(s=>({firmIssues:{...s.firmIssues,[key]:{text,detail,severity}}})),
+  clearFirmIssue:(key)=>set(s=>{if(!(key in s.firmIssues))return{};const n={...s.firmIssues};delete n[key];return{firmIssues:n};}),
 }));
 export default useEmpireStore;

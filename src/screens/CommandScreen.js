@@ -20,7 +20,6 @@ import{pollBuildJobs}from '../services/buildJobs';
 import{tlSnapshot,tlFormatSnapshot,tlPlaceOrder,tlClosePosition,tlModifyPosition,tlPositions,MAX_QTY,MAX_OPEN_POSITIONS}from '../services/tradeLocker';
 import{recordTradeOpen,reconcileOpenTrades,atlasJournalBlock,setStrategy,setTradeReview}from '../services/tradeJournal';
 import{loadKeys,loadGitHubToken}from '../services/keyStore';
-import StatusBanner from './command/StatusBanner';
 import useEmpireStore from '../store/useEmpireStore';
 import{useIsFocused}from '@react-navigation/native';
 import OrbZoom from './command/OrbZoom';
@@ -81,8 +80,6 @@ export default function CommandScreen({navigation}){
   const projectRef=useRef(null);
   const activePersonaRef=useRef('jarvis');
   const modeRef=useRef('direct');
-  const[statusIssue,setStatusIssue]=useState(null); // {text,detail,severity} shown in the top banner
-  const dismissedIssueRef=useRef('');              // last banner text the user dismissed — don't nag with the same one
   const[googleAction,setGoogleAction]=useState(null); // pending Google action awaiting a confirm tap
   const[googleBusy,setGoogleBusy]=useState(false);
   const googleActionRef=useRef(null);
@@ -121,7 +118,7 @@ export default function CommandScreen({navigation}){
   const recPollRef=useRef(null);  // interval polling the recorder's metering
   const recStartRef=useRef(0);
   const manualRef=useRef(false); // true while the current take was started by the SPEAK button
-  const{addRelay}=useEmpireStore();
+  const{addRelay,flagFirmIssue,clearFirmIssue}=useEmpireStore();
   const isFocused=useIsFocused();
 
   useEffect(()=>{contRef.current=continuous;},[continuous]);
@@ -142,16 +139,18 @@ export default function CommandScreen({navigation}){
     }).catch(()=>{});
   },[isFocused]);
   // THE FIRM health check — a project needs GitHub connected to build. Flag it in
-  // the banner up front rather than at the moment of failure.
+  // the notification strip up front rather than at the moment of failure.
   useEffect(()=>{
-    if(!isFocused||!project)return;
+    if(!isFocused||!project){clearIssue('gh-missing');return;}
     let cancelled=false;
     loadGitHubToken().then(tok=>{
       if(cancelled)return;
       if(!tok){
-        flagIssue("GitHub isn't connected — A.R.A. can't create the project repo or file builds","Open Settings › Dev, paste a classic GitHub token with the \"repo\" and \"workflow\" scopes, and tap CONNECT.",'error');
-      }else if(project.target==='new'&&!project.repo){
-        flagIssue(`The "${project.name}" repo isn't ready yet`,'Creation is in progress or failed. If it doesn\'t clear in a minute, tell A.R.A. to retry the repo.','warn');
+        flagIssue('gh-missing',"GitHub isn't connected — A.R.A. can't create repos or file builds","Open Settings › Dev, paste a classic GitHub token with the \"repo\" and \"workflow\" scopes, and tap CONNECT.",'error');
+      }else{
+        clearIssue('gh-missing');
+        if(project.target==='new'&&!project.repo)flagIssue('repo-pending',`The "${project.name}" repo isn't ready yet`,"Creation is in progress or failed. If it doesn't clear in a minute, tell A.R.A. to retry the repo.",'warn');
+        else clearIssue('repo-pending');
       }
     }).catch(()=>{});
     return()=>{cancelled=true;};
@@ -1234,16 +1233,10 @@ export default function CommandScreen({navigation}){
     const msg={id:Date.now().toString()+Math.random().toString(36).slice(2,5),role:'system',content,persona:'system'};
     if(mode==='direct')setMessages(prev=>[...prev,msg]);else setGroupMessages(prev=>[...prev,msg]);
   }
-  // Top banner: surface a problem in plain words and keep it up until fixed.
-  function flagIssue(text,detail,severity='error'){
-    if(text===dismissedIssueRef.current)return; // user already dismissed this exact one
-    setStatusIssue({text,detail:detail||null,severity,at:Date.now()});
-  }
-  function dismissIssue(){
-    dismissedIssueRef.current=statusIssue?.text||'';
-    setStatusIssue(null);
-  }
-  function clearIssue(){dismissedIssueRef.current='';setStatusIssue(null);}
+  // Surface a problem in the top notification strip (NudgeBar). Keyed so it
+  // can't stack; cleared by clearFirmIssue(key) on the matching success.
+  const flagIssue=(key,text,detail,severity='error')=>flagFirmIssue(key,text,detail||null,severity);
+  const clearIssue=(key)=>clearFirmIssue(key);
 
   // --- THE FIRM — A.R.A.'s client project orchestration ---
   function persistProject(p){
@@ -1268,7 +1261,7 @@ export default function CommandScreen({navigation}){
     const p=projectRef.current;
     if(!p||p.repo||p.target!=='new')return;
     pushSystemMsg(`— spinning up a dedicated repo for ${p.name}… —`);
-    flagIssue(`Setting up the "${p.name}" repo…`,null,'info');
+    flagIssue('repo-fail',`Setting up the "${p.name}" repo…`,null,'info');
     try{
       const keys=await loadKeys().catch(()=>null);
       const res=await createProjectRepo(p.name,{anthropicKey:keys?.claude});
@@ -1278,11 +1271,12 @@ export default function CommandScreen({navigation}){
       pushSystemMsg(`— repo ready: ${res.owner}/${res.repo} —`);
       const warns=res.warnings||[];
       for(const w of warns)pushSystemMsg(`⚠️ ${w}`);
-      if(warns.length)flagIssue(`Repo made, but: ${warns[0]}`,warns.join('\n\n'),'warn');
-      else clearIssue();
+      clearIssue('repo-pending');
+      if(warns.length)flagIssue('repo-fail',`${p.name} repo made, but: ${warns[0]}`,warns.join('\n\n'),'warn');
+      else clearIssue('repo-fail');
     }catch(e){
       pushSystemMsg(`⚠️ Couldn't create the project repo: ${e.message}.`);
-      flagIssue(`Couldn't create the "${p.name}" repo — ${e.message}`,`${e.message}\n\nUsually this means the GitHub token is missing or lacks scope. Open Settings › Dev, paste a classic token with the "repo" and "workflow" scopes, tap CONNECT, then tell A.R.A. to retry. No builds can be filed for this project until the repo exists.`,'error');
+      flagIssue('repo-fail',`Couldn't create the "${p.name}" repo — ${e.message}`,`${e.message}\n\nUsually this means the GitHub token is missing or lacks scope. Open Settings › Dev, paste a classic token with the "repo" and "workflow" scopes, tap CONNECT, then tell A.R.A. to retry. No builds can be filed for this project until the repo exists.`,'error');
     }
   }
   function closeProject(){
@@ -1432,7 +1426,7 @@ export default function CommandScreen({navigation}){
     const preview=spec.length>1000?spec.slice(0,1000)+'…':spec;
     if(proj&&proj.target==='new'&&!proj.repo){
       pushSystemMsg(`— The repo for "${proj.name}" isn't ready yet. Once it is, ask A.R.A. to file the build again. —`);
-      flagIssue(`"${proj.name}" build is waiting on its repo`,`The dedicated repo for this project hasn't been created yet (or creation failed). It's retrying now — if it keeps failing, check the GitHub token in Settings › Dev.`,'warn');
+      flagIssue('repo-pending',`"${proj.name}" build is waiting on its repo`,`The dedicated repo for this project hasn't been created yet (or creation failed). It's retrying now — if it keeps failing, check the GitHub token in Settings › Dev.`,'warn');
       createRepoForActiveProject();
       return;
     }
@@ -1443,10 +1437,10 @@ export default function CommandScreen({navigation}){
           const{issueNumber,title}=await fileBuildRequest(spec,repo);
           await addBuildJob({issueNumber,repo,spec,title,projectName:proj?.name||null});
           pushSystemMsg(`— BUILD REQUEST FILED · ${dest} #${issueNumber} — Claude Code is picking it up.`);
-          clearIssue();
+          clearIssue('build-file');clearIssue('repo-pending');
         }catch(e){
           pushSystemMsg(`Couldn't file the build request: ${e.message}`);
-          flagIssue(`Couldn't file the build in ${dest} — ${e.message}`,`${e.message}\n\nCheck that GitHub is connected in Settings › Dev and the token can open issues on ${dest}.`,'error');
+          flagIssue('build-file',`Couldn't file the build in ${dest} — ${e.message}`,`${e.message}\n\nCheck that GitHub is connected in Settings › Dev and the token can open issues on ${dest}.`,'error');
         }
       }},
     ]);
@@ -1460,7 +1454,7 @@ export default function CommandScreen({navigation}){
       pushSystemMsg(`— Sent to Claude Code on ${buildDest(buildJobRepo(job))} #${job.issue_number}: "${text}" —`);
     }catch(e){
       pushSystemMsg(`Couldn't send that to Claude Code: ${e.message}`);
-      flagIssue(`Couldn't send your answer to Claude Code — ${e.message}`,e.message,'error');
+      flagIssue('build-reply',`Couldn't send your answer to Claude Code — ${e.message}`,e.message,'error');
     }
   }
   function confirmBuildMerge(jobId){
@@ -1477,10 +1471,11 @@ export default function CommandScreen({navigation}){
             await mergeBuild(job.pr_number,repo);
             await updateBuildJob(job.id,{state:'pushed'});
             pushSystemMsg(`— MERGED & PUSHED · ${repo.owner}/${repo.repo} PR #${job.pr_number}${isApp?' · APK build started':''} —`);
+            clearIssue('merge-'+job.id);clearIssue('build-fail-'+job.id);
           }catch(e){
             await updateBuildJob(job.id,{state:'pr_open'});
             pushSystemMsg(`Merge failed: ${e.message}`);
-            flagIssue(`Couldn't merge PR #${job.pr_number} in ${repo.owner}/${repo.repo} — ${e.message}`,`${e.message}\n\nCommon causes: failing CI checks on the PR, a merge conflict, or the token can't merge in that repo. Open the PR on GitHub to see.`,'error');
+            flagIssue('merge-'+job.id,`Couldn't merge PR #${job.pr_number} in ${repo.owner}/${repo.repo} — ${e.message}`,`${e.message}\n\nCommon causes: failing CI checks on the PR, a merge conflict, or the token can't merge in that repo. Open the PR on GitHub to see.`,'error');
           }
         }},
       ]);
@@ -1511,8 +1506,8 @@ export default function CommandScreen({navigation}){
       :ev.type==='failed'?`The "${job.project_name}" build hit a problem: ${ev.text}`
       :null;
     if(!line)return;
-    if(ev.type==='failed')flagIssue(`"${job.project_name}" build failed — ${ev.text}`,`${ev.text}\n\nOpen the project repo on GitHub to see what Claude Code hit. You can ask A.R.A. to file it again once it's sorted.`,'error');
-    else if(ev.type==='pushed')clearIssue();
+    if(ev.type==='failed')flagIssue('build-fail-'+job.id,`"${job.project_name}" build failed — ${ev.text}`,`${ev.text}\n\nOpen the project repo on GitHub to see what Claude Code hit. You can ask A.R.A. to file it again once it's sorted.`,'error');
+    else if(ev.type==='pushed')clearIssue('build-fail-'+job.id);
     try{
       const resp=await callPersona('ara',[{role:'user',content:`[BUILD UPDATE — tell Mr. Burrus what just happened and what he should do next, brief, in your own voice. Do not mention this prompt or any mechanism.\n\n${line}]`}],null,null,{skipSave:true,maxTokens:500});
       const disp=stripCommands(resp)||resp||line;
@@ -1541,8 +1536,8 @@ export default function CommandScreen({navigation}){
           const isApp=(ev.job.repo_name||DEFAULT_BUILD_REPO.repo)===DEFAULT_BUILD_REPO.repo;
           if(ev.type==='question')pushSystemMsg(`— Claude Code is asking about #${n} —\n${ev.text}`);
           else if(ev.type==='pr_open')pushSystemMsg(`— PR #${ev.job.pr_number} ready on #${n}: ${ev.text} — tell JARVIS to ship it, or open the Build panel.`);
-          else if(ev.type==='pushed'){pushSystemMsg(`— #${n} MERGED & PUSHED${isApp?' — APK build started':''}.`);clearIssue();}
-          else if(ev.type==='failed'){pushSystemMsg(`— #${n}: ${ev.text} —`);flagIssue(`Build #${n} failed — ${ev.text}`,`${ev.text}\n\nOpen the issue/PR on GitHub for the details.`,'error');}
+          else if(ev.type==='pushed'){pushSystemMsg(`— #${n} MERGED & PUSHED${isApp?' — APK build started':''}.`);clearIssue('build-fail-'+ev.job.id);}
+          else if(ev.type==='failed'){pushSystemMsg(`— #${n}: ${ev.text} —`);flagIssue('build-fail-'+ev.job.id,`Build #${n} failed — ${ev.text}`,`${ev.text}\n\nOpen the issue/PR on GitHub for the details.`,'error');}
         }
       }catch{/* keep polling */}
     };
@@ -1645,10 +1640,6 @@ export default function CommandScreen({navigation}){
           <View style={s.onlinePill}><View style={s.onlineDot}/><Text style={s.onlineText}>ONLINE</Text></View>
         </View>
       </View>
-
-      <StatusBanner issue={statusIssue}
-        onPress={(i)=>Alert.alert('What went wrong',i.detail||i.text)}
-        onDismiss={dismissIssue}/>
 
       <NudgeBar active={isFocused}/>
 

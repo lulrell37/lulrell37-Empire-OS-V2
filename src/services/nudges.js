@@ -2,7 +2,7 @@
 // data (tasks, routine, streak, important dates). Surfaced both in the Command
 // screen strip and injected into every persona's context so they can raise
 // things before being asked. In-app only; real push needs expo-notifications.
-import{getTasks,getHudState,getUpcomingDates,getActiveBuildJobs}from './database';
+import{getTasks,getHudState,getUpcomingDates,getActiveBuildJobs,getBuildJobs}from './database';
 
 export async function computeNudges(){
   const out=[];
@@ -41,6 +41,12 @@ export async function computeNudges(){
       const tag=j.project_name?`the ${j.project_name} build`:`#${j.issue_number}`;
       if(j.state==='question')out.push({key:'build-q-'+(j.id||j.issue_number),text:`Claude Code needs your answer on ${tag}`});
       else if(j.state==='pr_open')out.push({key:'build-pr-'+(j.id||j.issue_number),text:`${j.project_name?j.project_name+': ':''}PR #${j.pr_number} ready to merge`});
+    }
+    // Builds that failed in the last few days — terminal, so not in the active
+    // list, but still worth flagging until dismissed.
+    const cutoff=Date.now()-3*86400000;
+    for(const j of (await getBuildJobs(20)).filter(j=>j.state==='failed'&&(j.updated_at||0)>cutoff)){
+      out.push({key:'build-fail-'+(j.id||j.issue_number),severity:'error',text:`${j.project_name?j.project_name+': ':''}build #${j.issue_number} failed — open it on GitHub`});
     }
   }catch{}
 
