@@ -34,7 +34,6 @@ const HEROES=[
 
 const CITY_R=26;          // ground radius
 const ROAM_BOUND=20;      // how far the camera target can travel
-const ENTER_R=9;          // camera distance at which "zoom into a landmark" fires
 
 function mulberry32(a){
   return function(){
@@ -192,7 +191,7 @@ function EmpireCity({navigation}){
 
   const engine=useRef({
     rotY:0.7,rotX:0.62,startRX:0,startRY:0,
-    dolly:0,startDolly:0,baseR:17,minR:4,maxR:30,
+    dolly:0,startDolly:0,baseR:17,minR:2.4,maxR:30,wantEnter:false,
     panX:0,panZ:0,startPanX:0,startPanZ:0,
     active:true,idle:0,entering:null,navigated:false,
     vw:Dimensions.get('window').width,vh:Dimensions.get('window').height,
@@ -245,7 +244,7 @@ function EmpireCity({navigation}){
 
   useFocusEffect(useCallback(()=>{
     engine.active=true;engine.entering=null;engine.navigated=false;
-    engine.dolly=0;                    // reset the zoom so you're not stuck mid-enter
+    engine.dolly=0;engine.wantEnter=false;   // reset the zoom so you're not stuck mid-enter
     fade.stopAnimation();
     Animated.timing(fade,{toValue:0,duration:420,easing:Easing.out(Easing.cubic),useNativeDriver:true}).start();
     return()=>{engine.active=false;};
@@ -296,12 +295,18 @@ function EmpireCity({navigation}){
         engine.rotX=Math.max(0.12,Math.min(1.4,engine.startRX-e.translationY*0.005));
         engine.idle=0;
       });
-    // pinch -> zoom
+    // pinch -> zoom continuously. You can get right up to a building; you only
+    // dive into a screen by *keeping* the pinch-in going once you're already at
+    // the closest zoom (or by tapping a landmark).
     const pinch=Gesture.Pinch().runOnJS(true)
       .onStart(()=>{engine.startDolly=engine.dolly;engine.idle=0;})
       .onUpdate(e=>{
         engine.dolly=Math.max(engine.minR-engine.baseR,Math.min(engine.maxR-engine.baseR,engine.startDolly-(e.scale-1)*17));
         engine.idle=0;
+      })
+      .onEnd(e=>{
+        const r=engine.baseR+engine.dolly;
+        if(e.scale>1&&r<=engine.minR+0.5)engine.wantEnter=true;
       });
     // tap directly on a landmark -> open it
     const tap=Gesture.Tap().runOnJS(true).maxDistance(18)
@@ -388,9 +393,11 @@ function EmpireCity({navigation}){
         engine.renderer.render(engine.scene,engine.camera);
         gl.endFrameEXP();
 
-        // zoom-into-a-landmark: once the camera is close and a landmark sits
-        // near screen centre, dive into its screen (no tap needed).
-        if(!engine.entering&&r<ENTER_R){
+        // zoom-into-a-landmark: only when the user has pinched fully in and kept
+        // pushing (engine.wantEnter, set in pinch.onEnd) and a landmark sits near
+        // screen centre. Tapping a landmark is the other way in.
+        if(engine.wantEnter&&!engine.entering){
+          engine.wantEnter=false;
           let best=null,bestD=1e9;
           for(const a of engine.anchors){
             tmp.copy(a.pos).applyMatrix4(engine.pivot.matrixWorld).project(engine.camera);
@@ -399,7 +406,7 @@ function EmpireCity({navigation}){
             const d=Math.hypot(sx-engine.vw/2,sy-engine.vh/2);
             if(d<bestD){bestD=d;best=a;}
           }
-          if(best&&bestD<Math.min(engine.vw,engine.vh)*0.34){
+          if(best&&bestD<Math.min(engine.vw,engine.vh)*0.4){
             startEnter(HEROES.find(h=>h.name===best.name).route);
           }
         }

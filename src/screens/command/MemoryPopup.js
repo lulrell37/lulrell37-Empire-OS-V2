@@ -1,7 +1,7 @@
 // A single memory in a centered card. Swipe either way — or tap the trash — to
 // delete it; the caller does the optimistic remove + undo.
 import React from 'react';
-import{View,Text,StyleSheet,Modal,ScrollView,TouchableOpacity}from 'react-native';
+import{View,Text,StyleSheet,Modal,ScrollView,TouchableOpacity,Dimensions}from 'react-native';
 import{Swipeable,GestureHandlerRootView}from 'react-native-gesture-handler';
 import{Feather}from '@expo/vector-icons';
 import{categoryMeta}from '../../services/memoryCategories';
@@ -46,7 +46,8 @@ export default function MemoryPopup({memory,onClose,onDelete}){
                   </TouchableOpacity>
                 </View>
 
-                <ScrollView style={s.scroll} contentContainerStyle={s.scrollPad}>
+                <ScrollView style={s.scroll} contentContainerStyle={s.scrollPad}
+                  showsVerticalScrollIndicator bounces>
                   {!!you&&<>
                     <Text style={s.speaker}>YOU</Text>
                     <Text style={s.you} selectable>{you}</Text>
@@ -73,7 +74,7 @@ export default function MemoryPopup({memory,onClose,onDelete}){
 
 const s=StyleSheet.create({
   over:{flex:1,backgroundColor:'rgba(0,0,0,0.84)',alignItems:'center',justifyContent:'center',padding:space.xl},
-  cardWrap:{width:'88%',maxHeight:'62%'},
+  cardWrap:{width:'88%',maxHeight:'88%'},
   card:{backgroundColor:colors.card,borderWidth:1,borderColor:colors.hairline,borderRadius:radius.lg,overflow:'hidden'},
   accent:{height:3},
   head:{flexDirection:'row',alignItems:'center',gap:space.md,paddingHorizontal:space.md,paddingVertical:space.md,borderBottomWidth:1,borderBottomColor:colors.hairline},
@@ -81,7 +82,7 @@ const s=StyleSheet.create({
   tagDot:{width:5,height:5,borderRadius:3},
   tagT:{fontFamily:FONTS.monoMed,fontSize:7.5,letterSpacing:1.5},
   date:{fontFamily:FONTS.mono,fontSize:9,letterSpacing:1,color:colors.textDim,flex:1},
-  scroll:{maxHeight:260},
+  scroll:{maxHeight:Math.round(Dimensions.get('window').height*0.62)},
   scrollPad:{padding:space.lg},
   speaker:{fontFamily:FONTS.monoMed,fontSize:7.5,letterSpacing:3,color:colors.textDim,marginBottom:6},
   you:{fontFamily:FONTS.mono,fontSize:13,lineHeight:21,color:colors.text},

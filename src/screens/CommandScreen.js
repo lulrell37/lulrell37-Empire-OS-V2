@@ -5,6 +5,7 @@ import{Audio}from 'expo-av';
 import*as Speech from 'expo-speech';
 import*as ImagePicker from 'expo-image-picker';
 import*as DocumentPicker from 'expo-document-picker';
+import*as VideoThumbnails from 'expo-video-thumbnails';
 import{Camera}from 'expo-camera';
 import*as FileSystem from 'expo-file-system';
 import{PERSONA_LIST,getPersona}from '../personas/personas';
@@ -30,6 +31,7 @@ import DeepResearchBanner from './command/DeepResearchBanner';
 import BuildPanel from './command/BuildPanel';
 import NudgeBar from './command/NudgeBar';
 import{parseChartSpec}from '../services/chartSpec';
+import{extractUrls,fetchLinkContext,linkContextToBlock}from '../services/mediaContext';
 
 const TEAM_PHOTO=require('../../assets/teamphoto.png');
 const HANDS_FREE_SILENCE_MS=3000;   // quiet for this long AFTER real speech -> stop (allow mid-sentence pauses)
@@ -791,7 +793,7 @@ export default function CommandScreen({navigation}){
         const userMsg={id:Date.now().toString(),role:'user',content:clean,persona:'user'};
         if(isGroup)setGroupMessages(prev=>[...prev,userMsg]);
         else{setMessages(prev=>[...prev,userMsg]);await saveMessage(activePersona,'user',clean,'direct');}
-        await runRound(clean,isGroup);
+        await runRound(clean,isGroup,extractUrls(clean).map(u=>({type:'link',url:u})));
       }else{
         setLoading(false);
         maybeAutoListen();
@@ -821,13 +823,14 @@ export default function CommandScreen({navigation}){
       if(status!=='granted'){Alert.alert('Permission','Photo library access required.');return;}
       const result=await ImagePicker.launchImageLibraryAsync({mediaTypes:ImagePicker.MediaTypeOptions.Images,quality:0.8});
       if(!result.canceled&&result.assets[0]){
+        const asset=result.assets[0];
         const msg=`[Image attached]\n${(inputRef.current||input).trim()||'What do you see in this image?'}`;
         setInput('');inputRef.current='';try{textInputRef.current?.clear();}catch{}
-        const userMsg={id:Date.now().toString(),role:'user',content:msg,persona:'user',image:result.assets[0].uri};
+        const userMsg={id:Date.now().toString(),role:'user',content:msg,persona:'user',image:asset.uri};
         const isGroup=mode!=='direct';
         if(isGroup)setGroupMessages(prev=>[...prev,userMsg]);
         else{setMessages(prev=>[...prev,userMsg]);await saveMessage(activePersona,'user',msg,'direct');}
-        await runRound(msg,isGroup);
+        await runRound(msg,isGroup,[{type:'image',uri:asset.uri,mime:asset.mimeType||'image/jpeg'}]);
       }
     }catch(e){Alert.alert('Error',e.message);}
   }
@@ -848,6 +851,40 @@ export default function CommandScreen({navigation}){
     }catch(e){Alert.alert('Error',e.message);}
   }
 
+  // Pick a video and sample evenly-spaced frames — the personas "watch" it by
+  // reasoning over the keyframes (plus whatever you type). Vision models take
+  // stills, not clips, so this is the honest way to hand them a local video.
+  async function pickVideo(){
+    try{
+      const{status}=await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if(status!=='granted'){Alert.alert('Permission','Photo library access required.');return;}
+      const result=await ImagePicker.launchImageLibraryAsync({mediaTypes:ImagePicker.MediaTypeOptions.Videos,quality:0.8});
+      if(result.canceled||!result.assets?.[0])return;
+      const asset=result.assets[0];
+      let dur=Number(asset.duration)||0;
+      if(dur>0&&dur<600)dur*=1000; // some pickers report seconds, not ms
+      const N=6;
+      const times=dur>1500
+        ?Array.from({length:N},(_,i)=>Math.round((i+0.5)/N*dur))
+        :[0,300,700,1200,2000,3000];
+      const frames=[];
+      for(const t of times){
+        try{
+          const{uri}=await VideoThumbnails.getThumbnailAsync(asset.uri,{time:t,quality:0.6});
+          frames.push({type:'image',uri,mime:'image/jpeg'});
+        }catch{/* past the end / unreadable — skip */}
+      }
+      if(!frames.length){Alert.alert('Video','Could not read frames from that video.');return;}
+      const msg=`[Video attached — ${frames.length} frames sampled${dur?` over ${(dur/1000).toFixed(0)}s`:''}]\n${(inputRef.current||input).trim()||'What happens in this video?'}`;
+      setInput('');inputRef.current='';try{textInputRef.current?.clear();}catch{}
+      const userMsg={id:Date.now().toString(),role:'user',content:msg,persona:'user',image:frames[0].uri};
+      const isGroup=mode!=='direct';
+      if(isGroup)setGroupMessages(prev=>[...prev,userMsg]);
+      else{setMessages(prev=>[...prev,userMsg]);await saveMessage(activePersona,'user',msg,'direct');}
+      await runRound(msg,isGroup,frames);
+    }catch(e){Alert.alert('Error',e.message);}
+  }
+
   async function openCamera(){
     const{status}=await Camera.requestCameraPermissionsAsync();
     if(status!=='granted'){Alert.alert('Permission','Camera access required.');return;}
@@ -865,7 +902,7 @@ export default function CommandScreen({navigation}){
       const isGroup=mode!=='direct';
       if(isGroup)setGroupMessages(prev=>[...prev,userMsg]);
       else{setMessages(prev=>[...prev,userMsg]);await saveMessage(activePersona,'user',msg,'direct');}
-      await runRound(msg,isGroup);
+      await runRound(msg,isGroup,[{type:'image',uri:photo.uri,mime:'image/jpeg'}]);
     }catch(e){Alert.alert('Error',e.message);}
   }
 
@@ -900,20 +937,38 @@ export default function CommandScreen({navigation}){
     const userMsg={id:Date.now().toString(),role:'user',content:text,persona:'user'};
     if(isGroup)setGroupMessages(prev=>[...prev,userMsg]);
     else{setMessages(prev=>[...prev,userMsg]);await saveMessage(activePersona,'user',text,'direct');}
-    await runRound(text,isGroup);
+    await runRound(text,isGroup,extractUrls(text).map(u=>({type:'link',url:u})));
   }
 
-  async function runRound(text,isGroup){
+  async function runRound(text,isGroup,attachments=[]){
     setLoading(true);abortRef.current=new AbortController();
     const myAbort=abortRef.current;
     const targets=isGroup?getTargets():[activePersona];
     const replies=[];
+    // Attachments → image blocks the model sees + link context it can read.
+    const atts=Array.isArray(attachments)?attachments:[];
+    const images=atts.filter(a=>a&&a.type==='image').map(a=>({uri:a.uri,data:a.data,mime:a.mime}));
+    const linkAtts=atts.filter(a=>a&&a.type==='link');
+    let linkText='';
+    if(linkAtts.length){
+      pushSystemMsg(`— reading ${linkAtts.length} link${linkAtts.length>1?'s':''} —`);
+      for(const a of linkAtts){
+        if(myAbort.signal.aborted)break;
+        try{
+          const ctx=await fetchLinkContext(a.url,{signal:myAbort.signal});
+          const{text:bt,image}=linkContextToBlock(ctx);
+          linkText+=(linkText?'\n\n':'')+bt;
+          if(image)images.push({uri:image.uri,mime:image.mime});
+        }catch(e){linkText+=(linkText?'\n\n':'')+`[LINKED MEDIA — ${a.url} (couldn't be read: ${e.message})]`;}
+      }
+    }
+    const modelText=text+(linkText?`\n\n${linkText}`:'');
     try{
       for(const pid of targets){
         if(myAbort.signal.aborted)break;
         const p=getPersona(pid);
         const hist=(isGroup?groupMessages:messages).slice(-20).map(m=>({role:m.role==='user'||m.role==='assistant'?m.role:'user',content:m.content}));
-        hist.push({role:'user',content:text});
+        hist.push({role:'user',content:modelText});
         if(isGroup&&replies.length>0)hist.push({role:'user',content:`[PRIOR:\n${replies.map(r=>`${r.name}: ${r.text}`).join('\n\n')}\nAcknowledge and be brief.]`});
         const willVoice=voiceOn&&!voiceMuted;
         const msgId=`${Date.now()}-${pid}`;
@@ -933,7 +988,7 @@ export default function CommandScreen({navigation}){
           const shown=(stripCommands(raw)||'').replace(/\[[A-Z_]+:?[^\]]*$/,'').trimEnd();
           patch(m=>({...m,content:shown,revealed:shown.length}));
         };
-        let response=await callPersona(pid,hist,myAbort.signal,onDelta,voiceModelOpts(p));
+        let response=await callPersona(pid,hist,myAbort.signal,onDelta,{...voiceModelOpts(p),images,saveUserText:text});
         // Second-pass tools: the persona emits a lookup tag on pass 1, we gather
         // the data, then it re-answers with everything in hand. One pass only.
         const injections=[];
@@ -1005,7 +1060,7 @@ export default function CommandScreen({navigation}){
           const hist2=[...hist,{role:'assistant',content:response},{role:'user',content:`[TOOL RESULTS — answer my previous message using this. Do not mention the lookup mechanism.\n\n${injections.join('\n\n---\n\n')}\n]`}];
           raw='';lastPatch=0;
           patch(m=>({...m,content:'',revealed:0,streaming:!willVoice}));
-          response=await callPersona(pid,hist2,myAbort.signal,willVoice?null:onDelta,{skipSave:true,...voiceModelOpts(p)});
+          response=await callPersona(pid,hist2,myAbort.signal,willVoice?null:onDelta,{skipSave:true,...voiceModelOpts(p),images});
           savePersonaMemory(pid,`YOU: ${text}\n${p.name}: ${stripCommands(response)||response}`).catch(()=>{});
         }
         const display=stripCommands(response)||response;
@@ -1465,6 +1520,9 @@ export default function CommandScreen({navigation}){
             </TouchableOpacity>}
             <TouchableOpacity style={s.iact} onPress={pickImage}>
               <View style={s.iactDot}/><Text style={s.iactT}>IMAGE</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={s.iact} onPress={pickVideo}>
+              <View style={s.iactDot}/><Text style={s.iactT}>VIDEO</Text>
             </TouchableOpacity>
             <TouchableOpacity style={s.iact} onPress={pickDocument}>
               <View style={s.iactDot}/><Text style={s.iactT}>DOCUMENT</Text>

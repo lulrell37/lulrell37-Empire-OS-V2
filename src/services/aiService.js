@@ -144,6 +144,21 @@ function xhrStream({url,headers,body,signal,onEvent}){
   });
 }
 
+// Read an image attachment ({uri} or already-base64 {data}) into a provider block.
+async function toImageBlocks(images,provider){
+  const out=[];
+  for(const im of images||[]){
+    if(!im)continue;
+    let data=im.data;
+    if(!data&&im.uri){try{data=await FileSystem.readAsStringAsync(im.uri,{encoding:FileSystem.EncodingType.Base64});}catch{continue;}}
+    if(!data)continue;
+    const mime=im.mime||'image/jpeg';
+    if(provider==='openai')out.push({type:'image_url',image_url:{url:`data:${mime};base64,${data}`}});
+    else out.push({type:'image',source:{type:'base64',media_type:mime,data}});
+  }
+  return out;
+}
+
 export async function callPersona(personaId,messages,signal=null,onDelta=null,opts={}){
   const k=await ensureKeys();
   const{getPersona}=await import('../personas/personas');
@@ -154,11 +169,40 @@ export async function callPersona(personaId,messages,signal=null,onDelta=null,op
   const maxTokens=opts.maxTokens||1500;
   let response='';
   const emit=(t)=>{if(t){response+=t;if(stream){try{onDelta(t);}catch{}}}};
-  if(persona.api==='claude'){
+
+  // Vision: when the turn carries images, attach them to the last user message
+  // and route through a vision-capable model. Grok-3 has no vision, so a Grok
+  // persona's visual turn is answered by Claude — the persona prompt is
+  // unchanged, only the model for this one turn.
+  const images=Array.isArray(opts.images)?opts.images.filter(x=>x&&(x.uri||x.data)):[];
+  const hasVision=images.length>0;
+  const be=hasVision?await loadBackend():null;
+  // Grok-3 has no vision. Prefer Claude for a Grok persona's visual turn; if
+  // there's no Claude route, fall back to xAI's own vision model.
+  let api=persona.api;
+  let grokVisionModel=null;
+  if(hasVision&&persona.api==='grok'){
+    if(k?.claude||be)api='claude';
+    else{grokVisionModel='grok-2-vision-1212';}
+  }
+  if(hasVision){
+    const provider=(api==='openai'||grokVisionModel)?'openai':'claude';
+    const blocks=await toImageBlocks(images,provider);
+    if(blocks.length){
+      for(let i=hist.length-1;i>=0;i--){
+        if(hist[i].role==='user'){
+          hist[i]={role:'user',content:[{type:'text',text:String(hist[i].content||'')},...blocks]};
+          break;
+        }
+      }
+    }
+  }
+
+  if(api==='claude'){
     const{base,auth}=await aiRoute('claude',k?.claude,'Claude');
     const url=base+'/v1/messages';
     const headers={'Content-Type':'application/json',...auth};
-    const body=JSON.stringify({model:opts.model||persona.model||'claude-sonnet-4-6',max_tokens:maxTokens,system:sys,messages:hist,stream});
+    const body=JSON.stringify({model:hasVision?'claude-sonnet-4-6':(opts.model||persona.model||'claude-sonnet-4-6'),max_tokens:maxTokens,system:sys,messages:hist,stream});
     if(stream){
       let tin=0,tout=0;
       await xhrStream({url,headers,body,signal,onEvent:(e)=>{
@@ -175,11 +219,11 @@ export async function callPersona(personaId,messages,signal=null,onDelta=null,op
       emit(d.content?.[0]?.text||'');
       if(d.usage)await trackApiUsage('claude',d.usage.input_tokens||0,d.usage.output_tokens||0).catch(()=>{});
     }
-  }else if(persona.api==='grok'){
+  }else if(api==='grok'){
     const{base,auth}=await aiRoute('grok',k?.grok,'Grok');
     const url=base+'/v1/chat/completions';
     const headers={'Content-Type':'application/json',...auth};
-    const body=JSON.stringify({model:opts.model||persona.model||'grok-3-latest',max_tokens:maxTokens,messages:[{role:'system',content:sys},...hist],stream});
+    const body=JSON.stringify({model:grokVisionModel||opts.model||persona.model||'grok-3-latest',max_tokens:maxTokens,messages:[{role:'system',content:sys},...hist],stream});
     if(stream){
       await xhrStream({url,headers,body,signal,onEvent:(e)=>{
         const c=e.choices?.[0]?.delta?.content;if(c)emit(c);
@@ -192,11 +236,11 @@ export async function callPersona(personaId,messages,signal=null,onDelta=null,op
       emit(d.choices?.[0]?.message?.content||'');
       if(d.usage)await trackApiUsage('grok',d.usage.prompt_tokens||0,d.usage.completion_tokens||0).catch(()=>{});
     }
-  }else if(persona.api==='openai'){
+  }else if(api==='openai'){
     const{base,auth}=await aiRoute('openai',k?.openai,'OpenAI');
     const url=base+'/v1/chat/completions';
     const headers={'Content-Type':'application/json',...auth};
-    const body=JSON.stringify({model:opts.model||persona.model||'gpt-4o',max_tokens:maxTokens,messages:[{role:'system',content:sys},...hist],stream,...(stream?{stream_options:{include_usage:true}}:{})});
+    const body=JSON.stringify({model:hasVision?'gpt-4o':(opts.model||persona.model||'gpt-4o'),max_tokens:maxTokens,messages:[{role:'system',content:sys},...hist],stream,...(stream?{stream_options:{include_usage:true}}:{})});
     if(stream){
       await xhrStream({url,headers,body,signal,onEvent:(e)=>{
         const c=e.choices?.[0]?.delta?.content;if(c)emit(c);
@@ -211,7 +255,12 @@ export async function callPersona(personaId,messages,signal=null,onDelta=null,op
     }
   }
   const lastUser=messages.filter(m=>m.role==='user').slice(-1)[0];
-  if(lastUser&&response&&!opts.skipSave){await savePersonaMemory(personaId,`YOU: ${lastUser.content}\n${persona.name}: ${response}`).catch(()=>{});}
+  if(lastUser&&response&&!opts.skipSave){
+    // Prefer a caller-supplied clean prompt — the raw message can carry a huge
+    // injected link transcript we don't want stored verbatim.
+    const uText=opts.saveUserText||(typeof lastUser.content==='string'?lastUser.content:'[attachment]');
+    await savePersonaMemory(personaId,`YOU: ${uText}\n${persona.name}: ${response}`).catch(()=>{});
+  }
   return response;
 }
 
@@ -273,7 +322,7 @@ export async function autoTradeDecision({symbol,snapshot,record,strategy,positio
   const k=await ensureKeys();
   const{base,auth}=await aiRoute('claude',k?.claude,'Claude');
   const sys=`You are A.T.L.A.S., running UNATTENDED on a DEMO trading account. No human reviews your call before it fires. Every order is 0.01 lot.
-Look at ${symbol} right now and decide. Doing NOTHING is the right answer most of the time — only act on a real, high-conviction edge that fits your strategy and your record. Stops and targets go off structure, tight, as concrete prices.
+Look at ${symbol} right now and decide. Patience is still the edge — never force a trade in chop or against clear structure. BUT this is a live demo you are meant to be actively working: when a clean setup is in front of you that fits your strategy and your record — a defined level, a clear bias, a sensible stop — take it rather than holding out for a perfect one. A reasonable A-/B+ setup with tight risk is a yes. Stops and targets go off structure, tight, as concrete prices.
 Reply with ONLY a JSON object, no prose, no code fence:
 {"action":"enter"|"close"|"none","side":"buy"|"sell","stopLoss":<price>,"takeProfit":<price>,"setup":"scalp|swing|<label>","rationale":"<=140 chars","closeIds":["<id>"],"breakevenIds":["<id>"]}
 Use "enter" to open one position, "close" to close open positions by id, "none" to wait. "breakevenIds" moves those open positions' stops to entry — only positions already comfortably in profit — and may accompany any action. You may hold up to 5 positions at once (one per pair); if 5 are already open, do not "enter". Omit fields that don't apply. If unsure: {"action":"none"}.`;
@@ -290,41 +339,83 @@ Use "enter" to open one position, "close" to close open positions by id, "none" 
   try{return JSON.parse(m[0]);}catch{return{action:'none'};}
 }
 
-// Quick web search — a tight factual briefing, not deep research. Grok Live
-// Search for Grok personas, Claude's web_search tool otherwise.
+// Quick web search — a tight factual briefing, not deep research. Tries xAI Live
+// Search for Grok personas, then always falls back to Claude's web_search tool
+// so a persona never has to report "nothing" just because one provider is down
+// or has changed its search API.
+const SEARCH_BRIEF='Search the web and give a tight, factual briefing: the key numbers, facts, and dates, with source names inline. No fluff, no preamble.';
+
+// A result that isn't actually search output — the model refused or came back empty.
+function looksLikeNoSearch(t){
+  const s=String(t||'').trim().toLowerCase();
+  if(s.length<12)return true;
+  return /\b(i can(?:'|no)t (?:browse|search|access the (?:web|internet))|i (?:don'?t|do not) have (?:web|internet|real-?time) access|unable to (?:browse|search)|no results?\b|nothing (?:came back|found)|as an ai)\b/.test(s);
+}
+
+async function grokLiveSearch(persona,query,signal){
+  const k=await ensureKeys();
+  const{base,auth}=await aiRoute('grok',k?.grok,'Grok');
+  const res=await fetch(base+'/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json',...auth},body:JSON.stringify({
+    model:persona.model&&!/latest/.test(persona.model)?persona.model:'grok-3',max_tokens:900,
+    messages:[{role:'system',content:SEARCH_BRIEF},{role:'user',content:query}],
+    search_parameters:{mode:'on',return_citations:true,sources:[{type:'web'},{type:'news'},{type:'x'}],max_search_results:10},
+  }),signal});
+  if(!res.ok)throw new Error(`grok live search HTTP ${res.status}: ${String(await res.text()).substring(0,200)}`);
+  const d=await res.json();
+  if(d.usage)await trackApiUsage('grok',d.usage.prompt_tokens||0,d.usage.completion_tokens||0).catch(()=>{});
+  const txt=d.choices?.[0]?.message?.content||'';
+  const cites=d.citations?.length?`\n\nSources: ${d.citations.slice(0,8).join(' · ')}`:'';
+  return(txt+cites).trim();
+}
+
+async function claudeWebSearch(query,signal){
+  const k=await ensureKeys();
+  const{base,auth}=await aiRoute('claude',k?.claude,'Claude');
+  const res=await fetch(base+'/v1/messages',{method:'POST',headers:{'Content-Type':'application/json',...auth},body:JSON.stringify({
+    model:'claude-sonnet-4-6',max_tokens:1000,
+    tools:[{type:'web_search_20250305',name:'web_search',max_uses:5}],
+    messages:[{role:'user',content:`${SEARCH_BRIEF}\n\nQuery: ${query}`}],
+  }),signal});
+  if(!res.ok)throw new Error(`claude web search HTTP ${res.status}: ${String(await res.text()).substring(0,200)}`);
+  const d=await res.json();
+  if(d.usage)await trackApiUsage('claude',d.usage.input_tokens||0,d.usage.output_tokens||0).catch(()=>{});
+  return(d.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('\n').trim();
+}
+
 export async function webSearch(personaId,query,signal=null){
   const k=await ensureKeys();
   const{getPersona}=await import('../personas/personas');
   const persona=getPersona(personaId);
-  const brief='Search the web and give a tight, factual briefing: the key numbers, facts, and dates, with source names inline. No fluff, no preamble.';
   const be=await loadBackend();
-  if(persona.api==='grok'&&(k?.grok||be)){
-    const{base,auth}=await aiRoute('grok',k?.grok,'Grok');
-    const res=await fetch(base+'/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json',...auth},body:JSON.stringify({
-      model:persona.model||'grok-3-latest',max_tokens:900,
-      messages:[{role:'system',content:brief},{role:'user',content:query}],
-      search_parameters:{mode:'on',return_citations:true,max_search_results:8},
-    }),signal});
-    if(!res.ok)throw new Error(`web search: ${(await res.text()).substring(0,80)}`);
-    const d=await res.json();
-    if(d.usage)await trackApiUsage('grok',d.usage.prompt_tokens||0,d.usage.completion_tokens||0).catch(()=>{});
-    const txt=d.choices?.[0]?.message?.content||'';
-    const cites=d.citations?.length?`\n\nSources: ${d.citations.slice(0,8).join(' · ')}`:'';
-    return(txt+cites).trim()||'(no results)';
+  const haveGrok=!!(k?.grok||be);
+  const haveClaude=!!(k?.claude||be);
+  if(!haveGrok&&!haveClaude)throw new Error('web search needs a Grok or Claude API key, or a connected backend');
+  const errs=[];
+  // 1) Grok Live Search first for Grok personas (best for X / fast-moving news).
+  if(persona.api==='grok'&&haveGrok){
+    try{
+      const out=await grokLiveSearch(persona,query,signal);
+      if(out&&!looksLikeNoSearch(out))return out;
+      errs.push('grok: empty/refused');
+    }catch(e){if(e?.name==='AbortError')throw e;errs.push(e.message);}
   }
-  if(k?.claude||be){
-    const{base,auth}=await aiRoute('claude',k?.claude,'Claude');
-    const res=await fetch(base+'/v1/messages',{method:'POST',headers:{'Content-Type':'application/json',...auth},body:JSON.stringify({
-      model:'claude-sonnet-4-6',max_tokens:1000,
-      tools:[{type:'web_search_20250305',name:'web_search',max_uses:5}],
-      messages:[{role:'user',content:`${brief}\n\nQuery: ${query}`}],
-    }),signal});
-    if(!res.ok)throw new Error(`web search: ${(await res.text()).substring(0,80)}`);
-    const d=await res.json();
-    if(d.usage)await trackApiUsage('claude',d.usage.input_tokens||0,d.usage.output_tokens||0).catch(()=>{});
-    return(d.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('\n').trim()||'(no results)';
+  // 2) Claude web_search tool — the reliable default and the fallback for everyone.
+  if(haveClaude){
+    try{
+      const out=await claudeWebSearch(query,signal);
+      if(out&&!looksLikeNoSearch(out))return out;
+      errs.push('claude: empty');
+    }catch(e){if(e?.name==='AbortError')throw e;errs.push(e.message);}
   }
-  throw new Error('web search needs a Grok or Claude API key, or a connected backend');
+  // 3) Last resort: Grok for a non-Grok persona if that's all we have.
+  if(persona.api!=='grok'&&haveGrok){
+    try{
+      const out=await grokLiveSearch(persona,query,signal);
+      if(out&&!looksLikeNoSearch(out))return out;
+      errs.push('grok(fallback): empty/refused');
+    }catch(e){if(e?.name==='AbortError')throw e;errs.push(e.message);}
+  }
+  throw new Error(`web search failed — ${errs.join(' | ').slice(0,240)}`);
 }
 
 // Long-form autonomous research via OpenAI Deep Research. Runs for minutes —

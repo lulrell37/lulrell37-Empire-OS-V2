@@ -15,6 +15,9 @@ import{reconcileOpenTrades,formatTradeRecord,getStrategy,recordTradeOpen}from '.
 import{getSetting,saveMessage,savePersonaMemory}from './database';
 
 let timer=null,running=false,busy=false;
+let warnedDisconnected=false;   // so "waiting for TradeLocker" is said once, not every cycle
+let lastHeartbeat=0;            // throttle the "nothing happened" line
+const HEARTBEAT_MS=1800000;     // ...to at most once every 30 min
 const listeners=new Set();
 
 export function onAutoTrade(cb){listeners.add(cb);return()=>listeners.delete(cb);}
@@ -31,7 +34,11 @@ async function runOnce(){
   try{
     if((await getSetting('auto_trade','0'))!=='1'){stopAutoTrader();return;}
     const st=tlStatus();
-    if(!st.connected)return;
+    if(!st.connected){
+      if(!warnedDisconnected){warnedDisconnected=true;emit('AUTO-TRADE waiting — TradeLocker isn’t connected yet. Log in under Settings › TRADELOCKER; the loop starts watching once the session is live.');}
+      return;
+    }
+    warnedDisconnected=false;
     if(st.env!=='demo'){
       emit('AUTO-TRADE HALTED — TradeLocker is on a LIVE account. Auto-trade only runs on demo. Turn it back on in Settings once you are back on demo.');
       await getSetting('auto_trade','0'); // (read only — leave the toggle; the guard above stops the loop)
@@ -53,9 +60,11 @@ async function runOnce(){
     const record=await formatTradeRecord().catch(()=>'');
     const strategy=await getStrategy().catch(()=>'');
 
+    let entered=0,closed=0,scanned=0;
     for(const sym of syms){
       let snap;
       try{snap=await tlSnapshot(sym);}catch{continue;}
+      scanned++;
       const mine=positions.filter(p=>symOf(p)===sym);
       const posText=mine.map(p=>`#${p.id} ${p.side} ${p.qty} @ ${p.avgPrice} (uP/L ${p.unrealizedPl})`).join('; ')||'none';
 
@@ -75,7 +84,7 @@ async function runOnce(){
 
       if(dec.action==='close'&&Array.isArray(dec.closeIds)&&dec.closeIds.length){
         for(const id of dec.closeIds){
-          try{await tlClosePosition(id);emit(`AUTO · closed #${id} ${sym}${dec.rationale?` — ${dec.rationale}`:''}`);}
+          try{await tlClosePosition(id);closed++;emit(`AUTO · closed #${id} ${sym}${dec.rationale?` — ${dec.rationale}`:''}`);}
           catch(e){emit(`AUTO close #${id} failed: ${e.message}`);}
         }
         continue;
@@ -89,11 +98,21 @@ async function runOnce(){
           const r=await tlPlaceOrder({symbol:sym,side:dec.side,qty:MAX_QTY,stopLoss:dec.stopLoss,takeProfit:dec.takeProfit});
           await recordTradeOpen({symbol:sym,side:r.side,qty:r.qty,entry:price,stopLoss:dec.stopLoss,takeProfit:dec.takeProfit,
             rationale:dec.rationale||'auto-trade',orderId:r.orderId,setup:dec.setup,auto:true}).catch(()=>{});
-          openSyms.add(sym);openCount++;
+          openSyms.add(sym);openCount++;entered++;
           emit(`AUTO · ${r.side.toUpperCase()} ${r.qty} ${sym} @ ~${price??'mkt'} · SL ${dec.stopLoss??'—'} TP ${dec.takeProfit??'—'}${dec.rationale?` — ${dec.rationale}`:''}`);
           savePersonaMemory('atlas',`[auto-trade] opened ${r.side} ${sym} @ ~${price??'mkt'} — ${dec.rationale||''}`).catch(()=>{});
         }catch(e){emit(`AUTO ${sym} order failed: ${e.message}`);}
       }
+    }
+    // Heartbeat — so you can see the loop is alive even on a quiet cycle. A cycle
+    // that traded always logs; a quiet cycle logs at most every HEARTBEAT_MS.
+    if(scanned&&(entered||closed||Date.now()-lastHeartbeat>HEARTBEAT_MS)){
+      lastHeartbeat=Date.now();
+      const bits=[];
+      if(entered)bits.push(`${entered} new`);
+      if(closed)bits.push(`${closed} closed`);
+      if(!bits.length)bits.push('standing pat');
+      emit(`AUTO · reviewed ${syms.join(', ')} — ${bits.join(', ')} (${openCount}/${MAX_OPEN_POSITIONS} open)`);
     }
   }catch(e){/* never let the loop throw */}
   finally{busy=false;}
@@ -111,6 +130,8 @@ export async function startAutoTrader(){
 
 export function stopAutoTrader(){
   running=false;
+  warnedDisconnected=false;
+  lastHeartbeat=0;
   if(timer){clearInterval(timer);timer=null;}
 }
 
