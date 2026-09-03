@@ -149,7 +149,7 @@ export async function replyToBuild(issueNumber,text,repo=DEFAULT_REPO){
   return{ok:true};
 }
 
-// --- Find the PR the Action opened for this issue ---
+// --- Find the PR for this issue ---
 export async function findLinkedPR(issueNumber,repo=DEFAULT_REPO){
   const prs=await gh(`${rp(repo)}/pulls?state=all&per_page=50&sort=created&direction=desc`);
   const branchTag=`issue-${issueNumber}-`;
@@ -159,6 +159,36 @@ export async function findLinkedPR(issueNumber,repo=DEFAULT_REPO){
   );
   if(!pr)return null;
   return{prNumber:pr.number,title:pr.title,state:pr.state,merged:!!pr.merged_at,url:pr.html_url,headSha:pr.head?.sha};
+}
+
+// The Claude Code Action, when triggered on an ISSUE, pushes a `claude/issue-N-*`
+// branch and posts a "Create PR" link rather than opening the PR itself. Find
+// that branch (with commits ahead of the base) and open the PR so the app's
+// merge flow can pick it up. Returns the same shape as findLinkedPR, or null.
+export async function openPRForIssue(issueNumber,repo=DEFAULT_REPO){
+  const branches=await gh(`${rp(repo)}/branches?per_page=100`);
+  const branch=branches.find(b=>new RegExp(`(^|/)(claude[/-])?issue-${issueNumber}-`).test(b.name)||b.name.includes(`issue-${issueNumber}-`));
+  if(!branch)return null;
+  const repoInfo=await gh(rp(repo));
+  const base=repoInfo.default_branch||'main';
+  // Only open a PR if the branch actually has commits the base doesn't.
+  try{
+    const cmp=await gh(`${rp(repo)}/compare/${base}...${encodeURIComponent(branch.name)}`);
+    if(!cmp.ahead_by)return null;
+  }catch{return null;}
+  const issue=await gh(`${rp(repo)}/issues/${issueNumber}`);
+  try{
+    const pr=await gh(`${rp(repo)}/pulls`,{method:'POST',body:{
+      title:issue.title||`Build request #${issueNumber}`,
+      head:branch.name,base,
+      body:`Implements #${issueNumber}.\n\nCloses #${issueNumber}`,
+    }});
+    return{prNumber:pr.number,title:pr.title,state:pr.state,merged:false,url:pr.html_url,headSha:pr.head?.sha};
+  }catch(e){
+    // A PR for this head may already exist — fall back to the finder.
+    if(/pull request already exists/i.test(e.message))return await findLinkedPR(issueNumber,repo);
+    throw e;
+  }
 }
 
 // --- PR + CI status ---

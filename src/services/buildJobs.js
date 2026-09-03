@@ -4,7 +4,7 @@
 // Each job carries its own repo (Empire OS V2 for app changes, a dedicated repo
 // for a client project), so every GitHub call is scoped to job's repo.
 import{getActiveBuildJobs,updateBuildJob,buildJobRepo}from './database';
-import{getIssueActivity,findLinkedPR,getPRStatus}from './buildAgent';
+import{getIssueActivity,findLinkedPR,openPRForIssue,getPRStatus}from './buildAgent';
 
 // A Claude comment that asks for input rather than reporting a PR.
 function looksLikeQuestion(body){
@@ -49,7 +49,10 @@ export async function pollBuildJobs(){
 
       // 2. Is there a PR yet?
       if(!job.pr_number){
-        const pr=await findLinkedPR(n,repo);
+        let pr=await findLinkedPR(n,repo);
+        // The Action leaves a pushed branch without a PR when triggered on an
+        // issue — open it ourselves so the merge flow can proceed.
+        if(!pr){try{pr=await openPRForIssue(n,repo);}catch{/* no branch yet, or transient */}}
         if(pr){
           if(pr.merged){
             await updateBuildJob(job.id,{pr_number:pr.prNumber,state:'pushed'});
