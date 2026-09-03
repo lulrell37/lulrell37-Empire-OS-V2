@@ -330,7 +330,7 @@ export default function SettingsScreen({navigation}){
           </View>}
           {tab==='DEV'&&<View>
             <Text style={s.secTitle}>BUILD PIPELINE</Text>
-            <Text style={s.secSub}>JARVIS files what you ask for as a GitHub issue; Claude Code implements it, opens a pull request, and JARVIS relays the questions and tells you when it's shipped. Runs only while the app is open. Every run bills your Anthropic key.</Text>
+            <Text style={s.secSub}>JARVIS files app changes as GitHub issues; Claude Code implements them, opens a pull request, and JARVIS relays questions and tells you when it's shipped. A.R.A. uses the same pipeline for client projects — each gets its own repo, created from client-project-template. Runs only while the app is open. Every run bills your Anthropic key.</Text>
             {ghStatus&&<View style={[s.tlAcctCard,{marginTop:0,marginBottom:16,borderColor:ghStatus.ok?'#2c4a38':'#4a2c2c'}]}>
               <Text style={[s.tlAcctLine,{color:ghStatus.ok?'#5FA779':'#C7614B'}]}>{ghStatus.ok?`CONNECTED · ${ghStatus.repo}`:`NOT CONNECTED · ${ghStatus.error}`}</Text>
             </View>}
@@ -344,7 +344,7 @@ export default function SettingsScreen({navigation}){
             <TouchableOpacity style={[s.saveBtn,{backgroundColor:'#111',borderWidth:1,borderColor:'#333',marginTop:10}]} onPress={disconnectGitHub}>
               <Text style={[s.saveBtnT,{color:'#E05555'}]}>DISCONNECT</Text>
             </TouchableOpacity>
-            <Text style={[s.secSub,{marginTop:20,marginBottom:0}]}>ONE-TIME GITHUB SETUP{'\n'}1 · Repo → Settings → Secrets and variables → Actions → add ANTHROPIC_API_KEY (sk-ant-…). Without it Claude Code can't run.{'\n'}2 · Repo → Settings → Actions → General → enable "Allow GitHub Actions to create and approve pull requests."{'\n'}3 · github.com/settings/tokens → fine-grained token, this repo only, with Contents + Issues + Pull requests set to Read and write. Paste it above.</Text>
+            <Text style={[s.secSub,{marginTop:20,marginBottom:0}]}>ONE-TIME GITHUB SETUP{'\n'}1 · github.com/settings/tokens → generate a CLASSIC token with the "repo" and "workflow" scopes (a fine-grained "single repo" token can't create the client-project repos). Paste it above and tap CONNECT.{'\n'}2 · This Empire OS repo → Settings → Secrets and variables → Actions → add ANTHROPIC_API_KEY (sk-ant-…). Without it Claude Code can't run app builds.{'\n'}3 · This repo → Settings → Actions → General → enable "Allow GitHub Actions to create and approve pull requests."{'\n'}Client-project repos get their ANTHROPIC_API_KEY and PR permissions set automatically when A.R.A. creates them, using the Anthropic key from the KEYS tab.</Text>
           </View>}
           {tab==='BACKEND'&&<View>
             <Text style={s.secTitle}>BACKEND SERVER</Text>
