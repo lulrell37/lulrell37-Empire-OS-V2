@@ -1470,8 +1470,11 @@ export default function CommandScreen({navigation}){
             await updateBuildJob(job.id,{state:'merging'});
             await mergeBuild(job.pr_number,repo);
             await updateBuildJob(job.id,{state:'pushed'});
-            pushSystemMsg(`— MERGED & PUSHED · ${repo.owner}/${repo.repo} PR #${job.pr_number}${isApp?' · APK build started':''} —`);
+            pushSystemMsg(`— MERGED · ${repo.owner}/${repo.repo} PR #${job.pr_number}${isApp?' · APK build started':''} —`);
             clearIssue('merge-'+job.id);clearIssue('build-fail-'+job.id);
+            if(job.project_name){
+              araBuildReport({type:'pushed',job:{...job,pr_number:job.pr_number}});
+            }
           }catch(e){
             await updateBuildJob(job.id,{state:'pr_open'});
             pushSystemMsg(`Merge failed: ${e.message}`);
@@ -1500,9 +1503,10 @@ export default function CommandScreen({navigation}){
   // system line — so she "comes back" on her own.
   async function araBuildReport(ev){
     const job=ev.job;
+    const jrepo=buildJobRepo(job);
     const line=ev.type==='question'?`Claude Code has a question on the "${job.project_name}" build (issue #${job.issue_number}):\n${ev.text}`
       :ev.type==='pr_open'?`The "${job.project_name}" build opened a pull request (#${job.pr_number}): ${ev.text}`
-      :ev.type==='pushed'?`The "${job.project_name}" build — PR #${job.pr_number} — is merged and shipped.`
+      :ev.type==='pushed'?`The "${job.project_name}" build (PR #${job.pr_number}) is merged into main of ${jrepo.owner}/${jrepo.repo}. The code is in, but it is NOT deployed to a live URL yet — that host still needs setting up. Tell Mr. Burrus what landed and that the next step is choosing where to publish it.`
       :ev.type==='failed'?`The "${job.project_name}" build hit a problem: ${ev.text}`
       :null;
     if(!line)return;
