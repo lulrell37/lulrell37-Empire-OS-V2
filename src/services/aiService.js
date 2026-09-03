@@ -34,19 +34,28 @@ export async function personaSystemPrompt(personaId){
   return buildSys(personaId,getPersona(personaId),[]);
 }
 
-async function buildSys(personaId,persona,convo=[]){
+// The current moment in Mr. Burrus's timezone, computed fresh every call.
+// Personas anchor to the last dated thing they saw, so stale chat history / old
+// memory entries were making them think it was still the day or time of the
+// previous conversation. Used both at the end of the system prompt and stamped
+// onto the latest user turn.
+export function currentMoment(){
   const now=new Date();
   const timeStr=now.toLocaleString('en-US',{timeZone:'America/New_York',weekday:'long',month:'long',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit',hour12:true});
   const jan=new Date(now.getFullYear(),0,1).getTimezoneOffset();
   const jul=new Date(now.getFullYear(),6,1).getTimezoneOffset();
   const tz=now.getTimezoneOffset()<Math.max(jan,jul)?'EDT':'EST';
+  return{timeStr,tz,label:`${timeStr} ${tz}`};
+}
+
+async function buildSys(personaId,persona,convo=[]){
+  const{timeStr,tz}=currentMoment();
   const customPrompt=await getCustomPrompt(personaId);
   let sys=customPrompt||persona.system;
   sys+=`\n\n[RESPONSE STYLE: Reply directly to what Mr. Burrus just said. Do not open with a status briefing, HUD summary, morning-routine readout, or any unprompted overview unless he explicitly asks for one. Skip "here is where things stand" preambles — answer the message and stop.]`;
   sys+=`\n\n[MEMORY RECALL: The memory block below holds what is most relevant right now. If you need to recall something specific from past conversations that is NOT shown there, emit [MEMORY_QUERY: your precise question] and your memory index will answer it before you reply. Use it sparingly, only when it matters. Never mention this mechanism to Mr. Burrus — just recall.]`;
   sys+=`\n\n[CHARTS: When numbers would land better as a picture, emit [SHOW_CHART: type | title | data]. type = line, area, bar, or pie. data = "label:value, label:value, ..." for one series, or "A=x:1,y:2; B=x:3,y:4" for several. It takes over the visualization panel until Mr. Burrus closes it. Use it when it genuinely helps — trends, breakdowns, comparisons — not for one or two numbers.]`;
   sys+=`\n\n[WEB: You can search the live web with [SEARCH_WEB: query] (max 1 per turn) — the result comes back before you reply. Use it only when the answer really turns on something current that you can't know: today's price, a recent event, a just-released product, a fast-moving number. For general knowledge, or in quick back-and-forth conversation, just answer directly — a search adds a noticeable delay before you can speak, so it must be worth it. Don't mention the mechanism; weave in what you find with source names.]`;
-  sys+=`\n\n[CURRENT DATE & TIME: ${timeStr} ${tz} | LOCATION: Waldorf, MD]`;
   try{
     const gt=await loadGoogleToken();
     if(gt?.accessToken){
@@ -129,6 +138,8 @@ async function buildSys(personaId,persona,convo=[]){
     const body=mem.map(m=>`[${m.date}${m.category?' · '+m.category:''}]\n${m.content}`).join('\n\n');
     sys+=`\n\n[MEMORY — past exchanges kept in full, most relevant to the current message first. Reference naturally; never claim you don't remember:\n${body.substring(0,6000)}\n]`;
   }
+  // Keep this LAST so it's the most recent thing the model reads before replying.
+  sys+=`\n\n[THE CURRENT MOMENT — right now it is ${timeStr} ${tz}, and Mr. Burrus is in Waldorf, MD. This is authoritative. The chat history and the memory above may be hours, days, or weeks old — do NOT assume it is still the same day or time of day as the last message. Every reply should be grounded in the date and time stated here. If more than a few hours have clearly passed since the last exchange, greet the new moment accordingly (a fresh morning, a new day) rather than continuing as if no time passed.]`;
   return sys;
 }
 // SSE over XHR — React Native's fetch can't expose a streaming response body,
@@ -203,6 +214,18 @@ export async function callPersona(personaId,messages,signal=null,onDelta=null,op
   const persona=getPersona(personaId);
   const sys=await buildSys(personaId,persona,messages);
   const hist=messages.slice(-20).map(m=>({role:m.role==='system'?'user':m.role,content:m.content}));
+  // Stamp the current moment onto the newest user turn — the model weights the
+  // last dated thing it saw, and undated stale history was making personas reply
+  // as if it were still the day/time of the previous conversation.
+  {
+    const mm=currentMoment();
+    for(let i=hist.length-1;i>=0;i--){
+      if(hist[i].role==='user'&&typeof hist[i].content==='string'){
+        hist[i]={...hist[i],content:`[${mm.label}] ${hist[i].content}`};
+        break;
+      }
+    }
+  }
   const stream=typeof onDelta==='function';
   const maxTokens=opts.maxTokens||1500;
   let response='';
