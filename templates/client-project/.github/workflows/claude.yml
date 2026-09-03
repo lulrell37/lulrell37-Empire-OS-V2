@@ -32,5 +32,5 @@ jobs:
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ github.token }}
-          claude_args: |
-            --max-turns 150
+          # No --max-turns: client-project builds run to completion (the work is
+          # billed to the client). GitHub's 6h job timeout is the only ceiling.
