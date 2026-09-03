@@ -38,8 +38,9 @@ export async function computeNudges(){
 
   try{
     for(const j of await getActiveBuildJobs()){
-      if(j.state==='question')out.push({key:'build-q-'+j.issue_number,text:`Claude Code needs your answer on #${j.issue_number}`});
-      else if(j.state==='pr_open')out.push({key:'build-pr-'+j.issue_number,text:`PR #${j.pr_number} ready to merge`});
+      const tag=j.project_name?`the ${j.project_name} build`:`#${j.issue_number}`;
+      if(j.state==='question')out.push({key:'build-q-'+(j.id||j.issue_number),text:`Claude Code needs your answer on ${tag}`});
+      else if(j.state==='pr_open')out.push({key:'build-pr-'+(j.id||j.issue_number),text:`${j.project_name?j.project_name+': ':''}PR #${j.pr_number} ready to merge`});
     }
   }catch{}
 

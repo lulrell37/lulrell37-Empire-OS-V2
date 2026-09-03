@@ -19,12 +19,13 @@ export async function initDatabase(){
     CREATE TABLE IF NOT EXISTS app_settings(key TEXT PRIMARY KEY,value TEXT);
     CREATE TABLE IF NOT EXISTS expenses(id INTEGER PRIMARY KEY AUTOINCREMENT,amount REAL,category TEXT,note TEXT,date TEXT,created_at INTEGER);
     CREATE TABLE IF NOT EXISTS important_dates(id INTEGER PRIMARY KEY AUTOINCREMENT,label TEXT,date TEXT,note TEXT,created_at INTEGER);
-    CREATE TABLE IF NOT EXISTS build_jobs(issue_number INTEGER PRIMARY KEY,pr_number INTEGER,spec TEXT,state TEXT,question TEXT,last_comment_id INTEGER DEFAULT 0,title TEXT,created_at INTEGER,updated_at INTEGER);
+    CREATE TABLE IF NOT EXISTS build_jobs(id TEXT PRIMARY KEY,repo_owner TEXT,repo_name TEXT,issue_number INTEGER,pr_number INTEGER,spec TEXT,state TEXT,question TEXT,last_comment_id INTEGER DEFAULT 0,title TEXT,project_name TEXT,created_at INTEGER,updated_at INTEGER);
     CREATE TABLE IF NOT EXISTS trades(id INTEGER PRIMARY KEY AUTOINCREMENT,persona TEXT DEFAULT 'atlas',symbol TEXT,side TEXT,qty REAL,entry_ref REAL,entry_fill REAL,stop_loss REAL,take_profit REAL,setup TEXT,rationale TEXT,status TEXT DEFAULT 'open',order_id TEXT,position_id TEXT,opened_at INTEGER,closed_at INTEGER,exit_price REAL,realized_pl REAL,pl_estimated INTEGER DEFAULT 0,outcome TEXT,r_multiple REAL,review TEXT,misses INTEGER DEFAULT 0,last_unrealized REAL,auto INTEGER DEFAULT 0,created_at INTEGER,updated_at INTEGER);
     CREATE TABLE IF NOT EXISTS deep_research(id TEXT PRIMARY KEY,topic TEXT,persona TEXT,mode TEXT DEFAULT 'direct',model TEXT,status TEXT DEFAULT 'running',progress TEXT,result TEXT,error TEXT,started_at INTEGER,finished_at INTEGER,created_at INTEGER,updated_at INTEGER);
   `);
   await migrateHudColumns();
   await migratePersonaMemory();
+  await migrateBuildJobs();
   await migrateColumn('trades','auto','INTEGER DEFAULT 0');
   await migrateColumn('deep_research','delivered','INTEGER DEFAULT 0');
   await ensureHudState();
@@ -48,7 +49,7 @@ const SYNC_TABLES={
   notes:'lower(hex(randomblob(16)))',
   expenses:'lower(hex(randomblob(16)))',
   important_dates:'lower(hex(randomblob(16)))',
-  build_jobs:'CAST(NEW.issue_number AS TEXT)',
+  build_jobs:'NEW.id',
   trades:'lower(hex(randomblob(16)))',
   business_targets:'NEW.business',
   custom_prompts:'NEW.persona',
@@ -91,6 +92,18 @@ async function initSync(){
       WHEN (SELECT mute FROM sync_meta WHERE id=1)=0 AND OLD.sync_id IS NOT NULL
       BEGIN INSERT OR REPLACE INTO tombstones(table_name,sync_id,deleted_at) VALUES('${t}',OLD.sync_id,${NOW_MS}); END;
     `);
+    // build_jobs is keyed on a synthetic `id` (`owner/repo#issue`) that equals
+    // its sync_id. Rows arriving from another device via sync insert without an
+    // `id`; backfill it from sync_id so getBuildJob(id) keeps working.
+    if(t==='build_jobs'){
+      await db.execAsync(`
+        DROP TRIGGER IF EXISTS build_jobs_id_fill;
+        CREATE TRIGGER build_jobs_id_fill AFTER INSERT ON build_jobs
+        WHEN NEW.id IS NULL AND NEW.sync_id IS NOT NULL
+        BEGIN UPDATE build_jobs SET id=NEW.sync_id WHERE rowid=NEW.rowid; END;
+      `);
+      await db.execAsync(`UPDATE build_jobs SET id=sync_id WHERE id IS NULL AND sync_id IS NOT NULL`);
+    }
   }
 }
 // Add one column to an existing table if it isn't there yet (no-op on fresh installs).
@@ -132,6 +145,25 @@ async function migratePersonaMemory(){
     }
   }
 }
+// build_jobs moved from an issue_number PK to a synthetic `id` (`owner/repo#n`)
+// so client-project repos can't collide with Empire OS V2 on the same issue
+// number. Rebuild the table, tagging every existing row as an Empire OS V2 build.
+async function migrateBuildJobs(){
+  const cols=(await db.getAllAsync('PRAGMA table_info(build_jobs)')).map(c=>c.name);
+  if(!cols.length||cols.includes('id'))return; // fresh install already has the new schema
+  await db.execAsync(`
+    DROP TRIGGER IF EXISTS build_jobs_sync_ins;
+    DROP TRIGGER IF EXISTS build_jobs_sync_upd;
+    DROP TRIGGER IF EXISTS build_jobs_sync_del;
+    ALTER TABLE build_jobs RENAME TO build_jobs_legacy;
+    CREATE TABLE build_jobs(id TEXT PRIMARY KEY,repo_owner TEXT,repo_name TEXT,issue_number INTEGER,pr_number INTEGER,spec TEXT,state TEXT,question TEXT,last_comment_id INTEGER DEFAULT 0,title TEXT,project_name TEXT,created_at INTEGER,updated_at INTEGER);
+    INSERT INTO build_jobs(id,repo_owner,repo_name,issue_number,pr_number,spec,state,question,last_comment_id,title,project_name,created_at,updated_at)
+      SELECT 'lulrell37/lulrell37-Empire-OS-V2#'||issue_number,'lulrell37','lulrell37-Empire-OS-V2',issue_number,pr_number,spec,state,question,COALESCE(last_comment_id,0),title,NULL,created_at,updated_at
+      FROM build_jobs_legacy;
+    DROP TABLE build_jobs_legacy;
+  `);
+}
+
 export function getTodayStr(){return new Date().toISOString().split('T')[0];}
 export function getMonthStr(){const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');}
 // --- Editable HUD structures: morning routine + Batman protocol ---
@@ -475,27 +507,42 @@ export async function getCustomPrompt(persona){const r=await db.getFirstAsync('S
 export async function trackApiUsage(provider,tokensIn,tokensOut){const today=getTodayStr();const ex=await db.getFirstAsync('SELECT * FROM api_usage WHERE provider=? AND date=?',[provider,today]);if(ex){await db.runAsync('UPDATE api_usage SET tokens_in=tokens_in+?,tokens_out=tokens_out+? WHERE id=?',[tokensIn,tokensOut,ex.id]);}else{await db.runAsync('INSERT INTO api_usage(provider,tokens_in,tokens_out,date,created_at) VALUES(?,?,?,?,?)',[provider,tokensIn,tokensOut,today,Date.now()]);}}
 export async function getApiUsage(){return await db.getAllAsync('SELECT * FROM api_usage ORDER BY date DESC LIMIT 30');}
 
-// --- Build jobs (JARVIS build pipeline) ---
+// --- Build jobs (JARVIS / A.R.A. build pipeline) ---
 // state: queued | working | question | pr_open | merging | pushed | failed | cancelled
+// id: `owner/repo#issue` — app-change builds target Empire OS V2, client
+// projects target their own repo.
 const BUILD_TERMINAL=['pushed','failed','cancelled'];
-export async function addBuildJob({issueNumber,spec,title,state='queued'}){
+export const DEFAULT_BUILD_REPO={owner:'lulrell37',repo:'lulrell37-Empire-OS-V2'};
+export function buildJobId(repo,issueNumber){const r=repo||DEFAULT_BUILD_REPO;return `${r.owner}/${r.repo}#${issueNumber}`;}
+export function buildJobRepo(job){return{owner:job?.repo_owner||DEFAULT_BUILD_REPO.owner,repo:job?.repo_name||DEFAULT_BUILD_REPO.repo};}
+export async function addBuildJob({issueNumber,repo=DEFAULT_BUILD_REPO,spec,title,projectName=null,state='queued'}){
   const now=Date.now();
+  const id=buildJobId(repo,issueNumber);
   await db.runAsync(
-    `INSERT INTO build_jobs(issue_number,pr_number,spec,state,question,last_comment_id,title,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)
-     ON CONFLICT(issue_number) DO UPDATE SET pr_number=excluded.pr_number,spec=excluded.spec,state=excluded.state,question=excluded.question,last_comment_id=excluded.last_comment_id,title=excluded.title,updated_at=excluded.updated_at`,
-    [issueNumber,null,spec||'',state,null,0,title||'',now,now],
+    `INSERT INTO build_jobs(id,repo_owner,repo_name,issue_number,pr_number,spec,state,question,last_comment_id,title,project_name,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+     ON CONFLICT(id) DO UPDATE SET pr_number=excluded.pr_number,spec=excluded.spec,state=excluded.state,question=excluded.question,last_comment_id=excluded.last_comment_id,title=excluded.title,project_name=COALESCE(excluded.project_name,build_jobs.project_name),updated_at=excluded.updated_at`,
+    [id,repo.owner,repo.repo,issueNumber,null,spec||'',state,null,0,title||'',projectName,now,now],
   );
-  return issueNumber;
+  return id;
 }
-export async function updateBuildJob(issueNumber,patch){
+export async function updateBuildJob(id,patch){
   const keys=Object.keys(patch);
   if(!keys.length)return;
   const fields=keys.map(k=>`${k}=?`).join(',');
-  await db.runAsync(`UPDATE build_jobs SET ${fields},updated_at=? WHERE issue_number=?`,[...keys.map(k=>patch[k]),Date.now(),issueNumber]);
+  await db.runAsync(`UPDATE build_jobs SET ${fields},updated_at=? WHERE id=?`,[...keys.map(k=>patch[k]),Date.now(),id]);
 }
 export async function getBuildJobs(limit=40){return await db.getAllAsync('SELECT * FROM build_jobs ORDER BY created_at DESC LIMIT ?',[limit]);}
 export async function getActiveBuildJobs(){
   const q=BUILD_TERMINAL.map(()=>'?').join(',');
   return await db.getAllAsync(`SELECT * FROM build_jobs WHERE state NOT IN (${q}) ORDER BY created_at DESC`,BUILD_TERMINAL);
 }
-export async function getBuildJob(issueNumber){return await db.getFirstAsync('SELECT * FROM build_jobs WHERE issue_number=?',[issueNumber]);}
+export async function getBuildJob(id){return await db.getFirstAsync('SELECT * FROM build_jobs WHERE id=?',[id]);}
+// Resolve an issue-number-only reference (from a persona's [BUILD_*:#n] command)
+// to a job row — preferring one in `preferRepo` ({owner,repo}), else newest.
+export async function getBuildJobByIssue(issueNumber,preferRepo=null){
+  if(preferRepo){
+    const hit=await db.getFirstAsync('SELECT * FROM build_jobs WHERE issue_number=? AND repo_owner=? AND repo_name=?',[issueNumber,preferRepo.owner,preferRepo.repo]);
+    if(hit)return hit;
+  }
+  return await db.getFirstAsync('SELECT * FROM build_jobs WHERE issue_number=? ORDER BY created_at DESC LIMIT 1',[issueNumber]);
+}

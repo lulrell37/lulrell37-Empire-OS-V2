@@ -1,5 +1,5 @@
 import{loadKeys,loadBackend,loadGoogleToken}from './keyStore';
-import{getPersonaMemory,getMemoriesByPersona,savePersonaMemory,getHudState,getTasks,trackApiUsage,getCustomPrompt,getUpcomingDates}from './database';
+import{getPersonaMemory,getMemoriesByPersona,savePersonaMemory,getHudState,getTasks,trackApiUsage,getCustomPrompt,getUpcomingDates,getSetting}from './database';
 import*as FileSystem from 'expo-file-system';
 import{Alert}from 'react-native';
 let keys=null;
@@ -85,6 +85,44 @@ async function buildSys(personaId,persona,convo=[]){
     const nudges=await computeNudges();
     if(nudges.length)sys+=`\n\n[PROACTIVE NUDGES — raise any of these yourself if it fits the conversation, don't wait to be asked: ${nudges.map(n=>n.text).join(' · ')}]`;
   }catch{}
+  // THE EMPIRE ROSTER + THE FIRM — every persona knows who the others are, and
+  // how it participates in A.R.A.-coordinated projects. Kept here (not in
+  // persona.system) so it still applies when the user has set a custom prompt.
+  try{
+    const{PERSONA_LIST,PROJECT_ROLES}=await import('../personas/personas');
+    const roster=PERSONA_LIST.filter(x=>x.id!==personaId).map(x=>` - ${x.name} (${x.id}) — ${x.role}`).join('\n');
+    if(roster)sys+=`\n\n[THE EMPIRE — the other personas who serve Mr. Burrus alongside you. Know them, refer to them by name, and hand off anything outside your lane with [RELAY_TO: id | message]:\n${roster}\n]`;
+    if(personaId==='ara'){
+      sys+=`\n\n[THE FIRM — client & project delivery. When Mr. Burrus brings you a project (a client website, a launch, a course, a brand) you run it as coordinator: scope it, delegate it, pull the pieces together, keep him in the loop.
+- Open it once, up front: [PROJECT_START: short name | one-paragraph brief in your own words — the client, what they need, the goal, any constraints he gave | target]. The third field is where the build lands: "new" spins up a dedicated GitHub repo for this client (use this for anything external — a client's website, app or landing page — so it never touches Empire OS); "empire" builds into Empire OS V2 itself (only when the project genuinely IS a change to this app). Default to "new" for outside client work. If the brief is thin, ask the two or three questions that matter first.
+- Delegate to the specialists it needs — one or several in the same reply: [DELEGATE: name | the specific scoped task]. Each one works and reports back to you before you synthesize. Roles: Selene = brand & visual identity; Rogue = copy & content strategy; J.A.R.V.I.S. = architecture & build feasibility (he executes the final build separately); Atlas = pricing structure & payment systems; Asia = legal, terms, privacy, compliance, risk; Stephanie = training or educational content; Haven = health & wellness protocol content. Only pull in the roles that fit.
+- Synthesize: what each delivered, how it fits together, what is decided, what still needs his call. Name any conflict between contributions instead of smoothing it over.
+- Hand off the build once he approves: write the full self-contained spec — folding in every specialist's work — and file it with [BUILD_REQUEST: complete spec]. It goes to the project's repo automatically; for a "new" project that repo is created the moment you open the project.
+- [PROJECT_DONE] when it ships or gets shelved.]`;
+    }else if(personaId==='jarvis'){
+      sys+=`\n\n[THE FIRM: A.R.A. coordinates client & project work. When she hands you a synthesized build spec — visual direction, copy, pricing and legal already folded in — treat it as a complete brief and build the whole thing in one pass. She may also [DELEGATE: jarvis | ...] a scoped architecture or feasibility question while planning; answer it directly and concretely so she can fold your input into the spec.]`;
+    }else if(PROJECT_ROLES&&PROJECT_ROLES[personaId]){
+      sys+=`\n\n[THE FIRM: when A.R.A. delegates a client-project task to you, your lane is "${PROJECT_ROLES[personaId]}". Reply with your part only — concrete, specific and build-ready, no preamble and no restating the brief. Flag anything outside your lane on a line starting "FLAG:".]`;
+    }
+  }catch{}
+  // THE FIRM — A.R.A. carries the active client project so she doesn't have to
+  // restate the brief on every turn, and knows who has already contributed.
+  if(personaId==='ara'){
+    try{
+      const raw=await getSetting('active_project','');
+      const proj=raw?JSON.parse(raw):null;
+      if(proj&&proj.name){
+        const contribs=Array.isArray(proj.contributions)?proj.contributions:[];
+        const who=contribs.length
+          ?contribs.map(c=>`  - ${c.persona}: ${String(c.task||'').slice(0,120)}`).join('\n')
+          :'  (none yet)';
+        const repoLine=proj.repo&&proj.repo.owner
+          ?`\nRepo: ${proj.repo.owner}/${proj.repo.repo} (builds land here)`
+          :(proj.target==='empire'?'\nRepo: Empire OS V2 (this project is an app change)':'\nRepo: not created yet');
+        sys+=`\n\n[ACTIVE CLIENT PROJECT — you are coordinating this:\nName: ${proj.name}\nBrief: ${proj.brief||'(not written)'}${repoLine}\nContributions gathered so far:\n${who}\nDelegate with [DELEGATE: name | task], synthesize what comes back, hand the build off with [BUILD_REQUEST: ...] once Mr. Burrus approves, and [PROJECT_DONE] when it's finished.]`;
+      }
+    }catch{}
+  }
   const lastUser=[...convo].reverse().find(m=>m?.role==='user'&&m?.content);
   const mem=await getPersonaMemory(personaId,{query:lastUser?.content||'',limit:16});
   if(mem?.length){

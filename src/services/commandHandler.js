@@ -54,6 +54,17 @@ export async function handleCommands(response,personaId,callbacks={}){
   for(const m of response.matchAll(/\[RELAY_TO:\s*([^|\]]+)\|([^\]]+)\]/gi)){
     callbacks.onRelay?.({target:m[1].trim().toLowerCase(),message:m[2].trim()});
   }
+  // --- THE FIRM — A.R.A. project orchestration ---
+  // [PROJECT_START: name | brief] opens a client project; [PROJECT_DONE] closes it.
+  // [DELEGATE: persona | task] is handled in CommandScreen.runRound (it calls the
+  // specialist inline and feeds the result back to A.R.A.), not here.
+  for(const m of response.matchAll(/\[PROJECT_START:\s*([\s\S]+?)\]/gi)){
+    const parts=m[1].split('|').map(s=>s.trim());
+    const name=parts[0];if(!name)continue;
+    // target: "empire" (build into Empire OS V2) | "new" (dedicated repo) | "owner/repo"
+    callbacks.onProjectStart?.({name,brief:parts[1]||'',target:(parts[2]||'').toLowerCase()});
+  }
+  if(/\[PROJECT_(?:DONE|CLOSE|COMPLETE|END)\]/i.test(response))callbacks.onProjectDone?.();
   // [TRADE_PROPOSE: SYMBOL | side | entry | stopLoss | takeProfit | qty | rationale]
   // SYMBOL is optional for backward compatibility; side must be buy/sell/long/short.
   for(const m of response.matchAll(/\[TRADE_PROPOSE:\s*(?:([A-Za-z0-9./]{3,12})\s*\|\s*)?(buy|sell|long|short)\s*\|([^|\]]+)\|([^|\]]+)\|([^|\]]+)\|([^|\]]+)\|([^\]]+)\]/gi)){
@@ -182,6 +193,8 @@ export function stripCommands(text){
     .replace(/\[SET_FACT:[^\]]*\]/gi,'').replace(/\[SET_TARGET:[^\]]*\]/gi,'')
     .replace(/\[HUD_DETACH:[^\]]*\]/gi,'').replace(/\[HUD_DOCK:[^\]]*\]/gi,'').replace(/\[DIAGRAM_SHOW:[^\]]*\]/gi,'')
     .replace(/\[RELAY_TO:[^\]]*\]/gi,'').replace(/\[SEARCH_WEB:[^\]]*\]/gi,'')
+    .replace(/\[PROJECT_START:[\s\S]*?\]/gi,'').replace(/\[DELEGATE:[^\]]*\]/gi,'')
+    .replace(/\[PROJECT_(?:DONE|CLOSE|COMPLETE|END)\]/gi,'')
     .replace(/\[READ_CALENDAR\]/gi,'').replace(/\[READ_EMAIL\]/gi,'')
     .replace(/\[MEMORY_QUERY:[^\]]*\]/gi,'').replace(/\[DEEP_RESEARCH:[^\]]*\]/gi,'')
     .replace(/\[TRADE_SCAN(?::[^\]]*)?\]/gi,'').replace(/\[TRADE_PROPOSE:[^\]]*\]/gi,'').replace(/\[TRADE_CLOSE:[^\]]*\]/gi,'')

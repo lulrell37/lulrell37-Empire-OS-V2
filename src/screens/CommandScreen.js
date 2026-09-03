@@ -8,14 +8,14 @@ import*as DocumentPicker from 'expo-document-picker';
 import*as VideoThumbnails from 'expo-video-thumbnails';
 import{Camera}from 'expo-camera';
 import*as FileSystem from 'expo-file-system';
-import{PERSONA_LIST,getPersona}from '../personas/personas';
+import{PERSONA_LIST,getPersona,resolveSpecialist}from '../personas/personas';
 import{callPersona,textToSpeech,transcribeAudio,queryMemory,webSearch}from '../services/aiService';
 import{drStart,drGetActive,drTick,drDismiss,drDeliverPending,DR_POLL_MS}from '../services/deepResearch';
 import{onAutoTrade}from '../services/autoTrader';
 import{handleCommands,stripCommands}from '../services/commandHandler';
 import{googleReadInjections,googleWriteCommands}from '../services/googleCommands';
-import{getMessages,saveMessage,getAllPersonaPics,savePersonaMemory,getSetting,getExpenseSummary,addBuildJob,updateBuildJob,getBuildJob,getBuildJobs,getCustomPrompt}from '../services/database';
-import{fileBuildRequest,replyToBuild,mergeBuild,cancelBuild}from '../services/buildAgent';
+import{getMessages,saveMessage,getAllPersonaPics,savePersonaMemory,getSetting,setSetting,getExpenseSummary,addBuildJob,updateBuildJob,getBuildJob,getBuildJobByIssue,getBuildJobs,buildJobRepo,DEFAULT_BUILD_REPO,getCustomPrompt}from '../services/database';
+import{fileBuildRequest,replyToBuild,mergeBuild,cancelBuild,createProjectRepo}from '../services/buildAgent';
 import{pollBuildJobs}from '../services/buildJobs';
 import{tlSnapshot,tlFormatSnapshot,tlPlaceOrder,tlClosePosition,tlModifyPosition,tlPositions,MAX_QTY,MAX_OPEN_POSITIONS}from '../services/tradeLocker';
 import{recordTradeOpen,reconcileOpenTrades,atlasJournalBlock,setStrategy,setTradeReview}from '../services/tradeJournal';
@@ -76,6 +76,10 @@ export default function CommandScreen({navigation}){
   const[tradeBusy,setTradeBusy]=useState(false);
   const[deepResearch,setDeepResearch]=useState(null); // deep_research row + progressObj; null when idle. Persisted — see services/deepResearch.js
   const[chartOverlay,setChartOverlay]=useState(null); // parsed chart spec shown over the orb
+  const[project,setProject]=useState(null); // THE FIRM: active client project A.R.A. is coordinating — {name,brief,target,repo,contributions[],startedAt}
+  const projectRef=useRef(null);
+  const activePersonaRef=useRef('jarvis');
+  const modeRef=useRef('direct');
   const[googleAction,setGoogleAction]=useState(null); // pending Google action awaiting a confirm tap
   const[googleBusy,setGoogleBusy]=useState(false);
   const googleActionRef=useRef(null);
@@ -123,6 +127,17 @@ export default function CommandScreen({navigation}){
   useEffect(()=>{loadingRef.current=loading;},[loading]);
   useEffect(()=>{voicePausedRef.current=voicePaused;},[voicePaused]);
   useEffect(()=>{getSetting('voice_fast_model','1').then(v=>{voiceFastRef.current=v;}).catch(()=>{});},[]);
+  useEffect(()=>{projectRef.current=project;},[project]);
+  useEffect(()=>{activePersonaRef.current=activePersona;},[activePersona]);
+  useEffect(()=>{modeRef.current=mode;},[mode]);
+  // THE FIRM: hydrate the active client project (persisted in app_settings) so it
+  // survives an app restart and A.R.A. picks up where she left off.
+  useEffect(()=>{
+    if(!isFocused)return;
+    getSetting('active_project','').then(raw=>{
+      try{setProject(raw?JSON.parse(raw):null);}catch{setProject(null);}
+    }).catch(()=>{});
+  },[isFocused]);
   // Continuous-voice loop: the single source of truth for re-opening the mic.
   // Whenever hands-free is on and nothing is thinking, speaking or already
   // recording, listen again. Playback callbacks null soundRef and clear loading;
@@ -910,6 +925,8 @@ export default function CommandScreen({navigation}){
     return mode==='custom'?customPersonas:[activePersona];
   }
 
+  const jarvisBuildFilter=useCallback((j)=>!j.project_name,[]);
+  const firmBuildFilter=useCallback((j)=>!!projectRef.current&&j.project_name===projectRef.current.name,[project?.name]);// eslint-disable-line react-hooks/exhaustive-deps
   const pickPersonaFromOrb=useCallback((id)=>{setMode('direct');setActivePersona(id);setOrbLevel('orb');},[]);
   const launchGroupFromOrb=useCallback((ids)=>{setCustomPersonas(ids);setMode('custom');setView('text');},[]);
 
@@ -1018,7 +1035,7 @@ export default function CommandScreen({navigation}){
           try{
             const jobs=await getBuildJobs(20);
             injections.push(jobs.length
-              ?'BUILD JOBS:\n'+jobs.map(j=>`  #${j.issue_number} [${j.state}] ${j.title||j.spec?.slice(0,60)||''}${j.pr_number?` · PR #${j.pr_number}`:''}${j.state==='question'&&j.question?`\n     Claude Code asked: ${j.question.slice(0,300)}`:''}`).join('\n')
+              ?'BUILD JOBS:\n'+jobs.map(j=>`  ${j.repo_name&&j.repo_name!==DEFAULT_BUILD_REPO.repo?`${j.repo_owner}/${j.repo_name} `:''}#${j.issue_number} [${j.state}]${j.project_name?` · ${j.project_name}`:''} ${j.title||j.spec?.slice(0,60)||''}${j.pr_number?` · PR #${j.pr_number}`:''}${j.state==='question'&&j.question?`\n     Claude Code asked: ${j.question.slice(0,300)}`:''}`).join('\n')
               :'BUILD JOBS: none filed yet.');
           }catch(e){injections.push('BUILD STATUS: failed — '+e.message);}
         }
@@ -1049,10 +1066,91 @@ export default function CommandScreen({navigation}){
           onShowChart:(raw)=>{const spec=parseChartSpec(raw);if(spec.valid){setChartOverlay(spec);setView('viz');}},
           onShowDiagram:()=>navigation.navigate('Laboratory'),
           onBuildRequest:({spec})=>confirmBuildRequest(spec),
-          onBuildReply:({issueNumber,text})=>sendBuildReply(issueNumber,text),
-          onBuildMerge:({issueNumber})=>confirmBuildMerge(issueNumber),
-          onBuildCancel:({issueNumber})=>confirmBuildCancel(issueNumber),
+          onBuildReply:({issueNumber,text})=>{getBuildJobByIssue(issueNumber,projectRef.current?.repo).then(j=>j?sendBuildReply(j.id,text):pushSystemMsg(`— No build job for #${issueNumber}. —`));},
+          onBuildMerge:({issueNumber})=>{getBuildJobByIssue(issueNumber,projectRef.current?.repo).then(j=>j?confirmBuildMerge(j.id):pushSystemMsg(`— No build job for #${issueNumber}. —`));},
+          onBuildCancel:({issueNumber})=>{getBuildJobByIssue(issueNumber,projectRef.current?.repo).then(j=>j?confirmBuildCancel(j.id):pushSystemMsg(`— No build job for #${issueNumber}. —`));},
+          onProjectStart:(p)=>openProject(p),
+          onProjectDone:()=>closeProject(),
         };
+
+        // --- THE FIRM — A.R.A. delegates to specialists, then synthesizes ---
+        // A.R.A. emits one or more [DELEGATE: name | task] on pass 1. We call each
+        // specialist inline (one-shot, no history), show their contribution in the
+        // chat, then A.R.A. re-answers in a fresh bubble with everything in hand.
+        const delegTags=(pid==='ara'&&!myAbort.signal.aborted)
+          ?[...response.matchAll(/\[DELEGATE:\s*([A-Za-z.\s]+?)\s*\|\s*([\s\S]+?)\]/gi)]
+          :[];
+        if(delegTags.length){
+          await handleCommands(response,pid,cmdCallbacks); // honor a [PROJECT_START] in the same reply
+          const lead=(stripCommands(response)||'Bringing in the team.').trim();
+          patch(m=>({...m,content:lead,revealed:lead.length,streaming:false}));
+          if(!isGroup)await saveMessage('ara','assistant',lead,'direct');
+          if(lead)replies.push({name:p.name,text:lead});
+          const proj=projectRef.current;
+          const gathered=[];
+          const seen=new Set();
+          for(const dm of delegTags.slice(0,6)){
+            if(myAbort.signal.aborted)break;
+            const spec=resolveSpecialist(dm[1]);
+            const task=(dm[2]||'').trim();
+            if(!spec||!task||seen.has(spec.id))continue;
+            seen.add(spec.id);
+            const cMsgId=`${Date.now()}-${spec.id}-firm`;
+            setMsgs(prev=>[...prev,{id:cMsgId,role:'assistant',content:`◇ ${spec.name} — ${spec.role}…`,persona:spec.id,revealed:0,streaming:true}]);
+            vizRef.personaId=spec.id;vizRef.color=spec.color;vizRef.speaking=true;
+            try{
+              const brief=`You are contributing to a client project A.R.A. is coordinating for Mr. Burrus.${proj?`\n\nPROJECT: ${proj.name}\nBRIEF: ${proj.brief||'(none written)'}`:''}${gathered.length?`\n\nALREADY IN FROM THE TEAM:\n${gathered.map(g=>`${g.spec.name} (${g.spec.role}): ${g.clean.slice(0,600)}`).join('\n\n')}`:''}\n\nYOUR ASSIGNMENT (${spec.role}): ${task}\n\nDeliver only your part — concrete and specific, ready for the team to build on. No preamble, don't restate the brief. If you see a problem outside your lane, end with a line starting "FLAG:".`;
+              const out=await callPersona(spec.id,[{role:'user',content:brief}],myAbort.signal,null,{skipSave:true,maxTokens:1100});
+              const clean=(stripCommands(out)||out||'(no response)').trim();
+              setMsgs(prev=>prev.map(m=>m.id===cMsgId?{...m,content:clean,revealed:clean.length,streaming:false}:m));
+              gathered.push({spec,task,clean});
+              savePersonaMemory(spec.id,`CLIENT PROJECT${proj?` — ${proj.name}`:''}. A.R.A. delegated: ${task}\n\n${spec.name}: ${clean}`).catch(()=>{});
+            }catch(e){
+              if(e.name==='AbortError')break;
+              const err=`(couldn't contribute — ${e.message})`;
+              setMsgs(prev=>prev.map(m=>m.id===cMsgId?{...m,content:err,revealed:err.length,streaming:false}:m));
+            }
+          }
+          if(proj&&gathered.length){
+            persistProject({...proj,contributions:[...(proj.contributions||[]),...gathered.map(g=>({persona:g.spec.id,task:g.task,text:g.clean,at:Date.now()}))]});
+          }
+          if(!gathered.length&&!myAbort.signal.aborted){
+            pushSystemMsg(`— THE FIRM · couldn't match "${delegTags.map(d=>d[1].trim()).join(', ')}" to a specialist —`);
+          }
+          if(!myAbort.signal.aborted&&gathered.length){
+            const synthId=`${Date.now()}-ara-synth`;
+            setMsgs(prev=>[...prev,{id:synthId,role:'assistant',content:'',persona:'ara',revealed:0,streaming:!willVoice}]);
+            const sPatch=(fn)=>setMsgs(prev=>prev.map(m=>m.id===synthId?fn(m):m));
+            vizRef.personaId='ara';vizRef.color=p.color;vizRef.speaking=true;
+            let sraw='',sLast=0;
+            const sDelta=willVoice?null:(t)=>{
+              sraw+=t;vizRef.amplitude=synthAmp();
+              const now=Date.now();if(now-sLast<45)return;sLast=now;
+              const shown=(stripCommands(sraw)||'').replace(/\[[A-Z_]+:?[^\]]*$/,'').trimEnd();
+              sPatch(m=>({...m,content:shown,revealed:shown.length}));
+            };
+            const sHist=[...hist,{role:'assistant',content:lead},{role:'user',content:`[THE FIRM HAS REPORTED BACK${proj?` — project "${proj.name}"`:''}. Synthesize for Mr. Burrus now: what each specialist delivered, how it fits into one coherent plan, what is decided, and what still needs his decision. Name any conflict between contributions. If the direction is ready and he has approved it, write the full self-contained build spec — folding in every specialist's work — and hand it to J.A.R.V.I.S. with [BUILD_REQUEST: ...]. Do not mention delegation mechanics.\n\n${gathered.map(g=>`${g.spec.name} (${g.spec.role}):\n${g.clean}`).join('\n\n---\n\n')}\n]`}];
+            try{
+              let sResp=await callPersona('ara',sHist,myAbort.signal,sDelta,{skipSave:true});
+              const sDisplay=(stripCommands(sResp)||sResp).trim();
+              sPatch(m=>({...m,content:sDisplay,revealed:willVoice?0:sDisplay.length,streaming:false}));
+              await handleCommands(sResp,'ara',cmdCallbacks);
+              if(!isGroup)await saveMessage('ara','assistant',sDisplay,'direct');
+              savePersonaMemory('ara',`YOU: ${text}\nA.R.A. (firm synthesis): ${sDisplay}`).catch(()=>{});
+              if(sDisplay)replies.push({name:p.name,text:sDisplay});
+              if(willVoice&&!myAbort.signal.aborted){
+                await speakWithReveal(sDisplay,p,synthId,isGroup,{turns:hist.filter(h=>h.role==='user'||h.role==='assistant').slice(-6),userText:text});
+                if(!myAbort.signal.aborted)sPatch(m=>({...m,content:sDisplay,revealed:sDisplay.length,streaming:false}));
+              }
+            }catch(e){
+              if(e.name!=='AbortError')sPatch(m=>({...m,content:`Synthesis failed: ${e.message}`,revealed:0,streaming:false}));
+            }
+          }
+          vizRef.speaking=false;vizRef.amplitude=0;
+          if(myAbort.signal.aborted)break;
+          continue;
+        }
+
         if(injections.length&&!myAbort.signal.aborted){
           await handleCommands(response,pid,cmdCallbacks);
           patch(m=>({...m,content:toolLabel,revealed:toolLabel.length,streaming:false}));
@@ -1117,6 +1215,47 @@ export default function CommandScreen({navigation}){
   function pushSystemMsg(content){
     const msg={id:Date.now().toString()+Math.random().toString(36).slice(2,5),role:'system',content,persona:'system'};
     if(mode==='direct')setMessages(prev=>[...prev,msg]);else setGroupMessages(prev=>[...prev,msg]);
+  }
+
+  // --- THE FIRM — A.R.A.'s client project orchestration ---
+  function persistProject(p){
+    projectRef.current=p;
+    setProject(p);
+    setSetting('active_project',p?JSON.stringify(p):'').catch(()=>{});
+  }
+  async function openProject({name,brief,target}){
+    const b=brief||'';
+    const explicitRepo=target&&target.includes('/');
+    const wantEmpire=target==='empire'||/\bempire os\b|this app itself|change to (the|this) app/i.test(b);
+    let repo=null,mode2='new';
+    if(explicitRepo){const[o,r]=target.split('/');repo={owner:o.trim(),repo:r.trim()};mode2='existing';}
+    else if(wantEmpire){repo=DEFAULT_BUILD_REPO;mode2='empire';}
+    persistProject({name,brief:b,target:mode2,repo,contributions:[],startedAt:Date.now()});
+    pushSystemMsg(`— THE FIRM · project opened: ${name}${mode2==='empire'?' (builds into Empire OS V2)':mode2==='existing'?` (builds into ${repo.owner}/${repo.repo})`:''} —`);
+    if(mode2==='new')createRepoForActiveProject();
+  }
+  // Create the dedicated GitHub repo for the active "new" project. Safe to call
+  // again (retry) — it only ever fills in a missing repo, never touches contributions.
+  async function createRepoForActiveProject(){
+    const p=projectRef.current;
+    if(!p||p.repo||p.target!=='new')return;
+    pushSystemMsg(`— spinning up a dedicated repo for ${p.name}… —`);
+    try{
+      const keys=await loadKeys().catch(()=>null);
+      const res=await createProjectRepo(p.name,{anthropicKey:keys?.claude});
+      if(projectRef.current&&projectRef.current.name===p.name){
+        persistProject({...projectRef.current,repo:{owner:res.owner,repo:res.repo},repoUrl:res.url});
+      }
+      pushSystemMsg(`— repo ready: ${res.owner}/${res.repo} —`);
+      for(const w of res.warnings||[])pushSystemMsg(`⚠️ ${w}`);
+    }catch(e){
+      pushSystemMsg(`⚠️ Couldn't create the project repo: ${e.message}. Fix the GitHub token in Settings › Dev, then tell A.R.A. to retry — builds can't be filed until the repo exists.`);
+    }
+  }
+  function closeProject(){
+    const name=projectRef.current?.name;
+    persistProject(null);
+    if(name)pushSystemMsg(`— THE FIRM · project closed: ${name} —`);
   }
   // A persona proposed a Google action that needs a confirm tap (send email,
   // delete). One card at a time; extras queue.
@@ -1249,59 +1388,100 @@ export default function CommandScreen({navigation}){
     pushSystemMsg('Deep research dismissed — it keeps running on OpenAI but the app has stopped tracking it.');
   }
 
-  // --- JARVIS build pipeline ---
+  // --- Build pipeline (J.A.R.V.I.S. for app changes, A.R.A. for client projects) ---
+  // A build targets the active project's repo when there is one, else Empire OS V2.
+  function buildDest(repo){return repo.repo===DEFAULT_BUILD_REPO.repo?'Empire OS V2':`${repo.owner}/${repo.repo}`;}
   function confirmBuildRequest(spec){
+    const proj=projectRef.current;
+    const repo=proj?.repo||DEFAULT_BUILD_REPO;
+    const dest=buildDest(repo);
+    const isApp=repo.repo===DEFAULT_BUILD_REPO.repo;
     const preview=spec.length>1000?spec.slice(0,1000)+'…':spec;
-    Alert.alert('File this build request?',`Claude Code will implement it and open a pull request. This bills your Anthropic key.\n\n${preview}`,[
+    if(proj&&proj.target==='new'&&!proj.repo){
+      pushSystemMsg(`— The repo for "${proj.name}" isn't ready yet. Once it is, ask A.R.A. to file the build again. —`);
+      createRepoForActiveProject();
+      return;
+    }
+    Alert.alert('File this build request?',`Claude Code will implement it in ${dest} and open a pull request. This bills your Anthropic key.${isApp?'':'\n\nThis does NOT touch Empire OS V2.'}\n\n${preview}`,[
       {text:'Cancel',style:'cancel'},
       {text:'File it',onPress:async()=>{
         try{
-          const{issueNumber,title}=await fileBuildRequest(spec);
-          await addBuildJob({issueNumber,spec,title});
-          pushSystemMsg(`— BUILD REQUEST FILED · #${issueNumber} — Claude Code is picking it up.`);
+          const{issueNumber,title}=await fileBuildRequest(spec,repo);
+          await addBuildJob({issueNumber,repo,spec,title,projectName:proj?.name||null});
+          pushSystemMsg(`— BUILD REQUEST FILED · ${dest} #${issueNumber} — Claude Code is picking it up.`);
         }catch(e){pushSystemMsg(`Couldn't file the build request: ${e.message}`);}
       }},
     ]);
   }
-  async function sendBuildReply(issueNumber,text){
+  async function sendBuildReply(jobId,text){
     try{
-      await replyToBuild(issueNumber,text);
-      await updateBuildJob(issueNumber,{state:'working',question:null});
-      pushSystemMsg(`— Sent to Claude Code on #${issueNumber}: "${text}" —`);
+      const job=await getBuildJob(jobId);
+      if(!job)throw new Error('build job not found');
+      await replyToBuild(job.issue_number,text,buildJobRepo(job));
+      await updateBuildJob(job.id,{state:'working',question:null});
+      pushSystemMsg(`— Sent to Claude Code on ${buildDest(buildJobRepo(job))} #${job.issue_number}: "${text}" —`);
     }catch(e){pushSystemMsg(`Couldn't send that to Claude Code: ${e.message}`);}
   }
-  function confirmBuildMerge(issueNumber){
+  function confirmBuildMerge(jobId){
     (async()=>{
-      const job=await getBuildJob(issueNumber);
-      if(!job?.pr_number){pushSystemMsg(`No pull request on #${issueNumber} yet.`);return;}
-      Alert.alert('Merge and ship?',`Merge PR #${job.pr_number} into main. This pushes to main and starts an APK build.`,[
+      const job=await getBuildJob(jobId);
+      if(!job){pushSystemMsg(`Couldn't find that build job.`);return;}
+      if(!job.pr_number){pushSystemMsg(`No pull request on #${job.issue_number} yet.`);return;}
+      const repo=buildJobRepo(job);const isApp=repo.repo===DEFAULT_BUILD_REPO.repo;
+      Alert.alert('Merge and ship?',`Merge PR #${job.pr_number} in ${repo.owner}/${repo.repo}.${isApp?' This pushes to main and starts an APK build.':''}`,[
         {text:'Cancel',style:'cancel'},
         {text:'Merge',onPress:async()=>{
           try{
-            await updateBuildJob(issueNumber,{state:'merging'});
-            await mergeBuild(job.pr_number);
-            await updateBuildJob(issueNumber,{state:'pushed'});
-            pushSystemMsg(`— MERGED & PUSHED · PR #${job.pr_number} · APK build started —`);
+            await updateBuildJob(job.id,{state:'merging'});
+            await mergeBuild(job.pr_number,repo);
+            await updateBuildJob(job.id,{state:'pushed'});
+            pushSystemMsg(`— MERGED & PUSHED · ${repo.owner}/${repo.repo} PR #${job.pr_number}${isApp?' · APK build started':''} —`);
           }catch(e){
-            await updateBuildJob(issueNumber,{state:'pr_open'});
+            await updateBuildJob(job.id,{state:'pr_open'});
             pushSystemMsg(`Merge failed: ${e.message}`);
           }
         }},
       ]);
     })();
   }
-  function confirmBuildCancel(issueNumber){
+  function confirmBuildCancel(jobId){
     (async()=>{
-      const job=await getBuildJob(issueNumber);
-      Alert.alert('Abandon this request?',`Close issue #${issueNumber}${job?.pr_number?` and PR #${job.pr_number}`:''}.`,[
+      const job=await getBuildJob(jobId);
+      if(!job){pushSystemMsg(`Couldn't find that build job.`);return;}
+      const repo=buildJobRepo(job);
+      Alert.alert('Abandon this request?',`Close issue #${job.issue_number}${job.pr_number?` and PR #${job.pr_number}`:''} in ${repo.owner}/${repo.repo}.`,[
         {text:'Keep',style:'cancel'},
         {text:'Abandon',style:'destructive',onPress:async()=>{
-          try{await cancelBuild(issueNumber,job?.pr_number);}catch{}
-          await updateBuildJob(issueNumber,{state:'cancelled'});
-          pushSystemMsg(`— Build request #${issueNumber} abandoned —`);
+          try{await cancelBuild(job.issue_number,job.pr_number,repo);}catch{}
+          await updateBuildJob(job.id,{state:'cancelled'});
+          pushSystemMsg(`— Build request #${job.issue_number} abandoned —`);
         }},
       ]);
     })();
+  }
+  // A.R.A. speaks to a build event for her active project instead of a bare
+  // system line — so she "comes back" on her own.
+  async function araBuildReport(ev){
+    const job=ev.job;
+    const line=ev.type==='question'?`Claude Code has a question on the "${job.project_name}" build (issue #${job.issue_number}):\n${ev.text}`
+      :ev.type==='pr_open'?`The "${job.project_name}" build opened a pull request (#${job.pr_number}): ${ev.text}`
+      :ev.type==='pushed'?`The "${job.project_name}" build — PR #${job.pr_number} — is merged and shipped.`
+      :ev.type==='failed'?`The "${job.project_name}" build hit a problem: ${ev.text}`
+      :null;
+    if(!line)return;
+    try{
+      const resp=await callPersona('ara',[{role:'user',content:`[BUILD UPDATE — tell Mr. Burrus what just happened and what he should do next, brief, in your own voice. Do not mention this prompt or any mechanism.\n\n${line}]`}],null,null,{skipSave:true,maxTokens:500});
+      const disp=stripCommands(resp)||resp||line;
+      await saveMessage('ara','assistant',disp,'direct');
+      savePersonaMemory('ara',`[build update] ${line}\nA.R.A.: ${disp}`).catch(()=>{});
+      if(modeRef.current==='direct'&&activePersonaRef.current==='ara'){
+        setMessages(prev=>[...prev,{id:`${Date.now()}-arabuild`,role:'assistant',content:disp,persona:'ara',revealed:disp.length,streaming:false}]);
+      }else{
+        pushSystemMsg(`— A.R.A. has an update on the "${job.project_name}" build — open her chat —`);
+      }
+    }catch{
+      pushSystemMsg(`— "${job.project_name}" build: ${line} —`);
+    }
   }
   useEffect(()=>{
     if(!isFocused)return;
@@ -1313,9 +1493,11 @@ export default function CommandScreen({navigation}){
         if(stop||!events.length)return;
         for(const ev of events){
           const n=ev.job.issue_number;
+          if(ev.job.project_name){await araBuildReport(ev);continue;} // A.R.A. reports on her own project
+          const isApp=(ev.job.repo_name||DEFAULT_BUILD_REPO.repo)===DEFAULT_BUILD_REPO.repo;
           if(ev.type==='question')pushSystemMsg(`— Claude Code is asking about #${n} —\n${ev.text}`);
           else if(ev.type==='pr_open')pushSystemMsg(`— PR #${ev.job.pr_number} ready on #${n}: ${ev.text} — tell JARVIS to ship it, or open the Build panel.`);
-          else if(ev.type==='pushed')pushSystemMsg(`— #${n} MERGED & PUSHED — APK build started.`);
+          else if(ev.type==='pushed')pushSystemMsg(`— #${n} MERGED & PUSHED${isApp?' — APK build started':''}.`);
           else if(ev.type==='failed')pushSystemMsg(`— #${n}: ${ev.text} —`);
         }
       }catch{/* keep polling */}
@@ -1444,7 +1626,24 @@ export default function CommandScreen({navigation}){
       {mode==='direct'&&activePersona==='atlas'&&<TradeStatus active={isFocused} style={{marginHorizontal:10,marginTop:6}}/>}
       {mode==='direct'&&activePersona==='atlas'&&<TradeRecordBar active={isFocused} style={{marginHorizontal:10,marginTop:6}}/>}
       {mode==='direct'&&activePersona==='atlas'&&<TradePanel active={isFocused} onEvent={pushSystemMsg}/>}
-      {mode==='direct'&&activePersona==='jarvis'&&<BuildPanel active={isFocused} onMerge={confirmBuildMerge} onCancel={confirmBuildCancel}/>}
+      {mode==='direct'&&activePersona==='jarvis'&&<BuildPanel active={isFocused} onMerge={confirmBuildMerge} onCancel={confirmBuildCancel} filter={jarvisBuildFilter}/>}
+
+      {project&&mode==='direct'&&activePersona==='ara'&&(
+        <View style={s.firmBar}>
+          <Text style={s.firmDot}>◆</Text>
+          <View style={{flex:1}}>
+            <Text style={s.firmName} numberOfLines={1}>THE FIRM · {project.name}</Text>
+            <Text style={s.firmSub} numberOfLines={1}>
+              {(project.contributions?.length||0)} contribution{(project.contributions?.length||0)===1?'':'s'} in
+              {project.repo?` · ${project.repo.owner}/${project.repo.repo}`:project.target==='empire'?' · Empire OS V2':project.target==='new'?' · repo pending':''}
+            </Text>
+          </View>
+          <TouchableOpacity onPress={()=>Alert.alert('Close this project?',project.name,[{text:'Keep open',style:'cancel'},{text:'Close',style:'destructive',onPress:closeProject}])}>
+            <Text style={s.firmX}>✕</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+      {project&&mode==='direct'&&activePersona==='ara'&&<BuildPanel active={isFocused} title="FIRM BUILD" accent="#00CED1" onMerge={confirmBuildMerge} onCancel={confirmBuildCancel} filter={firmBuildFilter}/>}
 
       <DeepResearchBanner job={deepResearch} onDismiss={dismissDeepResearch}/>
 
@@ -1665,6 +1864,11 @@ const s=StyleSheet.create({
   sysText:{color:'#333',fontSize:9,fontFamily:'monospace',textAlign:'center',letterSpacing:2},
   thinking:{flexDirection:'row',alignItems:'center',gap:6,paddingHorizontal:14,paddingVertical:5},
   thinkT:{fontFamily:'monospace',fontSize:9,letterSpacing:1},
+  firmBar:{flexDirection:'row',alignItems:'center',gap:10,marginHorizontal:10,marginTop:6,paddingHorizontal:12,paddingVertical:8,borderRadius:8,borderWidth:1,borderColor:'#00CED144',backgroundColor:'#00CED111'},
+  firmDot:{color:'#00CED1',fontSize:12},
+  firmName:{fontFamily:'monospace',fontSize:11,color:'#00CED1',letterSpacing:1,fontWeight:'700'},
+  firmSub:{fontFamily:'monospace',fontSize:8,color:'#4a7d7d',letterSpacing:1,marginTop:2},
+  firmX:{color:'#4a7d7d',fontSize:14,paddingHorizontal:4},
   inputArea:{borderTopWidth:1,borderTopColor:'#111'},
   inputRow:{flexDirection:'row',alignItems:'flex-end',paddingHorizontal:10,paddingTop:8,paddingBottom:4,gap:8},
   input:{flex:1,backgroundColor:'#080808',borderWidth:1,borderColor:'#151515',borderRadius:8,paddingHorizontal:12,paddingVertical:9,color:'#DDD',fontSize:14,maxHeight:90},

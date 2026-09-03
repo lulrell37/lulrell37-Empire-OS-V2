@@ -498,10 +498,10 @@ export function BuildBoardPanel({active=true}){
   return(
     <>
       {jobs.map(j=>(
-        <View key={j.issue_number} style={bs.row}>
+        <View key={j.id||j.issue_number} style={bs.row}>
           <View style={bs.top}>
             <Text style={[bs.state,{color:color[j.state]||colors.textDim}]}>{label[j.state]||j.state}</Text>
-            <Text style={bs.issue}>#{j.issue_number}{j.pr_number?` · PR #${j.pr_number}`:''}</Text>
+            <Text style={bs.issue}>{j.repo_name&&j.repo_name!=='lulrell37-Empire-OS-V2'?`${j.repo_name} `:''}#{j.issue_number}{j.pr_number?` · PR #${j.pr_number}`:''}</Text>
           </View>
           <Text style={bs.title} numberOfLines={2}>{j.title||j.spec||''}</Text>
           {j.state==='question'&&!!j.question&&<Text style={bs.q} numberOfLines={3}>{j.question}</Text>}

@@ -61,3 +61,34 @@ export const PERSONA_LIST=Object.values(PERSONAS);
 export const COUNCIL_PERSONAS=['jarvis','ara','selene'];
 export const EMPIRE_PERSONAS=Object.keys(PERSONAS);
 export function getPersona(id){return PERSONAS[id]||PERSONAS.jarvis;}
+
+// --- THE FIRM — A.R.A.'s client/project orchestration ---
+// The role each persona plays when A.R.A. delegates a piece of a client project
+// to them. Only these personas can be delegated to.
+export const PROJECT_ROLES={
+  jarvis:'Architecture & build feasibility',
+  selene:'Brand direction & visual identity',
+  rogue:'Copy, messaging & content strategy',
+  atlas:'Pricing structure & payment systems',
+  aisha:'Legal, compliance, terms & privacy',
+  stephanie:'Training & educational content',
+  haven:'Health & wellness protocol content',
+};
+// Map a name A.R.A. wrote in a [DELEGATE: name | task] tag to a persona.
+// Accepts the persona name, its id, and common shorthands ("Asia" -> aisha).
+const SPECIALIST_ALIASES={
+  ara:'ara',aura:'ara',
+  jarvis:'jarvis',
+  selene:'selene',
+  rogue:'rogue',
+  atlas:'atlas',
+  aisha:'aisha',asia:'aisha',
+  stephanie:'stephanie',steph:'stephanie',stephany:'stephanie',
+  haven:'haven',
+};
+export function resolveSpecialist(name){
+  const q=String(name||'').toLowerCase().replace(/[^a-z]/g,'');
+  const id=SPECIALIST_ALIASES[q];
+  if(!id||!PROJECT_ROLES[id])return null;
+  return{id,name:PERSONAS[id].name,role:PROJECT_ROLES[id],color:PERSONAS[id].color};
+}
