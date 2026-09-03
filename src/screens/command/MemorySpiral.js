@@ -171,12 +171,47 @@ function MemorySpiralInner({persona,memories,onNode,onExit},ref){
     return false;
   },[focus,onExit,clampPan,animateTo]);
 
-  useImperativeHandle(ref,()=>({drillIn,drillOut}),[drillIn,drillOut]);
-
   const stageCenter=()=>({
     x:stageBox.current.x+stageBox.current.width/2,
     y:stageBox.current.y+stageBox.current.height/2,
   });
+
+  // Continuous pinch driven from OrbZoom's outer responder — same math as the
+  // internal `pan` below, but reachable even when the rotating SVG layer eats
+  // the two-finger gesture. cx/cy are raw screen coords.
+  const extPinch=useRef(null);
+  useImperativeHandle(ref,()=>({
+    drillIn,drillOut,
+    pinchStart(cx,cy){
+      sc.stopAnimation();tx.stopAnimation();ty.stopAnimation();
+      const o=origin.current;
+      extPinch.current={s0:view.current.s,x0:view.current.x,y0:view.current.y,
+        fx:cx-o.x,fy:cy-o.y,lastR:1};
+    },
+    pinchMove(ratio,cx,cy){
+      const g=extPinch.current;if(!g)return;
+      const o=origin.current;
+      if(cx!=null){g.fx=cx-o.x;g.fy=cy-o.y;}
+      g.lastR=ratio;
+      const s=Math.max(fitRef.current,Math.min(fitRef.current*MAX_ZOOM,g.s0*ratio));
+      const r=s/g.s0;
+      const c=stageCenter();
+      const dxF=g.fx-c.x,dyF=g.fy-c.y;
+      sc.setValue(s);
+      tx.setValue(g.x0*r+dxF*(1-r));
+      ty.setValue(g.y0*r+dyF*(1-r));
+    },
+    pinchEnd(){
+      const g=extPinch.current;extPinch.current=null;if(!g)return;
+      sc.stopAnimation(s=>tx.stopAnimation(x=>ty.stopAnimation(y=>{
+        const p=clampPan(s,x,y);
+        view.current={s,x:p.x,y:p.y};
+        if(p.x!==x)Animated.spring(tx,{toValue:p.x,useNativeDriver:true}).start();
+        if(p.y!==y)Animated.spring(ty,{toValue:p.y,useNativeDriver:true}).start();
+        if(s<=fitRef.current*1.02&&g.lastR<0.9)drillOut();
+      })));
+    },
+  }),[drillIn,drillOut,clampPan,sc,tx,ty]);
 
   const pan=useMemo(()=>PanResponder.create({
     onStartShouldSetPanResponderCapture:(e)=>mode==='graph'&&(e.nativeEvent.touches?.length||0)>=2,

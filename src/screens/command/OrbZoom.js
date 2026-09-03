@@ -17,10 +17,6 @@ import{getPersona,PERSONA_LIST}from '../../personas/personas';
 
 const LEVELS=['group','orb','memory'];
 const WHEEL_MID=1200;// px of scroll slack each side of the wheel-catcher — big enough one fast notch can't reach an edge
-// Continuous zoom on the group / orb levels, like the memory spiral: a pinch
-// scales in place, and only a pinch that is already at the far end and still
-// pushing changes level. MINZ/MAXZ are the on-screen scale bounds per level.
-const MINZ=0.6, MAXZ=3.6;
 
 const SAMP=[],SIN=[],COS=[];
 for(let k=0;k<=480;k++){const v=-12*Math.PI+(24*Math.PI)*(k/480);SAMP.push(v);SIN.push(Math.sin(v));COS.push(Math.cos(v));}
@@ -59,8 +55,6 @@ export default function OrbZoom({personaId,color,active,vizRef,personaPics={},on
   const pinchTX=useRef(new Animated.Value(0)).current;
   const pinchTY=useRef(new Animated.Value(0)).current;
   const enter=useRef(new Animated.Value(1)).current;
-  const zoomRef=useRef(1);            // committed scale for the current level — persists across pinches
-  const panRef=useRef({x:0,y:0});     // committed translate for the current level
 
   useEffect(()=>{levelRef.current=level;},[level]);
 
@@ -71,7 +65,6 @@ export default function OrbZoom({personaId,color,active,vizRef,personaPics={},on
 
   useEffect(()=>{
     pinchScale.setValue(1);pinchTX.setValue(0);pinchTY.setValue(0);
-    zoomRef.current=1;panRef.current={x:0,y:0};
     enter.setValue(0);
     Animated.timing(enter,{toValue:1,duration:300,easing:Easing.out(Easing.cubic),useNativeDriver:false}).start();
   },[level]);// eslint-disable-line react-hooks/exhaustive-deps
@@ -120,80 +113,56 @@ export default function OrbZoom({personaId,color,active,vizRef,personaPics={},on
     if(cur==='group'){onZoomOut?.();return;} // zoom out past the sphere -> the city
   },[setLvl,onZoomOut]);
 
-  // Commit a scale to the current level (no level change). Keeps pan sane and
-  // re-centres once you're basically zoomed back out.
-  const settleZoom=useCallback((s,animated=true)=>{
-    const z=Math.max(MINZ,Math.min(MAXZ,s));
-    zoomRef.current=z;
-    let{x,y}=panRef.current;
-    if(z<=1.02){x=0;y=0;}
-    else{
-      const mx=sizeRef.current.w*(z-1)/2, my=sizeRef.current.h*(z-1)/2;
-      x=Math.max(-mx,Math.min(mx,x));y=Math.max(-my,Math.min(my,y));
-    }
-    panRef.current={x,y};
-    if(animated){
-      Animated.spring(pinchScale,{toValue:z,useNativeDriver:false,speed:16,bounciness:3}).start();
-      Animated.spring(pinchTX,{toValue:x,useNativeDriver:false,speed:16,bounciness:3}).start();
-      Animated.spring(pinchTY,{toValue:y,useNativeDriver:false,speed:16,bounciness:3}).start();
-    }else{pinchScale.setValue(z);pinchTX.setValue(x);pinchTY.setValue(y);}
-  },[pinchScale,pinchTX,pinchTY]);
-
-  // A discrete zoom step (buttons / wheel). Only crosses a level boundary once
-  // we're already pinned at the far end.
-  const stepZoom=useCallback((factor,centroid)=>{
-    if(levelRef.current==='memory'){factor>1?deeper(centroid):shallower();return;}
-    const cur=zoomRef.current;
-    if(factor>1&&cur>=MAXZ-0.02){deeper(centroid);return;}
-    if(factor<1&&cur<=MINZ+0.02){shallower();return;}
-    settleZoom(cur*factor);
-  },[deeper,shallower,settleZoom]);
-
   const stagePan=useMemo(()=>PanResponder.create({
-    onStartShouldSetPanResponderCapture:(e)=>!!e.nativeEvent.touches&&e.nativeEvent.touches.length===2&&levelRef.current!=='memory',
-    onMoveShouldSetPanResponderCapture:(e)=>!!e.nativeEvent.touches&&e.nativeEvent.touches.length===2&&levelRef.current!=='memory',
+    // Capture two-finger pinches at every level. On group/orb it's a discrete
+    // "drill in / out"; on the memory spiral it's driven straight into the
+    // spiral's own smooth zoom (the SVG layer there was swallowing the gesture).
+    onStartShouldSetPanResponderCapture:(e)=>!!e.nativeEvent.touches&&e.nativeEvent.touches.length===2,
+    onMoveShouldSetPanResponderCapture:(e)=>!!e.nativeEvent.touches&&e.nativeEvent.touches.length===2,
     onPanResponderGrant:(e)=>{
       const t=e.nativeEvent.touches;
       if(t&&t.length===2){
         const d=touchDist(t);
-        pinchRef.current={d0:d,d1:d,s0:zoomRef.current,x0:panRef.current.x,y0:panRef.current.y,lastR:1};
+        const pcx=(t[0].pageX+t[1].pageX)/2, pcy=(t[0].pageY+t[1].pageY)/2;
+        pinchRef.current={d0:d,d1:d,mem:levelRef.current==='memory'};
         pinchScale.stopAnimation();pinchTX.stopAnimation();pinchTY.stopAnimation();
-        centroidRef.current={
-          x:(t[0].pageX+t[1].pageX)/2-originRef.current.x,
-          y:(t[0].pageY+t[1].pageY)/2-originRef.current.y,
-        };
+        centroidRef.current={x:pcx-originRef.current.x,y:pcy-originRef.current.y};
+        if(pinchRef.current.mem)memRef.current&&memRef.current.pinchStart(pcx,pcy);
       }
     },
     onPanResponderMove:(e)=>{
       const t=e.nativeEvent.touches;
-      if(t&&t.length===2&&pinchRef.current.d0){
-        pinchRef.current.d1=touchDist(t);
-        const r=pinchRef.current.d1/pinchRef.current.d0;
-        pinchRef.current.lastR=r;
-        const s=Math.max(MINZ,Math.min(MAXZ,pinchRef.current.s0*r));
-        pinchScale.setValue(s);
-        // hold the pinch centroid fixed on screen as the content scales from it
-        const c=centroidRef.current||{x:sizeRef.current.w/2,y:sizeRef.current.h/2};
-        const dxF=c.x-sizeRef.current.w/2, dyF=c.y-sizeRef.current.h/2;
-        const ratio=s/(pinchRef.current.s0||1);
-        const x=pinchRef.current.x0*ratio+dxF*(1-ratio);
-        const y=pinchRef.current.y0*ratio+dyF*(1-ratio);
-        panRef.current={x,y};
-        pinchTX.setValue(x);pinchTY.setValue(y);
+      if(!(t&&t.length===2))return;
+      pinchRef.current.d1=touchDist(t);
+      if(pinchRef.current.mem){
+        const pcx=(t[0].pageX+t[1].pageX)/2, pcy=(t[0].pageY+t[1].pageY)/2;
+        memRef.current&&memRef.current.pinchMove(pinchRef.current.d1/pinchRef.current.d0,pcx,pcy);
+        return;
       }
+      const sc=Math.max(0.55,Math.min(1.8,pinchRef.current.d1/pinchRef.current.d0));
+      pinchScale.setValue(sc);
+      const c=centroidRef.current||{x:0,y:0};
+      pinchTX.setValue((c.x-sizeRef.current.w/2)*(1-sc));
+      pinchTY.setValue((c.y-sizeRef.current.h/2)*(1-sc));
     },
     onPanResponderRelease:()=>{
-      const{s0,lastR,d0}=pinchRef.current;
+      const{d0,d1,mem}=pinchRef.current;
       pinchRef.current={d0:0,d1:0};
-      if(!d0)return;
-      const s=Math.max(MINZ,Math.min(MAXZ,(s0||1)*(lastR||1)));
-      // At the far end and still pushing that way -> change level.
-      if(s>=MAXZ-0.02&&lastR>1.03){zoomRef.current=1;deeper(centroidRef.current);return;}
-      if(s<=MINZ+0.02&&lastR<0.97){zoomRef.current=1;shallower();return;}
-      settleZoom(s);
+      if(mem){memRef.current&&memRef.current.pinchEnd();return;}
+      const r=(d0>0&&d1>0)?d1/d0:1;
+      // Getting from the persona sphere into an orb takes a lighter pinch than
+      // the other level changes.
+      const inAt=levelRef.current==='group'?1.10:1.20;
+      if(r>inAt){deeper(centroidRef.current);}
+      else if(r<0.83){shallower();}
+      else{
+        Animated.spring(pinchScale,{toValue:1,useNativeDriver:false}).start();
+        Animated.spring(pinchTX,{toValue:0,useNativeDriver:false}).start();
+        Animated.spring(pinchTY,{toValue:0,useNativeDriver:false}).start();
+      }
     },
     onPanResponderTerminationRequest:()=>false,
-  }),[deeper,shallower,settleZoom]);
+  }),[deeper,shallower]);
 
   useEffect(()=>{
     if(Platform.OS!=='web')return;
@@ -202,12 +171,12 @@ export default function OrbZoom({personaId,color,active,vizRef,personaPics={},on
     const onWheel=(e)=>{
       if(e.preventDefault)e.preventDefault();
       wheelAcc.current+=e.deltaY;
-      if(wheelAcc.current<-90){wheelAcc.current=0;stepZoom(1.2);}
-      else if(wheelAcc.current>90){wheelAcc.current=0;stepZoom(1/1.2);}
+      if(wheelAcc.current<-140){wheelAcc.current=0;deeper();}
+      else if(wheelAcc.current>140){wheelAcc.current=0;shallower();}
     };
     node.addEventListener('wheel',onWheel,{passive:false});
     return()=>node.removeEventListener('wheel',onWheel);
-  },[stepZoom]);
+  },[deeper,shallower]);
 
   // Android (Samsung DeX / any attached mouse): RN has no `wheel` event on a
   // plain View, but a ScrollView still scrolls from mouse-wheel ACTION_SCROLL
@@ -225,12 +194,12 @@ export default function OrbZoom({personaId,color,active,vizRef,personaPics={},on
     wheelY.current=y;
     if(!dy)return;
     wheelAcc.current+=dy;
-    if(wheelAcc.current<-70){wheelAcc.current=0;stepZoom(1.2);recenterWheel();}
-    else if(wheelAcc.current>70){wheelAcc.current=0;stepZoom(1/1.2);recenterWheel();}
+    if(wheelAcc.current<-90){deeper();recenterWheel();}
+    else if(wheelAcc.current>90){shallower();recenterWheel();}
     // keep the catcher near the middle even between level changes, so a fast
     // spin can't park it against a content edge where it stops reporting delta
     else if(Math.abs(y-WHEEL_MID)>500)recenterWheel();
-  },[stepZoom,recenterWheel]);
+  },[deeper,shallower,recenterWheel]);
 
   function removeMemory(mem){
     if(!mem)return;
@@ -289,8 +258,8 @@ export default function OrbZoom({personaId,color,active,vizRef,personaPics={},on
       </View>
 
       <View style={s.zoomCtl} pointerEvents="box-none">
-        <TouchableOpacity style={s.zBtn} onPress={()=>stepZoom(1/1.4)}><Text style={s.zT}>−</Text></TouchableOpacity>
-        <TouchableOpacity style={s.zBtn} onPress={()=>stepZoom(1.4)}><Text style={s.zT}>+</Text></TouchableOpacity>
+        <TouchableOpacity style={s.zBtn} onPress={()=>shallower()}><Text style={s.zT}>−</Text></TouchableOpacity>
+        <TouchableOpacity style={s.zBtn} onPress={()=>deeper()}><Text style={s.zT}>+</Text></TouchableOpacity>
       </View>
 
 
