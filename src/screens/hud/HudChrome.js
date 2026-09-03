@@ -6,7 +6,8 @@
 // the whole screen's chrome. JS-driven (not native) so a value can feed both an
 // opacity and a layout prop without RN's mixed-driver warning.
 import React,{useEffect,useRef,useState}from 'react';
-import{View,Text,StyleSheet,Animated,Easing,Dimensions}from 'react-native';
+import{View,Text,StyleSheet,Animated,Easing,Dimensions,TouchableOpacity}from 'react-native';
+import{Feather}from '@expo/vector-icons';
 import{colors,space,radius,FONTS}from '../../theme';
 
 const{width:SCREEN_W,height:SCREEN_H}=Dimensions.get('window');
@@ -131,7 +132,7 @@ function Blink(){
 }
 
 // --- Module wrapper each section sits in ----------------------------------
-export function HudModule({index,label,pulse,children,live=true}){
+export function HudModule({index,label,pulse,children,live=true,onDetach}){
   const dotGlow=pulse.interpolate({inputRange:[0,1],outputRange:[0.3,1]});
   return(
     <View style={c.module}>
@@ -144,6 +145,11 @@ export function HudModule({index,label,pulse,children,live=true}){
         <View style={{flex:1}}/>
         {live&&<Animated.View style={[c.modDot,{opacity:dotGlow}]}/>}
         <Text style={c.modBars}>▚▚</Text>
+        {onDetach&&(
+          <TouchableOpacity onPress={onDetach} hitSlop={{top:10,bottom:10,left:10,right:10}} activeOpacity={0.6}>
+            <Feather name="maximize-2" size={12} color={colors.textDim}/>
+          </TouchableOpacity>
+        )}
       </View>
       <View style={c.modBody}>{children}</View>
     </View>

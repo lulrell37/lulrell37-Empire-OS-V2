@@ -1,9 +1,9 @@
-import React,{useState,useCallback,useRef}from 'react';
+import React,{useState,useCallback,useRef,useEffect}from 'react';
 import{View,Text,StyleSheet,ScrollView,TouchableOpacity,TextInput,Modal}from 'react-native';
 import{SafeAreaView}from 'react-native-safe-area-context';
-import{useFocusEffect}from '@react-navigation/native';
+import{useFocusEffect,useIsFocused}from '@react-navigation/native';
 import{Feather}from '@expo/vector-icons';
-import{getHudState,updateHudState,getTasks,getBusinessesWithRevenue,setBusinessTarget,addRevenue,updateEmpireScore,getMorningRoutine,saveMorningRoutine,getBatmanTemplate,saveBatmanTemplate,ensureHudState,DEFAULT_BATMAN}from '../services/database';
+import{getHudState,updateHudState,getTasks,getBusinessesWithRevenue,setBusinessTarget,addRevenue,updateEmpireScore,getMorningRoutine,saveMorningRoutine,getBatmanTemplate,saveBatmanTemplate,ensureHudState,getHudLayout,setPanelLayout,DEFAULT_BATMAN}from '../services/database';
 import{loadHudTasks,addHudTask,setHudTaskDone,renameHudTask,deleteHudTask}from '../services/hudTasks';
 import{colors,space,radius,FONTS}from '../theme';
 import{PANEL_META,BriefingPanel,AgendaPanel,BusinessPanel,TasksPanel,RoutinePanel,BatmanPanel,DailyPanel,MarketPanel,BuildBoardPanel}from './hud/panels';
@@ -40,11 +40,36 @@ export default function HUDScreen({navigation}){
   const[bizLogInput,setBizLogInput]=useState('');
   const[taskEdit,setTaskEdit]=useState(null);
   const[taskEditInput,setTaskEditInput]=useState('');
+  const[detachedKeys,setDetachedKeys]=useState([]); // modules pulled out as floating cards
   const busyRef=useRef(false);
   busyRef.current=panelEditing||showAddTask||!!taskEdit||!!bizModal;
   const pulse=useHudPulse();
+  const isFocused=useIsFocused();
 
   useFocusEffect(useCallback(()=>{if(!busyRef.current)load();},[]));
+
+  // Keep the feed in sync with what's floating — a card can be docked from
+  // anywhere (its ⊟ button), and JARVIS can detach/dock via commands.
+  async function readLayout(){
+    try{
+      const lay=await getHudLayout();
+      setDetachedKeys(Object.keys(lay).filter(k=>lay[k]?.detached));
+    }catch{}
+  }
+  useEffect(()=>{
+    if(!isFocused)return;
+    readLayout();
+    const iv=setInterval(readLayout,2500);
+    return()=>clearInterval(iv);
+  },[isFocused]);
+
+  async function detachModule(key){
+    let lay={};try{lay=await getHudLayout();}catch{}
+    const n=Object.values(lay).filter(v=>v?.detached).length;
+    const z=Math.max(0,...Object.values(lay).map(v=>v?.z||0))+1;
+    await setPanelLayout(key,{detached:1,x:16+n*20,y:90+n*20,scale:1,z});
+    setDetachedKeys(prev=>prev.includes(key)?prev:[...prev,key]);
+  }
 
   async function load(){
     await ensureHudState(); // roll the day over (score -> 0, checkboxes cleared) if it's a new day
@@ -195,14 +220,20 @@ export default function HUDScreen({navigation}){
           statusText={statusText} pulse={pulse}
         />
 
-        {MODULES.map(([key,label],i)=>(
+        {MODULES.filter(([key])=>!detachedKeys.includes(key)).map(([key,label],i)=>(
           <React.Fragment key={key}>
             {i>0&&<HudDivider/>}
-            <HudModule index={String(i+1).padStart(2,'0')} label={label||PANEL_META[key]?.title} pulse={pulse}>
+            <HudModule index={String(i+1).padStart(2,'0')} label={label||PANEL_META[key]?.title} pulse={pulse} onDetach={()=>detachModule(key)}>
               {renderPanel(key)}
             </HudModule>
           </React.Fragment>
         ))}
+
+        {detachedKeys.length>0&&(
+          <Text style={s.floatingNote}>
+            {detachedKeys.length} module{detachedKeys.length>1?'s':''} floating · drag it anywhere · minimize to dock it back here
+          </Text>
+        )}
 
         <View style={s.footer}>
           <Text style={s.footerText}>— END OF FEED —</Text>
@@ -268,6 +299,7 @@ const s=StyleSheet.create({
   scroll:{paddingBottom:space.xxxl},
   footer:{alignItems:'center',paddingVertical:space.xl},
   footerText:{fontFamily:FONTS.mono,fontSize:7,color:colors.textFaint,letterSpacing:3},
+  floatingNote:{fontFamily:FONTS.mono,fontSize:8,color:colors.textDim,letterSpacing:1,textAlign:'center',marginTop:space.lg,marginHorizontal:space.lg},
 
   modalOver:{flex:1,backgroundColor:'rgba(0,0,0,0.92)',justifyContent:'flex-end'},
   modalContent:{backgroundColor:colors.card,borderTopWidth:1,borderTopColor:colors.hairlineGold,borderTopLeftRadius:radius.xl,borderTopRightRadius:radius.xl,padding:space.xl},

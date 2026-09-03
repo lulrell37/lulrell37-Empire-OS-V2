@@ -1,7 +1,7 @@
-// Renders detached HUD panels as floating cards over the whole app, so a panel
-// JARVIS pops out with [HUD_DETACH] stays on screen after you leave the HUD. It
-// draws nothing on the HUD screen itself — every module is already in the HUD's
-// vertical feed there.
+// Renders detached HUD panels as free-floating, drag-anywhere cards over the
+// whole app — including the HUD screen itself, where a detached module drops out
+// of the vertical feed and lives as a floating card instead. JARVIS pops one out
+// with [HUD_DETACH]; the ⤢ button on a HUD module does the same.
 import React,{useState,useEffect,useCallback}from 'react';
 import{View,StyleSheet}from 'react-native';
 import{getHudLayout,setPanelLayout}from '../../services/database';
@@ -37,9 +37,9 @@ export default function HudFloatLayer({navRef}){
   // …and self-heal on a slow poll (also picks up a just-detached panel and
   // cross-device layout sync).
   useEffect(()=>{refresh();},[routeName,refresh]);
-  useEffect(()=>{const iv=setInterval(refresh,4000);return()=>clearInterval(iv);},[refresh]);
+  useEffect(()=>{const iv=setInterval(refresh,1800);return()=>clearInterval(iv);},[refresh]);
 
-  if(routeName==='HUD'||routeName==='Splash'||!routeName)return null;
+  if(routeName==='Splash'||!routeName)return null;
 
   const keys=Object.keys(layout).filter(k=>layout[k]?.detached);
   if(!keys.length)return null;

@@ -1,6 +1,7 @@
-// A HUD panel detached into a free-floating card: drag to move, pinch to
-// zoom, tap/drag to bring to front, dock button to snap back into the carousel.
-// Position and scale are reported up via onPersist (on gesture end only).
+// A HUD panel detached into a free-floating card: drag it anywhere on screen,
+// pinch to resize, touch to bring to front, dock button (⊟) to send it back into
+// the HUD feed. Position and scale are reported up via onPersist (on gesture
+// end only).
 import React from 'react';
 import{View,Text,StyleSheet,ScrollView,TouchableOpacity,Dimensions}from 'react-native';
 import Animated,{useSharedValue,useAnimatedStyle,withTiming,runOnJS}from 'react-native-reanimated';
@@ -31,10 +32,14 @@ export default function FloatingCard({title,initial,z=0,onFront,onPersist,onDock
       ty.value=startY.value+e.translationY;
     })
     .onEnd(()=>{
-      const maxX=width-64;
-      const minX=-(CARD_W-64);
-      const maxY=height-140;
-      const minY=-24;
+      // Put it almost anywhere — only stop it vanishing entirely. You can drag
+      // from any part of the card, so keeping EDGE px on screen is enough to
+      // grab it again.
+      const EDGE=48;
+      const maxX=width-EDGE;
+      const minX=-(CARD_W-EDGE);
+      const maxY=height-EDGE;
+      const minY=-EDGE/2;
       if(tx.value>maxX)tx.value=withTiming(maxX);
       else if(tx.value<minX)tx.value=withTiming(minX);
       if(ty.value>maxY)ty.value=withTiming(maxY);
