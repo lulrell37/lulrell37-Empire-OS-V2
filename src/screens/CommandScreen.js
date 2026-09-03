@@ -1646,7 +1646,7 @@ export default function CommandScreen({navigation}){
     <SafeAreaView style={s.container} edges={['top','bottom']}>
       <View style={s.header}>
         <TouchableOpacity onPress={handleBack} hitSlop={{top:10,bottom:10,left:10,right:10}}>
-          <Text style={s.empireOS}>‹ {view==='viz'&&orbLevel!=='group'?'BACK':'EMPIRE OS'}</Text>
+          <Text style={s.empireOS}>{view==='viz'&&orbLevel!=='group'?'‹ BACK':'♔ EMPIRE OS'}</Text>
         </TouchableOpacity>
         <View style={s.headerRight}>
           <View style={s.viewToggle}>

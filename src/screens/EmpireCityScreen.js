@@ -185,7 +185,6 @@ function EmpireCity({navigation}){
   const[status,setStatus]=useState('loading');
   const[errMsg,setErrMsg]=useState('');
   const[labels,setLabels]=useState([]);
-  const hud=useEmpireStore(s=>s.hudState);
   const setHudState=useEmpireStore(s=>s.setHudState);
   const fade=useRef(new Animated.Value(0)).current;   // black wash for page-change
 
@@ -436,9 +435,6 @@ function EmpireCity({navigation}){
     }
   }
 
-  const score=hud?.empire_score||0;
-  const streak=hud?.streak||0;
-
   if(status==='error'){
     return(
       <SafeAreaView style={s.fallback} edges={['top','bottom']}>
@@ -485,7 +481,6 @@ function EmpireCity({navigation}){
 
       <SafeAreaView style={s.hudStrip} edges={['top']} pointerEvents="none">
         <Text style={s.hudBrand}>THE EMPIRE</Text>
-        <Text style={s.hudMeta}>{score}%  ·  {streak}🔥</Text>
       </SafeAreaView>
 
       {status==='loading'&&(
@@ -515,7 +510,6 @@ const s=StyleSheet.create({
   labelS:{fontFamily:'monospace',fontSize:7,color:'#8A7E63',letterSpacing:2,marginTop:2},
   hudStrip:{position:'absolute',top:0,left:0,right:0,alignItems:'center',paddingTop:10},
   hudBrand:{fontFamily:'monospace',fontSize:15,fontWeight:'700',color:'#E8C98A',letterSpacing:6},
-  hudMeta:{fontFamily:'monospace',fontSize:10,color:'#8A7E63',letterSpacing:2,marginTop:3},
   hint:{position:'absolute',bottom:0,left:0,right:0,alignItems:'center',paddingBottom:10},
   hintT:{fontFamily:'monospace',fontSize:8,color:'#4A4436',letterSpacing:2},
   loading:{...StyleSheet.absoluteFillObject,alignItems:'center',justifyContent:'center',gap:10},
