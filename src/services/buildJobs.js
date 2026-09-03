@@ -10,7 +10,13 @@ import{getIssueActivity,findLinkedPR,getPRStatus}from './buildAgent';
 function looksLikeQuestion(body){
   const b=String(body||'');
   if(/github\.com\/[^\s]+\/pull\/\d+/.test(b))return false; // it's the PR announcement
+  if(looksLikeFailure(b))return false;
   return b.includes('?');
+}
+// The Claude Code Action edits its comment to this when a run errors out
+// (max turns, crash, timeout). No PR will come — surface it as a failure.
+function looksLikeFailure(body){
+  return /claude encountered an error|reached maximum number of turns|execution failed|\berror after \d/i.test(String(body||''));
 }
 
 export async function pollBuildJobs(){
@@ -28,6 +34,11 @@ export async function pollBuildJobs(){
         await updateBuildJob(job.id,{last_comment_id:fresh[fresh.length-1].id});
         const claudeMsgs=fresh.filter(c=>c.isClaude&&c.body.trim());
         const lastClaude=claudeMsgs[claudeMsgs.length-1];
+        if(lastClaude&&looksLikeFailure(lastClaude.body)&&job.state!=='pr_open'&&job.state!=='pushed'){
+          await updateBuildJob(job.id,{state:'failed'});
+          events.push({type:'failed',job,text:'Claude Code stopped before finishing (likely ran out of turns). Re-file the request — smaller if it was a big one.'});
+          continue;
+        }
         if(lastClaude&&looksLikeQuestion(lastClaude.body)&&job.state!=='pr_open'&&job.state!=='pushed'){
           await updateBuildJob(job.id,{state:'question',question:lastClaude.body.slice(0,1200)});
           events.push({type:'question',job,text:lastClaude.body.trim()});
