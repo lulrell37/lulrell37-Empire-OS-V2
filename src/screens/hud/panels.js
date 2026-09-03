@@ -216,14 +216,20 @@ export function BatmanPanel({template,done,today,onToggleDay,onSaveTemplate,onEd
 
 export function DailyPanel({hud,onRefreshed}){
   const[busy,setBusy]=useState(false);
+  const[err,setErr]=useState('');
   async function forceRefresh(){
     if(busy)return;
-    setBusy(true);
-    try{await refreshDailyBriefing({force:true});onRefreshed&&onRefreshed();}catch{}
+    setBusy(true);setErr('');
+    try{
+      const r=await refreshDailyBriefing({force:true});
+      if(r?.errors?.length)setErr(r.errors.join('  ·  '));
+      onRefreshed&&onRefreshed();
+    }catch(e){setErr(String(e?.message||e));}
     finally{setBusy(false);}
   }
   return(
     <>
+      {!!err&&<Text style={ps.dailyErr}>⚠ {err}</Text>}
       <View style={ps.wvfSection}>
         <View style={ps.wvfHeadRow}>
           <Text style={ps.wvfLabel}>WORD OF THE DAY</Text>
@@ -566,6 +572,7 @@ export const ps=StyleSheet.create({
   batEditRow:{flexDirection:'row',gap:space.md,paddingVertical:space.md,borderBottomWidth:1,borderBottomColor:colors.hairline},
   batEditDay:{fontFamily:FONTS.monoMed,fontSize:10,color:colors.gold,letterSpacing:1.5,width:34,paddingTop:10},
 
+  dailyErr:{fontFamily:FONTS.mono,fontSize:9,color:colors.danger,lineHeight:14,letterSpacing:0.3,marginBottom:space.md},
   wvfSection:{paddingVertical:space.lg,borderBottomWidth:1,borderBottomColor:colors.hairline},
   wvfSectionLast:{borderBottomWidth:0},
   wvfLabel:{fontFamily:FONTS.mono,fontSize:8,letterSpacing:2.5,color:colors.textDim,marginBottom:space.md},

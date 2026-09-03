@@ -56,13 +56,21 @@ async function ensureVerse(today,force){
 }
 
 // Fill in whatever the day is missing. `force` regenerates all three now.
+// Returns { generated:[...], errors:[...] } so a caller (the DAILY panel) can
+// show what actually happened instead of failing silently.
 export async function refreshDailyBriefing({force=false}={}){
-  if(running)return;
+  if(running)return{generated:[],errors:['already running']};
   running=true;
   const today=todayET();
+  const generated=[],errors=[];
+  const step=async(kind,fn)=>{
+    try{if(await fn(today,force))generated.push(kind);}
+    catch(e){errors.push(`${kind}: ${e?.message||e}`);}
+  };
   try{
-    try{await ensureWord(today,force);}catch(e){}
-    try{await ensureFact(today,force);}catch(e){}
-    try{await ensureVerse(today,force);}catch(e){}
+    await step('word',ensureWord);
+    await step('fact',ensureFact);
+    await step('verse',ensureVerse);
   }finally{running=false;}
+  return{generated,errors};
 }

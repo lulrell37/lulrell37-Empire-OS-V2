@@ -367,15 +367,16 @@ export async function dailyGenerate(kind,avoid=[]){
     user=`Do NOT repeat any of these already-used references: ${seen}`;
   }
   const res=await fetch(base+'/v1/messages',{method:'POST',headers:{'Content-Type':'application/json',...auth},body:JSON.stringify({
-    model:'claude-sonnet-4-6',max_tokens:300,system:sys,messages:[{role:'user',content:user}],
+    model:'claude-sonnet-4-6',max_tokens:500,system:sys,messages:[{role:'user',content:user}],
   })});
-  if(!res.ok)throw new Error(`daily ${kind}: ${apiErrorMessage(await res.text()).slice(0,100)}`);
+  if(!res.ok)throw new Error(`${apiErrorMessage(await res.text()).slice(0,140)}`);
   const d=await res.json();
   if(d.usage)await trackApiUsage('claude',d.usage.input_tokens||0,d.usage.output_tokens||0).catch(()=>{});
-  const raw=d.content?.[0]?.text?.trim()||'';
+  const raw=(d.content?.[0]?.text||'').replace(/```(?:json)?/gi,'').trim();
   const m=raw.match(/\{[\s\S]*\}/);
-  if(!m)throw new Error(`daily ${kind}: no JSON in reply`);
-  return JSON.parse(m[0]);
+  if(!m)throw new Error(`no JSON in reply: "${raw.slice(0,80)}"`);
+  try{return JSON.parse(m[0]);}
+  catch(e){throw new Error(`bad JSON: ${m[0].slice(0,80)}`);}
 }
 
 // One unattended trading decision for A.T.L.A.S. — a single Claude call that
