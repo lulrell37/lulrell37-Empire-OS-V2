@@ -8,12 +8,12 @@ import*as DocumentPicker from 'expo-document-picker';
 import{Camera}from 'expo-camera';
 import*as FileSystem from 'expo-file-system';
 import{PERSONA_LIST,getPersona}from '../personas/personas';
-import{callPersona,textToSpeech,transcribeAudio,queryMemory,webSearch,personaSystemPrompt}from '../services/aiService';
+import{callPersona,textToSpeech,transcribeAudio,queryMemory,webSearch}from '../services/aiService';
 import{drStart,drGetActive,drTick,drDismiss,DR_POLL_MS}from '../services/deepResearch';
 import{onAutoTrade}from '../services/autoTrader';
 import{handleCommands,stripCommands}from '../services/commandHandler';
 import{googleReadInjections,googleWriteCommands}from '../services/googleCommands';
-import{getMessages,saveMessage,getAllPersonaPics,savePersonaMemory,getSetting,getExpenseSummary,addBuildJob,updateBuildJob,getBuildJob,getBuildJobs}from '../services/database';
+import{getMessages,saveMessage,getAllPersonaPics,savePersonaMemory,getSetting,getExpenseSummary,addBuildJob,updateBuildJob,getBuildJob,getBuildJobs,getCustomPrompt}from '../services/database';
 import{fileBuildRequest,replyToBuild,mergeBuild,cancelBuild}from '../services/buildAgent';
 import{pollBuildJobs}from '../services/buildJobs';
 import{tlSnapshot,tlFormatSnapshot,tlPlaceOrder,tlClosePosition,tlModifyPosition,tlPositions,MAX_QTY,MAX_OPEN_POSITIONS}from '../services/tradeLocker';
@@ -291,13 +291,38 @@ export default function CommandScreen({navigation}){
     return sound;
   }
 
-  async function araGrokVoice(text){
+  // Build the conversation anchor for Ara's voice turn — the recent dialogue and
+  // the last thing Mr. Burrus said — so Grok voices *this* reply and doesn't wander.
+  function araVoiceCtx(replyText){
+    const list=mode==='direct'?messages:groupMessages;
+    const turns=(Array.isArray(list)?list:[])
+      .filter(m=>(m.role==='user'||m.role==='assistant')&&m.content&&m.content!==replyText)
+      .slice(-6).map(m=>({role:m.role,content:String(m.content)}));
+    const userText=[...turns].reverse().find(m=>m.role==='user')?.content||'';
+    return{turns,userText};
+  }
+
+  async function araGrokVoice(text,ctx){
     const keys=await loadKeys();
     if(!keys?.grok)throw new Error('Grok API key needed for Ara voice. Add in Settings.');
     araChunksRef.current=[];
-    // Seed the voice socket with the same HUD + memory context Ara's text turn got.
-    let araInstructions=getPersona('ara').system;
-    try{araInstructions=await personaSystemPrompt('ara');}catch{}
+    // Voice character only — your Settings prompt for Ara if you've set one,
+    // otherwise her built-in personality. NOT the full agent prompt: seeding the
+    // socket with the HUD/memory/tool/nudge context made Grok treat the finished
+    // reply as a fresh user prompt and answer it anew, drifting off topic. Grok's
+    // only job here is to *voice* the reply Ara's text turn already wrote — her
+    // wording, her delivery, same substance — anchored to what Mr. Burrus asked.
+    let base=getPersona('ara').system;
+    try{base=(await getCustomPrompt('ara'))||base;}catch{}
+    const araInstructions=base
+      +`\n\n[VOICE MODE: You are speaking out loud — everything you say is heard, not read. Below is the recent conversation, what Mr. Burrus just said, and the reply you are giving him. Deliver that reply in your own natural spoken voice: same meaning, same stance, your phrasing. Stay strictly on that reply — do not answer with anything new, do not add topics or information, do not read it back word for word. Keep it conversational and tight.]`;
+    const userText=(ctx?.userText||'').trim();
+    const turns=(ctx?.turns||[]).filter(t=>t&&t.content&&t.content!==text&&t.content!==userText).slice(-6);
+    const convoBits=turns.map(t=>`${t.role==='assistant'?'A.R.A.':'Mr. Burrus'}: ${String(t.content).slice(0,1500)}`).join('\n');
+    const voicePrompt=
+      (convoBits?`Recent conversation:\n${convoBits}\n\n`:'')
+      +(userText?`Mr. Burrus just said: "${userText}"\n\n`:'')
+      +`Deliver this reply out loud now, in your own spoken voice — same meaning and stance, your phrasing, on this and nothing else:\n"${text}"`;
     return new Promise((resolve,reject)=>{
       const ws=new WebSocket(
         'wss://api.x.ai/v1/realtime?model=grok-voice-latest',
@@ -327,7 +352,7 @@ export default function CommandScreen({navigation}){
         if(event.type==='session.created'||event.type==='session.updated'){
           if(!sessionReady){
             sessionReady=true;
-            ws.send(JSON.stringify({type:'conversation.item.create',item:{type:'message',role:'user',content:[{type:'input_text',text}]}}));
+            ws.send(JSON.stringify({type:'conversation.item.create',item:{type:'message',role:'user',content:[{type:'input_text',text:voicePrompt}]}}));
             ws.send(JSON.stringify({type:'response.create'}));
           }
         }
@@ -368,7 +393,7 @@ export default function CommandScreen({navigation}){
       await waitUntil(()=>!recBusyRef.current,3000);
       await audioModeForPlayback();
       if(persona.id==='ara'){
-        const result=await araGrokVoice(text);
+        const result=await araGrokVoice(text,araVoiceCtx(text));
         soundRef.current=result?.sound||null;
         if(soundRef.current)soundRef.current.setOnPlaybackStatusUpdate(st=>{if(st.didJustFinish){clearSound();maybeAutoListen();}});
         else maybeAutoListen();
@@ -393,7 +418,7 @@ export default function CommandScreen({navigation}){
   // Speaks `text` and reveals it in the chat bubble (id=msgId) in step with
   // playback. Resolves { revealed, completed } — how many characters were
   // actually voiced before it finished or was interrupted.
-  async function speakWithReveal(text,persona,msgId,isGroup){
+  async function speakWithReveal(text,persona,msgId,isGroup,voiceCtx){
     const setMsgs=isGroup?setGroupMessages:setMessages;
     const patch=(fn)=>setMsgs(prev=>prev.map(m=>m.id===msgId?fn(m):m));
 
@@ -488,9 +513,12 @@ export default function CommandScreen({navigation}){
           await sleep(60);
           let sound=null,timeline=null;
           if(persona.id==='ara'){
-            const r=await araGrokVoice(fullText);
-            sound=r?.sound||null;timeline=r?.timeline||null;
-            if(r?.transcript&&r.transcript.length>fullText.length){fullText=r.transcript;patch(m=>({...m,content:fullText}));}
+            const r=await araGrokVoice(fullText,voiceCtx||araVoiceCtx(fullText));
+            sound=r?.sound||null;
+            // Bubble stays the drafted reply; the spoken clip is Ara's own
+            // paraphrase of it, so its char-timeline no longer lines up with the
+            // bubble — let the reveal run off playback position instead.
+            timeline=null;
           }else if(persona.elevenlabsVoiceId){
             const uri=await textToSpeech(fullText,persona.elevenlabsVoiceId,persona.name);
             if(uri){
@@ -993,7 +1021,12 @@ export default function CommandScreen({navigation}){
           // at sentence boundaries. (The per-sentence streamSpeak path below is
           // no longer routed to: it started talking a beat sooner but left an
           // audible pause between every sentence while the next clip loaded.)
-          await speakWithReveal(display,p,msgId,isGroup);
+          // For Ara, hand the voice turn the real dialogue anchor (recent turns +
+          // what Mr. Burrus just said) so Grok voices *this* reply, on topic.
+          const voiceCtx=p.id==='ara'
+            ?{turns:hist.filter(h=>h.role==='user'||h.role==='assistant').slice(-6),userText:text}
+            :undefined;
+          await speakWithReveal(display,p,msgId,isGroup,voiceCtx);
           // The spoken helpers only drive the reveal animation — the reply text
           // is always the full `display`. Settle the bubble on it regardless of
           // how the reveal ended, unless the user has moved on.
