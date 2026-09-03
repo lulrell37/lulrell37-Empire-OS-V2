@@ -47,6 +47,18 @@ export async function pollBuildJobs(){
         if(job.state==='queued')await updateBuildJob(job.id,{state:'working'});
       }
 
+      // 1b. Stale catch — a build that's shown no activity at all for a long
+      // time has almost certainly died silently (workflow never ran, auth blew
+      // up before it could comment, etc.). Don't leave it stuck at "working".
+      if((job.state==='queued'||job.state==='working')&&!job.pr_number){
+        const idleMs=Date.now()-(job.updated_at||job.created_at||Date.now());
+        if(idleMs>45*60*1000){
+          await updateBuildJob(job.id,{state:'failed'});
+          events.push({type:'failed',job,text:'No progress from Claude Code for 45+ minutes — the run likely failed to start or died. Check the repo’s Actions tab, then re-file.'});
+          continue;
+        }
+      }
+
       // 2. Is there a PR yet?
       if(!job.pr_number){
         let pr=await findLinkedPR(n,repo);
