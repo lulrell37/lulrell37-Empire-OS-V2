@@ -1,0 +1,36 @@
+# Claude Code runs here when a client project files an issue containing "@claude"
+# (Empire OS / A.R.A. does this automatically) or when someone answers a
+# follow-up as an issue comment. Claude implements the change on a branch, opens
+# a PR, and comments back. The Empire OS app polls the issue/PR, relays questions,
+# and merges once Mr. Burrus confirms in-app.
+#
+# Repo setup (the Empire OS app does this automatically when it creates the repo
+# from this template):
+#   - Secret ANTHROPIC_API_KEY
+#   - Actions > General > "Allow GitHub Actions to create and approve pull requests"
+#
+# Auth: uses the workflow's own GITHUB_TOKEN (github_token below) so the Claude
+# GitHub App does NOT need to be installed on every client repo. The token's
+# permissions are granted in the `permissions:` block.
+name: Claude Code
+on:
+  issues:
+    types: [opened]
+  issue_comment:
+    types: [created]
+jobs:
+  claude:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ github.token }}
+          claude_args: |
+            --max-turns 40
