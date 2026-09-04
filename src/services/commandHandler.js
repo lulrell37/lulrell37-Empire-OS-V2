@@ -44,8 +44,20 @@ export async function handleCommands(response,personaId,callbacks={}){
     const task=tasks.find(t=>t.title.toLowerCase().includes(m[1].trim().toLowerCase()));
     if(task){await updateTask(task.id,m[2].trim(),task.notes||'');callbacks.onTaskEdited?.(task);}
   }
+  // Every persona's own instructions teach [SAVE_NOTE], not the Drive-specific
+  // [CREATE_NOTE]/[EDIT_NOTE] tags that only live in the generic GOOGLE block —
+  // so a note "saved" was always landing in the app's local table, never in
+  // Drive, no matter who asked or which persona wrote it. driveSaveNote writes
+  // to Drive and edits an existing note in place (by title) rather than
+  // duplicating it, so this one tag covers both create and edit for every
+  // persona; fall back to the local note only when Drive isn't connected or
+  // the write fails — mirrors [READ_NOTE]'s Drive-first/local-fallback in
+  // googleCommands.js.
   for(const m of response.matchAll(/\[SAVE_NOTE:\s*([^|\]]+)\|([^\]]+)\]/gi)){
-    if(m[1]&&m[2])await saveNote(m[1].trim(),m[2].trim(),personaId);
+    const title=m[1]?.trim(),content=m[2]?.trim();
+    if(!title||!content)continue;
+    try{await gtask.driveSaveNote({title,content});}
+    catch{await saveNote(title,content,personaId);}
   }
   for(const m of response.matchAll(/\[ADD_REVENUE:\s*([^|\]]+)\|([^|\]]+)(?:\|([^|\]]+))?(?:\|([^\]]+))?\]/gi)){
     const amount=parseFloat(m[2]);

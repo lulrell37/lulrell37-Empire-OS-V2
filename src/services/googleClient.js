@@ -229,7 +229,10 @@ async function driveFindByName(name){
   const data=await gapi('/drive/v3/files',{query:{
     q:`trashed=false and name contains '${esc}'`,pageSize:5,fields:'files(id,name,mimeType)',
   }});
-  return(data.files||[])[0]||null;
+  const files=data.files||[];
+  // Prefer an exact (case-insensitive) title match over Drive's loose "contains"
+  // search, so editing "Trip Plan" doesn't land on "Trip Plan — Backup" instead.
+  return files.find(f=>f.name.toLowerCase()===name.toLowerCase())||files[0]||null;
 }
 
 // Long documents are paged so one read can't blow out the context window.
@@ -289,6 +292,17 @@ export async function driveCreate({title,content}){
     headers:{'Content-Type':`multipart/related; boundary=${boundary}`},body,
   });
   return `Drive: note "${title}" created  [id:${f.id}]`;
+}
+
+// Create-or-update by title: what every persona's [SAVE_NOTE] actually needs
+// — a note with this title should be written the first time and edited in
+// place after that, not duplicated. Falls back to a fresh file if the name
+// lookup itself fails (still better than losing the write).
+export async function driveSaveNote({title,content}){
+  if(!title)throw new Error('no title');
+  const existing=await driveFindByName(title).catch(()=>null);
+  if(existing)return driveUpdate({fileId:existing.id,content}).then(()=>`Drive: note "${title}" updated  [id:${existing.id}]`);
+  return driveCreate({title,content});
 }
 
 export async function driveUpdate({fileId,content}){
