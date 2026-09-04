@@ -46,12 +46,14 @@ export default function MemoryList({memories,onNode,filter}){
           {sec.items.map(m=>{
             const cm=categoryMeta(m.category);
             const p=previews(m.content);
+            const pinned=m.pinned_until&&m.pinned_until>Date.now();
             return(
               <TouchableOpacity key={m.id} activeOpacity={0.75} style={s.card} onPress={()=>onNode&&onNode(m)}>
-                <View style={[s.rail,{backgroundColor:cm.color}]}/>
+                <View style={[s.rail,{backgroundColor:pinned?'#E8C98A':cm.color}]}/>
                 <View style={s.cardBody}>
                   <View style={s.cardHead}>
                     <Text style={[s.cat,{color:cm.color}]}>{cm.label.toUpperCase()}</Text>
+                    {pinned&&<Text style={s.pin}>  📌 {Math.max(1,Math.ceil((m.pinned_until-Date.now())/86400000))}d</Text>}
                   </View>
                   {!!p.you&&<Text style={s.you} numberOfLines={2}>{p.you}</Text>}
                   {!!p.reply&&<Text style={s.reply} numberOfLines={p.you?2:3}>{p.reply}</Text>}
@@ -75,6 +77,7 @@ const s=StyleSheet.create({
   cardBody:{flex:1,paddingVertical:space.md,paddingHorizontal:space.md,gap:5},
   cardHead:{flexDirection:'row',alignItems:'center'},
   cat:{fontFamily:FONTS.monoMed,fontSize:7.5,letterSpacing:2},
+  pin:{fontFamily:FONTS.mono,fontSize:7.5,letterSpacing:1,color:'#E8C98A'},
   you:{fontFamily:FONTS.mono,fontSize:12,lineHeight:17,color:colors.text},
   reply:{fontFamily:FONTS.mono,fontSize:11,lineHeight:16,color:colors.textMuted},
   empty:{flex:1,alignItems:'center',justifyContent:'center',padding:space.xxl},

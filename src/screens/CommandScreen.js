@@ -1140,6 +1140,7 @@ export default function CommandScreen({navigation}){
             if(e.action==='add')pushSystemMsg(`— PIPELINE · added ${e.name} —`);
             else if(e.action==='miss')pushSystemMsg(`— PIPELINE · no lead matches "${e.ref}" —`);
           },
+          onMemoryPinned:(e)=>pushSystemMsg(`— pinned for ${e.days}d: ${e.text} —`),
         };
 
         // --- THE FIRM — A.R.A. delegates to specialists, then synthesizes ---

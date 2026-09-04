@@ -54,7 +54,8 @@ async function buildSys(personaId,persona,convo=[]){
   const customPrompt=await getCustomPrompt(personaId);
   let sys=customPrompt||persona.system;
   sys+=`\n\n[RESPONSE STYLE: Reply directly to what Mr. Burrus just said. Do not open with a status briefing, HUD summary, morning-routine readout, or any unprompted overview unless he explicitly asks for one. Skip "here is where things stand" preambles — answer the message and stop.]`;
-  sys+=`\n\n[MEMORY RECALL: The memory block below holds what is most relevant right now. If you need to recall something specific from past conversations that is NOT shown there, emit [MEMORY_QUERY: your precise question] and your memory index will answer it before you reply. Use it sparingly, only when it matters. Never mention this mechanism to Mr. Burrus — just recall.]`;
+  sys+=`\n\n[MEMORY RECALL: The memory block below is routed to the topic Mr. Burrus is on right now — your full history for that area, plus anything pinned. If he references something specific that ISN'T shown, emit [MEMORY_QUERY: your precise question] and your memory index answers before you reply — use it whenever he points back to a past conversation, not just rarely.
+PINNING: when he tells you something that matters over the next few days — a trip, a deadline, a decision in progress, something he is waiting on — keep it in front of you with [REMEMBER: the thing | days] (1-30, default 3). It rides in your context every turn until it expires. [UNPIN_MEMORY: a few words of it] drops it early. Never mention these mechanisms — just remember.]`;
   sys+=`\n\n[CHARTS: When numbers would land better as a picture, emit [SHOW_CHART: type | title | data]. type = line, area, bar, or pie. data = "label:value, label:value, ..." for one series, or "A=x:1,y:2; B=x:3,y:4" for several. It takes over the visualization panel until Mr. Burrus closes it. Use it when it genuinely helps — trends, breakdowns, comparisons — not for one or two numbers.]`;
   sys+=`\n\n[WEB: You can search the live web with [SEARCH_WEB: query] (max 1 per turn) — the result comes back before you reply. Use it only when the answer really turns on something current that you can't know: today's price, a recent event, a just-released product, a fast-moving number. For general knowledge, or in quick back-and-forth conversation, just answer directly — a search adds a noticeable delay before you can speak, so it must be worth it. Don't mention the mechanism; weave in what you find with source names.]`;
   try{
@@ -143,10 +144,14 @@ async function buildSys(personaId,persona,convo=[]){
     }catch{}
   }
   const lastUser=[...convo].reverse().find(m=>m?.role==='user'&&m?.content);
-  const mem=await getPersonaMemory(personaId,{query:lastUser?.content||'',limit:16});
+  const mem=await getPersonaMemory(personaId,{query:lastUser?.content||'',charBudget:36000});
   if(mem?.length){
-    const body=mem.map(m=>`[${m.date}${m.category?' · '+m.category:''}]\n${m.content}`).join('\n\n');
-    sys+=`\n\n[MEMORY — past exchanges kept in full, most relevant to the current message first. Reference naturally; never claim you don't remember:\n${body.substring(0,6000)}\n]`;
+    const now=Date.now();
+    const body=mem.map(m=>{
+      const pin=(m.pinned_until&&m.pinned_until>now)?`📌 PINNED · ${Math.max(1,Math.ceil((m.pinned_until-now)/86400000))}d left `:'';
+      return `[${pin}${m.date}${m.category?' · '+m.category:''}]\n${m.content}`;
+    }).join('\n\n');
+    sys+=`\n\n[MEMORY — your history for the topic at hand, plus anything pinned and the last few exchanges. Reference naturally; never claim you don't remember:\n${body.substring(0,90000)}\n]`;
   }
   // Keep this LAST so it's the most recent thing the model reads before replying.
   sys+=`\n\n[THE CURRENT MOMENT — right now it is ${timeStr} ${tz}, and Mr. Burrus is in Waldorf, MD. This is authoritative. The chat history and the memory above may be hours, days, or weeks old — do NOT assume it is still the same day or time of day as the last message. Every reply should be grounded in the date and time stated here. If more than a few hours have clearly passed since the last exchange, greet the new moment accordingly (a fresh morning, a new day) rather than continuing as if no time passed.]`;
@@ -384,9 +389,9 @@ export async function queryMemory(personaId,question,signal=null){
   const{getPersona}=await import('../personas/personas');
   const persona=getPersona(personaId);
   let rows=[];
-  try{rows=await getPersonaMemory(personaId,{query:question,limit:60});}catch{}
-  if(!rows.length){try{rows=(await getMemoriesByPersona(personaId)).slice(0,60);}catch{}}
-  const corpus=rows.map(r=>`[${r.date}${r.category?' · '+r.category:''}]\n${r.content}`).join('\n\n').slice(0,14000);
+  try{rows=await getPersonaMemory(personaId,{query:question,charBudget:60000});}catch{}
+  if(!rows.length){try{rows=(await getMemoriesByPersona(personaId)).slice(0,150);}catch{}}
+  const corpus=rows.map(r=>`[${r.date}${r.category?' · '+r.category:''}]\n${r.content}`).join('\n\n').slice(0,60000);
   const sys=`You are the private memory index for ${persona.name}, the assistant to Mr. Burrus. Below are stored exchanges between Mr. Burrus and ${persona.name}, newest first. Answer the recall question using ONLY what is in these memories. Be specific — quote dates and details. If the memories do not cover it, say so in one sentence. No preamble.\n\n=== STORED MEMORIES ===\n${corpus||'(none)'}\n=== END ===`;
   const res=await fetch(base+'/v1/messages',{method:'POST',headers:{'Content-Type':'application/json',...auth},body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:700,system:sys,messages:[{role:'user',content:question}]}),signal});
   if(!res.ok){const e=await res.text();throw new Error(`memory recall: ${e.substring(0,80)}`);}

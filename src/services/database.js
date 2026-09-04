@@ -10,7 +10,7 @@ export async function initDatabase(){
     CREATE TABLE IF NOT EXISTS hud_state(id INTEGER PRIMARY KEY DEFAULT 1,date TEXT,empire_score INTEGER DEFAULT 0,streak INTEGER DEFAULT 0,batman_protocol TEXT DEFAULT '{}',batman_template TEXT DEFAULT '[]',morning_routine TEXT DEFAULT '[]',morning_routine_done TEXT DEFAULT '{}',word_of_day TEXT,word_phonetic TEXT,word_def TEXT,verse_of_day TEXT,verse_ref TEXT,fact_of_day TEXT,updated_at INTEGER);
     CREATE TABLE IF NOT EXISTS revenue(id INTEGER PRIMARY KEY AUTOINCREMENT,business TEXT,amount REAL,type TEXT DEFAULT 'income',note TEXT,date TEXT,created_at INTEGER);
     CREATE TABLE IF NOT EXISTS business_targets(business TEXT PRIMARY KEY,target REAL DEFAULT 0,week_goal REAL DEFAULT 0,sort_order INTEGER DEFAULT 0);
-    CREATE TABLE IF NOT EXISTS persona_memory(id INTEGER PRIMARY KEY AUTOINCREMENT,persona TEXT,content TEXT,category TEXT,keywords TEXT,date TEXT,created_at INTEGER);
+    CREATE TABLE IF NOT EXISTS persona_memory(id INTEGER PRIMARY KEY AUTOINCREMENT,persona TEXT,content TEXT,category TEXT,keywords TEXT,date TEXT,created_at INTEGER,pinned_until INTEGER);
     CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT,content TEXT,persona TEXT,created_at INTEGER,updated_at INTEGER);
     CREATE TABLE IF NOT EXISTS persona_pics(id INTEGER PRIMARY KEY AUTOINCREMENT,persona TEXT UNIQUE,pic_data TEXT);
     CREATE TABLE IF NOT EXISTS custom_prompts(id INTEGER PRIMARY KEY AUTOINCREMENT,persona TEXT UNIQUE,prompt TEXT);
@@ -30,6 +30,7 @@ export async function initDatabase(){
   await migrateColumn('trades','auto','INTEGER DEFAULT 0');
   await migrateColumn('deep_research','delivered','INTEGER DEFAULT 0');
   await migrateColumn('leads','source_id','TEXT');
+  await migrateColumn('persona_memory','pinned_until','INTEGER');
   await migrateTraderPersona();
   await ensureHudState();
   await ensureBusinessTargets();
@@ -416,31 +417,67 @@ export async function getBusinessesWithRevenue(){
   return targets.map(t=>({name:t.business,target:t.target,weekGoal:t.week_goal,rev:revMap[t.business]||0}));
 }
 // One row per exchange, stored verbatim (no truncation), tagged with a category.
-export async function savePersonaMemory(persona,content){
+// opts.pinnedUntil (ms) keeps the row in every turn's context until it expires.
+export async function savePersonaMemory(persona,content,opts={}){
   const text=String(content||'').trim();
   if(!text)return;
   const{category,keywords}=classifyMemory(text);
-  await db.runAsync('INSERT INTO persona_memory(persona,content,category,keywords,date,created_at) VALUES(?,?,?,?,?,?)',[persona,text,category,JSON.stringify(keywords),getTodayStr(),Date.now()]);
+  const pin=opts&&opts.pinnedUntil?opts.pinnedUntil:null;
+  await db.runAsync('INSERT INTO persona_memory(persona,content,category,keywords,date,created_at,pinned_until) VALUES(?,?,?,?,?,?,?)',[persona,text,category,JSON.stringify(keywords),getTodayStr(),Date.now(),pin]);
 }
-// Retrieval for a persona's system prompt. With a `query`, returns the most
-// relevant full exchanges (category + keyword match) plus the 3 most recent for
-// continuity; without one, plain recency. `opts` may be a number (limit only)
-// for backward compatibility.
+// A persona pins something time-sensitive Mr. Burrus flagged. Stored as its own
+// memory row, always loaded until `pinned_until` passes.
+export async function pinMemory(persona,text,days=3){
+  const t=String(text||'').trim();
+  if(!t)return null;
+  const d=Math.max(1,Math.min(30,parseInt(days,10)||3));
+  const until=Date.now()+d*86400000;
+  const{category,keywords}=classifyMemory(t);
+  const r=await db.runAsync('INSERT INTO persona_memory(persona,content,category,keywords,date,created_at,pinned_until) VALUES(?,?,?,?,?,?,?)',
+    [persona,'PINNED: '+t,category,JSON.stringify(keywords),getTodayStr(),Date.now(),until]);
+  return{id:r.lastInsertRowId,until,days:d};
+}
+export async function unpinMemory(id){await db.runAsync('UPDATE persona_memory SET pinned_until=NULL WHERE id=?',[id]);}
+export async function getPinnedMemories(persona){
+  return await db.getAllAsync('SELECT * FROM persona_memory WHERE persona=? AND pinned_until IS NOT NULL AND pinned_until>? ORDER BY pinned_until DESC',[persona,Date.now()]);
+}
+// Retrieval for a persona's system prompt. Category-routed: the current message
+// is classified into the same buckets that tag every stored memory, and the
+// full history for those buckets is loaded (up to `charBudget`), on top of
+// anything pinned and the last few exchanges for continuity. `opts` may be a
+// number (a rough entry count, kept for back-compat).
 export async function getPersonaMemory(persona,opts={}){
-  const{query='',limit=14}=(typeof opts==='number')?{limit:opts}:opts;
-  const rows=await db.getAllAsync('SELECT * FROM persona_memory WHERE persona=? ORDER BY created_at DESC LIMIT 400',[persona]);
+  const o=(typeof opts==='number')?{limit:opts}:(opts||{});
+  const query=o.query||'';
+  const charBudget=o.charBudget||(o.limit?Math.max(6000,o.limit*450):36000);
+  const recentCount=o.recentCount??3;
+
+  const rows=await db.getAllAsync('SELECT * FROM persona_memory WHERE persona=? ORDER BY created_at DESC LIMIT 2000',[persona]);
   if(!rows.length)return[];
-  if(!query)return rows.slice(0,limit);
-  const{category,keywords}=classifyMemory(query);
-  const recent=rows.slice(0,3);
-  const seen=new Set(recent.map(r=>r.id));
-  const out=[...recent];
-  const relevant=rows
-    .map(r=>({r,s:memoryRelevance(r,category,keywords)}))
-    .filter(x=>x.s>0&&!seen.has(x.r.id))
-    .sort((a,b)=>b.s-a.s);
-  for(const x of relevant){if(out.length>=limit)break;seen.add(x.r.id);out.push(x.r);}
-  for(const r of rows){if(out.length>=limit)break;if(!seen.has(r.id)){seen.add(r.id);out.push(r);}}
+  const now=Date.now();
+  const out=[],seen=new Set();
+  const take=r=>{if(!seen.has(r.id)){seen.add(r.id);out.push(r);}};
+
+  for(const r of rows)if(r.pinned_until&&r.pinned_until>now)take(r);   // pinned — always
+  for(const r of rows.slice(0,recentCount))take(r);                    // recent — continuity
+
+  let pool=rows; // default: recency
+  if(query){
+    const{category,categories,keywords}=classifyMemory(query);
+    if(categories&&categories.length){          // the message has a topical signal
+      const cats=new Set(categories);
+      const rank=r=>memoryRelevance(r,category,keywords);
+      const inCat=rows.filter(r=>cats.has(r.category));
+      pool=inCat.length
+        ? inCat.slice().sort((a,b)=>rank(b)-rank(a)||b.created_at-a.created_at)
+        : rows.map(r=>({r,s:rank(r)})).filter(x=>x.s>0).sort((a,b)=>b.s-a.s).map(x=>x.r);
+    }
+  }
+
+  let chars=out.reduce((a,r)=>a+((r.content||'').length),0);
+  const fill=list=>{for(const r of list){if(chars>=charBudget)break;if(seen.has(r.id))continue;seen.add(r.id);out.push(r);chars+=(r.content||'').length;}};
+  fill(pool);
+  if(chars<charBudget&&pool!==rows)fill(rows); // budget left over — top up by recency
   return out;
 }
 export async function getAllPersonaMemory(){return await db.getAllAsync('SELECT * FROM persona_memory ORDER BY created_at DESC LIMIT 100');}

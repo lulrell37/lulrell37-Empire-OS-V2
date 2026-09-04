@@ -1,4 +1,4 @@
-import{addTask,updateTask,completeTask,deleteTask,saveNote,getNote,addRevenue,getTasks,getHudState,updateHudState,setRoutineDone,addRoutineItem,removeRoutineItem,renameRoutineItem,setBatmanDay,getBusinessTargets,setBusinessTarget,setPanelLayout,addExpense,addImportantDate,addLead,updateLead,appendLeadLog,findLead}from './database';
+import{addTask,updateTask,completeTask,deleteTask,saveNote,getNote,addRevenue,getTasks,getHudState,updateHudState,setRoutineDone,addRoutineItem,removeRoutineItem,renameRoutineItem,setBatmanDay,getBusinessTargets,setBusinessTarget,setPanelLayout,addExpense,addImportantDate,addLead,updateLead,appendLeadLog,findLead,pinMemory,unpinMemory,getPinnedMemories}from './database';
 import*as gtask from './googleClient';
 import useEmpireStore from '../store/useEmpireStore';
 const HUD_PANELS=['briefing','businesses','tasks','routine','batman','daily'];
@@ -149,6 +149,18 @@ export async function handleCommands(response,personaId,callbacks={}){
     await appendLeadLog(lead.id,m[2].trim());
     callbacks.onLeadChange?.({action:'log',id:lead.id,name:lead.name});
   }
+  // --- Pinned memory (any persona) ---
+  for(const m of response.matchAll(/\[REMEMBER:\s*([^|\]]+?)(?:\s*\|\s*(\d+))?\]/gi)){
+    const txt=m[1]?.trim();if(!txt)continue;
+    const r=await pinMemory(personaId,txt,m[2]?parseInt(m[2],10):3);
+    if(r)callbacks.onMemoryPinned?.({text:txt,days:r.days});
+  }
+  for(const m of response.matchAll(/\[UNPIN_MEMORY:\s*([^\]]+)\]/gi)){
+    const q=m[1].trim().toLowerCase();if(!q)continue;
+    const pins=await getPinnedMemories(personaId);
+    const hit=pins.find(p=>String(p.content||'').toLowerCase().includes(q));
+    if(hit){await unpinMemory(hit.id);callbacks.onMemoryUnpinned?.({text:q});}
+  }
   if(/\[READ_HUD\]/i.test(response)){const hud=await getHudState();callbacks.onHudRead?.(hud);}
   for(const m of response.matchAll(/\[UPDATE_HUD:\s*([^|\]]+)\|([^\]]+)\]/gi)){
     await updateHudState({[m[1].trim()]:m[2].trim()});hudChanged();callbacks.onHudUpdated?.({field:m[1].trim(),value:m[2].trim()});
@@ -233,6 +245,7 @@ export function stripCommands(text){
     .replace(/\[LEAD_ADD:[^\]]*\]/gi,'').replace(/\[LEAD_UPDATE:[^\]]*\]/gi,'').replace(/\[LEAD_LOG:[^\]]*\]/gi,'')
     .replace(/\[LEAD_EMAIL:[^\]]*\]/gi,'').replace(/\[LEAD_LIST(?::[^\]]*)?\]/gi,'').replace(/\[LEADS\]/gi,'')
     .replace(/\[SCAN_INBOUND(?::[^\]]*)?\]/gi,'')
+    .replace(/\[REMEMBER:[^\]]*\]/gi,'').replace(/\[UNPIN_MEMORY:[^\]]*\]/gi,'')
     .replace(/\[SHOW_CHART:[^\]]*\]/gi,'')
     .replace(/\[BUILD_REQUEST:[^\]]*\]/gi,'').replace(/\[BUILD_REPLY:[^\]]*\]/gi,'')
     .replace(/\[BUILD_MERGE:[^\]]*\]/gi,'').replace(/\[BUILD_CANCEL:[^\]]*\]/gi,'').replace(/\[BUILD_STATUS\]/gi,'')

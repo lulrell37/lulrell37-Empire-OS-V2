@@ -41,12 +41,20 @@ function scoreCategory(lowerText,compiled){
 
 export function classifyMemory(text){
   const lower=String(text||'').toLowerCase();
-  let bestKey=null,bestScore=0;
+  const scored=[];
   for(const c of COMPILED){
     const sc=scoreCategory(lower,c);
-    if(sc>bestScore){bestScore=sc;bestKey=c.key;}
+    if(sc>0)scored.push({key:c.key,score:sc});
   }
-  return{category:bestScore>0?bestKey:'personal',keywords:extractKeywords(text)};
+  scored.sort((a,b)=>b.score-a.score);
+  // `categories` = every bucket the text touches (a message can span two, e.g.
+  // "how's trading affecting the business"); `category` stays the single best
+  // one for storage/tagging and back-compat.
+  return{
+    category:scored.length?scored[0].key:'personal',
+    categories:scored.map(x=>x.key),
+    keywords:extractKeywords(text),
+  };
 }
 
 export function extractKeywords(text,max=8){
