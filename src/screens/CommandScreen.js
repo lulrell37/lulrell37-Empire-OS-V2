@@ -140,7 +140,7 @@ export default function CommandScreen({navigation,route}){
   const manualRef=useRef(false); // true while the current take was started by the SPEAK button
   const interimContinueRef=useRef(null); // {isGroup} set when the last voiced reply was a stall — consumed by the auto-listen effect to keep the persona going instead of reopening the mic
   const interimStreakRef=useRef(0);      // consecutive stalls this turn — capped by INTERIM_CONTINUE_MAX
-  const{addRelay,flagFirmIssue,clearFirmIssue}=useEmpireStore();
+  const{flagFirmIssue,clearFirmIssue}=useEmpireStore();
   const isFocused=useIsFocused();
 
   useEffect(()=>{contRef.current=continuous;},[continuous]);
@@ -1203,8 +1203,32 @@ export default function CommandScreen({navigation,route}){
           const gReads=await googleReadInjections(response);
           if(gReads.length){toolLabel='◇ checking Google…';injections.push(...gReads);}
         }catch(e){/* never let a Google read break the turn */}
+        // [RELAY_TO: id | message] — actually ask that persona and wait for their
+        // real answer before this persona answers Mr. Burrus. Same one-shot
+        // pattern as A.R.A.'s delegation below: no history, no side commands run
+        // on their reply, just the answer fed back in as a tool result.
+        const relayTags=[...response.matchAll(/\[RELAY_TO:\s*([^|\]]+)\|([^\]]+)\]/gi)];
+        if(relayTags.length&&!myAbort.signal.aborted){
+          for(const rm of relayTags.slice(0,2)){
+            const targetId=rm[1].trim().toLowerCase();
+            const ask=rm[2].trim();
+            const target=getPersona(targetId);
+            if(!ask||!target||targetId===pid)continue;
+            toolLabel=`◇ asking ${target.name}…`;
+            try{
+              const rResp=await callPersona(targetId,[{role:'user',content:
+                `${p.name} is relaying a question from Mr. Burrus while talking to him — your answer goes straight back into that conversation, so answer directly and concretely.\n\n${ask}`}],
+                myAbort.signal,null,{skipSave:true,maxTokens:700});
+              const rClean=(stripCommands(rResp)||rResp||'').trim();
+              injections.push(`YOU ASKED ${target.name.toUpperCase()}: "${ask}"\n${target.name} REPLIED: ${rClean}`);
+              savePersonaMemory(targetId,`[relayed from ${p.name}] ${ask}\n${target.name}: ${rClean}`).catch(()=>{});
+            }catch(e){
+              if(e.name==='AbortError')break;
+              injections.push(`YOU ASKED ${target.name.toUpperCase()}: "${ask}"\n(couldn't reach ${target.name}: ${e.message})`);
+            }
+          }
+        }
         const cmdCallbacks={
-          onRelay:({target,message})=>addRelay(target,`[From ${p.name}]: ${message}`),
           onTradePropose:(prop)=>sendTrade({...prop,pid}),
           onTradeClose:(id)=>closePosition(id),
           onTradeBreakeven:({id,offset})=>moveToBreakeven(id,offset),
@@ -1318,7 +1342,12 @@ export default function CommandScreen({navigation,route}){
           await handleCommands(response,pid,cmdCallbacks);
           patch(m=>({...m,content:toolLabel,revealed:toolLabel.length,streaming:false}));
           vizRef.speaking=true;
-          const hist2=[...hist,{role:'assistant',content:response},{role:'user',content:`[TOOL RESULTS — answer my previous message using this. Do not mention the lookup mechanism.\n\n${injections.join('\n\n---\n\n')}\n]`}];
+          // Explicitly re-quote what Mr. Burrus actually asked — "answer my
+          // previous message" alone left the model to trace back past its own
+          // tool-call turn to find it, and it would sometimes anchor on the tool
+          // results instead and answer something adjacent instead of the real
+          // question (same root cause as the Ara voice drift fix above).
+          const hist2=[...hist,{role:'assistant',content:response},{role:'user',content:`[TOOL RESULTS for what you're about to answer — Mr. Burrus asked: "${text}"\n\nAnswer THAT, using this. Do not mention the lookup mechanism.\n\n${injections.join('\n\n---\n\n')}\n]`}];
           raw='';lastPatch=0;
           patch(m=>({...m,content:'',revealed:0,streaming:!willVoice}));
           response=await callPersona(pid,hist2,myAbort.signal,willVoice?null:onDelta,{skipSave:true,...voiceModelOpts(p),images});
