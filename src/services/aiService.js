@@ -9,12 +9,13 @@ async function ensureKeys(){if(!keys)keys=await loadKeys();return keys;}
 // Direct calls hit the provider with the on-device key. When a backend is
 // configured in Settings, every call instead goes through `${backend}/ai/<name>`
 // with the backend bearer token and the provider key never leaves the server.
-const AI_BASE={claude:'https://api.anthropic.com',grok:'https://api.x.ai',openai:'https://api.openai.com',elevenlabs:'https://api.elevenlabs.io'};
-const AI_PROXY_NAME={claude:'anthropic',grok:'xai',openai:'openai',elevenlabs:'elevenlabs'};
+const AI_BASE={claude:'https://api.anthropic.com',grok:'https://api.x.ai',openai:'https://api.openai.com',gemini:'https://generativelanguage.googleapis.com',elevenlabs:'https://api.elevenlabs.io'};
+const AI_PROXY_NAME={claude:'anthropic',grok:'xai',openai:'openai',gemini:'google',elevenlabs:'elevenlabs'};
 const AI_KEYHDR={
   claude:(kk)=>({'x-api-key':kk,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'}),
   grok:(kk)=>({Authorization:'Bearer '+kk}),
   openai:(kk)=>({Authorization:'Bearer '+kk}),
+  gemini:(kk)=>({'x-goog-api-key':kk}),
   elevenlabs:(kk)=>({'xi-api-key':kk}),
 };
 // Returns { base, auth } — `base` has no trailing slash; the paths below start
@@ -247,6 +248,8 @@ export async function callPersona(personaId,messages,signal=null,onDelta=null,op
     if(k?.claude||be)api='claude';
     else{grokVisionModel='grok-2-vision-1212';}
   }
+  // Gemini turns with images fall back to Claude for that one turn.
+  if(hasVision&&persona.api==='gemini')api='claude';
   if(hasVision){
     const provider=(api==='openai'||grokVisionModel)?'openai':'claude';
     const blocks=await toImageBlocks(images,provider);
@@ -314,6 +317,42 @@ export async function callPersona(personaId,messages,signal=null,onDelta=null,op
       const d=await res.json();
       emit(d.choices?.[0]?.message?.content||'');
       if(d.usage)await trackApiUsage('openai',d.usage.prompt_tokens||0,d.usage.completion_tokens||0).catch(()=>{});
+    }
+  }else if(api==='gemini'){
+    const{base,auth}=await aiRoute('gemini',k?.gemini,'Gemini');
+    const model=opts.model||persona.model||'gemini-2.0-flash';
+    const headers={'Content-Type':'application/json',...auth};
+    // Gemini wants user/model roles, a separate systemInstruction, and its own
+    // contents/parts shape. Vision turns are routed to Claude above, so `hist`
+    // content here is always a plain string.
+    const contents=hist.map(m=>({
+      role:m.role==='assistant'?'model':'user',
+      parts:[{text:typeof m.content==='string'?m.content:String(m.content||'')}],
+    }));
+    const bodyG=JSON.stringify({
+      systemInstruction:{parts:[{text:sys}]},
+      contents,
+      generationConfig:{maxOutputTokens:maxTokens},
+    });
+    if(stream){
+      const url=base+`/v1beta/models/${model}:streamGenerateContent?alt=sse`;
+      let tin=0,tout=0;
+      await xhrStream({url,headers,body:bodyG,signal,onEvent:(e)=>{
+        if(e.error)throw new Error(e.error.message||'Gemini stream error');
+        const t=(e.candidates?.[0]?.content?.parts||[]).map(p=>p.text).filter(Boolean).join('');
+        if(t)emit(t);
+        if(e.usageMetadata){tin=e.usageMetadata.promptTokenCount||tin;tout=e.usageMetadata.candidatesTokenCount||tout;}
+        const fr=e.candidates?.[0]?.finishReason;
+        if(fr&&fr!=='STOP'&&fr!=='MAX_TOKENS')throw new Error('Gemini stopped: '+fr);
+      }});
+      if(tin||tout)await trackApiUsage('gemini',tin,tout).catch(()=>{});
+    }else{
+      const url=base+`/v1beta/models/${model}:generateContent`;
+      const res=await fetch(url,{method:'POST',headers,body:bodyG,signal});
+      if(!res.ok){const e=await res.text();throw new Error(`Gemini error: ${e.substring(0,100)}`);}
+      const d=await res.json();
+      emit((d.candidates?.[0]?.content?.parts||[]).map(p=>p.text).filter(Boolean).join(''));
+      if(d.usageMetadata)await trackApiUsage('gemini',d.usageMetadata.promptTokenCount||0,d.usageMetadata.candidatesTokenCount||0).catch(()=>{});
     }
   }
   const lastUser=messages.filter(m=>m.role==='user').slice(-1)[0];

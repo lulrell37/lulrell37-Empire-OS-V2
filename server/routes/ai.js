@@ -25,6 +25,11 @@ const PROVIDERS = {
     envKey: 'XAI_API_KEY',
     headers: (k) => ({ authorization: 'Bearer ' + k }),
   },
+  google: {
+    base: 'https://generativelanguage.googleapis.com',
+    envKey: 'GEMINI_API_KEY',
+    headers: (k) => ({ 'x-goog-api-key': k }),
+  },
   elevenlabs: {
     base: 'https://api.elevenlabs.io',
     envKey: 'ELEVENLABS_API_KEY',

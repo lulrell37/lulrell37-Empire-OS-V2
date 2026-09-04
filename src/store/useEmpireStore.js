@@ -9,7 +9,7 @@ const useEmpireStore=create((set,get)=>({
   hudState:null,setHudState:(s)=>set({hudState:s}),
   tasks:[],setTasks:(t)=>set({tasks:t}),
   personaPics:{},setPersonaPics:(p)=>set({personaPics:p}),
-  messages:{jarvis:[],ara:[],selene:[],stephanie:[],rogue:[],atlas:[],haven:[],aisha:[],abraham:[],batman:[]},
+  messages:{jarvis:[],ara:[],selene:[],stephanie:[],rogue:[],scout:[],nova:[],atlas:[],haven:[],aisha:[],abraham:[],batman:[]},
   addMessage:(persona,msg)=>set(s=>({messages:{...s.messages,[persona]:[...(s.messages[persona]||[]),msg]}})),
   groupMessages:{council:[],empire:[],custom:[]},
   addGroupMessage:(mode,msg)=>set(s=>({groupMessages:{...s.groupMessages,[mode]:[...(s.groupMessages[mode]||[]),msg]}})),

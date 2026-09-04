@@ -9,6 +9,7 @@
 import React,{useState,useEffect,useMemo,useCallback,useRef,useImperativeHandle,forwardRef}from 'react';
 import{View,Text,StyleSheet,TouchableOpacity,ActivityIndicator,Dimensions,Platform,Animated,PanResponder,Image,Easing,ScrollView}from 'react-native';
 import PersonaOrb from './PersonaOrb';
+import SphereBackdrop from './SphereBackdrop';
 import MemorySpiral from './MemorySpiral';
 import MemoryPopup from './MemoryPopup';
 import Boundary from '../hud/Boundary';
@@ -245,6 +246,7 @@ function OrbZoom({personaId,color,active,vizRef,personaPics={},onPickPersona,onL
           contentOffset={{x:0,y:WHEEL_MID}} onScroll={onWheelScroll}
           onContentSizeChange={()=>{wheelY.current=WHEEL_MID;wheelScrollRef.current&&wheelScrollRef.current.scrollTo({y:WHEEL_MID,animated:false});}}/>
       )}
+      {level==='group'&&<SphereBackdrop/>}
       <Animated.View style={{flex:1,opacity:morph.opacity,transform:[{translateX:pinchTX},{translateY:pinchTY},{scale:contentScale}]}}>
         {level==='group'&&(
           <PersonaSphere ref={sphereRef} activeId={personaId} pics={personaPics} onPick={pick} onLaunch={launch}/>
