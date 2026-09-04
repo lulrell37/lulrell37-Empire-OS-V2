@@ -87,11 +87,11 @@ export async function handleCommands(response,personaId,callbacks={}){
     const off=m[2]?parseFloat(m[2]):0;
     callbacks.onTradeBreakeven?.({id:m[1].trim(),offset:isNaN(off)?0:off});
   }
-  // [STRATEGY_UPDATE: full replacement text] — Atlas rewrites her trading playbook
+  // [STRATEGY_UPDATE: full replacement text] — T.A.L.O.N. rewrites the trading playbook
   for(const m of response.matchAll(/\[STRATEGY_UPDATE:\s*([\s\S]+?)\]/gi)){
     if(m[1]?.trim())callbacks.onStrategyUpdate?.(m[1].trim());
   }
-  // [TRADE_REVIEW: tradeId | one-line note] — Atlas annotates a closed trade
+  // [TRADE_REVIEW: tradeId | one-line note] — T.A.L.O.N. annotates a closed trade
   for(const m of response.matchAll(/\[TRADE_REVIEW:\s*#?(\d+)\s*\|\s*([^\]]+)\]/gi)){
     callbacks.onTradeReview?.({id:parseInt(m[1],10),note:m[2].trim()});
   }

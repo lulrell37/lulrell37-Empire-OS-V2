@@ -20,7 +20,7 @@ export async function initDatabase(){
     CREATE TABLE IF NOT EXISTS expenses(id INTEGER PRIMARY KEY AUTOINCREMENT,amount REAL,category TEXT,note TEXT,date TEXT,created_at INTEGER);
     CREATE TABLE IF NOT EXISTS important_dates(id INTEGER PRIMARY KEY AUTOINCREMENT,label TEXT,date TEXT,note TEXT,created_at INTEGER);
     CREATE TABLE IF NOT EXISTS build_jobs(id TEXT PRIMARY KEY,repo_owner TEXT,repo_name TEXT,issue_number INTEGER,pr_number INTEGER,spec TEXT,state TEXT,question TEXT,last_comment_id INTEGER DEFAULT 0,title TEXT,project_name TEXT,created_at INTEGER,updated_at INTEGER);
-    CREATE TABLE IF NOT EXISTS trades(id INTEGER PRIMARY KEY AUTOINCREMENT,persona TEXT DEFAULT 'atlas',symbol TEXT,side TEXT,qty REAL,entry_ref REAL,entry_fill REAL,stop_loss REAL,take_profit REAL,setup TEXT,rationale TEXT,status TEXT DEFAULT 'open',order_id TEXT,position_id TEXT,opened_at INTEGER,closed_at INTEGER,exit_price REAL,realized_pl REAL,pl_estimated INTEGER DEFAULT 0,outcome TEXT,r_multiple REAL,review TEXT,misses INTEGER DEFAULT 0,last_unrealized REAL,auto INTEGER DEFAULT 0,created_at INTEGER,updated_at INTEGER);
+    CREATE TABLE IF NOT EXISTS trades(id INTEGER PRIMARY KEY AUTOINCREMENT,persona TEXT DEFAULT 'talon',symbol TEXT,side TEXT,qty REAL,entry_ref REAL,entry_fill REAL,stop_loss REAL,take_profit REAL,setup TEXT,rationale TEXT,status TEXT DEFAULT 'open',order_id TEXT,position_id TEXT,opened_at INTEGER,closed_at INTEGER,exit_price REAL,realized_pl REAL,pl_estimated INTEGER DEFAULT 0,outcome TEXT,r_multiple REAL,review TEXT,misses INTEGER DEFAULT 0,last_unrealized REAL,auto INTEGER DEFAULT 0,created_at INTEGER,updated_at INTEGER);
     CREATE TABLE IF NOT EXISTS deep_research(id TEXT PRIMARY KEY,topic TEXT,persona TEXT,mode TEXT DEFAULT 'direct',model TEXT,status TEXT DEFAULT 'running',progress TEXT,result TEXT,error TEXT,started_at INTEGER,finished_at INTEGER,created_at INTEGER,updated_at INTEGER);
   `);
   await migrateHudColumns();
@@ -28,6 +28,7 @@ export async function initDatabase(){
   await migrateBuildJobs();
   await migrateColumn('trades','auto','INTEGER DEFAULT 0');
   await migrateColumn('deep_research','delivered','INTEGER DEFAULT 0');
+  await migrateTraderPersona();
   await ensureHudState();
   await ensureBusinessTargets();
   await initSync();
@@ -111,6 +112,18 @@ async function migrateColumn(table,col,decl){
   try{
     const cols=(await db.getAllAsync(`PRAGMA table_info(${table})`)).map(c=>c.name);
     if(!cols.includes(col))await db.execAsync(`ALTER TABLE ${table} ADD COLUMN ${col} ${decl}`);
+  }catch{}
+}
+// Trading moved off A.T.L.A.S. onto the dedicated T.A.L.O.N. persona. Re-tag the
+// historical trade rows and the strategy note so the new desk inherits the full
+// record. One-time; guarded by an app_settings flag. No-op on fresh installs.
+async function migrateTraderPersona(){
+  try{
+    const done=await db.getFirstAsync("SELECT value FROM app_settings WHERE key='trader_persona_migrated'");
+    if(done&&done.value==='1')return;
+    await db.execAsync("UPDATE trades SET persona='talon' WHERE persona='atlas'");
+    await db.execAsync("UPDATE notes SET title='T.A.L.O.N. — Winning Strategy', persona='talon' WHERE title='A.T.L.A.S. — Winning Strategy'");
+    await db.runAsync("INSERT INTO app_settings(key,value) VALUES('trader_persona_migrated','1') ON CONFLICT(key) DO UPDATE SET value=excluded.value");
   }catch{}
 }
 async function migrateHudColumns(){
@@ -494,10 +507,10 @@ export async function updateTrade(id,patch){
   if(!cols.length)return;
   await db.runAsync(`UPDATE trades SET ${cols.map(c=>c+'=?').join(',')} WHERE id=?`,[...cols.map(c=>patch[c]),id]);
 }
-export async function getOpenTrades(persona='atlas'){return await db.getAllAsync('SELECT * FROM trades WHERE persona=? AND status=? ORDER BY opened_at ASC',[persona,'open']);}
-export async function getClosedTrades(persona='atlas',limit=40){return await db.getAllAsync('SELECT * FROM trades WHERE persona=? AND status IN (?,?) ORDER BY COALESCE(closed_at,opened_at) DESC LIMIT ?',[persona,'closed','unknown',limit]);}
+export async function getOpenTrades(persona='talon'){return await db.getAllAsync('SELECT * FROM trades WHERE persona=? AND status=? ORDER BY opened_at ASC',[persona,'open']);}
+export async function getClosedTrades(persona='talon',limit=40){return await db.getAllAsync('SELECT * FROM trades WHERE persona=? AND status IN (?,?) ORDER BY COALESCE(closed_at,opened_at) DESC LIMIT ?',[persona,'closed','unknown',limit]);}
 export async function getTradeById(id){return await db.getFirstAsync('SELECT * FROM trades WHERE id=?',[id]);}
-export async function getAllTrades(persona='atlas',limit=200){return await db.getAllAsync('SELECT * FROM trades WHERE persona=? ORDER BY opened_at DESC LIMIT ?',[persona,limit]);}
+export async function getAllTrades(persona='talon',limit=200){return await db.getAllAsync('SELECT * FROM trades WHERE persona=? ORDER BY opened_at DESC LIMIT ?',[persona,limit]);}
 
 // --- Deep Research jobs --------------------------------------------------
 // One row per OpenAI Deep Research run. Persisted so a job survives closing

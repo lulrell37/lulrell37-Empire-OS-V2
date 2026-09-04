@@ -18,7 +18,7 @@ import{getMessages,saveMessage,getAllPersonaPics,savePersonaMemory,getSetting,se
 import{fileBuildRequest,replyToBuild,mergeBuild,cancelBuild,createProjectRepo}from '../services/buildAgent';
 import{pollBuildJobs}from '../services/buildJobs';
 import{tlSnapshot,tlFormatSnapshot,tlPlaceOrder,tlClosePosition,tlModifyPosition,tlPositions,MAX_QTY,MAX_OPEN_POSITIONS}from '../services/tradeLocker';
-import{recordTradeOpen,reconcileOpenTrades,atlasJournalBlock,setStrategy,setTradeReview}from '../services/tradeJournal';
+import{recordTradeOpen,reconcileOpenTrades,traderJournalBlock,setStrategy,setTradeReview,TRADER_ID}from '../services/tradeJournal';
 import{loadKeys,loadGitHubToken}from '../services/keyStore';
 import useEmpireStore from '../store/useEmpireStore';
 import{useIsFocused,useFocusEffect}from '@react-navigation/native';
@@ -1060,7 +1060,7 @@ export default function CommandScreen({navigation}){
             try{injections.push(`MARKET SNAPSHOT ${sym}:\n`+tlFormatSnapshot(await tlSnapshot(sym)));}
             catch(e){injections.push(`MARKET SNAPSHOT ${sym}: failed — `+e.message);}
           }
-          try{await reconcileOpenTrades();injections.push(await atlasJournalBlock());}
+          try{await reconcileOpenTrades();injections.push(await traderJournalBlock());}
           catch(e){/* journal is best-effort — never block a scan */}
         }
         if(/\[BUILD_STATUS\]/i.test(response)&&!myAbort.signal.aborted){
@@ -1092,7 +1092,7 @@ export default function CommandScreen({navigation}){
           onTradePropose:(prop)=>setTradeProposal({...prop,pid}),
           onTradeClose:(id)=>closePosition(id),
           onTradeBreakeven:({id,offset})=>moveToBreakeven(id,offset),
-          onStrategyUpdate:(text)=>{setStrategy(text).then(()=>pushSystemMsg('— A.T.L.A.S. updated her strategy —')).catch(()=>{});},
+          onStrategyUpdate:(text)=>{setStrategy(text).then(()=>pushSystemMsg('— T.A.L.O.N. updated the playbook —')).catch(()=>{});},
           onTradeReview:({id,note})=>{setTradeReview(id,note).catch(()=>{});},
           onDeepResearch:(topic)=>startDeepResearch(topic,pid),
           onShowChart:(raw)=>{const spec=parseChartSpec(raw);if(spec.valid){setChartOverlay(spec);setView('viz');}},
@@ -1378,10 +1378,10 @@ export default function CommandScreen({navigation}){
       }else go();
     });
   }
-  // Live feed of A.T.L.A.S. auto-trade actions while you're on her screen.
+  // Live feed of T.A.L.O.N. auto-trade actions while you're on its screen.
   useEffect(()=>{
     return onAutoTrade((text)=>{
-      if(mode==='direct'&&activePersona==='atlas')pushSystemMsg(`— ${text} —`);
+      if(mode==='direct'&&activePersona===TRADER_ID)pushSystemMsg(`— ${text} —`);
     });
   },[activePersona,mode]);// eslint-disable-line react-hooks/exhaustive-deps
   // Resume a job that was still running when the app was last closed, and
@@ -1577,7 +1577,7 @@ export default function CommandScreen({navigation}){
       }
       const r=await tlPlaceOrder({symbol:sym,side,qty:Math.min(qty||MAX_QTY,MAX_QTY),stopLoss,takeProfit});
       pushSystemMsg(`— ORDER SENT · ${r.side.toUpperCase()} ${r.qty} ${sym} · SL ${r.stopLoss??'—'} · TP ${r.takeProfit??'—'} · #${r.orderId||'?'} —`);
-      savePersonaMemory(pid||'atlas',`YOU: [confirmed trade]\nA.T.L.A.S.: order sent ${r.side} ${r.qty} ${sym} SL ${r.stopLoss} TP ${r.takeProfit}`).catch(()=>{});
+      savePersonaMemory(pid||TRADER_ID,`YOU: [confirmed trade]\nT.A.L.O.N.: order sent ${r.side} ${r.qty} ${sym} SL ${r.stopLoss} TP ${r.takeProfit}`).catch(()=>{});
       recordTradeOpen({symbol:sym,side:r.side,qty:r.qty,entry:tradeProposal.entry,stopLoss,takeProfit,rationale:tradeProposal.rationale,orderId:r.orderId}).catch(()=>{});
       setTimeout(()=>reconcileOpenTrades().catch(()=>{}),6000);
     }catch(e){pushSystemMsg(`Order failed: ${e.message}`);}
@@ -1681,9 +1681,9 @@ export default function CommandScreen({navigation}){
         </View>
       )}
 
-      {mode==='direct'&&activePersona==='atlas'&&<TradeStatus active={isFocused} style={{marginHorizontal:10,marginTop:6}}/>}
-      {mode==='direct'&&activePersona==='atlas'&&<TradeRecordBar active={isFocused} style={{marginHorizontal:10,marginTop:6}}/>}
-      {mode==='direct'&&activePersona==='atlas'&&<TradePanel active={isFocused} onEvent={pushSystemMsg}/>}
+      {mode==='direct'&&activePersona===TRADER_ID&&<TradeStatus active={isFocused} style={{marginHorizontal:10,marginTop:6}}/>}
+      {mode==='direct'&&activePersona===TRADER_ID&&<TradeRecordBar active={isFocused} style={{marginHorizontal:10,marginTop:6}}/>}
+      {mode==='direct'&&activePersona===TRADER_ID&&<TradePanel active={isFocused} onEvent={pushSystemMsg}/>}
       {mode==='direct'&&activePersona==='jarvis'&&<BuildPanel active={isFocused} onMerge={confirmBuildMerge} onCancel={confirmBuildCancel} filter={jarvisBuildFilter}/>}
 
       {project&&mode==='direct'&&activePersona==='ara'&&(

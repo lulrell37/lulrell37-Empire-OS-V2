@@ -1,4 +1,4 @@
-// Live position monitor for Atlas's trades (any pair). Polls TradeLocker while
+// Live position monitor for T.A.L.O.N.'s trades (any pair). Polls TradeLocker while
 // the Command screen is focused — this is the "assisted" boundary: no polling in
 // the background, so nothing here runs once the app is closed.
 import React,{useState,useEffect,useRef,useCallback}from 'react';

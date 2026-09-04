@@ -237,7 +237,7 @@ export default function SettingsScreen({navigation}){
             <Text style={s.secTitle}>API KEYS</Text>
             <Text style={s.secSub}>Stored securely on device only. Never transmitted except to respective API.</Text>
             {[
-              ['ANTHROPIC (CLAUDE)','Required · Jarvis, Stephanie, Atlas, Haven, Aisha, Abraham, Batman',claude,setClaude,'sk-ant-...'],
+              ['ANTHROPIC (CLAUDE)','Required · Jarvis, Stephanie, Atlas, Talon, Haven, Aisha, Abraham, Batman',claude,setClaude,'sk-ant-...'],
               ['XAI (GROK)','Required · Ara, Rogue',grok,setGrok,'xai-...'],
               ['OPENAI','Optional · Selene',openai,setOpenai,'sk-...'],
               ['GOOGLE (GEMINI)','Required · Nova',gemini,setGemini,'AIza...'],
@@ -286,7 +286,7 @@ export default function SettingsScreen({navigation}){
           </View>}
           {tab==='TRADING'&&<View>
             <Text style={s.secTitle}>TRADELOCKER</Text>
-            <Text style={s.secSub}>Atlas trades XAUUSD through this login while the app is open. Max 0.01 lot per order. Demo account recommended until proven. Stored securely on device.</Text>
+            <Text style={s.secSub}>T.A.L.O.N. trades through this login while the app is open. Max 0.01 lot per order. Demo account recommended until proven. Stored securely on device.</Text>
             <View style={s.tlEnvRow}>
               {['demo','live'].map(e=>(
                 <TouchableOpacity key={e} style={[s.tlEnvBtn,tl.env===e&&s.tlEnvBtnA]} onPress={()=>setTl(v=>({...v,env:e}))}>
@@ -311,12 +311,12 @@ export default function SettingsScreen({navigation}){
               <Text style={[s.saveBtnT,{color:'#E05555'}]}>DISCONNECT</Text>
             </TouchableOpacity>
 
-            <Text style={[s.secTitle,{marginTop:28}]}>A.T.L.A.S. AUTO-TRADE</Text>
-            <Text style={s.secSub}>Lets Atlas open and close 0.01-lot trades on her own while the app is open — no confirmation. DEMO ACCOUNT ONLY; the loop refuses to touch a live account. No caps or loss limit — this is an experiment to see how she does.</Text>
+            <Text style={[s.secTitle,{marginTop:28}]}>T.A.L.O.N. AUTO-TRADE</Text>
+            <Text style={s.secSub}>Lets T.A.L.O.N. open and close 0.01-lot trades on its own while the app is open — no confirmation. DEMO ACCOUNT ONLY; the loop refuses to touch a live account. No caps or loss limit — this is an experiment to see how it does.</Text>
             <TouchableOpacity style={s.toggleRow} onPress={toggleAutoTrade} activeOpacity={0.7}>
               <View style={{flex:1,paddingRight:12}}>
                 <Text style={s.toggleLabel}>AUTONOMOUS TRADING</Text>
-                <Text style={s.toggleSub}>{autoTrade?`On — Atlas is watching ${autoSyms} every ${autoEvery} min.`:'Off — Atlas only trades when you confirm a proposal.'}</Text>
+                <Text style={s.toggleSub}>{autoTrade?`On — T.A.L.O.N. is watching ${autoSyms} every ${autoEvery} min.`:'Off — T.A.L.O.N. only trades when you confirm a proposal.'}</Text>
               </View>
               <View style={[s.switch,autoTrade&&s.switchOn]}><View style={[s.knob,autoTrade&&s.knobOn]}/></View>
             </TouchableOpacity>

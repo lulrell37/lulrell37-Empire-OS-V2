@@ -9,7 +9,7 @@ import{Feather}from '@expo/vector-icons';
 import{colors,space,radius,type,FONTS}from '../../theme';
 import{tlStatus,tlQuote,tlPositions,tlClosePosition,tlInstrumentsById}from '../../services/tradeLocker';
 import{getBuildJobs,getSetting,getAllTrades,getTasks}from '../../services/database';
-import{tradeRecord}from '../../services/tradeJournal';
+import{tradeRecord,TRADER_ID}from '../../services/tradeJournal';
 import{autoTraderRunning}from '../../services/autoTrader';
 import{refreshDailyBriefing}from '../../services/dailyBriefing';
 import{googleConnected,calendarEvents,gmailUnreadList,tasksListRaw}from '../../services/googleClient';
@@ -375,7 +375,7 @@ export function MarketPanel({active=true}){
         getSetting('auto_trade_symbols','XAUUSD, EURUSD, GBPJPY, BTCUSD'),
         getSetting('auto_trade_interval_min','5'),
         tradeRecord({}).catch(()=>null),
-        getAllTrades('atlas',60).catch(()=>[]),
+        getAllTrades(TRADER_ID,60).catch(()=>[]),
       ]);
       if(!alive.current)return;
       setAuto({
@@ -416,7 +416,7 @@ export function MarketPanel({active=true}){
         <View style={ps.autoBox}>
           <View style={ps.autoTopRow}>
             <Text style={[ps.autoTag,{color:auto.on?colors.online:colors.textFaint}]}>
-              {auto.on?(auto.live?'● A.T.L.A.S. AUTO-TRADE':'○ AUTO-TRADE (paused — app foreground only)'):'○ AUTO-TRADE OFF'}
+              {auto.on?(auto.live?'● T.A.L.O.N. AUTO-TRADE':'○ AUTO-TRADE (paused — app foreground only)'):'○ AUTO-TRADE OFF'}
             </Text>
           </View>
           {auto.on&&<Text style={ps.autoMeta}>{auto.syms} · every {auto.every}m</Text>}

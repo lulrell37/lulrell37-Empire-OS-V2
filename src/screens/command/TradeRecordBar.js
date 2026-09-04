@@ -1,4 +1,4 @@
-// A.T.L.A.S.'s running trade record, shown under the TradeLocker pill on her
+// T.A.L.O.N.'s running trade record, shown under the TradeLocker pill on its
 // screen. Read-only; refreshes when the screen gains focus and on a slow timer.
 // Hidden until there is at least one closed trade or an open one.
 import React,{useState,useEffect,useRef,useCallback}from 'react';
@@ -34,7 +34,7 @@ export default function TradeRecordBar({active=true,style}){
   return(
     <View style={[s.wrap,style]}>
       <TouchableOpacity style={s.bar} activeOpacity={0.7} onPress={()=>setOpen(o=>!o)}>
-        <Text style={s.label}>A.T.L.A.S. RECORD</Text>
+        <Text style={s.label}>T.A.L.O.N. RECORD</Text>
         <Text style={s.stat}>{r.wins}W&#8211;{r.losses}L{r.be?`–${r.be}BE`:''}</Text>
         {r.winRate!=null&&<Text style={s.stat}>{r.winRate}%</Text>}
         <Text style={[s.stat,{color:netColor}]}>{net>=0?'+':''}{net.toFixed(2)}</Text>

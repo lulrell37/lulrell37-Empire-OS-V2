@@ -1,17 +1,17 @@
-// A.T.L.A.S. autonomous trading loop — DEMO ACCOUNT ONLY.
+// T.A.L.O.N. autonomous trading loop — DEMO ACCOUNT ONLY.
 //
 // Runs while the app is open (App.js starts/stops it on foreground). Every
 // `auto_trade_interval_min` minutes it pulls a fresh snapshot for each watched
-// symbol, asks Atlas for a decision, and — with NO confirmation prompt — acts:
-// opens a 0.01-lot position, or closes ones she wants out of. Every fill is
-// recorded in the trade journal (auto=1) so she keeps learning from it.
+// symbol, asks T.A.L.O.N. for a decision, and — with NO confirmation prompt —
+// acts: opens a 0.01-lot position, or closes ones it wants out of. Every fill is
+// recorded in the trade journal (auto=1) so it keeps learning from it.
 //
 // This is a deliberately unguarded experiment: no daily caps, no loss
 // kill-switch. The ONE hard rule is env must be 'demo' — the loop refuses to
 // place a single order on a live account and stops itself if it sees one.
 import{tlStatus,tlSnapshot,tlFormatSnapshot,tlPlaceOrder,tlClosePosition,tlModifyPosition,tlPositions,tlInstrumentsById,MAX_QTY,MAX_OPEN_POSITIONS}from './tradeLocker';
 import{autoTradeDecision}from './aiService';
-import{reconcileOpenTrades,formatTradeRecord,getStrategy,recordTradeOpen}from './tradeJournal';
+import{reconcileOpenTrades,formatTradeRecord,getStrategy,recordTradeOpen,TRADER_ID}from './tradeJournal';
 import{getSetting,saveMessage,savePersonaMemory}from './database';
 
 let timer=null,running=false,busy=false;
@@ -24,7 +24,7 @@ export function onAutoTrade(cb){listeners.add(cb);return()=>listeners.delete(cb)
 export function autoTraderRunning(){return running;}
 
 function emit(text){
-  saveMessage('atlas','system',text,'direct').catch(()=>{});
+  saveMessage(TRADER_ID,'system',text,'direct').catch(()=>{});
   for(const cb of listeners){try{cb(text);}catch{}}
 }
 
@@ -100,7 +100,7 @@ async function runOnce(){
             rationale:dec.rationale||'auto-trade',orderId:r.orderId,setup:dec.setup,auto:true}).catch(()=>{});
           openSyms.add(sym);openCount++;entered++;
           emit(`AUTO · ${r.side.toUpperCase()} ${r.qty} ${sym} @ ~${price??'mkt'} · SL ${dec.stopLoss??'—'} TP ${dec.takeProfit??'—'}${dec.rationale?` — ${dec.rationale}`:''}`);
-          savePersonaMemory('atlas',`[auto-trade] opened ${r.side} ${sym} @ ~${price??'mkt'} — ${dec.rationale||''}`).catch(()=>{});
+          savePersonaMemory(TRADER_ID,`[auto-trade] opened ${r.side} ${sym} @ ~${price??'mkt'} — ${dec.rationale||''}`).catch(()=>{});
         }catch(e){emit(`AUTO ${sym} order failed: ${e.message}`);}
       }
     }

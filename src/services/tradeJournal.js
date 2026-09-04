@@ -1,6 +1,6 @@
-// The trade journal — Atlas's memory of her own trading.
+// The trade journal — T.A.L.O.N.'s memory of its own trading.
 //
-// confirmTrade() records a row here the moment an order is sent. reconcile()
+// recordTradeOpen() records a row here the moment an order is sent. reconcile()
 // then watches TradeLocker: while a trade's position is open it keeps the
 // unrealized P/L fresh, and once the position leaves the open list it pulls the
 // realized P/L from /ordersHistory, scores the trade (win / loss / breakeven,
@@ -10,12 +10,17 @@
 // of trading. A trade that closes overnight (SL/TP hit while the app is shut) is
 // reconciled on the next open; if it can't be resolved it's marked 'unknown'.
 //
-// formatRecord() + getStrategy() are what get injected into Atlas's context on
-// every [TRADE_SCAN] so she reviews her record and refines her strategy.
+// formatTradeRecord() + getStrategy() are what get injected into T.A.L.O.N.'s
+// context on every [TRADE_SCAN] so it reviews its record and refines its
+// strategy.
 import{insertTrade,updateTrade,getOpenTrades,getClosedTrades,getAllTrades,getTradeById,saveNote,getNote}from './database';
 import{tlPositions,tlOrdersHistory,tlInstrumentsById}from './tradeLocker';
 
-export const STRATEGY_TITLE='A.T.L.A.S. — Winning Strategy';
+// The persona id that owns the trading desk. All journal rows and the strategy
+// note are tagged with this. (Trading moved off A.T.L.A.S. onto T.A.L.O.N.;
+// database.js migrates the historical rows.)
+export const TRADER_ID='talon';
+export const STRATEGY_TITLE='T.A.L.O.N. — Winning Strategy';
 
 // One-time repair: an earlier version scored every closed trade a "win" because
 // it trusted a mis-mapped ordersHistory P/L column. Re-derive outcome from the
@@ -26,7 +31,7 @@ export async function repairTradeOutcomes(){
   if(repaired)return{fixed:0};
   repaired=true;
   let rows=[];
-  try{rows=await getAllTrades('atlas',500);}catch{return{fixed:0};}
+  try{rows=await getAllTrades(TRADER_ID,500);}catch{return{fixed:0};}
   let fixed=0;
   for(const t of rows){
     if(t.status!=='closed'||!t.outcome||t.outcome==='unknown')continue;
@@ -72,13 +77,13 @@ export async function getStrategy(){
 export async function setStrategy(text){
   const body=String(text||'').trim().slice(0,4000);
   if(!body)return;
-  await saveNote(STRATEGY_TITLE,body,'atlas');
+  await saveNote(STRATEGY_TITLE,body,TRADER_ID);
 }
 
 // --- recording -----------------------------------------------------------
 export async function recordTradeOpen({symbol,side,qty,entry,stopLoss,takeProfit,rationale,orderId,setup,auto}){
   return insertTrade({
-    persona:'atlas',symbol:String(symbol||'').toUpperCase(),side,
+    persona:TRADER_ID,symbol:String(symbol||'').toUpperCase(),side,
     qty:num(qty),entry_ref:num(entry),stop_loss:num(stopLoss),take_profit:num(takeProfit),
     setup:setup||inferSetup(rationale),rationale:String(rationale||'').slice(0,400),
     status:'open',order_id:orderId!=null?String(orderId):null,opened_at:Date.now(),
@@ -97,7 +102,7 @@ export async function setTradeReview(id,note){
 export async function reconcileOpenTrades(){
   await repairTradeOutcomes().catch(()=>{});
   let open;
-  try{open=await getOpenTrades('atlas');}catch{return{checked:0,closed:0};}
+  try{open=await getOpenTrades(TRADER_ID);}catch{return{checked:0,closed:0};}
   if(!open.length)return{checked:0,closed:0};
 
   let positions=[],idToSym={};
@@ -214,11 +219,11 @@ export async function reconcileOpenTrades(){
   return{checked:open.length,closed};
 }
 
-// --- the record Atlas reads -----------------------------------------------
+// --- the record T.A.L.O.N. reads ----------------------------------------
 export async function tradeRecord({limit=40}={}){
   let closed=[],openCount=0;
-  try{closed=await getClosedTrades('atlas',limit);}catch{}
-  try{openCount=(await getOpenTrades('atlas')).length;}catch{}
+  try{closed=await getClosedTrades(TRADER_ID,limit);}catch{}
+  try{openCount=(await getOpenTrades(TRADER_ID)).length;}catch{}
   const scored=closed.filter(t=>t.status==='closed'&&t.outcome&&t.outcome!=='unknown');
   const wins=scored.filter(t=>t.outcome==='win').length;
   const losses=scored.filter(t=>t.outcome==='loss').length;
@@ -274,11 +279,11 @@ export async function formatTradeRecord(){
 }
 
 // One block for the [TRADE_SCAN] injection: record + live strategy.
-export async function atlasJournalBlock(){
+export async function traderJournalBlock(){
   const [rec,strat]=await Promise.all([formatTradeRecord(),getStrategy()]);
-  return `A.T.L.A.S. TRADE RECORD (your own history — review before proposing):
+  return `T.A.L.O.N. TRADE RECORD (your own history — review before proposing):
 ${rec}
 
-A.T.L.A.S. CURRENT STRATEGY (your personalized playbook):
+T.A.L.O.N. CURRENT STRATEGY (your personalized playbook):
 ${strat||'(none written yet — as your record reveals what works for you, build it with [STRATEGY_UPDATE: ...])'}`;
 }

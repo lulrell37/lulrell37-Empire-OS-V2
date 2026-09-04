@@ -423,7 +423,7 @@ export async function dailyGenerate(kind,avoid=[]){
 export async function autoTradeDecision({symbol,snapshot,record,strategy,positions}){
   const k=await ensureKeys();
   const{base,auth}=await aiRoute('claude',k?.claude,'Claude');
-  const sys=`You are A.T.L.A.S., running UNATTENDED on a DEMO trading account. No human reviews your call before it fires. Every order is 0.01 lot.
+  const sys=`You are T.A.L.O.N., running UNATTENDED on a DEMO trading account. No human reviews your call before it fires. Every order is 0.01 lot.
 Look at ${symbol} right now and decide. Patience is still the edge — never force a trade in chop or against clear structure. BUT this is a live demo you are meant to be actively working: when a clean setup is in front of you that fits your strategy and your record — a defined level, a clear bias, a sensible stop — take it rather than holding out for a perfect one. A reasonable A-/B+ setup with tight risk is a yes. Stops and targets go off structure, tight, as concrete prices.
 Reply with ONLY a JSON object, no prose, no code fence:
 {"action":"enter"|"close"|"none","side":"buy"|"sell","stopLoss":<price>,"takeProfit":<price>,"setup":"scalp|swing|<label>","rationale":"<=140 chars","closeIds":["<id>"],"breakevenIds":["<id>"]}

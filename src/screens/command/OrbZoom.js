@@ -22,13 +22,26 @@ const WHEEL_MID=1200;// px of scroll slack each side of the wheel-catcher — bi
 const SAMP=[],SIN=[],COS=[];
 for(let k=0;k<=480;k++){const v=-12*Math.PI+(24*Math.PI)*(k/480);SAMP.push(v);SIN.push(Math.sin(v));COS.push(Math.cos(v));}
 
-const SPHERE_PTS=PERSONA_LIST.map((_,i)=>{
-  const n=PERSONA_LIST.length;
-  const y=1-(i/((n-1)||1))*2;
-  const r=Math.sqrt(Math.max(0,1-y*y));
-  const th=i*2.399963229728653;
-  return{x:Math.cos(th)*r,y,z:Math.sin(th)*r};
-});
+// Personas scattered through a wide 3D volume (not a sphere shell). Seeded so
+// the layout is stable across a session; a light min-distance pass keeps them
+// from clumping. You yaw the cloud and fly forward/back through it.
+const SCATTER=(()=>{
+  let a=0x9e3779b9;
+  const rnd=()=>{a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};
+  const n=PERSONA_LIST.length,pts=[];
+  for(let i=0;i<n;i++){
+    let best=null,bestD=-1;
+    for(let tries=0;tries<14;tries++){
+      const c={x:(rnd()*2-1)*3.6,y:(rnd()*2-1)*2.7,z:(rnd()*2-1)*3.8};
+      let d=99;
+      for(const p of pts)d=Math.min(d,Math.hypot(p.x-c.x,p.y-c.y,p.z-c.z));
+      if(d>bestD){bestD=d;best=c;}
+    }
+    pts.push(best);
+  }
+  return pts;
+})();
+const Z_SPAN=3.8;     // half-depth of the cloud; dolly ranges ±(Z_SPAN+2)
 
 function touchDist(t){return Math.hypot(t[0].pageX-t[1].pageX,t[0].pageY-t[1].pageY);}
 
@@ -289,35 +302,47 @@ function OrbZoom({personaId,color,active,vizRef,personaPics={},onPickPersona,onL
   );
 }
 
-// --- The rotatable persona sphere -------------------------------------------
+// --- The persona cloud -----------------------------------------------------
+// Personas scattered through a 3D volume. One-finger drag: left/right yaws the
+// whole cloud, up/down flies you forward / back THROUGH it (dolly). Perspective
+// spread + depth fade sell the movement; nearest-in-front is what a tap or a
+// pinch-in selects.
 
 function PersonaSphereInner({activeId,pics,onPick,onLaunch},ref){
   const[size,setSize]=useState({w:Dimensions.get('window').width,h:340});
   const[group,setGroup]=useState([]);
   const[order,setOrder]=useState(()=>PERSONA_LIST.map((_,i)=>i));
-  const theta=useRef(new Animated.Value(0.4)).current;
-  const phi=useRef(new Animated.Value(0.15)).current;
-  const tStart=useRef(0.4),pStart=useRef(0.15);
-  const tNow=useRef(0.4),pNow=useRef(0.15);
+  const yaw=useRef(new Animated.Value(0.3)).current;
+  const dolly=useRef(new Animated.Value(-4.2)).current;   // start outside, cloud ahead
+  const yStart=useRef(0.3),dStart=useRef(-4.2);
+  const yawNow=useRef(0.3),dollyNow=useRef(-4.2);
   const sizeRef=useRef(size);
   const sparkles=useRef(PERSONA_LIST.map(()=>new Animated.Value(Math.random()))).current;
 
   useEffect(()=>{sizeRef.current=size;},[size]);
 
+  const RX=Math.min(size.w,560)*0.12;
+  const RY=Math.min(size.h,size.w,560)*0.11;
+
+  // depth of persona i in front of the viewer, given current yaw + dolly
+  const depthOf=useCallback((i,yv,dv)=>{
+    const pt=SCATTER[i];
+    const z1=-pt.x*Math.sin(yv)+pt.z*Math.cos(yv);
+    return z1-dv;
+  },[]);
+
   useEffect(()=>{
     let last=0;
-    const onMove=({value},which)=>{
-      if(which==='t')tNow.current=value;else pNow.current=value;
-      const now=Date.now();if(now-last<150)return;last=now;
-      const t=tNow.current,p=pNow.current;
-      const ct=Math.cos(t),st=Math.sin(t),cp=Math.cos(p),sp=Math.sin(p);
-      const z=(i)=>{const pt=SPHERE_PTS[i];const z1=-st*pt.x+ct*pt.z;return sp*pt.y+cp*z1;};
-      setOrder(PERSONA_LIST.map((_,i)=>i).sort((a,b)=>z(a)-z(b)));
+    const sortNow=()=>{
+      const yv=yawNow.current,dv=dollyNow.current;
+      setOrder(PERSONA_LIST.map((_,i)=>i).sort((a,b)=>depthOf(b,yv,dv)-depthOf(a,yv,dv))); // far first
     };
-    const idT=theta.addListener(e=>onMove(e,'t'));
-    const idP=phi.addListener(e=>onMove(e,'p'));
-    return()=>{theta.removeListener(idT);phi.removeListener(idP);};
-  },[]);// eslint-disable-line react-hooks/exhaustive-deps
+    const recompute=()=>{const now=Date.now();if(now-last<120)return;last=now;sortNow();};
+    sortNow();                                        // initial depth order
+    const idY=yaw.addListener(e=>{yawNow.current=e.value;recompute();});
+    const idD=dolly.addListener(e=>{dollyNow.current=e.value;recompute();});
+    return()=>{yaw.removeListener(idY);dolly.removeListener(idD);};
+  },[depthOf]);// eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(()=>{
     const loops=sparkles.map((v,i)=>Animated.loop(Animated.sequence([
@@ -329,30 +354,22 @@ function PersonaSphereInner({activeId,pics,onPick,onLaunch},ref){
     return()=>loops.forEach(l=>l.stop());
   },[]);// eslint-disable-line react-hooks/exhaustive-deps
 
-  const RX=Math.min(size.w,520)*0.36;
-  const RY=Math.min(size.w,size.h,520)*0.32;
-
-  // pickAt(x,y): the orb nearest that screen point (front hemisphere), or the
-  // frontmost one when no point is given.
+  // pickAt(x,y): the persona nearest that screen point (in front of the viewer),
+  // or the nearest one straight ahead when no point is given.
   useImperativeHandle(ref,()=>({
     pickAt(x,y){
-      const t=tNow.current,p=pNow.current;
-      const ct=Math.cos(t),st=Math.sin(t),cp=Math.cos(p),sp=Math.sin(p);
+      const yv=yawNow.current,dv=dollyNow.current;
+      const cyN=Math.cos(yv),syN=Math.sin(yv);
       const cx=sizeRef.current.w/2,cy=sizeRef.current.h*0.42;
       let best=PERSONA_LIST[0].id,score=-Infinity;
       for(let i=0;i<PERSONA_LIST.length;i++){
-        const pt=SPHERE_PTS[i];
-        const x1=ct*pt.x+st*pt.z;
-        const z1=-st*pt.x+ct*pt.z;
-        const y2=cp*pt.y-sp*z1;
-        const z2=sp*pt.y+cp*z1;
-        let sc;
-        if(x==null){sc=z2;}
-        else{
-          if(z2<-0.2)continue;
-          const sx=cx+x1*RX,sy=cy+y2*RY;
-          sc=z2*140-Math.hypot(sx-x,sy-y);
-        }
+        const pt=SCATTER[i];
+        const x1=cyN*pt.x+syN*pt.z;
+        const depth=(-pt.x*syN+pt.z*cyN)-dv;
+        if(depth<0.35)continue;                       // behind, or passing through
+        const denom=Math.max(0.4,1.0+depth*0.14);
+        const sx=cx+(x1*RX)/denom,sy=cy+(pt.y*RY)/denom;
+        const sc=x==null?-depth:(-depth*40-Math.hypot(sx-x,sy-y));
         if(sc>score){score=sc;best=PERSONA_LIST[i].id;}
       }
       return best;
@@ -363,42 +380,41 @@ function PersonaSphereInner({activeId,pics,onPick,onLaunch},ref){
     onStartShouldSetPanResponder:()=>false,
     onMoveShouldSetPanResponder:(e,g)=>(!e.nativeEvent.touches||e.nativeEvent.touches.length<2)&&(Math.abs(g.dx)>6||Math.abs(g.dy)>6),
     onPanResponderGrant:()=>{
-      theta.stopAnimation(v=>{tStart.current=v;});
-      phi.stopAnimation(v=>{pStart.current=v;});
+      yaw.stopAnimation(v=>{yStart.current=v;});
+      dolly.stopAnimation(v=>{dStart.current=v;});
     },
     onPanResponderMove:(_,g)=>{
-      theta.setValue(tStart.current-g.dx*0.010);
-      phi.setValue(Math.max(-1.35,Math.min(1.35,pStart.current+g.dy*0.010)));
+      yaw.setValue(yStart.current-g.dx*0.008);
+      dolly.setValue(Math.max(-(Z_SPAN+2),Math.min(Z_SPAN+2,dStart.current-g.dy*0.011))); // drag up = fly forward
     },
     onPanResponderRelease:(_,g)=>{
-      Animated.decay(theta,{velocity:-g.vx*0.010,deceleration:0.996,useNativeDriver:false}).start();
+      Animated.decay(yaw,{velocity:-g.vx*0.008,deceleration:0.996,useNativeDriver:false}).start();
     },
   }),[]);// eslint-disable-line react-hooks/exhaustive-deps
 
   const orbs=useMemo(()=>{
-    const cosT=theta.interpolate({inputRange:SAMP,outputRange:COS,extrapolate:'clamp'});
-    const sinT=theta.interpolate({inputRange:SAMP,outputRange:SIN,extrapolate:'clamp'});
-    const cosP=phi.interpolate({inputRange:SAMP,outputRange:COS,extrapolate:'clamp'});
-    const sinP=phi.interpolate({inputRange:SAMP,outputRange:SIN,extrapolate:'clamp'});
+    const cosY=yaw.interpolate({inputRange:SAMP,outputRange:COS,extrapolate:'clamp'});
+    const sinY=yaw.interpolate({inputRange:SAMP,outputRange:SIN,extrapolate:'clamp'});
     return PERSONA_LIST.map((p,i)=>{
-      const pt=SPHERE_PTS[i];
-      const x1=Animated.add(Animated.multiply(cosT,pt.x),Animated.multiply(sinT,pt.z));
-      const z1=Animated.add(Animated.multiply(sinT,-pt.x),Animated.multiply(cosT,pt.z));
-      const y2=Animated.subtract(Animated.multiply(cosP,pt.y),Animated.multiply(sinP,z1));
-      const z2=Animated.add(Animated.multiply(sinP,pt.y),Animated.multiply(cosP,z1));
+      const pt=SCATTER[i];
+      const x1=Animated.add(Animated.multiply(cosY,pt.x),Animated.multiply(sinY,pt.z));
+      const z1=Animated.add(Animated.multiply(-pt.x,sinY),Animated.multiply(pt.z,cosY));
+      const depth=Animated.subtract(z1,dolly);
+      const denom=Animated.add(1.0,Animated.multiply(depth,0.14))
+        .interpolate({inputRange:[0.4,20],outputRange:[0.4,20],extrapolate:'clamp'});
       return{
         p,
-        translateX:Animated.multiply(x1,RX),
-        translateY:Animated.multiply(y2,RY),
+        translateX:Animated.divide(Animated.multiply(x1,RX),denom),
+        translateY:Animated.divide(Animated.multiply(pt.y,RY),denom),
         scale:Animated.multiply(
-          z2.interpolate({inputRange:[-1,1],outputRange:[0.5,1.15],extrapolate:'clamp'}),
-          sparkles[i].interpolate({inputRange:[0,1],outputRange:[0.9,1.12]})),
+          depth.interpolate({inputRange:[0.3,2.2,7,14],outputRange:[1.55,1.12,0.62,0.34],extrapolate:'clamp'}),
+          sparkles[i].interpolate({inputRange:[0,1],outputRange:[0.92,1.1]})),
         opacity:Animated.multiply(
-          z2.interpolate({inputRange:[-1,1],outputRange:[0.22,1],extrapolate:'clamp'}),
-          sparkles[i].interpolate({inputRange:[0,1],outputRange:[0.55,1]})),
+          depth.interpolate({inputRange:[0.15,1.5,7,13],outputRange:[0,1,0.6,0.1],extrapolate:'clamp'}),
+          sparkles[i].interpolate({inputRange:[0,1],outputRange:[0.6,1]})),
       };
     });
-  },[theta,phi,RX,RY]);// eslint-disable-line react-hooks/exhaustive-deps
+  },[yaw,dolly,RX,RY]);// eslint-disable-line react-hooks/exhaustive-deps
 
   const toggle=useCallback((id)=>setGroup(g=>g.includes(id)?g.filter(x=>x!==id):[...g,id]),[]);
 
