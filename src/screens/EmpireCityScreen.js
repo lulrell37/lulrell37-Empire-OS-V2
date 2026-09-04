@@ -41,6 +41,7 @@ import*as WebBrowser from 'expo-web-browser';
 import{mergeGeometries}from 'three/examples/jsm/utils/BufferGeometryUtils';
 import{Gesture,GestureDetector}from 'react-native-gesture-handler';
 import{getHudState}from '../services/database';
+import{getLeadsSheetId,leadsSheetUrl}from '../services/leadsSheet';
 import useEmpireStore from '../store/useEmpireStore';
 import Boundary from './hud/Boundary';
 import{colors,FONTS}from '../theme';
@@ -60,7 +61,7 @@ const HEROES=[
   {name:'Council',   route:'Command',   label:'THE PERSONAS',     sub:'THE COUNCIL',      tint:0xE8C98A, at:[-12,12], ly:10.5, shape:'towers'},
   {name:'Laboratory',route:'Laboratory',label:'THE DIAGRAM',      sub:'THE LABORATORY',   tint:0x9AD3E0, at:[-12,-12],ly:10.5, shape:'observatory'},
   {name:'Settings',  route:'Settings',  label:'THE WORKSHOP',     sub:'SETTINGS',         tint:0x9AA0A6, at:[12,-12], ly:8.5,  shape:'ziggurat'},
-  {name:'Leads',     route:'Command',   params:{persona:'scout'}, label:'THE LEDGER', sub:'S.C.O.U.T.', tint:0x2E86FF, at:[0,-25], ly:9, shape:'ledger'},
+  {name:'Leads',     route:'Command',   params:{persona:'scout'}, openSheet:true, label:'THE LEDGER', sub:'S.C.O.U.T.', tint:0x2E86FF, at:[0,-25], ly:9, shape:'ledger'},
   {name:'Web',       url:'https://tarellbempire.com', label:'TARELL B. EMPIRE', sub:'TARELLBEMPIRE.COM', tint:0xF3E3BE, at:[25,0], ly:11, shape:'monument', external:true},
 ];
 
@@ -743,12 +744,24 @@ function EmpireCity({navigation}){
     try{engine.renderer?.dispose?.();}catch{}
   },[engine]);
 
+  // Leads landmark: jump straight to the actual Google Sheet if one's linked
+  // (same as the Web monument — no flight animation, just opens it), otherwise
+  // fall back to Scout's in-app pipeline so tapping it is never a dead end.
+  const openLeadsHero=useCallback((hero)=>{
+    getLeadsSheetId().then(id=>{
+      const url=leadsSheetUrl(id);
+      if(url)WebBrowser.openBrowserAsync(url).catch(()=>{});
+      else navigation.navigate(hero.route,hero.params);
+    }).catch(()=>navigation.navigate(hero.route,hero.params));
+  },[navigation]);
+
   const enterHero=useCallback((hero)=>{
     if(!hero)return;
     if(hero.external){WebBrowser.openBrowserAsync(hero.url).catch(()=>{});return;}
+    if(hero.openSheet){openLeadsHero(hero);return;}
     if(engine.entering)return;
     engine.entering={route:hero.route,params:hero.params,name:hero.name,t:0};
-  },[engine]);
+  },[engine,openLeadsHero]);
 
   const raycastAt=useCallback((x,y)=>{
     const{camera,raycaster,pivot,vw,vh}=engine;
@@ -948,7 +961,7 @@ function EmpireCity({navigation}){
         <Text style={s.fallbackTitle}>THE EMPIRE</Text>
         <Text style={s.fallbackMsg}>City view unavailable{errMsg?` · ${errMsg}`:''}</Text>
         {HEROES.map(h=>(
-          <TouchableOpacity key={h.name} style={s.fallbackBtn} onPress={()=>h.external?WebBrowser.openBrowserAsync(h.url).catch(()=>{}):navigation.navigate(h.route,h.params)}>
+          <TouchableOpacity key={h.name} style={s.fallbackBtn} onPress={()=>h.external?WebBrowser.openBrowserAsync(h.url).catch(()=>{}):h.openSheet?openLeadsHero(h):navigation.navigate(h.route,h.params)}>
             <Text style={[s.fallbackBtnT,{color:'#'+h.tint.toString(16).padStart(6,'0')}]}>{h.label}</Text>
             <Text style={s.fallbackBtnS}>{h.sub}</Text>
           </TouchableOpacity>
