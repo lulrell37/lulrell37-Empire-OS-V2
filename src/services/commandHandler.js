@@ -1,4 +1,4 @@
-import{addTask,updateTask,completeTask,deleteTask,saveNote,getNote,addRevenue,getTasks,getHudState,updateHudState,setRoutineDone,addRoutineItem,removeRoutineItem,renameRoutineItem,setBatmanDay,getBusinessTargets,setBusinessTarget,setPanelLayout,addExpense,addImportantDate}from './database';
+import{addTask,updateTask,completeTask,deleteTask,saveNote,getNote,addRevenue,getTasks,getHudState,updateHudState,setRoutineDone,addRoutineItem,removeRoutineItem,renameRoutineItem,setBatmanDay,getBusinessTargets,setBusinessTarget,setPanelLayout,addExpense,addImportantDate,addLead,updateLead,appendLeadLog,findLead}from './database';
 import*as gtask from './googleClient';
 import useEmpireStore from '../store/useEmpireStore';
 const HUD_PANELS=['briefing','businesses','tasks','routine','batman','daily'];
@@ -120,6 +120,35 @@ export async function handleCommands(response,personaId,callbacks={}){
   for(const m of response.matchAll(/\[ADD_DATE:\s*([^|\]]+)\|([^|\]]+)(?:\|([^\]]+))?\]/gi)){
     await addImportantDate(m[1].trim(),m[2].trim(),m[3]?.trim()||'');
   }
+  // --- S.C.O.U.T. leads pipeline ---
+  for(const m of response.matchAll(/\[LEAD_ADD:\s*([^\]]+)\]/gi)){
+    const parts=m[1].split('|').map(s=>s.trim());
+    const name=parts[0];
+    if(!name)continue;
+    const id=await addLead({name,business:parts[1]||'',website:parts[2]||'',contact:parts[3]||'',bottleneck:parts[4]||'',segment:parts[5]||''});
+    callbacks.onLeadChange?.({action:'add',id,name});
+  }
+  for(const m of response.matchAll(/\[LEAD_UPDATE:\s*([^|\]]+)\|([^\]]+)\]/gi)){
+    const lead=await findLead(m[1].trim());
+    if(!lead){callbacks.onLeadChange?.({action:'miss',ref:m[1].trim()});continue;}
+    const patch={};
+    for(const pair of m[2].split(';')){
+      const eq=pair.indexOf('=');
+      if(eq<0)continue;
+      const k=pair.slice(0,eq).trim().toLowerCase();
+      const v=pair.slice(eq+1).trim();
+      if(k==='log'){await appendLeadLog(lead.id,v);continue;}
+      if(['name','business','website','contact','bottleneck','segment','value','stage','next_action','next_touch'].includes(k))patch[k]=v;
+    }
+    if(Object.keys(patch).length)await updateLead(lead.id,patch);
+    callbacks.onLeadChange?.({action:'update',id:lead.id,name:lead.name});
+  }
+  for(const m of response.matchAll(/\[LEAD_LOG:\s*([^|\]]+)\|([^\]]+)\]/gi)){
+    const lead=await findLead(m[1].trim());
+    if(!lead){callbacks.onLeadChange?.({action:'miss',ref:m[1].trim()});continue;}
+    await appendLeadLog(lead.id,m[2].trim());
+    callbacks.onLeadChange?.({action:'log',id:lead.id,name:lead.name});
+  }
   if(/\[READ_HUD\]/i.test(response)){const hud=await getHudState();callbacks.onHudRead?.(hud);}
   for(const m of response.matchAll(/\[UPDATE_HUD:\s*([^|\]]+)\|([^\]]+)\]/gi)){
     await updateHudState({[m[1].trim()]:m[2].trim()});hudChanged();callbacks.onHudUpdated?.({field:m[1].trim(),value:m[2].trim()});
@@ -201,6 +230,9 @@ export function stripCommands(text){
     .replace(/\[TRADE_BREAKEVEN:[^\]]*\]/gi,'')
     .replace(/\[STRATEGY_UPDATE:[\s\S]*?\]/gi,'').replace(/\[TRADE_REVIEW:[^\]]*\]/gi,'')
     .replace(/\[ADD_EXPENSE:[^\]]*\]/gi,'').replace(/\[ADD_DATE:[^\]]*\]/gi,'').replace(/\[EXPENSE_SUMMARY\]/gi,'')
+    .replace(/\[LEAD_ADD:[^\]]*\]/gi,'').replace(/\[LEAD_UPDATE:[^\]]*\]/gi,'').replace(/\[LEAD_LOG:[^\]]*\]/gi,'')
+    .replace(/\[LEAD_EMAIL:[^\]]*\]/gi,'').replace(/\[LEAD_LIST(?::[^\]]*)?\]/gi,'').replace(/\[LEADS\]/gi,'')
+    .replace(/\[SCAN_INBOUND(?::[^\]]*)?\]/gi,'')
     .replace(/\[SHOW_CHART:[^\]]*\]/gi,'')
     .replace(/\[BUILD_REQUEST:[^\]]*\]/gi,'').replace(/\[BUILD_REPLY:[^\]]*\]/gi,'')
     .replace(/\[BUILD_MERGE:[^\]]*\]/gi,'').replace(/\[BUILD_CANCEL:[^\]]*\]/gi,'').replace(/\[BUILD_STATUS\]/gi,'')

@@ -321,6 +321,14 @@ export async function sheetCreate({title,columns=[],values=[]}){
   return `Sheets: "${title}" created — ${ss.spreadsheetUrl}`;
 }
 
+// Read a value range from a spreadsheet — used by the inbound-leads poller to
+// pull Google Form responses (they land in a "Form Responses" sheet).
+export async function sheetRead({spreadsheetId,range='A1:Z2000'}){
+  if(!spreadsheetId)throw new Error('no spreadsheet id');
+  const data=await gapi(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values/${encodeURIComponent(range)}`,{});
+  return data?.values||[];
+}
+
 // --- Google Tasks -----------------------------------------------------------
 export async function tasksList(){
   const data=await gapi('/tasks/v1/lists/@default/tasks',{query:{showCompleted:'false',maxResults:100}});

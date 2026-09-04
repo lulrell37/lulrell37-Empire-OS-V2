@@ -95,6 +95,14 @@ async function buildSys(personaId,persona,convo=[]){
     const nudges=await computeNudges();
     if(nudges.length)sys+=`\n\n[PROACTIVE NUDGES — raise any of these yourself if it fits the conversation, don't wait to be asked: ${nudges.map(n=>n.text).join(' · ')}]`;
   }catch{}
+  // A.R.A. runs the day and N.O.V.A. reads across domains — both get a live
+  // cross-front status read (revenue, trading, outreach, builds) every turn.
+  if(personaId==='ara'||personaId==='nova'){
+    try{
+      const{empireStatusBlock}=await import('./empireStatus');
+      sys+=await empireStatusBlock();
+    }catch{}
+  }
   // THE EMPIRE ROSTER + THE FIRM — every persona knows who the others are, and
   // how it participates in A.R.A.-coordinated projects. Kept here (not in
   // persona.system) so it still applies when the user has set a custom prompt.

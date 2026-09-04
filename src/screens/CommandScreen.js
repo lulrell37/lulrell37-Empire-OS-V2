@@ -14,7 +14,7 @@ import{drStart,drGetActive,drTick,drDismiss,drDeliverPending,DR_POLL_MS}from '..
 import{onAutoTrade}from '../services/autoTrader';
 import{handleCommands,stripCommands}from '../services/commandHandler';
 import{googleReadInjections,googleWriteCommands}from '../services/googleCommands';
-import{getMessages,saveMessage,getAllPersonaPics,savePersonaMemory,getSetting,setSetting,getExpenseSummary,addBuildJob,updateBuildJob,getBuildJob,getBuildJobByIssue,getBuildJobs,buildJobRepo,DEFAULT_BUILD_REPO,getCustomPrompt}from '../services/database';
+import{getMessages,saveMessage,getAllPersonaPics,savePersonaMemory,getSetting,setSetting,getExpenseSummary,addBuildJob,updateBuildJob,getBuildJob,getBuildJobByIssue,getBuildJobs,buildJobRepo,DEFAULT_BUILD_REPO,getCustomPrompt,getAllLeads}from '../services/database';
 import{fileBuildRequest,replyToBuild,mergeBuild,cancelBuild,createProjectRepo}from '../services/buildAgent';
 import{pollBuildJobs}from '../services/buildJobs';
 import{tlSnapshot,tlFormatSnapshot,tlPlaceOrder,tlClosePosition,tlModifyPosition,tlPositions,MAX_QTY,MAX_OPEN_POSITIONS}from '../services/tradeLocker';
@@ -29,6 +29,8 @@ import TradeStatus from '../components/TradeStatus';
 import TradeRecordBar from './command/TradeRecordBar';
 import DeepResearchBanner from './command/DeepResearchBanner';
 import BuildPanel from './command/BuildPanel';
+import LeadsPanel from './command/LeadsPanel';
+import{runInboundScan,importInboundForm}from '../services/inbound';
 import NudgeBar from './command/NudgeBar';
 import{parseChartSpec}from '../services/chartSpec';
 import{extractUrls,fetchLinkContext,linkContextToBlock}from '../services/mediaContext';
@@ -139,6 +141,11 @@ export default function CommandScreen({navigation}){
       try{setProject(raw?JSON.parse(raw):null);}catch{setProject(null);}
     }).catch(()=>{});
   },[isFocused]);
+  // Pull any new website-form submissions into the pipeline when S.C.O.U.T. opens.
+  useEffect(()=>{
+    if(!isFocused||activePersona!=='scout')return;
+    importInboundForm().then(n=>{if(n>0)pushSystemMsg(`— PIPELINE · ${n} new inbound lead${n===1?'':'s'} from the site —`);}).catch(()=>{});
+  },[isFocused,activePersona]);// eslint-disable-line react-hooks/exhaustive-deps
   // THE FIRM health check — a project needs GitHub connected to build. Flag it in
   // the notification strip up front rather than at the moment of failure.
   useEffect(()=>{
@@ -1071,6 +1078,32 @@ export default function CommandScreen({navigation}){
               :'BUILD JOBS: none filed yet.');
           }catch(e){injections.push('BUILD STATUS: failed — '+e.message);}
         }
+        if(/\[LEAD_LIST(?::[^\]]*)?\]|\[LEADS\]/i.test(response)&&!myAbort.signal.aborted){
+          try{
+            const wantStage=(response.match(/\[LEAD_LIST:\s*([^\]]+)\]/i)||[])[1]?.trim().toLowerCase();
+            let ls=await getAllLeads();
+            if(wantStage)ls=ls.filter(l=>l.stage===wantStage);
+            if(!ls.length){injections.push('PIPELINE: no leads yet.');}
+            else{
+              const tally={};ls.forEach(l=>{tally[l.stage]=(tally[l.stage]||0)+1;});
+              const head=Object.entries(tally).map(([k,v])=>`${v} ${k}`).join(' · ');
+              injections.push(`PIPELINE (${ls.length} lead${ls.length===1?'':'s'}) — ${head}:\n`+ls.map(l=>{
+                const top=(l.log||'').split('\n')[0];
+                return `  #${l.id} ${l.name}${l.business?` · ${l.business}`:''} · ${String(l.stage||'new').toUpperCase()}`
+                  +`${l.next_touch?` · next ${l.next_touch}`:''}${l.next_action?` · ${l.next_action}`:''}`
+                  +` · ${l.contact||'needs contact'}${top?`\n     last: ${top}`:''}`;
+              }).join('\n'));
+            }
+          }catch(e){injections.push('PIPELINE: failed — '+e.message);}
+        }
+        const scanInb=response.match(/\[SCAN_INBOUND(?::\s*([^\]]+))?\]/i);
+        if(scanInb&&!myAbort.signal.aborted){
+          toolLabel='◇ scanning inbound channels…';
+          try{
+            const digest=await runInboundScan(pid,scanInb[1]?.trim()||'',myAbort.signal);
+            injections.push('INBOUND SCAN:\n'+(digest||'(nothing found)'));
+          }catch(e){injections.push('INBOUND SCAN: failed — '+e.message);}
+        }
         if(/\[EXPENSE_SUMMARY\]/i.test(response)){
           try{const es=await getExpenseSummary();injections.push(`EXPENSES ${es.month} — total ${es.total.toFixed(2)}:\n${es.byCategory.map(c=>`  ${c.category}: ${c.total.toFixed(2)} (${c.n})`).join('\n')||'  (none logged)'}`);}
           catch(e){injections.push('EXPENSE SUMMARY: failed — '+e.message);}
@@ -1103,6 +1136,10 @@ export default function CommandScreen({navigation}){
           onBuildCancel:({issueNumber})=>{getBuildJobByIssue(issueNumber,projectRef.current?.repo).then(j=>j?confirmBuildCancel(j.id):pushSystemMsg(`— No build job for #${issueNumber}. —`));},
           onProjectStart:(p)=>openProject(p),
           onProjectDone:()=>closeProject(),
+          onLeadChange:(e)=>{
+            if(e.action==='add')pushSystemMsg(`— PIPELINE · added ${e.name} —`);
+            else if(e.action==='miss')pushSystemMsg(`— PIPELINE · no lead matches "${e.ref}" —`);
+          },
         };
 
         // --- THE FIRM — A.R.A. delegates to specialists, then synthesizes ---
@@ -1684,6 +1721,7 @@ export default function CommandScreen({navigation}){
       {mode==='direct'&&activePersona===TRADER_ID&&<TradeStatus active={isFocused} style={{marginHorizontal:10,marginTop:6}}/>}
       {mode==='direct'&&activePersona===TRADER_ID&&<TradeRecordBar active={isFocused} style={{marginHorizontal:10,marginTop:6}}/>}
       {mode==='direct'&&activePersona===TRADER_ID&&<TradePanel active={isFocused} onEvent={pushSystemMsg}/>}
+      {mode==='direct'&&activePersona==='scout'&&<LeadsPanel active={isFocused}/>}
       {mode==='direct'&&activePersona==='jarvis'&&<BuildPanel active={isFocused} onMerge={confirmBuildMerge} onCancel={confirmBuildCancel} filter={jarvisBuildFilter}/>}
 
       {project&&mode==='direct'&&activePersona==='ara'&&(

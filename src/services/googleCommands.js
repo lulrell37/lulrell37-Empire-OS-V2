@@ -8,7 +8,7 @@
 // run immediately (create/edit) or are handed to onConfirm() for a confirmation
 // card (send email, deletes). Any persona may use these — no gate.
 import*as g from './googleClient';
-import{addImportantDate,getTasks,getNote}from './database';
+import{addImportantDate,getTasks,getNote,findLead,appendLeadLog,updateLead}from './database';
 import{runSync}from './sync';
 
 // "Learning Everything | 2" or "abc123 | all" -> { ref, page }. A trailing
@@ -113,6 +113,23 @@ export async function googleWriteCommands(text,{onConfirm}={}){
     const to=m[1].trim(),subject=m[2].trim(),body=m[3].trim();
     defer({kind:'send_email',label:'Send email',detail:`To: ${to}\nSubject: ${subject}`,
       run:()=>g.gmailSend({to,subject,body})});
+  }
+  // [LEAD_EMAIL: ref | subject | body] — S.C.O.U.T. sends outreach to a pipeline
+  // lead. Pulls the address from the lead's `contact`, and on send logs it and
+  // moves a brand-new lead to `contacted`.
+  for(const m of t.matchAll(/\[LEAD_EMAIL:\s*([^|\]]+)\|([^|\]]+)\|([^\]]+)\]/ig)){
+    const ref=m[1].trim(),subject=m[2].trim(),body=m[3].trim();
+    const lead=await findLead(ref);
+    if(!lead){immediate.push(`⚠️ No lead matches "${ref}" — add them to the pipeline first.`);continue;}
+    const email=/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(lead.contact||'').trim())?lead.contact.trim():null;
+    if(!email){immediate.push(`No email on file for ${lead.name} — draft it in chat and send it yourself, then log it.`);continue;}
+    defer({kind:'lead_email',label:'Send outreach email',detail:`To: ${lead.name} <${email}>\nSubject: ${subject}`,
+      run:async()=>{
+        await g.gmailSend({to:email,subject,body});
+        await appendLeadLog(lead.id,`Emailed: ${subject}`);
+        if(lead.stage==='new')await updateLead(lead.id,{stage:'contacted'});
+        return `Sent to ${lead.name} — logged to the pipeline`;
+      }});
   }
   for(const m of t.matchAll(/\[DELETE_EVENT:\s*([^\]]+)\]/ig)){
     const id=m[1].trim();

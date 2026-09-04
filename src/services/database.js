@@ -22,12 +22,14 @@ export async function initDatabase(){
     CREATE TABLE IF NOT EXISTS build_jobs(id TEXT PRIMARY KEY,repo_owner TEXT,repo_name TEXT,issue_number INTEGER,pr_number INTEGER,spec TEXT,state TEXT,question TEXT,last_comment_id INTEGER DEFAULT 0,title TEXT,project_name TEXT,created_at INTEGER,updated_at INTEGER);
     CREATE TABLE IF NOT EXISTS trades(id INTEGER PRIMARY KEY AUTOINCREMENT,persona TEXT DEFAULT 'talon',symbol TEXT,side TEXT,qty REAL,entry_ref REAL,entry_fill REAL,stop_loss REAL,take_profit REAL,setup TEXT,rationale TEXT,status TEXT DEFAULT 'open',order_id TEXT,position_id TEXT,opened_at INTEGER,closed_at INTEGER,exit_price REAL,realized_pl REAL,pl_estimated INTEGER DEFAULT 0,outcome TEXT,r_multiple REAL,review TEXT,misses INTEGER DEFAULT 0,last_unrealized REAL,auto INTEGER DEFAULT 0,created_at INTEGER,updated_at INTEGER);
     CREATE TABLE IF NOT EXISTS deep_research(id TEXT PRIMARY KEY,topic TEXT,persona TEXT,mode TEXT DEFAULT 'direct',model TEXT,status TEXT DEFAULT 'running',progress TEXT,result TEXT,error TEXT,started_at INTEGER,finished_at INTEGER,created_at INTEGER,updated_at INTEGER);
+    CREATE TABLE IF NOT EXISTS leads(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT,business TEXT,website TEXT,contact TEXT,bottleneck TEXT,segment TEXT,value TEXT,stage TEXT DEFAULT 'new',next_action TEXT,next_touch TEXT,last_touch TEXT,log TEXT DEFAULT '',source TEXT DEFAULT 'scout',source_id TEXT,created_at INTEGER,updated_at INTEGER);
   `);
   await migrateHudColumns();
   await migratePersonaMemory();
   await migrateBuildJobs();
   await migrateColumn('trades','auto','INTEGER DEFAULT 0');
   await migrateColumn('deep_research','delivered','INTEGER DEFAULT 0');
+  await migrateColumn('leads','source_id','TEXT');
   await migrateTraderPersona();
   await ensureHudState();
   await ensureBusinessTargets();
@@ -52,6 +54,7 @@ const SYNC_TABLES={
   important_dates:'lower(hex(randomblob(16)))',
   build_jobs:'NEW.id',
   trades:'lower(hex(randomblob(16)))',
+  leads:'lower(hex(randomblob(16)))',
   business_targets:'NEW.business',
   custom_prompts:'NEW.persona',
   persona_pics:'NEW.persona',
@@ -489,6 +492,86 @@ export async function saveNote(title,content,persona=null){const now=Date.now();
 export async function getNote(title){return await db.getFirstAsync('SELECT * FROM notes WHERE title LIKE ?',['%'+title+'%']);}
 export async function getAllNotes(){return await db.getAllAsync('SELECT * FROM notes ORDER BY updated_at DESC');}
 export async function deleteNote(id){await db.runAsync('DELETE FROM notes WHERE id=?',[id]);}
+
+// --- Leads pipeline (S.C.O.U.T.) -----------------------------------------
+// One row per prospect. S.C.O.U.T. drives every field from chat via the
+// [LEAD_ADD] / [LEAD_UPDATE] / [LEAD_LOG] tags; the Command-screen LeadsPanel
+// and the follow-up nudges read it back. Synced like tasks/notes.
+export const LEAD_STAGES=['inbound','new','contacted','replied','qualifying','call_booked','won','lost','cold'];
+const LEAD_FIELDS=['name','business','website','contact','bottleneck','segment','value','stage','next_action','next_touch','last_touch','log','source','source_id'];
+export async function addLead(fields={}){
+  const now=Date.now();
+  const f={source:'scout',stage:'new',...fields};
+  const cols=LEAD_FIELDS.filter(k=>f[k]!==undefined&&f[k]!==null);
+  const sql=`INSERT INTO leads(${cols.join(',')},created_at,updated_at) VALUES(${cols.map(()=>'?').join(',')},?,?)`;
+  const r=await db.runAsync(sql,[...cols.map(k=>f[k]),now,now]);
+  return r.lastInsertRowId;
+}
+export async function updateLead(id,patch={}){
+  const cols=Object.keys(patch).filter(k=>LEAD_FIELDS.includes(k));
+  if(!cols.length)return;
+  await db.runAsync(`UPDATE leads SET ${cols.map(c=>c+'=?').join(',')} WHERE id=?`,[...cols.map(c=>patch[c]),id]);
+}
+export async function appendLeadLog(id,line){
+  const text=String(line||'').trim();
+  if(!text)return;
+  const lead=await getLead(id);
+  if(!lead)return;
+  const stamped=`${getTodayStr()} — ${text}`;
+  const nextLog=lead.log?`${stamped}\n${lead.log}`:stamped;
+  await db.runAsync('UPDATE leads SET log=?,last_touch=? WHERE id=?',[nextLog,getTodayStr(),id]);
+}
+export async function getAllLeads(){return await db.getAllAsync('SELECT * FROM leads ORDER BY updated_at DESC');}
+export async function getLeads(stage){return stage?await db.getAllAsync('SELECT * FROM leads WHERE stage=? ORDER BY updated_at DESC',[stage]):getAllLeads();}
+export async function getLead(id){return await db.getFirstAsync('SELECT * FROM leads WHERE id=?',[id]);}
+// Resolve a reference S.C.O.U.T. wrote — a row id, or a name/business substring.
+export async function findLead(ref){
+  const raw=String(ref||'').trim();
+  if(!raw)return null;
+  if(/^\d+$/.test(raw)){const byId=await getLead(parseInt(raw,10));if(byId)return byId;}
+  const q='%'+raw.toLowerCase()+'%';
+  return await db.getFirstAsync('SELECT * FROM leads WHERE lower(name) LIKE ? ORDER BY updated_at DESC LIMIT 1',[q])
+    || await db.getFirstAsync('SELECT * FROM leads WHERE lower(business) LIKE ? ORDER BY updated_at DESC LIMIT 1',[q]);
+}
+// Leads whose next touch is due on or before `dateStr` and aren't closed out.
+export async function getLeadsDue(dateStr){
+  return await db.getAllAsync("SELECT * FROM leads WHERE next_touch IS NOT NULL AND next_touch!='' AND next_touch<=? AND stage NOT IN ('won','lost') ORDER BY next_touch ASC",[dateStr]);
+}
+export async function deleteLead(id){await db.runAsync('DELETE FROM leads WHERE id=?',[id]);}
+// Dedupe key for auto-imported inbound leads (a Google Form row, etc.).
+export async function findLeadBySourceId(sid){
+  if(!sid)return null;
+  return await db.getFirstAsync('SELECT * FROM leads WHERE source_id=? LIMIT 1',[String(sid)]);
+}
+// Inbound leads still sitting untouched at the front of the pipeline.
+export async function getInboundLeads(){
+  return await db.getAllAsync("SELECT * FROM leads WHERE stage='inbound' ORDER BY created_at DESC");
+}
+// source_ids already imported from the website form — the poller's dedupe set.
+export async function getFormSourceIds(){
+  const rows=await db.getAllAsync("SELECT source_id FROM leads WHERE source='inbound-form' AND source_id IS NOT NULL");
+  return rows.map(r=>r.source_id);
+}
+// Dedupe for the auto-scout loop — a lead already exists if its name normalizes
+// to the same thing, or it shares a website host.
+const normName=s=>String(s||'').toLowerCase().replace(/[^a-z0-9]/g,'');
+const hostOf=s=>String(s||'').toLowerCase().replace(/^https?:\/\//,'').replace(/^www\./,'').split(/[/?#]/)[0];
+export async function leadExists(name,website){
+  const n=normName(name);
+  const h=hostOf(website);
+  const rows=await db.getAllAsync('SELECT name,website FROM leads');
+  return rows.some(r=>(n&&normName(r.name)===n)||(h&&h.length>3&&hostOf(r.website)===h));
+}
+// Leads the auto-scout loop may cold-email: fresh, reachable, not yet contacted.
+export async function getLeadsForOutreach(limit=5){
+  return await db.getAllAsync(
+    `SELECT * FROM leads
+     WHERE stage IN ('inbound','new')
+       AND contact LIKE '%_@_%._%'
+       AND COALESCE(log,'') NOT LIKE '%mailed%'
+     ORDER BY (stage='inbound') DESC, created_at ASC
+     LIMIT ?`,[limit]);
+}
 
 // --- Trade journal (Atlas) -------------------------------------------------
 // One row per trade Mr. Burrus confirmed. Opened on confirm; reconciled against

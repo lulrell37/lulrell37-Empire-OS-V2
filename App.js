@@ -24,7 +24,9 @@ import{runSync,initSyncStatus}from './src/services/sync';
 import{registerPushToken}from './src/services/push';
 import{tlInit}from './src/services/tradeLocker';
 import{startAutoTrader,stopAutoTrader}from './src/services/autoTrader';
+import{startAutoScout,stopAutoScout}from './src/services/autoScout';
 import{refreshDailyBriefing}from './src/services/dailyBriefing';
+import{importInboundForm}from './src/services/inbound';
 import{getAllPersonaPics}from './src/services/database';
 import useEmpireStore from './src/store/useEmpireStore';
 import{recentCrashCount}from './src/services/crashLog';
@@ -70,19 +72,24 @@ export default function App(){
   },[]);
   useEffect(()=>{
     // Sync on every return to the foreground + a gentle background interval.
-    const sub=AppState.addEventListener('change',(st)=>{if(st==='active'){runSync().catch(()=>{});refreshDailyBriefing().catch(()=>{});}});
+    const sub=AppState.addEventListener('change',(st)=>{if(st==='active'){runSync().catch(()=>{});refreshDailyBriefing().catch(()=>{});importInboundForm().catch(()=>{});}});
     const iv=setInterval(()=>{runSync().catch(()=>{});},120000);
+    const inb=setInterval(()=>{importInboundForm().catch(()=>{});},300000);
+    setTimeout(()=>importInboundForm().catch(()=>{}),9000);
     // Daily HUD content — Stephanie (word + fact), Abraham (verse). Once/day, no repeats.
     setTimeout(()=>refreshDailyBriefing().catch(()=>{}),6000);
-    return()=>{sub.remove();clearInterval(iv);};
+    return()=>{sub.remove();clearInterval(iv);clearInterval(inb);};
   },[]);
   useEffect(()=>{
     // A.T.L.A.S. auto-trader — only actually runs when enabled in Settings (demo only).
     startAutoTrader().catch(()=>{});
+    // S.C.O.U.T. auto-scout — only runs when enabled in Settings › OUTREACH.
+    startAutoScout().catch(()=>{});
     const sub=AppState.addEventListener('change',(st)=>{
-      if(st==='active')startAutoTrader().catch(()=>{});else stopAutoTrader();
+      if(st==='active'){startAutoTrader().catch(()=>{});startAutoScout().catch(()=>{});}
+      else{stopAutoTrader();stopAutoScout();}
     });
-    return()=>{sub.remove();stopAutoTrader();};
+    return()=>{sub.remove();stopAutoTrader();stopAutoScout();};
   },[]);
   if(!isReady||!navReady)return null;
   return(

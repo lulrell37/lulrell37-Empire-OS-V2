@@ -2,7 +2,7 @@
 // data (tasks, routine, streak, important dates). Surfaced both in the Command
 // screen strip and injected into every persona's context so they can raise
 // things before being asked. In-app only; real push needs expo-notifications.
-import{getTasks,getHudState,getUpcomingDates,getActiveBuildJobs,getBuildJobs}from './database';
+import{getTasks,getHudState,getUpcomingDates,getActiveBuildJobs,getBuildJobs,getLeadsDue,getInboundLeads}from './database';
 
 export async function computeNudges(){
   const out=[];
@@ -47,6 +47,19 @@ export async function computeNudges(){
     const cutoff=Date.now()-3*86400000;
     for(const j of (await getBuildJobs(20)).filter(j=>j.state==='failed'&&(j.updated_at||0)>cutoff)){
       out.push({key:'build-fail-'+(j.id||j.issue_number),severity:'error',text:`${j.project_name?j.project_name+': ':''}build #${j.issue_number} failed — open it on GitHub`});
+    }
+  }catch{}
+
+  try{
+    const inbound=await getInboundLeads();
+    if(inbound.length)out.push({key:'inbound-leads',text:`${inbound.length} inbound lead${inbound.length>1?'s':''} waiting — they came to you`});
+  }catch{}
+
+  try{
+    const due=await getLeadsDue(today);
+    for(const l of due.slice(0,4)){
+      const overdue=l.next_touch<today;
+      out.push({key:'lead-'+l.id,text:`${overdue?'overdue — ':''}follow up: ${l.name}`});
     }
   }catch{}
 

@@ -7,6 +7,7 @@ import{runSync,pingBackend,initSyncStatus}from '../services/sync';
 import{registerPushToken,unregisterPushToken,sendTestPush}from '../services/push';
 import{tlConnect,tlReset}from '../services/tradeLocker';
 import{refreshAutoTrader}from '../services/autoTrader';
+import{refreshAutoScout}from '../services/autoScout';
 import{resetWeather}from '../services/weather';
 import{ghVerify}from '../services/buildAgent';
 import{saveCustomPrompt,getCustomPrompt,getApiUsage,getAllPersonaPics,savePersonaPic,getSetting,setSetting}from '../services/database';
@@ -14,7 +15,7 @@ import{getCrashLog,clearCrashLog}from '../services/crashLog';
 import{PERSONA_LIST,getPersona}from '../personas/personas';
 import{useGoogleAuth,exchangeGoogleCode,revokeGoogle}from '../services/googleAuth';
 import useEmpireStore from '../store/useEmpireStore';
-const TABS=['KEYS','GOOGLE','TRADING','DEV','BACKEND','AI','PROFILES','PROMPTS','USAGE','DIAGNOSTICS'];
+const TABS=['KEYS','GOOGLE','TRADING','OUTREACH','DEV','BACKEND','AI','PROFILES','PROMPTS','USAGE','DIAGNOSTICS'];
 export default function SettingsScreen({navigation}){
   const[tab,setTab]=useState('KEYS');
   const[claude,setClaude]=useState('');const[grok,setGrok]=useState('');const[openai,setOpenai]=useState('');const[gemini,setGemini]=useState('');const[elevenlabs,setElevenlabs]=useState('');const[meshy,setMeshy]=useState('');
@@ -34,6 +35,11 @@ export default function SettingsScreen({navigation}){
   const[autoSyms,setAutoSyms]=useState('XAUUSD, EURUSD, GBPJPY, BTCUSD');
   const[autoEvery,setAutoEvery]=useState('5');
   const[weatherPlace,setWeatherPlace]=useState('Waldorf, MD');
+  const[inboundSheet,setInboundSheet]=useState('');
+  const[autoScout,setAutoScout]=useState(false);
+  const[scoutEvery,setScoutEvery]=useState('30');
+  const[scoutLeads,setScoutLeads]=useState('20');
+  const[scoutEmails,setScoutEmails]=useState('20');
   const[ghToken,setGhToken]=useState('');
   const[ghBusy,setGhBusy]=useState(false);
   const[ghStatus,setGhStatus]=useState(null); // {ok,repo,error}
@@ -70,6 +76,11 @@ export default function SettingsScreen({navigation}){
     setAutoSyms(await getSetting('auto_trade_symbols','XAUUSD, EURUSD, GBPJPY, BTCUSD'));
     setAutoEvery(await getSetting('auto_trade_interval_min','5'));
     setWeatherPlace(await getSetting('weather_place','Waldorf, MD'));
+    setInboundSheet(await getSetting('inbound_sheet_id',''));
+    setAutoScout((await getSetting('auto_scout','0'))==='1');
+    setScoutEvery(await getSetting('auto_scout_interval_min','30'));
+    setScoutLeads(await getSetting('auto_scout_daily_leads','20'));
+    setScoutEmails(await getSetting('auto_scout_daily_emails','20'));
     const gt=await loadGitHubToken();if(gt){setGhToken(gt);ghVerify().then(setGhStatus);}
     const be=await loadBackend();if(be){setBeUrl(be.url);setBeToken(be.token);setBeConfigured(true);}
     const st=await initSyncStatus().catch(()=>null);if(st)setBeSync({lastSync:st.lastSync,error:st.error,running:st.running});
@@ -131,9 +142,26 @@ export default function SettingsScreen({navigation}){
   }
   async function saveAutoSyms(){await setSetting('auto_trade_symbols',autoSyms.trim()||'XAUUSD');await refreshAutoTrader().catch(()=>{});}
   async function saveWeatherPlace(){await setSetting('weather_place',weatherPlace.trim()||'Waldorf, MD');await setSetting('weather_geo','');resetWeather();}
+  async function saveInboundSheet(){
+    // accept a full Sheets URL or a bare id
+    const m=inboundSheet.trim().match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+    const id=m?m[1]:inboundSheet.trim();
+    setInboundSheet(id);
+    await setSetting('inbound_sheet_id',id);
+  }
   async function saveAutoEvery(){
     const n=Math.max(1,parseInt(autoEvery,10)||5);
     setAutoEvery(String(n));await setSetting('auto_trade_interval_min',String(n));await refreshAutoTrader().catch(()=>{});
+  }
+  async function toggleAutoScout(){
+    const nv=!autoScout;
+    setAutoScout(nv);
+    await setSetting('auto_scout',nv?'1':'0');
+    await refreshAutoScout().catch(()=>{});
+  }
+  async function saveScoutNum(key,val,setter,def,min){
+    const n=Math.max(min,parseInt(val,10)||def);
+    setter(String(n));await setSetting(key,String(n));await refreshAutoScout().catch(()=>{});
   }
   async function disconnectTradeLocker(){
     await clearTradeCreds();tlReset();setTlAccount(null);setTl({email:'',password:'',server:'',env:'demo'});
@@ -283,6 +311,13 @@ export default function SettingsScreen({navigation}){
               <Text style={s.keyLabel}>WEATHER LOCATION</Text>
               <TextInput style={s.keyInput} value={weatherPlace} onChangeText={setWeatherPlace} onBlur={saveWeatherPlace} placeholder="Waldorf, MD" placeholderTextColor="#1A1A1A" autoCorrect={false}/>
             </View>
+
+            <Text style={[s.secTitle,{marginTop:28}]}>INBOUND LEADS</Text>
+            <Text style={s.secSub}>S.C.O.U.T. pulls new website enquiries straight into her pipeline while the app is open. Make a Google Form for tarellbempire.com, link it to a responses sheet, and paste that sheet's link (or ID) here. New rows become leads at the "inbound" stage. Needs Google connected above.</Text>
+            <View style={s.keyField}>
+              <Text style={s.keyLabel}>FORM RESPONSES SHEET</Text>
+              <TextInput style={s.keyInput} value={inboundSheet} onChangeText={setInboundSheet} onBlur={saveInboundSheet} placeholder="docs.google.com/spreadsheets/d/…  or the ID" placeholderTextColor="#1A1A1A" autoCapitalize="none" autoCorrect={false}/>
+            </View>
           </View>}
           {tab==='TRADING'&&<View>
             <Text style={s.secTitle}>TRADELOCKER</Text>
@@ -328,6 +363,30 @@ export default function SettingsScreen({navigation}){
               <Text style={s.keyLabel}>CHECK EVERY (MINUTES)</Text>
               <TextInput style={s.keyInput} value={String(autoEvery)} onChangeText={setAutoEvery} onBlur={saveAutoEvery} placeholder="5" placeholderTextColor="#1A1A1A" keyboardType="number-pad"/>
             </View>
+          </View>}
+          {tab==='OUTREACH'&&<View>
+            <Text style={s.secTitle}>S.C.O.U.T. AUTO-SCOUT</Text>
+            <Text style={s.secSub}>Lets S.C.O.U.T. prospect the entire US and send cold outreach on her own while the app is open — no confirmation on any email. Emails go from your connected Gmail; sustained cold sending from a personal account can get it throttled or suspended. Every cycle bills your Claude key. Needs a Claude key and Google connected. Nothing runs while the app is closed.</Text>
+            <TouchableOpacity style={s.toggleRow} onPress={toggleAutoScout} activeOpacity={0.7}>
+              <View style={{flex:1,paddingRight:12}}>
+                <Text style={s.toggleLabel}>AUTONOMOUS SCOUTING</Text>
+                <Text style={s.toggleSub}>{autoScout?`On — prospecting every ${scoutEvery} min, up to ${scoutLeads} new leads and ${scoutEmails} emails a day.`:'Off — S.C.O.U.T. only scouts and emails when you ask.'}</Text>
+              </View>
+              <View style={[s.switch,autoScout&&s.switchOn]}><View style={[s.knob,autoScout&&s.knobOn]}/></View>
+            </TouchableOpacity>
+            <View style={s.keyField}>
+              <Text style={s.keyLabel}>SCAN EVERY (MINUTES)</Text>
+              <TextInput style={s.keyInput} value={String(scoutEvery)} onChangeText={setScoutEvery} onBlur={()=>saveScoutNum('auto_scout_interval_min',scoutEvery,setScoutEvery,30,1)} placeholder="30" placeholderTextColor="#1A1A1A" keyboardType="number-pad"/>
+            </View>
+            <View style={s.keyField}>
+              <Text style={s.keyLabel}>NEW LEADS PER DAY (MAX)</Text>
+              <TextInput style={s.keyInput} value={String(scoutLeads)} onChangeText={setScoutLeads} onBlur={()=>saveScoutNum('auto_scout_daily_leads',scoutLeads,setScoutLeads,20,1)} placeholder="20" placeholderTextColor="#1A1A1A" keyboardType="number-pad"/>
+            </View>
+            <View style={s.keyField}>
+              <Text style={s.keyLabel}>AUTO-SENT EMAILS PER DAY (MAX)</Text>
+              <TextInput style={s.keyInput} value={String(scoutEmails)} onChangeText={setScoutEmails} onBlur={()=>saveScoutNum('auto_scout_daily_emails',scoutEmails,setScoutEmails,20,0)} placeholder="20" placeholderTextColor="#1A1A1A" keyboardType="number-pad"/>
+            </View>
+            <Text style={[s.secSub,{marginTop:16,marginBottom:0}]}>Set AUTO-SENT EMAILS to 0 to have her only build and qualify the pipeline — no email leaves on its own; you send each one from the Command screen.</Text>
           </View>}
           {tab==='DEV'&&<View>
             <Text style={s.secTitle}>BUILD PIPELINE</Text>
