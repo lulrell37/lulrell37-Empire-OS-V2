@@ -40,19 +40,20 @@ export async function repairTradeOutcomes(){
     const lastU=num(t.last_unrealized);
     const mv=(entry!=null&&exit!=null)?((t.side==='buy'?1:-1)*(exit-entry)):null;
     const tol=Math.abs(entry||1)*2e-4;
+    // Same priority as reconcileOpenTrades(): the real exit price beats a
+    // stale last-polled-while-open unrealized snapshot every time.
     let should=null;
-    if(lastU!=null&&Math.abs(lastU)>0.01){
-      should=lastU>0?'win':'loss';
-      if(mv!=null&&Math.abs(mv)<=tol)should='breakeven';
-    }else if(mv!=null){
+    if(mv!=null){
       should=mv>tol?'win':(mv<-tol?'loss':'breakeven');
+    }else if(lastU!=null&&Math.abs(lastU)>0.01){
+      should=lastU>0?'win':'loss';
     }
     if(!should||should===t.outcome)continue;
     const patch={outcome:should};
     const dir=should==='win'?1:should==='loss'?-1:0;
     if(dir!==0&&Math.sign(Number(t.realized_pl)||0)!==dir){
-      patch.realized_pl=lastU!=null&&Math.sign(lastU)===dir?+lastU.toFixed(2)
-        :(mv!=null?+(mv*(num(t.qty)||0.01)*100).toFixed(2):0);
+      patch.realized_pl=mv!=null?+(mv*(num(t.qty)||0.01)*100).toFixed(2)
+        :(lastU!=null&&Math.sign(lastU)===dir?+lastU.toFixed(2):0);
       patch.pl_estimated=1;
     }
     try{await updateTrade(t.id,patch);fixed++;}catch{}
@@ -183,23 +184,30 @@ export async function reconcileOpenTrades(){
     // price move in the trade's favour, per unit
     const move=(exit!=null&&entry!=null)?((t.side==='buy'?1:-1)*(exit-entry)):null;
     const beTol=Math.abs(entry||1)*2e-4;              // within ~2bp of entry = scratched to B/E
-    const lastU=num(t.last_unrealized);               // from the positions feed — reliable
+    const lastU=num(t.last_unrealized);                // last live poll while open — a fallback only, see below
 
+    // Priority matches the comment above: the real exit price is the only
+    // thing that knows what actually happened. last_unrealized is a snapshot
+    // from the last time this position was *polled while still open* — a
+    // trade that ticks green then reverses hard into its stop between polls
+    // leaves a stale positive lastU behind even though it closed a loser, so
+    // it can only ever be a last-resort fallback, never override a real exit.
     let outcome,realized,estimated;
-    if(lastU!=null&&Math.abs(lastU)>0.01){
-      outcome=lastU>0?'win':'loss';
-      if(move!=null&&Math.abs(move)<=beTol)outcome='breakeven';
-      const agree=histPl!=null&&Math.sign(histPl)===Math.sign(lastU);
-      realized=agree?+histPl.toFixed(2):+lastU.toFixed(2);
-      estimated=agree?0:1;
-    }else if(move!=null){
+    if(move!=null){
       outcome=move>beTol?'win':(move<-beTol?'loss':'breakeven');
-      const agree=histPl!=null&&(outcome==='breakeven'||Math.sign(histPl)===Math.sign(move));
-      realized=agree?+histPl.toFixed(2):+(move*(num(t.qty)||0.01)*100).toFixed(2);
-      estimated=agree?0:1;
+      const dir=outcome==='win'?1:outcome==='loss'?-1:0;
+      const histAgrees=histPl!=null&&(outcome==='breakeven'||Math.sign(histPl)===dir);
+      const lastAgrees=lastU!=null&&Math.abs(lastU)>0.01&&(outcome==='breakeven'||Math.sign(lastU)===dir);
+      if(histAgrees){realized=+histPl.toFixed(2);estimated=0;}
+      else if(lastAgrees){realized=+lastU.toFixed(2);estimated=1;}
+      else{realized=+(move*(num(t.qty)||0.01)*100).toFixed(2);estimated=1;}
     }else if(histPl!=null){
       realized=+histPl.toFixed(2);estimated=0;
       outcome=realized>0.01?'win':(realized<-0.01?'loss':'breakeven');
+    }else if(lastU!=null&&Math.abs(lastU)>0.01){
+      // no real exit price at all — fall back to the last poll (least reliable)
+      outcome=lastU>0?'win':'loss';
+      realized=+lastU.toFixed(2);estimated=1;
     }else{
       realized=0;estimated=1;outcome='breakeven';
     }
