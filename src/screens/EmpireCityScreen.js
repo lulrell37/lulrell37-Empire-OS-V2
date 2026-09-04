@@ -1,7 +1,7 @@
 // THE EMPIRE — a holographic Roman city that is the app's home / hub.
 //
-//   1 finger  drag ....... orbit / rotate the city
-//   2 fingers drag ....... move through the city (pan across the ground)
+//   1 finger  drag ....... move through the city (pan across the ground)
+//   2 fingers drag ....... orbit / rotate the city
 //   pinch ................ zoom; zoom right into a landmark to open its screen
 //   mouse wheel .......... zoom (Samsung DeX / any attached mouse)
 //   tap a landmark ....... fly in and open it
@@ -481,14 +481,14 @@ function EmpireCity({navigation}){
   },[engine]);
 
   const gesture=useMemo(()=>{
-    const orbit=Gesture.Pan().runOnJS(true).maxPointers(1)
+    const orbit=Gesture.Pan().runOnJS(true).minPointers(2)
       .onStart(()=>{engine.startRX=engine.rotX;engine.startRY=engine.rotY;engine.idle=0;})
       .onUpdate(e=>{
         engine.rotY=engine.startRY-e.translationX*0.006;
         engine.rotX=Math.max(0.12,Math.min(1.4,engine.startRX-e.translationY*0.005));
         engine.idle=0;
       });
-    const move=Gesture.Pan().runOnJS(true).minPointers(2)
+    const move=Gesture.Pan().runOnJS(true).maxPointers(1)
       .onStart(()=>{engine.startPanX=engine.panX;engine.startPanZ=engine.panZ;engine.idle=0;})
       .onUpdate(e=>{
         const sc=0.020*(engine.baseR+engine.dolly)/21;
@@ -512,7 +512,7 @@ function EmpireCity({navigation}){
       });
     const tap=Gesture.Tap().runOnJS(true).maxDistance(18)
       .onEnd((e,ok)=>{if(ok){const t=raycastAt(e.x,e.y);if(t){const h=HEROES.find(x=>x.name===t);if(h)enterHero(h);}}});
-    return Gesture.Simultaneous(pinch,move,Gesture.Exclusive(tap,orbit));
+    return Gesture.Simultaneous(pinch,orbit,Gesture.Exclusive(tap,move));
   },[engine,raycastAt,enterHero]);
 
   async function onContextCreate(gl){
@@ -742,7 +742,7 @@ function EmpireCity({navigation}){
 
       {/* nav hint */}
       <SafeAreaView style={s.hint} edges={['bottom']} pointerEvents="none">
-        <Text style={s.hintText}>DRAG TO ROTATE · TWO FINGERS TO MOVE · PINCH TO ENTER A DISTRICT</Text>
+        <Text style={s.hintText}>DRAG TO MOVE · TWO FINGERS TO ROTATE · PINCH TO ENTER A DISTRICT</Text>
       </SafeAreaView>
 
       <HudFrame pulse={pulse}/>
