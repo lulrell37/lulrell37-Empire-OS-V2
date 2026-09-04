@@ -961,7 +961,7 @@ export default function CommandScreen({navigation}){
       }catch(e){setClipUp(null);Alert.alert('Upload failed',e.message);return;}
       setClipUp(null);
       const note=(inputRef.current||input).trim()||'Edit this into a short.';
-      const msg=`[Raw clip uploaded for editing — ${frames.length} frames sampled${dur?` over ${(dur/1000).toFixed(0)}s`:''}\nDrive link: ${up.viewLink}]\n${note}`;
+      const msg=`[Raw clip uploaded for editing — ${frames.length} frames sampled${dur?` over ${(dur/1000).toFixed(0)}s`:''}\nClip URL (use this in EDIT_CLIP): ${up.downloadLink}\nDrive file: ${up.viewLink}]\n${note}`;
       setInput('');inputRef.current='';try{textInputRef.current?.clear();}catch{}
       const userMsg={id:Date.now().toString(),role:'user',content:msg,persona:'user',image:frames[0]?.uri};
       setMessages(prev=>[...prev,userMsg]);
