@@ -114,10 +114,27 @@ async function migrateColumn(table,col,decl){
   }catch{}
 }
 async function migrateHudColumns(){
-  const cols=await db.getAllAsync('PRAGMA table_info(hud_state)');
-  const names=cols.map(c=>c.name);
-  if(!names.includes('batman_template')){
-    await db.execAsync("ALTER TABLE hud_state ADD COLUMN batman_template TEXT DEFAULT '[]'");
+  const names=(await db.getAllAsync('PRAGMA table_info(hud_state)')).map(c=>c.name);
+  // Every column the current hud_state schema has beyond the original set. An
+  // old table (created before word/verse/fact shipped) is missing these, and
+  // CREATE TABLE IF NOT EXISTS never adds them — so the daily-content writes were
+  // failing with "no such column: word_phonetic".
+  const add=[
+    ['batman_template',"TEXT DEFAULT '[]'"],
+    ['batman_protocol',"TEXT DEFAULT '{}'"],
+    ['morning_routine',"TEXT DEFAULT '[]'"],
+    ['morning_routine_done',"TEXT DEFAULT '{}'"],
+    ['word_of_day','TEXT'],
+    ['word_phonetic','TEXT'],
+    ['word_def','TEXT'],
+    ['verse_of_day','TEXT'],
+    ['verse_ref','TEXT'],
+    ['fact_of_day','TEXT'],
+  ];
+  for(const[name,decl]of add){
+    if(!names.includes(name)){
+      try{await db.execAsync(`ALTER TABLE hud_state ADD COLUMN ${name} ${decl}`);}catch{}
+    }
   }
 }
 // persona_memory moved from one blob-per-day to one row per exchange, each tagged
