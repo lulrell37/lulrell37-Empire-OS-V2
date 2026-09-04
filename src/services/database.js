@@ -32,6 +32,7 @@ export async function initDatabase(){
   await migrateColumn('deep_research','delivered','INTEGER DEFAULT 0');
   await migrateColumn('leads','source_id','TEXT');
   await migrateColumn('persona_memory','pinned_until','INTEGER');
+  await migrateColumn('messages','unread','INTEGER DEFAULT 0');
   await migrateTraderPersona();
   await ensureHudState();
   await ensureBusinessTargets();
@@ -290,8 +291,22 @@ async function ensureBusinessTargets(){
     await db.runAsync('INSERT OR IGNORE INTO business_targets(business,target,week_goal,sort_order) VALUES(?,?,?,?)',[b.name,b.target,b.weekGoal,i]);
   }
 }
-export async function saveMessage(persona,role,content,mode='direct'){await db.runAsync('INSERT INTO messages(persona,role,content,mode,timestamp) VALUES(?,?,?,?,?)',[persona,role,content,mode,Date.now()]);}
+export async function saveMessage(persona,role,content,mode='direct',unread=0){await db.runAsync('INSERT INTO messages(persona,role,content,mode,timestamp,unread) VALUES(?,?,?,?,?,?)',[persona,role,content,mode,Date.now(),unread?1:0]);}
 export async function getMessages(persona,limit=50){return await db.getAllAsync('SELECT * FROM messages WHERE persona=? ORDER BY timestamp DESC LIMIT ?',[persona,limit]);}
+// A reply that landed while Mr. Burrus had already left that persona's orb —
+// zoomed out, switched to another orb, or gone back to the city — is saved
+// with unread=1 instead of getting spoken live. getUnreadPersonas() drives the
+// badge dot on the sphere; getUnreadMessages()+markPersonaRead() deliver it
+// (text was already there via getMessages — this is just the catch-up voice
+// line) the moment he zooms back into that specific orb.
+export async function getUnreadPersonas(){
+  const rows=await db.getAllAsync("SELECT DISTINCT persona FROM messages WHERE role='assistant' AND unread=1");
+  return rows.map(r=>r.persona);
+}
+export async function getUnreadMessages(persona){
+  return await db.getAllAsync("SELECT * FROM messages WHERE persona=? AND role='assistant' AND unread=1 ORDER BY timestamp ASC",[persona]);
+}
+export async function markPersonaRead(persona){await db.runAsync("UPDATE messages SET unread=0 WHERE persona=? AND unread=1",[persona]);}
 export async function getTasks(includeCompleted=false){return await db.getAllAsync(includeCompleted?'SELECT * FROM tasks ORDER BY completed ASC,created_at DESC':'SELECT * FROM tasks WHERE completed=0 ORDER BY created_at DESC');}
 export async function addTask(title,notes='',dueDate=null,priority='normal'){const r=await db.runAsync('INSERT INTO tasks(title,notes,due_date,priority,created_at) VALUES(?,?,?,?,?)',[title,notes,dueDate,priority,Date.now()]);return r.lastInsertRowId;}
 export async function updateTask(id,title,notes=''){await db.runAsync('UPDATE tasks SET title=?,notes=? WHERE id=?',[title,notes,id]);}

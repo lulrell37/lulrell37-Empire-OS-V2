@@ -15,7 +15,8 @@ import{onAutoTrade}from '../services/autoTrader';
 import{handleCommands,stripCommands}from '../services/commandHandler';
 import{googleReadInjections,googleWriteCommands}from '../services/googleCommands';
 import{driveUploadFile,googleConnected}from '../services/googleClient';
-import{getMessages,saveMessage,getAllPersonaPics,savePersonaMemory,getSetting,setSetting,getExpenseSummary,addBuildJob,updateBuildJob,getBuildJob,getBuildJobByIssue,getBuildJobs,buildJobRepo,DEFAULT_BUILD_REPO,getCustomPrompt,getAllLeads,addClipJob}from '../services/database';
+import{getMessages,saveMessage,getAllPersonaPics,savePersonaMemory,getSetting,setSetting,getExpenseSummary,addBuildJob,updateBuildJob,getBuildJob,getBuildJobByIssue,getBuildJobs,buildJobRepo,DEFAULT_BUILD_REPO,getCustomPrompt,getAllLeads,addClipJob,getUnreadPersonas,getUnreadMessages,markPersonaRead}from '../services/database';
+import{speak as speakOneShot}from '../services/voice';
 import{fileBuildRequest,replyToBuild,mergeBuild,cancelBuild,createProjectRepo,fileClipJob}from '../services/buildAgent';
 import{pollBuildJobs}from '../services/buildJobs';
 import{pollClipJobs}from '../services/clipJobs';
@@ -100,6 +101,12 @@ export default function CommandScreen({navigation,route}){
   const projectRef=useRef(null);
   const activePersonaRef=useRef('jarvis');
   const modeRef=useRef('direct');
+  const orbLevelRef=useRef('group');
+  const isFocusedRef=useRef(true);
+  // Personas with a reply sitting unread because Mr. Burrus left that orb
+  // before it landed (zoomed out, switched orbs, or went back to the city).
+  // Drives the badge dot on the sphere; cleared the moment he zooms back in.
+  const[unreadPersonas,setUnreadPersonas]=useState(()=>new Set());
   const[googleAction,setGoogleAction]=useState(null); // pending Google action awaiting a confirm tap
   const[googleBusy,setGoogleBusy]=useState(false);
   const googleActionRef=useRef(null);
@@ -113,6 +120,7 @@ export default function CommandScreen({navigation,route}){
   const contRef=useRef(false);
   const soundRef=useRef(null);
   const speakCancelRef=useRef(null); // stops the in-progress voice+text reveal
+  const voiceControlRef=useRef(null); // {pause(),resume()} for whatever is currently speaking — set by speakWithReveal, null when nothing is
   // --- streamed sentence-chunked TTS (ElevenLabs personas, voice on) ---
   const streamSpeakActiveRef=useRef(false);
   const ttsTextQueueRef=useRef([]);   // [{text,idx}] sentences waiting to be synthesized
@@ -152,6 +160,27 @@ export default function CommandScreen({navigation,route}){
   useEffect(()=>{projectRef.current=project;},[project]);
   useEffect(()=>{activePersonaRef.current=activePersona;},[activePersona]);
   useEffect(()=>{modeRef.current=mode;},[mode]);
+  useEffect(()=>{orbLevelRef.current=orbLevel;},[orbLevel]);
+  useEffect(()=>{isFocusedRef.current=isFocused;},[isFocused]);
+  // Load which personas already have a reply waiting from a previous session
+  // (the screen fully remounts on a return from the city, so this can't live
+  // in component state alone).
+  useEffect(()=>{getUnreadPersonas().then(list=>setUnreadPersonas(new Set(list))).catch(()=>{});},[]);
+  // Zooming into a persona's orb for direct chat — if a reply was queued while
+  // Mr. Burrus was away, it's already visible as text (loadHistory just pulled
+  // it in); this delivers the catch-up voice line and clears the badge.
+  useEffect(()=>{
+    if(mode!=='direct'||orbLevel!=='orb')return;
+    const persona=activePersona;
+    getUnreadMessages(persona).then(async(rows)=>{
+      if(!rows||!rows.length)return;
+      await markPersonaRead(persona).catch(()=>{});
+      setUnreadPersonas(prev=>{if(!prev.has(persona))return prev;const n=new Set(prev);n.delete(persona);return n;});
+      if(!voiceOn||voiceMuted)return;
+      const p=getPersona(persona);
+      speakOneShot(rows.map(r=>r.content).join('  '),p.elevenlabsVoiceId,p.name).catch(()=>{});
+    }).catch(()=>{});
+  },[activePersona,mode,orbLevel]);// eslint-disable-line react-hooks/exhaustive-deps
   // Landed here from a map landmark (e.g. the S.C.O.U.T. ledger) with a persona
   // to open straight into. Clear the param after so refocusing this screen
   // later doesn't keep bouncing back to it.
@@ -248,6 +277,12 @@ export default function CommandScreen({navigation,route}){
   async function loadHistory(persona){
     const h=await getMessages(persona,40);
     setMessages(h.reverse().map(m=>({id:m.id.toString(),role:m.role,content:m.content,persona:m.persona})));
+  }
+  // Is Mr. Burrus actually looking at this persona's orb right now? If not —
+  // he zoomed out, switched to a different orb, or left for the city — the
+  // reply about to be saved should queue unread instead of being spoken live.
+  function isPresentFor(pid){
+    return isFocusedRef.current&&modeRef.current==='direct'&&orbLevelRef.current==='orb'&&activePersonaRef.current===pid;
   }
 
   function clearSilenceTimer(){
@@ -522,7 +557,7 @@ export default function CommandScreen({navigation,route}){
     return new Promise((resolve)=>{
       let settled=false,cancelled=false,timer=null,safety=null,lastRevealed=0,fullText=text;
       let lastPos=-1,lastPosAt=Date.now(),failCount=0,durKnown=false;
-      const cleanup=()=>{if(timer){clearInterval(timer);timer=null;}if(safety){clearTimeout(safety);safety=null;}speakCancelRef.current=null;};
+      const cleanup=()=>{if(timer){clearInterval(timer);timer=null;}if(safety){clearTimeout(safety);safety=null;}speakCancelRef.current=null;voiceControlRef.current=null;};
       const done=(completed)=>{
         if(settled)return;settled=true;cleanup();
         vizRef.speaking=false;
@@ -570,10 +605,16 @@ export default function CommandScreen({navigation,route}){
           if(st.didJustFinish)done(true);
         },80);
       };
-      const nativeFallback=()=>{
-        try{Speech.speak(fullText.slice(0,700),{language:'en-US',rate:0.95,onDone:()=>done(true),onStopped:()=>done(false)});}catch{done(false);return;}
+      // expo-speech has no pause/resume on Android at all, and even on iOS a
+      // plain Speech.stop() (what pauseAudio used to call unconditionally)
+      // fires the utterance's onStopped callback — which was wired straight to
+      // done(false), so "pause" actually ended the whole turn as if cancelled,
+      // with nothing left to resume. nativePaused distinguishes that
+      // intentional stop from a real cancel/finish so onStopped can ignore it;
+      // resume() on Android re-speaks whatever text hadn't been revealed yet.
+      let nativePaused=false;
+      const nativeRevealTimer=()=>{
         vizRef.speaking=true;
-        safety=setTimeout(()=>done(true),Math.min(60000,(fullText.length/11)*1000+4000));
         timer=setInterval(()=>{
           if(cancelled)return;
           vizRef.amplitude=synthAmp();
@@ -581,6 +622,38 @@ export default function CommandScreen({navigation,route}){
           patch(m=>({...m,revealed:lastRevealed}));
           if(lastRevealed>=fullText.length){clearInterval(timer);timer=null;}
         },90);
+      };
+      const nativeFallback=()=>{
+        try{Speech.speak(fullText.slice(0,700),{language:'en-US',rate:0.95,onDone:()=>done(true),onStopped:()=>{if(!nativePaused)done(false);}});}catch{done(false);return;}
+        safety=setTimeout(()=>done(true),Math.min(60000,(fullText.length/11)*1000+4000));
+        nativeRevealTimer();
+        voiceControlRef.current={
+          pause(){
+            if(nativePaused)return;
+            nativePaused=true;
+            if(timer){clearInterval(timer);timer=null;}
+            if(safety){clearTimeout(safety);safety=null;}
+            if(Platform.OS==='ios')Speech.pause().catch(()=>{});
+            else Speech.stop();
+            vizRef.speaking=false;vizRef.amplitude=0;
+          },
+          resume(){
+            if(!nativePaused)return;
+            nativePaused=false;
+            if(Platform.OS==='ios'){
+              Speech.resume().catch(()=>{});
+              safety=setTimeout(()=>done(true),Math.min(60000,((fullText.length-lastRevealed)/11)*1000+4000));
+              nativeRevealTimer();
+              return;
+            }
+            const remaining=fullText.slice(lastRevealed,lastRevealed+700);
+            if(!remaining){done(true);return;}
+            try{Speech.speak(remaining,{language:'en-US',rate:0.95,onDone:()=>done(true),onStopped:()=>{if(!nativePaused)done(false);}});}
+            catch{done(false);return;}
+            safety=setTimeout(()=>done(true),Math.min(60000,(remaining.length/11)*1000+4000));
+            nativeRevealTimer();
+          },
+        };
       };
 
       (async()=>{
@@ -615,6 +688,10 @@ export default function CommandScreen({navigation,route}){
           if(cancelled||settled){if(sound){try{await sound.stopAsync();await sound.unloadAsync();}catch{}}return;}
           if(!sound){nativeFallback();return;}
           soundRef.current=sound;
+          voiceControlRef.current={
+            pause(){try{sound.pauseAsync();}catch{}},
+            resume(){try{sound.playAsync();}catch{}},
+          };
           startTimer(sound,timeline);
         }catch(err){
           if(!settled)nativeFallback();
@@ -774,12 +851,12 @@ export default function CommandScreen({navigation,route}){
   }
 
   function pauseAudio(){
-    if(soundRef.current){try{soundRef.current.pauseAsync();}catch{}}
-    Speech.stop();setVoicePaused(true);
+    voiceControlRef.current?.pause();
+    setVoicePaused(true);
   }
 
   function resumeAudio(){
-    if(soundRef.current){try{soundRef.current.playAsync();}catch{}}
+    voiceControlRef.current?.resume();
     setVoicePaused(false);
   }
 
@@ -1373,7 +1450,16 @@ export default function CommandScreen({navigation,route}){
             interimStreakRef.current=0;
           }
         }
-        if(willVoice){
+        // Mr. Burrus left this persona's orb while the reply was still cooking
+        // (group turns don't have an "orb" to leave, so they always count as
+        // present). Don't burn a live TTS call talking to an empty room — save
+        // it silently and queue it; it'll be voiced once when he zooms back in.
+        if(willVoice&&!(isGroup||isPresentFor(pid))){
+          vizRef.speaking=false;vizRef.amplitude=0;
+          patch(m=>({...m,content:display,revealed:display.length,streaming:false}));
+          await saveMessage(pid,'assistant',display,'direct',1);
+          setUnreadPersonas(prev=>prev.has(pid)?prev:new Set(prev).add(pid));
+        }else if(willVoice){
           patch(m=>({...m,content:display,revealed:0,streaming:true}));
           // One TTS call for the whole reply, played as a single clip — no gaps
           // at sentence boundaries. (The per-sentence streamSpeak path below is
@@ -1390,12 +1476,20 @@ export default function CommandScreen({navigation,route}){
           // how the reveal ended, unless the user has moved on.
           if(!myAbort.signal.aborted){
             patch(m=>({...m,content:display,revealed:display.length,streaming:false}));
-            if(!isGroup)await saveMessage(pid,'assistant',display,'direct');
+            if(!isGroup){
+              const present=isPresentFor(pid);
+              await saveMessage(pid,'assistant',display,'direct',present?0:1);
+              if(!present)setUnreadPersonas(prev=>prev.has(pid)?prev:new Set(prev).add(pid));
+            }
           }
         }else{
           vizRef.speaking=false;vizRef.amplitude=0;
           patch(m=>({...m,content:display,revealed:display.length,streaming:false}));
-          if(!isGroup)await saveMessage(pid,'assistant',display,'direct');
+          if(!isGroup){
+            const present=isPresentFor(pid);
+            await saveMessage(pid,'assistant',display,'direct',present?0:1);
+            if(!present)setUnreadPersonas(prev=>prev.has(pid)?prev:new Set(prev).add(pid));
+          }
         }
         if(myAbort.signal.aborted)break;
       }
@@ -1902,6 +1996,7 @@ export default function CommandScreen({navigation,route}){
           personaPics={personaPics}
           level={orbLevel}
           onLevelChange={setOrbLevel}
+          unreadPersonas={unreadPersonas}
           onPickPersona={pickPersonaFromOrb}
           onLaunchGroup={launchGroupFromOrb}
           onZoomOut={goToCity}

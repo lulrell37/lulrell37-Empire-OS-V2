@@ -45,7 +45,7 @@ const Z_SPAN=3.8;     // half-depth of the cloud; dolly ranges ±(Z_SPAN+2)
 
 function touchDist(t){return Math.hypot(t[0].pageX-t[1].pageX,t[0].pageY-t[1].pageY);}
 
-function OrbZoom({personaId,color,active,vizRef,personaPics={},onPickPersona,onLaunchGroup,onZoomOut,level='group',onLevelChange},ref){
+function OrbZoom({personaId,color,active,vizRef,personaPics={},unreadPersonas,onPickPersona,onLaunchGroup,onZoomOut,level='group',onLevelChange},ref){
   const persona=getPersona(personaId);
   const[memories,setMemories]=useState(null);
   const[memory,setMemory]=useState(null);
@@ -262,7 +262,7 @@ function OrbZoom({personaId,color,active,vizRef,personaPics={},onPickPersona,onL
       {level==='group'&&<SphereBackdrop/>}
       <Animated.View style={{flex:1,opacity:morph.opacity,transform:[{translateX:pinchTX},{translateY:pinchTY},{scale:contentScale}]}}>
         {level==='group'&&(
-          <PersonaSphere ref={sphereRef} activeId={personaId} pics={personaPics} onPick={pick} onLaunch={launch}/>
+          <PersonaSphere ref={sphereRef} activeId={personaId} pics={personaPics} unreadPersonas={unreadPersonas} onPick={pick} onLaunch={launch}/>
         )}
         {level==='orb'&&(
           <Boundary label="The visualization"><PersonaOrb viz={vizRef} color={color} active={active}/></Boundary>
@@ -308,7 +308,7 @@ function OrbZoom({personaId,color,active,vizRef,personaPics={},onPickPersona,onL
 // spread + depth fade sell the movement; nearest-in-front is what a tap or a
 // pinch-in selects.
 
-function PersonaSphereInner({activeId,pics,onPick,onLaunch},ref){
+function PersonaSphereInner({activeId,pics,unreadPersonas,onPick,onLaunch},ref){
   const[size,setSize]=useState({w:Dimensions.get('window').width,h:340});
   const[group,setGroup]=useState([]);
   const[order,setOrder]=useState(()=>PERSONA_LIST.map((_,i)=>i));
@@ -430,6 +430,7 @@ function PersonaSphereInner({activeId,pics,onPick,onLaunch},ref){
                   ?<Image source={{uri:pics[p.id]}} style={s.orbImg}/>
                   :<View style={[s.orbCore,{backgroundColor:p.color,shadowColor:p.color}]}/>}
               </View>
+              {unreadPersonas?.has?.(p.id)&&<View style={s.orbUnread}/>}
               <Text style={[s.orbName,{color:p.color},group.includes(p.id)&&{fontWeight:'700'}]} numberOfLines={1}>{p.name.replace(/\./g,'')}</Text>
             </TouchableOpacity>
           </Animated.View>
@@ -474,6 +475,9 @@ const s=StyleSheet.create({
 
   orbWrap:{position:'absolute',left:'50%',top:'42%',marginLeft:-34,marginTop:-34,width:68,alignItems:'center'},
   orbGlow:{width:52,height:52,borderRadius:26,alignItems:'center',justifyContent:'center',overflow:'hidden'},
+  // A reply is waiting — landed while this orb wasn't the one open. Sits
+  // outside orbGlow's own clip so the dot isn't cropped by its circle mask.
+  orbUnread:{position:'absolute',top:-1,right:8,width:12,height:12,borderRadius:6,backgroundColor:'#E05555',borderWidth:2,borderColor:'#000'},
   orbImg:{width:'100%',height:'100%',borderRadius:26},
   orbCore:{width:18,height:18,borderRadius:9,shadowOpacity:0.9,shadowRadius:8,shadowOffset:{width:0,height:0},elevation:6},
   orbName:{fontFamily:'monospace',fontSize:6,letterSpacing:1,marginTop:4,opacity:0.85},
