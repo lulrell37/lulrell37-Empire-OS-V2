@@ -2,19 +2,23 @@
 //
 //   1 finger  drag ....... move through the city (pan across the ground)
 //   2 fingers drag ....... orbit / rotate the city
-//   pinch ................ zoom; zoom right into a landmark to open its screen
+//   pinch ................ zoom (out far enough to see the whole city); zoom
+//                          right into a landmark to open its screen
 //   mouse wheel .......... zoom (Samsung DeX / any attached mouse)
 //   tap a landmark ....... fly in and open it
 //
 // Built on an actual Roman grid plan: the Cardo (N–S) and Decumanus (E–W)
 // avenues cross at a colonnaded forum (stepped plaza, central monument, four
 // triumphal arches), with a full grid of lesser streets forming insula blocks.
-// ~90 buildings fill the blocks — window-grid facades with floor ledges,
-// pilaster strips, rooftop clutter and one of four roof styles. Four detailed
-// landmarks ring the forum, plus the tarellbempire.com beacon on the east gate.
-// A crenellated perimeter wall with gate towers rings the city, an aqueduct runs
-// the west approach, cypress rows and streetlights line the avenues, ~22 cars
-// run in-lane and ~34 pedestrians walk the sidewalks.
+// ~150 buildings fill the densely-subdivided blocks — window-grid facades with
+// floor ledges, pilaster strips, rooftop clutter (tanks, penthouses) and one of
+// four roof styles; hedged courtyard gardens sit on the odd plot. The forum adds
+// a market-stall ring and four plaza statues; four fountains mark the district
+// squares. Four detailed landmarks ring the forum, plus the tarellbempire.com
+// beacon on the east gate. A crenellated (merloned) perimeter wall with gate
+// towers and brazier glows rings the city, an aqueduct runs the west approach,
+// cypress rows and streetlights line the avenues, ~30 cars run in-lane and ~46
+// pedestrians walk the sidewalks.
 //
 // Rendered procedurally with three.js primitives + the shared holo material
 // (src/screens/command/holoMaterial.js). Static mass (roads, pavement, the whole
@@ -161,6 +165,15 @@ function addBuilding(cx,cz,cellW,cellD,rnd,facade,trim){
   trim.push(box(0.55+rnd()*0.5,0.5,0.55+rnd()*0.5,cx+(rnd()-0.5)*w*0.5,h+0.3,cz+(rnd()-0.5)*d*0.5));
   if(rnd()>0.5)trim.push(box(0.4,0.35,0.9,cx+(rnd()-0.5)*w*0.4,h+0.22,cz+(rnd()-0.5)*d*0.4));
   if(tall)trim.push(box(0.06,1.6+rnd()*1.4,0.06,cx+w*0.3,h+1.0,cz-d*0.3)); // antenna mast
+  if(rnd()>0.55){                                    // rooftop water tank on a stand
+    trim.push(box(0.55,0.4,0.55,cx-w*0.18,h+0.24,cz+d*0.16));
+    const tank=new THREE.CylinderGeometry(0.34,0.34,0.72,8);
+    tank.translate(cx-w*0.18,h+0.78,cz+d*0.16);
+    trim.push(tank);
+  }
+  if(rnd()>0.72){                                    // rooftop stair penthouse
+    trim.push(box(0.9,0.9,0.9,cx+w*0.22,h+0.45,cz-d*0.18));
+  }
 
   // roof cap — four styles
   const roll=rnd();
@@ -342,6 +355,8 @@ function buildCity(uniforms){
   const matTrim=createHoloMaterial(uniforms,{opacity:0.4});
   const matWall=createHoloMaterial(uniforms,{opacity:0.3});
   const matTree=createHoloMaterial(uniforms,{tint:0x9FC79A,opacity:0.38});
+  const matGlow=createHoloMaterial(uniforms,{tint:0xF3E3BE,opacity:0.55});
+  const matWater=new THREE.MeshBasicMaterial({color:0x8FD8E6,transparent:true,opacity:0.32,depthWrite:false,blending:THREE.AdditiveBlending});
 
   pivot.add(buildSky());
   const grid=buildGrid();pivot.add(grid);
@@ -419,9 +434,38 @@ function buildCity(uniforms){
   }
   pivot.add(new THREE.Mesh(mergeGeometries(archGeos),matTrim));
 
+  // --- forum market stalls, ringed just inside the colonnade ---
+  const stallGeos=[];
+  for(let i=0;i<10;i++){
+    const a=(i/10)*Math.PI*2+0.31;
+    const sx=Math.cos(a)*4.35,sz=Math.sin(a)*4.35;
+    const px=Math.cos(a+Math.PI/2),pz=Math.sin(a+Math.PI/2);
+    stallGeos.push(
+      box(1.2,0.95,0.8,sx,0.48,sz,-a),                 // counter
+      box(1.5,0.09,1.05,sx,1.55,sz,-a),                // awning
+      box(0.07,1.05,0.07,sx+px*0.55,1.0,sz+pz*0.55),   // posts
+      box(0.07,1.05,0.07,sx-px*0.55,1.0,sz-pz*0.55),
+    );
+  }
+  pivot.add(new THREE.Mesh(mergeGeometries(stallGeos),matGlow));
+
+  // --- four statues on the plaza, at the inter-cardinal points ---
+  const statBase=[],statTop=[];
+  for(let i=0;i<4;i++){
+    const a=Math.PI/4+i*Math.PI/2;
+    const x=Math.cos(a)*3.5,z=Math.sin(a)*3.5;
+    statBase.push(box(0.85,0.9,0.85,x,0.45,z),box(1.05,0.22,1.05,x,0.98,z));
+    const torso=new THREE.CylinderGeometry(0.22,0.32,1.4,8);torso.translate(x,1.75,z);statBase.push(torso);
+    const head=new THREE.SphereGeometry(0.24,10,8);head.translate(x,2.62,z);statTop.push(head);
+  }
+  pivot.add(new THREE.Mesh(mergeGeometries(statBase),matTrim));
+  pivot.add(new THREE.Mesh(mergeGeometries(statTop),matGlow));
+
   // --- pavement slabs + the building stock, block by block ---
   const nearHero=(x,z,r)=>HEROES.some(h=>Math.hypot(x-h.at[0],z-h.at[1])<r);
-  const slabGeos=[],facadeGeos=[],trimGeos=[];
+  const FOUNTAINS=[[21,21],[-21,21],[21,-21],[-21,-21]];
+  const nearFountain=(x,z,r)=>FOUNTAINS.some(([fx,fz])=>Math.hypot(x-fx,z-fz)<r);
+  const slabGeos=[],facadeGeos=[],trimGeos=[],hedgeGeos=[],gardenPts=[];
   for(let i=0;i<LINES.length-1;i++){
     for(let j=0;j<LINES.length-1;j++){
       const x0=LINES[i],x1=LINES[i+1],z0=LINES[j],z1=LINES[j+1];
@@ -434,14 +478,23 @@ function buildCity(uniforms){
       if(Math.hypot(cx,cz)<6.6)continue;            // forum
       if(nearHero(cx,cz,7.2))continue;              // landmark lots
       slabGeos.push(box(bw+1.3,0.05,bd+1.3,cx,0.035,cz));
-      // subdivide the block into a small grid of plots
-      const nx=bw>9?3:bw>4.6?2:1;
-      const nz=bd>9?3:bd>4.6?2:1;
+      // subdivide the block into a small grid of plots — denser than before
+      const nx=bw>12?4:bw>8.5?3:bw>4.4?2:1;
+      const nz=bd>12?4:bd>8.5?3:bd>4.4?2:1;
       const pw=bw/nx,pd=bd/nz;
       for(let a=0;a<nx;a++){
         for(let b=0;b<nz;b++){
-          if((nx>1||nz>1)&&rnd()<0.12)continue;     // the odd empty lot / courtyard
           const px=bx0+pw*(a+0.5),pz=bz0+pd*(b+0.5);
+          if(nearFountain(px,pz,3.6))continue;          // keep the fountain square clear
+          if((nx>1||nz>1)&&rnd()<0.15){                 // hedged courtyard garden in place of a plot
+            hedgeGeos.push(
+              box(pw*0.66,0.5,0.12,px,0.25,pz+pd*0.3),box(pw*0.66,0.5,0.12,px,0.25,pz-pd*0.3),
+              box(0.12,0.5,pd*0.66,px+pw*0.3,0.25,pz),box(0.12,0.5,pd*0.66,px-pw*0.3,0.25,pz),
+            );
+            gardenPts.push([px,pz]);
+            continue;
+          }
+          if((nx>1||nz>1)&&rnd()<0.05)continue;         // the odd empty lot
           addBuilding(px,pz,pw,pd,rnd,facadeGeos,trimGeos);
         }
       }
@@ -451,6 +504,12 @@ function buildCity(uniforms){
   const facadeGeo=mergeGeometries(facadeGeos);
   pivot.add(new THREE.Mesh(facadeGeo,matBld));
   pivot.add(new THREE.Mesh(mergeGeometries(trimGeos),matTrim));
+  if(hedgeGeos.length)pivot.add(new THREE.Mesh(mergeGeometries(hedgeGeos),matTree));
+  if(gardenPts.length){
+    const gt=[];
+    for(const[gx,gz]of gardenPts){const c=new THREE.ConeGeometry(0.55,2.1,6);c.translate(gx,1.05,gz);gt.push(c);}
+    pivot.add(new THREE.Mesh(mergeGeometries(gt),matTree));
+  }
   pivot.add(new THREE.LineSegments(
     new THREE.EdgesGeometry(facadeGeo,24),
     new THREE.LineBasicMaterial({color:0xF3E3BE,transparent:true,opacity:0.2,depthWrite:false}),
@@ -467,6 +526,7 @@ function buildCity(uniforms){
       const t=(s+0.5)/n;
       wallGeos.push(box(len/n,WH,0.7,x0+(x1-x0)*t,WH/2,z0+(z1-z0)*t,-ang));
       wallGeos.push(box(len/n,0.5,0.95,x0+(x1-x0)*t,WH+0.2,z0+(z1-z0)*t,-ang)); // walkway cap
+      if(s%2===0)wallGeos.push(box(len/n*0.5,0.55,0.4,x0+(x1-x0)*t,WH+0.72,z0+(z1-z0)*t,-ang)); // merlon
     }
   };
   for(const zf of[WR,-WR]){wallRun(-WR,zf,-GAP,zf);wallRun(GAP,zf,WR,zf);}
@@ -487,6 +547,32 @@ function buildCity(uniforms){
   aqGeos.push(box(1.1,1.0,36,AX,7.1,0));                    // water channel
   pivot.add(new THREE.Mesh(mergeGeometries(aqGeos),matWall));
 
+  // --- fountains at the four district squares (merged stone + glowing water) ---
+  const fountainStone=[];
+  for(const[fx,fz]of FOUNTAINS){
+    const r1=new THREE.CylinderGeometry(2.1,2.35,0.55,26);r1.translate(fx,0.28,fz);
+    const r2=new THREE.CylinderGeometry(1.1,1.3,0.5,18);r2.translate(fx,0.8,fz);
+    const st=new THREE.CylinderGeometry(0.16,0.26,1.6,10);st.translate(fx,1.5,fz);
+    fountainStone.push(r1,r2,st);
+    for(let k=0;k<8;k++){const a=k/8*Math.PI*2;fountainStone.push(box(0.34,0.34,0.34,fx+Math.cos(a)*2.25,0.62,fz+Math.sin(a)*2.25));}
+    const w1=new THREE.Mesh(new THREE.CircleGeometry(1.95,22),matWater);w1.rotation.x=-Math.PI/2;w1.position.set(fx,0.52,fz);pivot.add(w1);
+    const w2=new THREE.Mesh(new THREE.CircleGeometry(1.0,16),matWater);w2.rotation.x=-Math.PI/2;w2.position.set(fx,1.02,fz);pivot.add(w2);
+    const drop=new THREE.Mesh(new THREE.IcosahedronGeometry(0.34,1),createHoloMaterial(uniforms,{tint:0x9AD3E0,opacity:0.9}));
+    drop.position.set(fx,2.5,fz);drop.userData.spin=1;pivot.add(drop);
+  }
+  pivot.add(new THREE.Mesh(mergeGeometries(fountainStone),matTrim));
+
+  // --- brazier glows atop the gate towers (instanced) ---
+  const brazPos=[[GAP,WR],[-GAP,WR],[GAP,-WR],[-GAP,-WR],[WR,GAP],[WR,-GAP],[-WR,GAP],[-WR,-GAP]];
+  const brazMesh=new THREE.InstancedMesh(
+    new THREE.SphereGeometry(0.24,8,6),
+    new THREE.MeshBasicMaterial({color:0xFFB86A,transparent:true,opacity:0.85,depthWrite:false,blending:THREE.AdditiveBlending}),
+    brazPos.length,
+  );
+  brazMesh.frustumCulled=false;
+  brazPos.forEach(([x,z],i)=>{dm.position.set(x,6.0,z);dm.rotation.set(0,0,0);dm.scale.set(1,1,1);dm.updateMatrix();brazMesh.setMatrixAt(i,dm.matrix);});
+  pivot.add(brazMesh);
+
   // --- landmarks ---
   const anchors=[],beams=[];
   for(const hero of HEROES){
@@ -498,7 +584,7 @@ function buildCity(uniforms){
 
   // --- cypress trees along the avenues + ringing the forum (instanced) ---
   const treePos=[];
-  for(let t=-EXTENT+4;t<=EXTENT-4;t+=3.4){
+  for(let t=-EXTENT+4;t<=EXTENT-4;t+=2.6){
     if(Math.abs(t)<7)continue;
     treePos.push([AV_HW+1.0,t],[-(AV_HW+1.0),t],[t,AV_HW+1.0],[t,-(AV_HW+1.0)]);
   }
@@ -511,7 +597,7 @@ function buildCity(uniforms){
 
   // --- streetlights down the avenues (post + glowing lamp, instanced) ---
   const lampPos=[];
-  for(let t=-EXTENT+6;t<=EXTENT-6;t+=6){
+  for(let t=-EXTENT+6;t<=EXTENT-6;t+=4.5){
     if(Math.abs(t)<6)continue;
     lampPos.push([AV_HW+0.4,t],[-(AV_HW+0.4),t],[t,AV_HW+0.4],[t,-(AV_HW+0.4)]);
   }
@@ -532,11 +618,11 @@ function buildCity(uniforms){
   const carMesh=new THREE.InstancedMesh(
     new THREE.BoxGeometry(0.8,0.16,0.34),
     new THREE.MeshBasicMaterial({color:0xF7E6C0,transparent:true,opacity:0.85,depthWrite:false,blending:THREE.AdditiveBlending}),
-    22,
+    30,
   );
   carMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   carMesh.frustumCulled=false;
-  for(let i=0;i<22;i++){
+  for(let i=0;i<30;i++){
     const horiz=i%2===0;
     const line=ROADS[Math.floor(rnd()*ROADS.length)];
     const dir=rnd()>0.5?1:-1;
@@ -550,11 +636,11 @@ function buildCity(uniforms){
   const pedMesh=new THREE.InstancedMesh(
     new THREE.CylinderGeometry(0.09,0.11,0.55,5),
     new THREE.MeshBasicMaterial({color:0xE8C98A,transparent:true,opacity:0.8,depthWrite:false,blending:THREE.AdditiveBlending}),
-    34,
+    46,
   );
   pedMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   pedMesh.frustumCulled=false;
-  for(let i=0;i<34;i++){
+  for(let i=0;i<46;i++){
     const horiz=i%2===0;
     const line=ROADS[Math.floor(rnd()*ROADS.length)];
     const side=rnd()>0.5?1:-1;
@@ -577,7 +663,7 @@ function EmpireCity({navigation}){
 
   const engine=useRef({
     rotY:0.7,rotX:0.56,startRX:0,startRY:0,
-    dolly:0,startDolly:0,baseR:21,minR:2.8,maxR:38,wantEnter:false,
+    dolly:0,startDolly:0,baseR:21,minR:2.8,maxR:88,wantEnter:false,
     panX:0,panZ:0,startPanX:0,startPanZ:0,
     active:true,idle:0,entering:null,navigated:false,
     vw:Dimensions.get('window').width,vh:Dimensions.get('window').height,
@@ -886,10 +972,9 @@ function EmpireCity({navigation}){
         </View>
       )}
 
-      {/* title + stat line */}
+      {/* title */}
       <SafeAreaView style={s.telemetry} edges={['top']} pointerEvents="none">
         <Text style={s.title}>THE EMPIRE</Text>
-        <Text style={s.statLine}>V DISTRICTS · WALDORF · MD · SYSTEMS ONLINE</Text>
       </SafeAreaView>
 
       {/* nav hint */}
@@ -934,7 +1019,6 @@ const s=StyleSheet.create({
 
   telemetry:{position:'absolute',top:0,left:0,right:0,alignItems:'center',paddingTop:8},
   title:{fontFamily:FONTS.displaySemi,fontSize:30,color:colors.gold,letterSpacing:6},
-  statLine:{fontFamily:FONTS.mono,fontSize:8,color:'#8A7E63',letterSpacing:2.5,marginTop:2},
 
   hint:{position:'absolute',bottom:0,left:0,right:0,alignItems:'center',paddingBottom:12},
   hintText:{fontFamily:FONTS.mono,fontSize:7,color:'#4A4436',letterSpacing:2},
