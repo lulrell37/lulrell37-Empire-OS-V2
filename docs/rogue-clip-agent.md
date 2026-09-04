@@ -15,7 +15,8 @@ in R.O.G.U.E.'s CLIPS panel.
 
 ## Schedule
 
-Every **15 minutes**.
+**Hourly** (`0 * * * *`). Cloud routines can't run more often than once an hour.
+For a rush job, hit "Run now" on the routine at https://claude.ai/code/routines.
 
 ## Routine prompt
 
