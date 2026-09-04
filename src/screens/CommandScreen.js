@@ -70,7 +70,7 @@ function isInterimReply(text){
 const INTERIM_CONTINUE_MAX=4;         // consecutive stalls before giving the mic back to Mr. Burrus anyway
 const INTERIM_CONTINUE_PROMPT='[Keep going — give the real answer now, out loud. Do not just say you need more time again.]';
 
-export default function CommandScreen({navigation}){
+export default function CommandScreen({navigation,route}){
   const[activePersona,setActivePersona]=useState('jarvis');
   const[mode,setMode]=useState('direct');
   const[input,setInput]=useState('');
@@ -93,8 +93,7 @@ export default function CommandScreen({navigation}){
   const[view,setView]=useState('viz'); // viz | text
   const[orbLevel,setOrbLevel]=useState('group'); // lifted so it survives the viz/text toggle
   const orbZoomRef=useRef(null);
-  const[tradeProposal,setTradeProposal]=useState(null); // {symbol,side,entry,stopLoss,takeProfit,qty,rationale,pid}
-  const[tradeBusy,setTradeBusy]=useState(false);
+  const[tradeBusy,setTradeBusy]=useState(false); // guards against two proposals landing at once
   const[deepResearch,setDeepResearch]=useState(null); // deep_research row + progressObj; null when idle. Persisted — see services/deepResearch.js
   const[chartOverlay,setChartOverlay]=useState(null); // parsed chart spec shown over the orb
   const[project,setProject]=useState(null); // THE FIRM: active client project A.R.A. is coordinating — {name,brief,target,repo,contributions[],startedAt}
@@ -153,6 +152,16 @@ export default function CommandScreen({navigation}){
   useEffect(()=>{projectRef.current=project;},[project]);
   useEffect(()=>{activePersonaRef.current=activePersona;},[activePersona]);
   useEffect(()=>{modeRef.current=mode;},[mode]);
+  // Landed here from a map landmark (e.g. the S.C.O.U.T. ledger) with a persona
+  // to open straight into. Clear the param after so refocusing this screen
+  // later doesn't keep bouncing back to it.
+  useEffect(()=>{
+    const pid=route?.params?.persona;
+    if(pid&&PERSONA_LIST.some(p=>p.id===pid)){
+      setActivePersona(pid);setMode('direct');setView('text');setOrbLevel('orb');
+      navigation.setParams({persona:undefined});
+    }
+  },[route?.params?.persona]);// eslint-disable-line react-hooks/exhaustive-deps
   // THE FIRM: hydrate the active client project (persisted in app_settings) so it
   // survives an app restart and A.R.A. picks up where she left off.
   useEffect(()=>{
@@ -1196,7 +1205,7 @@ export default function CommandScreen({navigation}){
         }catch(e){/* never let a Google read break the turn */}
         const cmdCallbacks={
           onRelay:({target,message})=>addRelay(target,`[From ${p.name}]: ${message}`),
-          onTradePropose:(prop)=>setTradeProposal({...prop,pid}),
+          onTradePropose:(prop)=>sendTrade({...prop,pid}),
           onTradeClose:(id)=>closePosition(id),
           onTradeBreakeven:({id,offset})=>moveToBreakeven(id,offset),
           onStrategyUpdate:(text)=>{setStrategy(text).then(()=>pushSystemMsg('— T.A.L.O.N. updated the playbook —')).catch(()=>{});},
@@ -1703,24 +1712,26 @@ export default function CommandScreen({navigation}){
     return()=>{stop=true;clearInterval(iv);};
   },[isFocused]);// eslint-disable-line react-hooks/exhaustive-deps
 
-  async function confirmTrade(){
-    if(!tradeProposal||tradeBusy)return;
+  // T.A.L.O.N. proposing a trade in chat fires immediately — same as auto-trade,
+  // no confirmation tap. Mirrors services/autoTrader.js's own order-placement path.
+  async function sendTrade(prop){
+    if(!prop||tradeBusy)return;
     setTradeBusy(true);
-    const{symbol,side,stopLoss,takeProfit,qty,pid}=tradeProposal;
+    const{symbol,side,stopLoss,takeProfit,qty,entry,rationale,pid}=prop;
     const sym=symbol||'XAUUSD';
     try{
       const open=await tlPositions().catch(()=>[]);
       if(open.length>=MAX_OPEN_POSITIONS){
         pushSystemMsg(`— ${MAX_OPEN_POSITIONS} positions already open — close one before adding another —`);
-        setTradeBusy(false);setTradeProposal(null);return;
+        return;
       }
       const r=await tlPlaceOrder({symbol:sym,side,qty:Math.min(qty||MAX_QTY,MAX_QTY),stopLoss,takeProfit});
       pushSystemMsg(`— ORDER SENT · ${r.side.toUpperCase()} ${r.qty} ${sym} · SL ${r.stopLoss??'—'} · TP ${r.takeProfit??'—'} · #${r.orderId||'?'} —`);
-      savePersonaMemory(pid||TRADER_ID,`YOU: [confirmed trade]\nT.A.L.O.N.: order sent ${r.side} ${r.qty} ${sym} SL ${r.stopLoss} TP ${r.takeProfit}`).catch(()=>{});
-      recordTradeOpen({symbol:sym,side:r.side,qty:r.qty,entry:tradeProposal.entry,stopLoss,takeProfit,rationale:tradeProposal.rationale,orderId:r.orderId}).catch(()=>{});
+      savePersonaMemory(pid||TRADER_ID,`T.A.L.O.N.: order sent ${r.side} ${r.qty} ${sym} SL ${r.stopLoss} TP ${r.takeProfit}${rationale?` — ${rationale}`:''}`).catch(()=>{});
+      recordTradeOpen({symbol:sym,side:r.side,qty:r.qty,entry,stopLoss,takeProfit,rationale,orderId:r.orderId}).catch(()=>{});
       setTimeout(()=>reconcileOpenTrades().catch(()=>{}),6000);
     }catch(e){pushSystemMsg(`Order failed: ${e.message}`);}
-    finally{setTradeBusy(false);setTradeProposal(null);}
+    finally{setTradeBusy(false);}
   }
 
   function interject(){
@@ -1820,14 +1831,17 @@ export default function CommandScreen({navigation}){
         </View>
       )}
 
-      {mode==='direct'&&activePersona===TRADER_ID&&<TradeStatus active={isFocused} style={{marginHorizontal:10,marginTop:6}}/>}
-      {mode==='direct'&&activePersona===TRADER_ID&&<TradeRecordBar active={isFocused} style={{marginHorizontal:10,marginTop:6}}/>}
-      {mode==='direct'&&activePersona===TRADER_ID&&<TradePanel active={isFocused} onEvent={pushSystemMsg}/>}
-      {mode==='direct'&&activePersona==='scout'&&<LeadsPanel active={isFocused}/>}
-      {mode==='direct'&&activePersona==='rogue'&&<ClipPanel active={isFocused}/>}
-      {mode==='direct'&&activePersona==='jarvis'&&<BuildPanel active={isFocused} onMerge={confirmBuildMerge} onCancel={confirmBuildCancel} filter={jarvisBuildFilter}/>}
+      {/* These are chat-view panels, not orb-screen popups — they no longer render
+          over view==='viz' (the orb), so picking a persona's orb doesn't pop one
+          open on its own; switch to the text view (≣) to see it. */}
+      {view==='text'&&mode==='direct'&&activePersona===TRADER_ID&&<TradeStatus active={isFocused} style={{marginHorizontal:10,marginTop:6}}/>}
+      {view==='text'&&mode==='direct'&&activePersona===TRADER_ID&&<TradeRecordBar active={isFocused} style={{marginHorizontal:10,marginTop:6}}/>}
+      {view==='text'&&mode==='direct'&&activePersona===TRADER_ID&&<TradePanel active={isFocused} onEvent={pushSystemMsg}/>}
+      {view==='text'&&mode==='direct'&&activePersona==='scout'&&<LeadsPanel active={isFocused}/>}
+      {view==='text'&&mode==='direct'&&activePersona==='rogue'&&<ClipPanel active={isFocused}/>}
+      {view==='text'&&mode==='direct'&&activePersona==='jarvis'&&<BuildPanel active={isFocused} onMerge={confirmBuildMerge} onCancel={confirmBuildCancel} filter={jarvisBuildFilter}/>}
 
-      {project&&mode==='direct'&&activePersona==='ara'&&(
+      {view==='text'&&project&&mode==='direct'&&activePersona==='ara'&&(
         <View style={s.firmBar}>
           <Text style={s.firmDot}>◆</Text>
           <View style={{flex:1}}>
@@ -1842,7 +1856,7 @@ export default function CommandScreen({navigation}){
           </TouchableOpacity>
         </View>
       )}
-      {project&&mode==='direct'&&activePersona==='ara'&&<BuildPanel active={isFocused} title="FIRM BUILD" accent="#00CED1" onMerge={confirmBuildMerge} onCancel={confirmBuildCancel} filter={firmBuildFilter}/>}
+      {view==='text'&&project&&mode==='direct'&&activePersona==='ara'&&<BuildPanel active={isFocused} title="FIRM BUILD" accent="#00CED1" onMerge={confirmBuildMerge} onCancel={confirmBuildCancel} filter={firmBuildFilter}/>}
 
       <DeepResearchBanner job={deepResearch} onDismiss={dismissDeepResearch}/>
 
@@ -1985,29 +1999,6 @@ export default function CommandScreen({navigation}){
         </View></View>
       </Modal>
 
-      <Modal visible={!!tradeProposal} transparent animationType="fade" onRequestClose={()=>setTradeProposal(null)}>
-        <View style={s.modalOver}><View style={s.tradeCard}>
-          <Text style={s.tradeTitle}>CONFIRM TRADE · {tradeProposal?.symbol||'XAUUSD'}</Text>
-          {tradeProposal&&<>
-            <View style={[s.tradeSideChip,{backgroundColor:(tradeProposal.side==='buy'?'#5FA779':'#C7614B')+'22',borderColor:tradeProposal.side==='buy'?'#5FA779':'#C7614B'}]}>
-              <Text style={[s.tradeSideT,{color:tradeProposal.side==='buy'?'#5FA779':'#C7614B'}]}>{tradeProposal.side==='buy'?'▲ BUY':'▼ SELL'} {Math.min(tradeProposal.qty||MAX_QTY,MAX_QTY)} LOT</Text>
-            </View>
-            <View style={s.tradeRow}><Text style={s.tradeK}>Entry (ref)</Text><Text style={s.tradeV}>{tradeProposal.entry??'market'}</Text></View>
-            <View style={s.tradeRow}><Text style={s.tradeK}>Stop loss</Text><Text style={[s.tradeV,{color:'#C7614B'}]}>{tradeProposal.stopLoss??'—'}</Text></View>
-            <View style={s.tradeRow}><Text style={s.tradeK}>Take profit</Text><Text style={[s.tradeV,{color:'#5FA779'}]}>{tradeProposal.takeProfit??'—'}</Text></View>
-            {!!tradeProposal.rationale&&<Text style={s.tradeRationale}>{tradeProposal.rationale}</Text>}
-            <Text style={s.tradeNote}>Sends a market order now — fill may differ from the reference entry.</Text>
-            <View style={{flexDirection:'row',gap:10,marginTop:16}}>
-              <TouchableOpacity style={[s.modalBtn,{backgroundColor:tradeProposal.side==='buy'?'#5FA779':'#C7614B'}]} disabled={tradeBusy} onPress={confirmTrade}>
-                <Text style={[s.modalBtnT,{color:'#000'}]}>{tradeBusy?'SENDING…':'CONFIRM & SEND'}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={[s.modalBtn,{backgroundColor:'#111',borderWidth:1,borderColor:'#333'}]} onPress={()=>setTradeProposal(null)}>
-                <Text style={[s.modalBtnT,{color:'#555'}]}>CANCEL</Text>
-              </TouchableOpacity>
-            </View>
-          </>}
-        </View></View>
-      </Modal>
     </SafeAreaView>
   );
 }

@@ -14,8 +14,9 @@
 // floor ledges, pilaster strips, rooftop clutter (tanks, penthouses) and one of
 // four roof styles; hedged courtyard gardens sit on the odd plot. The forum adds
 // a market-stall ring and four plaza statues; four fountains mark the district
-// squares. Four detailed landmarks ring the forum, plus the tarellbempire.com
-// beacon on the east gate. A crenellated (merloned) perimeter wall with gate
+// squares. Four detailed landmarks ring the forum, the S.C.O.U.T. lead ledger
+// stands south of it, plus the tarellbempire.com beacon on the east gate. A
+// crenellated (merloned) perimeter wall with gate
 // towers and brazier glows rings the city, an aqueduct runs the west approach,
 // cypress rows and streetlights line the avenues, ~30 cars run in-lane and ~46
 // pedestrians walk the sidewalks.
@@ -59,6 +60,7 @@ const HEROES=[
   {name:'Council',   route:'Command',   label:'THE PERSONAS',     sub:'THE COUNCIL',      tint:0xE8C98A, at:[-12,12], ly:10.5, shape:'towers'},
   {name:'Laboratory',route:'Laboratory',label:'THE DIAGRAM',      sub:'THE LABORATORY',   tint:0x9AD3E0, at:[-12,-12],ly:10.5, shape:'observatory'},
   {name:'Settings',  route:'Settings',  label:'THE WORKSHOP',     sub:'SETTINGS',         tint:0x9AA0A6, at:[12,-12], ly:8.5,  shape:'ziggurat'},
+  {name:'Leads',     route:'Command',   params:{persona:'scout'}, label:'THE LEDGER', sub:'S.C.O.U.T.', tint:0x2E86FF, at:[0,-25], ly:9, shape:'ledger'},
   {name:'Web',       url:'https://tarellbempire.com', label:'TARELL B. EMPIRE', sub:'TARELLBEMPIRE.COM', tint:0xF3E3BE, at:[25,0], ly:11, shape:'monument', external:true},
 ];
 
@@ -323,6 +325,22 @@ function buildHero(hero,uniforms){
     // corner obelisks
     for(const sx of[-2.6,2.6])for(const sz of[-2.6,2.6])
       put(new THREE.CylinderGeometry(0.06,0.28,3.2,4),hmat,sx,1.6,sz).rotation.y=Math.PI/4;
+
+  }else if(hero.shape==='ledger'){                  // LEADS — S.C.O.U.T.'s pipeline as a ruled ledger stele
+    put(new THREE.BoxGeometry(2.6,0.5,2.0),hmat,0,1.15,0);          // base slab
+    put(new THREE.BoxGeometry(2.2,3.6,1.5),hmat,0,3.7,0);           // the ledger block
+    put(new THREE.BoxGeometry(2.4,0.3,1.7),emat,0,5.65,0);          // cap ledge
+    // ruled columns/rows etched into the front face, like a spreadsheet
+    const rule=[];
+    for(let r=0;r<6;r++)rule.push(box(1.9,0.03,0.02,0,2.1+r*0.55,0.76));
+    for(let c=0;c<4;c++)rule.push(box(0.02,3.1,0.02,-0.9+c*0.6,3.7,0.76));
+    merged(rule,emat);
+    // a small fan of pages above the block
+    for(let i=0;i<3;i++){
+      const pg=put(new THREE.BoxGeometry(1.5,1.8,0.06),emat,0,6.25+i*0.32,0.1-i*0.14);
+      pg.rotation.x=-0.16+i*0.05;pg.rotation.y=0.09*(i-1);
+    }
+    const orb=put(new THREE.IcosahedronGeometry(0.48,1),emat,0,7.9,0);orb.userData.spin=1;
 
   }else{                                            // MONUMENT — tarellbempire.com beacon
     put(box(2.6,0.6,2.6,0,0,0),hmat,0,1.05,0);
@@ -729,7 +747,7 @@ function EmpireCity({navigation}){
     if(!hero)return;
     if(hero.external){WebBrowser.openBrowserAsync(hero.url).catch(()=>{});return;}
     if(engine.entering)return;
-    engine.entering={route:hero.route,name:hero.name,t:0};
+    engine.entering={route:hero.route,params:hero.params,name:hero.name,t:0};
   },[engine]);
 
   const raycastAt=useCallback((x,y)=>{
@@ -870,7 +888,7 @@ function EmpireCity({navigation}){
           r=THREE.MathUtils.lerp(r,3.2,e.t);
           tx=THREE.MathUtils.lerp(tx,hero.at[0],e.t);
           tz=THREE.MathUtils.lerp(tz,hero.at[1],e.t);
-          if(e.t>=1&&!engine.navigated){engine.navigated=true;navigation.navigate(e.route);return;}
+          if(e.t>=1&&!engine.navigated){engine.navigated=true;navigation.navigate(e.route,e.params);return;}
         }
         engine.camera.position.set(
           tx+Math.sin(engine.rotY)*Math.cos(engine.rotX)*r,
@@ -930,7 +948,7 @@ function EmpireCity({navigation}){
         <Text style={s.fallbackTitle}>THE EMPIRE</Text>
         <Text style={s.fallbackMsg}>City view unavailable{errMsg?` · ${errMsg}`:''}</Text>
         {HEROES.map(h=>(
-          <TouchableOpacity key={h.name} style={s.fallbackBtn} onPress={()=>h.external?WebBrowser.openBrowserAsync(h.url).catch(()=>{}):navigation.navigate(h.route)}>
+          <TouchableOpacity key={h.name} style={s.fallbackBtn} onPress={()=>h.external?WebBrowser.openBrowserAsync(h.url).catch(()=>{}):navigation.navigate(h.route,h.params)}>
             <Text style={[s.fallbackBtnT,{color:'#'+h.tint.toString(16).padStart(6,'0')}]}>{h.label}</Text>
             <Text style={s.fallbackBtnS}>{h.sub}</Text>
           </TouchableOpacity>
@@ -962,12 +980,12 @@ function EmpireCity({navigation}){
             activeOpacity={0.8}
             onPress={()=>enterHero(h)}
             hitSlop={{top:18,bottom:18,left:18,right:18}}
-            style={[s.marker,{left:l.x-92,top:l.y-32,borderColor:l.tint+(isCentered?'':'55')}]}
+            style={[s.marker,{left:l.x-104,top:l.y-32,borderColor:l.tint+(isCentered?'':'55')}]}
           >
             <View style={[s.markerBr,s.brTL,{borderColor:l.tint}]}/>
             <View style={[s.markerBr,s.brBR,{borderColor:l.tint}]}/>
-            <Text style={[s.markerLabel,{color:l.tint}]} numberOfLines={1}>{l.label}</Text>
-            <Text style={s.markerSub} numberOfLines={1}>
+            <Text style={[s.markerLabel,{color:l.tint}]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>{l.label}</Text>
+            <Text style={s.markerSub} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
               {l.sub}{'   '}{l.external?'↗':(isCentered?'▸ ENTER':'⤢')}
             </Text>
           </TouchableOpacity>
@@ -984,7 +1002,7 @@ function EmpireCity({navigation}){
 
       {/* title */}
       <SafeAreaView style={s.telemetry} edges={['top']} pointerEvents="none">
-        <Text style={s.title}>THE EMPIRE</Text>
+        <Text style={s.title} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>THE EMPIRE</Text>
       </SafeAreaView>
 
       {/* nav hint */}
@@ -1013,7 +1031,7 @@ export default function EmpireCityScreen(props){
 const s=StyleSheet.create({
   container:{flex:1,backgroundColor:'#000'},
 
-  marker:{position:'absolute',width:184,alignItems:'center',backgroundColor:'rgba(4,4,7,0.6)',borderWidth:1,borderRadius:3,paddingVertical:6,paddingHorizontal:8},
+  marker:{position:'absolute',width:208,alignItems:'center',backgroundColor:'rgba(4,4,7,0.6)',borderWidth:1,borderRadius:3,paddingVertical:6,paddingHorizontal:8,overflow:'hidden'},
   markerBr:{position:'absolute',width:9,height:9},
   brTL:{top:-1,left:-1,borderTopWidth:1.5,borderLeftWidth:1.5},
   brBR:{bottom:-1,right:-1,borderBottomWidth:1.5,borderRightWidth:1.5},
@@ -1027,8 +1045,8 @@ const s=StyleSheet.create({
   retLeft:{left:0,top:31,width:14,height:2},
   retRight:{right:0,top:31,width:14,height:2},
 
-  telemetry:{position:'absolute',top:0,left:0,right:0,alignItems:'center',paddingTop:8},
-  title:{fontFamily:FONTS.displaySemi,fontSize:30,color:colors.gold,letterSpacing:6},
+  telemetry:{position:'absolute',top:0,left:0,right:0,alignItems:'center',paddingTop:8,paddingHorizontal:20},
+  title:{fontFamily:FONTS.displaySemi,fontSize:26,color:colors.gold,letterSpacing:5,textAlign:'center'},
 
   hint:{position:'absolute',bottom:0,left:0,right:0,alignItems:'center',paddingBottom:12},
   hintText:{fontFamily:FONTS.mono,fontSize:7,color:'#4A4436',letterSpacing:2},

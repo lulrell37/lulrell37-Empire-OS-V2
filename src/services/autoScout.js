@@ -72,7 +72,7 @@ async function prospectPass(stats,dailyLeads){
   const{metro,segment}=pickTarget(cursor);
 
   let results='';
-  try{results=await webSearch('scout',`${segment} businesses in ${metro} — small, owner-operated`);}
+  try{results=await webSearch('scout',`${segment} businesses in ${metro} — small, owner-operated, currently open (not permanently closed)`);}
   catch(e){emitErr(`AUTO-SCOUT · search failing — ${e.message}`);return;}
   if(!String(results||'').trim())return;
 
@@ -82,7 +82,9 @@ async function prospectPass(stats,dailyLeads){
 `Pick the businesses in these results that genuinely fit Empire Digital's ICP and emit one line per business:\n`+
 `[LEAD_ADD: name | what they do | website | contact | the bottleneck you'd guess they have | ${segment} · ${metro}]\n\n`+
 `ICP: owner-operated, roughly 2-50 people, a clear repetitive bottleneck likely costing time or money, an owner who can say yes alone. `+
-`Do NOT add franchises, national chains, directories, marketplaces, aggregator listings or anything enterprise. Never invent an email or phone — leave contact blank if it isn't in the results. `+
+`Do NOT add franchises, national chains, directories, marketplaces, aggregator listings or anything enterprise. `+
+`Do NOT add a business that is permanently closed, temporarily closed, or otherwise no longer operating — if the results flag a listing "permanently closed", "closed", "out of business" or similar, skip it; we need live, reachable leads. `+
+`Never invent an email or phone — leave contact blank if it isn't in the results. `+
 `Add at most ${room}; two well-qualified beats ten weak. Output ONLY the [LEAD_ADD:] lines.`}];
   let resp='';
   try{resp=await callPersona('scout',ask,null,null,{skipSave:true,maxTokens:1400});}
