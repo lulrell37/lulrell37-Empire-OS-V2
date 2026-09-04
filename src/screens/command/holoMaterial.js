@@ -60,12 +60,15 @@ export function injectHoloClip(shader,uniforms){
 // building) shift the base colour while keeping the same glow behaviour.
 // `windows:true` etches a procedural lit-window grid into the emissive channel,
 // using object-local position — for the city's buildings.
-export function createHoloMaterial(uniforms,{tint=0xE8C98A,opacity=0.42,emissive=0x5a4423,windows=false}={}){
+// `doubleSide:false` renders only front faces — half the fragment work on
+// closed, always-viewed-from-outside geometry (the city). Defaults to true so
+// the Laboratory's clip-and-look-inside behavior (DiagramPanel) is unaffected.
+export function createHoloMaterial(uniforms,{tint=0xE8C98A,opacity=0.42,emissive=0x5a4423,windows=false,doubleSide=true}={}){
   const mat=new THREE.MeshStandardMaterial({
     color:new THREE.Color(tint),
     emissive:new THREE.Color(emissive),
     emissiveIntensity:0.55,metalness:0.25,roughness:0.4,
-    transparent:true,opacity,side:THREE.DoubleSide,depthWrite:false,
+    transparent:true,opacity,side:doubleSide?THREE.DoubleSide:THREE.FrontSide,depthWrite:false,
   });
   mat.userData.shared=true;
   mat.onBeforeCompile=(shader)=>{

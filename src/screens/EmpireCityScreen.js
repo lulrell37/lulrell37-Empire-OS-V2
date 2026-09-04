@@ -10,7 +10,7 @@
 // Built on an actual Roman grid plan: the Cardo (N–S) and Decumanus (E–W)
 // avenues cross at a colonnaded forum (stepped plaza, central monument, four
 // triumphal arches), with a full grid of lesser streets forming insula blocks.
-// ~150 buildings fill the densely-subdivided blocks — window-grid facades with
+// ~110 buildings fill the subdivided blocks — window-grid facades with
 // floor ledges, pilaster strips, rooftop clutter (tanks, penthouses) and one of
 // four roof styles; hedged courtyard gardens sit on the odd plot. The forum adds
 // a market-stall ring and four plaza statues; four fountains mark the district
@@ -21,8 +21,11 @@
 // pedestrians walk the sidewalks.
 //
 // Rendered procedurally with three.js primitives + the shared holo material
-// (src/screens/command/holoMaterial.js). Static mass (roads, pavement, the whole
-// building stock, the wall, the aqueduct) is merged and trees / lights / traffic
+// (src/screens/command/holoMaterial.js), front-face-only here (cityMat) since
+// the whole city is closed geometry seen from outside — half the fragment cost
+// of the double-sided default the Laboratory needs for its clipped-open views.
+// Static mass (roads, pavement, the whole building stock, the wall, the aqueduct)
+// is merged and trees / lights / traffic
 // are instanced, so the city still draws in a couple dozen calls; landmarks are
 // individual groups. Labels are screen-space projected RN <Text> (see the
 // animate loop -> setLabels). No bundled model — ships as an OTA update.
@@ -41,6 +44,11 @@ import useEmpireStore from '../store/useEmpireStore';
 import Boundary from './hud/Boundary';
 import{colors,FONTS}from '../theme';
 import{makeHoloUniforms,createHoloMaterial,disposeObject}from './command/holoMaterial';
+
+// The whole city is closed geometry always seen from outside and above — front
+// faces only, half the fragment cost of the Laboratory's default double-sided
+// material, with no visible difference at this camera range.
+function cityMat(uniforms,opts={}){return createHoloMaterial(uniforms,{...opts,doubleSide:false});}
 
 // Landmark id (mesh.userData.heroTarget) -> nav route (or external url) + display.
 // `label` is the serif overlay caption, `sub` the system name under it.
@@ -206,8 +214,8 @@ function addBuilding(cx,cz,cellW,cellD,rnd,facade,trim){
 // Returns { group, beam } — beam pulses; orbs tagged userData.spin are spun by
 // the animate loop.
 function buildHero(hero,uniforms){
-  const hmat=createHoloMaterial(uniforms,{tint:hero.tint,windows:true,opacity:0.5});
-  const emat=createHoloMaterial(uniforms,{tint:hero.tint,opacity:0.9});
+  const hmat=cityMat(uniforms,{tint:hero.tint,windows:true,opacity:0.5});
+  const emat=cityMat(uniforms,{tint:hero.tint,opacity:0.9});
   const g=new THREE.Group();
   g.position.set(hero.at[0],0,hero.at[1]);
   g.name=hero.name;
@@ -348,14 +356,14 @@ function buildHero(hero,uniforms){
 function buildCity(uniforms){
   const pivot=new THREE.Group();
   const rnd=mulberry32(20260904);
-  const matRoad=createHoloMaterial(uniforms,{opacity:0.24});
-  const matPave=createHoloMaterial(uniforms,{opacity:0.12});
-  const matStripe=createHoloMaterial(uniforms,{tint:0xF3E3BE,opacity:0.7});
-  const matBld=createHoloMaterial(uniforms,{windows:true,opacity:0.34});
-  const matTrim=createHoloMaterial(uniforms,{opacity:0.4});
-  const matWall=createHoloMaterial(uniforms,{opacity:0.3});
-  const matTree=createHoloMaterial(uniforms,{tint:0x9FC79A,opacity:0.38});
-  const matGlow=createHoloMaterial(uniforms,{tint:0xF3E3BE,opacity:0.55});
+  const matRoad=cityMat(uniforms,{opacity:0.24});
+  const matPave=cityMat(uniforms,{opacity:0.12});
+  const matStripe=cityMat(uniforms,{tint:0xF3E3BE,opacity:0.7});
+  const matBld=cityMat(uniforms,{windows:true,opacity:0.34});
+  const matTrim=cityMat(uniforms,{opacity:0.4});
+  const matWall=cityMat(uniforms,{opacity:0.3});
+  const matTree=cityMat(uniforms,{tint:0x9FC79A,opacity:0.38});
+  const matGlow=cityMat(uniforms,{tint:0xF3E3BE,opacity:0.55});
   const matWater=new THREE.MeshBasicMaterial({color:0x8FD8E6,transparent:true,opacity:0.32,depthWrite:false,blending:THREE.AdditiveBlending});
 
   pivot.add(buildSky());
@@ -393,7 +401,7 @@ function buildCity(uniforms){
   pivot.add(new THREE.Mesh(mergeGeometries(stripeGeos),matStripe));
 
   // --- forum: stepped plaza, colonnade + architrave, central monument, arches
-  const plazaMat=createHoloMaterial(uniforms,{opacity:0.5});
+  const plazaMat=cityMat(uniforms,{opacity:0.5});
   pivot.add(new THREE.Mesh(new THREE.CylinderGeometry(5.0,5.0,0.12,56),plazaMat).translateY(0.09));
   pivot.add(new THREE.Mesh(new THREE.CylinderGeometry(5.7,5.9,0.12,56),plazaMat).translateY(0.05));
   pivot.add(new THREE.Mesh(new THREE.CylinderGeometry(6.4,6.6,0.12,56),plazaMat).translateY(0.02));
@@ -409,7 +417,7 @@ function buildCity(uniforms){
   architrave.rotation.x=Math.PI/2;architrave.position.y=2.95;
   pivot.add(architrave);
   // central monument — column + a slowly turning finial
-  const monMat=createHoloMaterial(uniforms,{opacity:0.55});
+  const monMat=cityMat(uniforms,{opacity:0.55});
   pivot.add(new THREE.Mesh(box(1.6,0.6,1.6,0,0.3,0),monMat));
   pivot.add(new THREE.Mesh(new THREE.CylinderGeometry(0.5,0.6,6.4,10),monMat).translateY(3.7));
   pivot.add(new THREE.Mesh(box(1.3,0.4,1.3,0,7.1,0),monMat));
@@ -479,8 +487,8 @@ function buildCity(uniforms){
       if(nearHero(cx,cz,7.2))continue;              // landmark lots
       slabGeos.push(box(bw+1.3,0.05,bd+1.3,cx,0.035,cz));
       // subdivide the block into a small grid of plots — denser than before
-      const nx=bw>12?4:bw>8.5?3:bw>4.4?2:1;
-      const nz=bd>12?4:bd>8.5?3:bd>4.4?2:1;
+      const nx=bw>13?3:bw>7?2:1;
+      const nz=bd>13?3:bd>7?2:1;
       const pw=bw/nx,pd=bd/nz;
       for(let a=0;a<nx;a++){
         for(let b=0;b<nz;b++){
@@ -494,7 +502,7 @@ function buildCity(uniforms){
             gardenPts.push([px,pz]);
             continue;
           }
-          if((nx>1||nz>1)&&rnd()<0.05)continue;         // the odd empty lot
+          if((nx>1||nz>1)&&rnd()<0.09)continue;         // the odd empty lot
           addBuilding(px,pz,pw,pd,rnd,facadeGeos,trimGeos);
         }
       }
@@ -557,7 +565,7 @@ function buildCity(uniforms){
     for(let k=0;k<8;k++){const a=k/8*Math.PI*2;fountainStone.push(box(0.34,0.34,0.34,fx+Math.cos(a)*2.25,0.62,fz+Math.sin(a)*2.25));}
     const w1=new THREE.Mesh(new THREE.CircleGeometry(1.95,22),matWater);w1.rotation.x=-Math.PI/2;w1.position.set(fx,0.52,fz);pivot.add(w1);
     const w2=new THREE.Mesh(new THREE.CircleGeometry(1.0,16),matWater);w2.rotation.x=-Math.PI/2;w2.position.set(fx,1.02,fz);pivot.add(w2);
-    const drop=new THREE.Mesh(new THREE.IcosahedronGeometry(0.34,1),createHoloMaterial(uniforms,{tint:0x9AD3E0,opacity:0.9}));
+    const drop=new THREE.Mesh(new THREE.IcosahedronGeometry(0.34,1),cityMat(uniforms,{tint:0x9AD3E0,opacity:0.9}));
     drop.position.set(fx,2.5,fz);drop.userData.spin=1;pivot.add(drop);
   }
   pivot.add(new THREE.Mesh(mergeGeometries(fountainStone),matTrim));
@@ -584,7 +592,7 @@ function buildCity(uniforms){
 
   // --- cypress trees along the avenues + ringing the forum (instanced) ---
   const treePos=[];
-  for(let t=-EXTENT+4;t<=EXTENT-4;t+=2.6){
+  for(let t=-EXTENT+4;t<=EXTENT-4;t+=3.0){
     if(Math.abs(t)<7)continue;
     treePos.push([AV_HW+1.0,t],[-(AV_HW+1.0),t],[t,AV_HW+1.0],[t,-(AV_HW+1.0)]);
   }
@@ -597,7 +605,7 @@ function buildCity(uniforms){
 
   // --- streetlights down the avenues (post + glowing lamp, instanced) ---
   const lampPos=[];
-  for(let t=-EXTENT+6;t<=EXTENT-6;t+=4.5){
+  for(let t=-EXTENT+6;t<=EXTENT-6;t+=5.2){
     if(Math.abs(t)<6)continue;
     lampPos.push([AV_HW+0.4,t],[-(AV_HW+0.4),t],[t,AV_HW+0.4],[t,-(AV_HW+0.4)]);
   }
@@ -779,11 +787,13 @@ function EmpireCity({navigation}){
 
       const scene=new THREE.Scene();
       const camera=new THREE.PerspectiveCamera(46,glW/glH,0.1,340);
+      // Point light dropped — its per-fragment distance falloff was the priciest
+      // light in the scene and the fresnel/emissive glow already carries the
+      // read; hemisphere nudged up a touch to keep the center from going flat.
       scene.add(new THREE.AmbientLight(0xffffff,0.92));
-      scene.add(new THREE.HemisphereLight(0xF3E3BE,0x1a1206,0.55));
+      scene.add(new THREE.HemisphereLight(0xF3E3BE,0x1a1206,0.62));
       const kl=new THREE.DirectionalLight(0xfff2d8,1.5);kl.position.set(9,14,7);scene.add(kl);
       const rl=new THREE.DirectionalLight(0xE8C98A,0.85);rl.position.set(-11,6,-9);scene.add(rl);
-      const fl=new THREE.PointLight(0xF3E3BE,0.9,60);fl.position.set(0,7,0);scene.add(fl);
 
       const uniforms=makeHoloUniforms();
       const city=buildCity(uniforms);
