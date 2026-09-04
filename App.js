@@ -27,6 +27,7 @@ import{startAutoTrader,stopAutoTrader}from './src/services/autoTrader';
 import{startAutoScout,stopAutoScout}from './src/services/autoScout';
 import{refreshDailyBriefing}from './src/services/dailyBriefing';
 import{importInboundForm}from './src/services/inbound';
+import{pushLeadsToSheet}from './src/services/leadsSheet';
 import{getAllPersonaPics}from './src/services/database';
 import useEmpireStore from './src/store/useEmpireStore';
 import{recentCrashCount}from './src/services/crashLog';
@@ -72,13 +73,15 @@ export default function App(){
   },[]);
   useEffect(()=>{
     // Sync on every return to the foreground + a gentle background interval.
-    const sub=AppState.addEventListener('change',(st)=>{if(st==='active'){runSync().catch(()=>{});refreshDailyBriefing().catch(()=>{});importInboundForm().catch(()=>{});}});
+    const sub=AppState.addEventListener('change',(st)=>{if(st==='active'){runSync().catch(()=>{});refreshDailyBriefing().catch(()=>{});importInboundForm().catch(()=>{});pushLeadsToSheet().catch(()=>{});}});
     const iv=setInterval(()=>{runSync().catch(()=>{});},120000);
     const inb=setInterval(()=>{importInboundForm().catch(()=>{});},300000);
+    const lsh=setInterval(()=>{pushLeadsToSheet().catch(()=>{});},300000);
     setTimeout(()=>importInboundForm().catch(()=>{}),9000);
+    setTimeout(()=>pushLeadsToSheet().catch(()=>{}),10000);
     // Daily HUD content — Stephanie (word + fact), Abraham (verse). Once/day, no repeats.
     setTimeout(()=>refreshDailyBriefing().catch(()=>{}),6000);
-    return()=>{sub.remove();clearInterval(iv);clearInterval(inb);};
+    return()=>{sub.remove();clearInterval(iv);clearInterval(inb);clearInterval(lsh);};
   },[]);
   useEffect(()=>{
     // A.T.L.A.S. auto-trader — only actually runs when enabled in Settings (demo only).

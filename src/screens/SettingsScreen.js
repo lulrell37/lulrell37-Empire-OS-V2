@@ -1,5 +1,5 @@
 import React,{useState,useEffect}from 'react';
-import{View,Text,StyleSheet,TextInput,TouchableOpacity,ScrollView,Alert,KeyboardAvoidingView,Platform,Image}from 'react-native';
+import{View,Text,StyleSheet,TextInput,TouchableOpacity,ScrollView,Alert,KeyboardAvoidingView,Platform,Image,Linking}from 'react-native';
 import{SafeAreaView}from 'react-native-safe-area-context';
 import*as ImagePicker from 'expo-image-picker';
 import{saveKeys,loadKeys,saveGoogleToken,loadGoogleToken,clearGoogleToken,saveTradeCreds,loadTradeCreds,clearTradeCreds,saveGitHubToken,loadGitHubToken,clearGitHubToken,saveBackend,loadBackend,clearBackend}from '../services/keyStore';
@@ -8,6 +8,7 @@ import{registerPushToken,unregisterPushToken,sendTestPush}from '../services/push
 import{tlConnect,tlReset}from '../services/tradeLocker';
 import{refreshAutoTrader}from '../services/autoTrader';
 import{refreshAutoScout}from '../services/autoScout';
+import{createLeadsSheet,unlinkLeadsSheet,leadsSheetUrl}from '../services/leadsSheet';
 import{resetWeather}from '../services/weather';
 import{ghVerify}from '../services/buildAgent';
 import{saveCustomPrompt,getCustomPrompt,getApiUsage,getAllPersonaPics,savePersonaPic,getSetting,setSetting}from '../services/database';
@@ -40,6 +41,8 @@ export default function SettingsScreen({navigation}){
   const[scoutEvery,setScoutEvery]=useState('30');
   const[scoutLeads,setScoutLeads]=useState('20');
   const[scoutEmails,setScoutEmails]=useState('20');
+  const[leadsSheetId,setLeadsSheetId]=useState('');
+  const[sheetBusy,setSheetBusy]=useState(false);
   const[ghToken,setGhToken]=useState('');
   const[ghBusy,setGhBusy]=useState(false);
   const[ghStatus,setGhStatus]=useState(null); // {ok,repo,error}
@@ -81,6 +84,7 @@ export default function SettingsScreen({navigation}){
     setScoutEvery(await getSetting('auto_scout_interval_min','30'));
     setScoutLeads(await getSetting('auto_scout_daily_leads','20'));
     setScoutEmails(await getSetting('auto_scout_daily_emails','20'));
+    setLeadsSheetId(await getSetting('leads_sheet_id',''));
     const gt=await loadGitHubToken();if(gt){setGhToken(gt);ghVerify().then(setGhStatus);}
     const be=await loadBackend();if(be){setBeUrl(be.url);setBeToken(be.token);setBeConfigured(true);}
     const st=await initSyncStatus().catch(()=>null);if(st)setBeSync({lastSync:st.lastSync,error:st.error,running:st.running});
@@ -162,6 +166,23 @@ export default function SettingsScreen({navigation}){
   async function saveScoutNum(key,val,setter,def,min){
     const n=Math.max(min,parseInt(val,10)||def);
     setter(String(n));await setSetting(key,String(n));await refreshAutoScout().catch(()=>{});
+  }
+  async function makeLeadsSheet(){
+    setSheetBusy(true);
+    try{
+      const{id,url}=await createLeadsSheet();
+      setLeadsSheetId(id);
+      Linking.openURL(url).catch(()=>{});
+    }catch(e){Alert.alert('Couldn\'t create the sheet',e.message);}
+    finally{setSheetBusy(false);}
+  }
+  async function openLeadsSheet(){
+    const u=leadsSheetUrl(leadsSheetId);
+    if(u)Linking.openURL(u).catch(()=>{});
+  }
+  async function removeLeadsSheet(){
+    await unlinkLeadsSheet();
+    setLeadsSheetId('');
   }
   async function disconnectTradeLocker(){
     await clearTradeCreds();tlReset();setTlAccount(null);setTl({email:'',password:'',server:'',env:'demo'});
@@ -387,6 +408,23 @@ export default function SettingsScreen({navigation}){
               <TextInput style={s.keyInput} value={String(scoutEmails)} onChangeText={setScoutEmails} onBlur={()=>saveScoutNum('auto_scout_daily_emails',scoutEmails,setScoutEmails,20,0)} placeholder="20" placeholderTextColor="#1A1A1A" keyboardType="number-pad"/>
             </View>
             <Text style={[s.secSub,{marginTop:16,marginBottom:0}]}>Set AUTO-SENT EMAILS to 0 to have her only build and qualify the pipeline — no email leaves on its own; you send each one from the Command screen.</Text>
+
+            <Text style={[s.secTitle,{marginTop:28}]}>PIPELINE SHEET</Text>
+            <Text style={s.secSub}>Mirrors the lead pipeline into a Google Sheet you can check from anywhere — one row per lead, refreshed whenever a lead changes and every few minutes while the app is open. One-way: the app owns the data, edits made in the sheet don't flow back. Needs Google connected.</Text>
+            {leadsSheetId?(
+              <>
+                <TouchableOpacity style={s.saveBtn} onPress={openLeadsSheet}>
+                  <Text style={s.saveBtnT}>OPEN PIPELINE SHEET</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[s.saveBtn,{backgroundColor:'#111',borderWidth:1,borderColor:'#333',marginTop:10}]} onPress={removeLeadsSheet}>
+                  <Text style={[s.saveBtnT,{color:'#E05555'}]}>UNLINK</Text>
+                </TouchableOpacity>
+              </>
+            ):(
+              <TouchableOpacity style={s.saveBtn} onPress={makeLeadsSheet} disabled={sheetBusy}>
+                <Text style={s.saveBtnT}>{sheetBusy?'CREATING…':'CREATE PIPELINE SHEET'}</Text>
+              </TouchableOpacity>
+            )}
           </View>}
           {tab==='DEV'&&<View>
             <Text style={s.secTitle}>BUILD PIPELINE</Text>

@@ -368,6 +368,24 @@ export async function sheetRead({spreadsheetId,range='A1:Z2000'}){
   return data?.values||[];
 }
 
+// Create a blank spreadsheet — returns { id, url }.
+export async function sheetCreateRaw(title){
+  const ss=await gapi('https://sheets.googleapis.com/v4/spreadsheets',{method:'POST',json:{properties:{title:title||'Untitled'}}});
+  return{id:ss.spreadsheetId,url:ss.spreadsheetUrl};
+}
+function colLetter(n){let s='';while(n>0){const m=(n-1)%26;s=String.fromCharCode(65+m)+s;n=Math.floor((n-1)/26);}return s;}
+// Overwrite the first sheet with `rows` (a 2D array). Clears the old range first
+// so deleted leads don't linger. One-way mirror — user edits don't flow back.
+export async function sheetReplace(spreadsheetId,rows){
+  if(!spreadsheetId)throw new Error('no spreadsheet id');
+  await gapi(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values/A1:Z100000:clear`,{method:'POST',json:{}});
+  if(!rows.length)return;
+  const end=colLetter(Math.max(1,...rows.map(r=>r.length)));
+  await gapi(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values/A1:${end}${rows.length}`,{
+    method:'PUT',query:{valueInputOption:'RAW'},json:{values:rows},
+  });
+}
+
 // --- Google Tasks -----------------------------------------------------------
 export async function tasksList(){
   const data=await gapi('/tasks/v1/lists/@default/tasks',{query:{showCompleted:'false',maxResults:100}});

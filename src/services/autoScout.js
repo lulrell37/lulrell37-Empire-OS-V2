@@ -14,6 +14,7 @@ import{webSearch,callPersona}from './aiService';
 import{runInboundScan}from './inbound';
 import{gmailSend,googleConnected}from './googleClient';
 import{pickTarget,pickInboundQuery}from './scoutTargets';
+import{pushLeadsToSheet}from './leadsSheet';
 
 let timer=null,running=false,busy=false,cycle=0;
 let lastHeartbeat=0,lastError=0;
@@ -212,6 +213,7 @@ async function runOnce(){
     await followupPass(stats,dailyEmails).catch(()=>{});
 
     await saveStats(stats);
+    pushLeadsToSheet().catch(()=>{});
 
     if(Date.now()-lastHeartbeat>HEARTBEAT_MS){
       lastHeartbeat=Date.now();

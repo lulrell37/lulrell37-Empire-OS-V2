@@ -34,6 +34,7 @@ import DeepResearchBanner from './command/DeepResearchBanner';
 import BuildPanel from './command/BuildPanel';
 import LeadsPanel from './command/LeadsPanel';
 import{runInboundScan,importInboundForm}from '../services/inbound';
+import{pushLeadsToSheet}from '../services/leadsSheet';
 import NudgeBar from './command/NudgeBar';
 import{parseChartSpec}from '../services/chartSpec';
 import{extractUrls,fetchLinkContext,linkContextToBlock}from '../services/mediaContext';
@@ -1184,6 +1185,7 @@ export default function CommandScreen({navigation}){
           onLeadChange:(e)=>{
             if(e.action==='add')pushSystemMsg(`— PIPELINE · added ${e.name} —`);
             else if(e.action==='miss')pushSystemMsg(`— PIPELINE · no lead matches "${e.ref}" —`);
+            pushLeadsToSheet().catch(()=>{});
           },
           onMemoryPinned:(e)=>pushSystemMsg(`— pinned for ${e.days}d: ${e.text} —`),
           onClipEdit:async({mediaUrl,instructions})=>{
