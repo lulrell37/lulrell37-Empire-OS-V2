@@ -56,6 +56,19 @@ function synthAmp(){
   const t=Date.now()/1000;
   return Math.max(0.18,Math.min(1,0.32+0.34*(0.5+0.5*Math.sin(t*6.3))+0.22*Math.sin(t*15.1)+0.12*Math.sin(t*27.7)));
 }
+// A persona stalling ("give me a minute", "that's not it") isn't done yet —
+// short remarks like these mean it's still working, not handing the floor
+// back. Caught in hands-free voice turns so the mic doesn't reopen for Mr.
+// Burrus to prompt it again; instead it keeps going on its own. Real answers
+// run longer than this, so length alone rules most of them out.
+const INTERIM_REPLY_PATTERNS=[/give me (a|one|just a) (minute|moment|sec(ond)?)/i,/\bhold on\b/i,/\bhang on\b/i,/\bbear with me\b/i,/\bjust a (sec(ond)?|moment)\b/i,/\bone (moment|sec(ond)?)\b/i,/\blet me (try|check|look|dig|pull) .{0,24}again\b/i,/\b(that'?s|this) (isn'?t|is not|not) (it|right|quite it)\b/i,/\bstill (working|looking|checking|digging|thinking) on (it|that|this)\b/i,/\bworking on it\b/i,/\blet me (get|pull|find) (that|this|it)( for you)?\b/i];
+function isInterimReply(text){
+  const t=(text||'').trim();
+  if(!t||t.length>220)return false;
+  return INTERIM_REPLY_PATTERNS.some(re=>re.test(t));
+}
+const INTERIM_CONTINUE_MAX=4;         // consecutive stalls before giving the mic back to Mr. Burrus anyway
+const INTERIM_CONTINUE_PROMPT='[Keep going — give the real answer now, out loud. Do not just say you need more time again.]';
 
 export default function CommandScreen({navigation}){
   const[activePersona,setActivePersona]=useState('jarvis');
@@ -126,6 +139,8 @@ export default function CommandScreen({navigation}){
   const recPollRef=useRef(null);  // interval polling the recorder's metering
   const recStartRef=useRef(0);
   const manualRef=useRef(false); // true while the current take was started by the SPEAK button
+  const interimContinueRef=useRef(null); // {isGroup} set when the last voiced reply was a stall — consumed by the auto-listen effect to keep the persona going instead of reopening the mic
+  const interimStreakRef=useRef(0);      // consecutive stalls this turn — capped by INTERIM_CONTINUE_MAX
   const{addRelay,flagFirmIssue,clearFirmIssue}=useEmpireStore();
   const isFocused=useIsFocused();
 
@@ -177,9 +192,17 @@ export default function CommandScreen({navigation}){
     if(!handsFree||voicePaused)return;
     if(loading||recording||!isFocused)return;
     const t=setTimeout(()=>{
-      if(handsFreeRef.current&&!loadingRef.current&&!recordingRef.current&&!recBusyRef.current&&!voicePausedRef.current&&!soundRef.current){
-        startRecording();
+      if(!(handsFreeRef.current&&!loadingRef.current&&!recordingRef.current&&!recBusyRef.current&&!voicePausedRef.current&&!soundRef.current))return;
+      // The persona just stalled ("give me a minute", "that's not it") instead
+      // of handing back the floor — let it keep working instead of opening the
+      // mic for Mr. Burrus to prompt it again.
+      if(interimContinueRef.current){
+        const pending=interimContinueRef.current;
+        interimContinueRef.current=null;
+        runRound(INTERIM_CONTINUE_PROMPT,pending.isGroup);
+        return;
       }
+      startRecording();
     },500);
     return()=>clearTimeout(t);
   },[handsFree,voicePaused,loading,recording,isFocused]);// eslint-disable-line react-hooks/exhaustive-deps
@@ -206,6 +229,7 @@ export default function CommandScreen({navigation}){
   useEffect(()=>{
     if(isFocused)return;
     clearSilenceTimer();
+    interimContinueRef.current=null;interimStreakRef.current=0;
     if(recordingRef.current)stopRecording();
     stopAudio();
   },[isFocused]);// eslint-disable-line react-hooks/exhaustive-deps
@@ -766,6 +790,9 @@ export default function CommandScreen({navigation}){
 
   async function startRecording(opts={}){
     if(recBusyRef.current||recordingRef.current)return; // one already live or tearing down
+    // A manual tap (SPEAK button) is Mr. Burrus interjecting on purpose —
+    // drop any pending "keep going" so it doesn't fire after he's done talking.
+    if(opts.manual){interimContinueRef.current=null;interimStreakRef.current=0;}
     recBusyRef.current=true;
     try{
       const{status}=await Audio.requestPermissionsAsync();
@@ -1034,6 +1061,7 @@ export default function CommandScreen({navigation}){
     inputRef.current='';setInput('');
     try{textInputRef.current?.clear();}catch{}
     Keyboard.dismiss();abortRef.current?.abort();stopAudio();
+    interimContinueRef.current=null;interimStreakRef.current=0; // a real message from Mr. Burrus supersedes any pending "keep going"
     atBottomRef.current=true;   // sending your own message always snaps the chat down
     const isGroup=mode!=='direct';
     const userMsg={id:Date.now().toString(),role:'user',content:text,persona:'user'};
@@ -1294,6 +1322,19 @@ export default function CommandScreen({navigation}){
           const gw=await googleWriteCommands(response,{onConfirm:queueGoogleAction});
           for(const line of gw.immediate)pushSystemMsg(line);
         }catch(e){pushSystemMsg('Google action failed: '+e.message);}
+        // A stalling reply ("give me a minute", "that's not it") in a direct,
+        // hands-free voice turn means the persona isn't done — flag it so the
+        // auto-listen effect keeps it going instead of reopening the mic.
+        // Capped so a persona that can't land an answer eventually gives the
+        // floor back rather than looping forever.
+        if(willVoice&&!isGroup){
+          if(isInterimReply(display)&&interimStreakRef.current<INTERIM_CONTINUE_MAX){
+            interimStreakRef.current+=1;
+            interimContinueRef.current={isGroup};
+          }else{
+            interimStreakRef.current=0;
+          }
+        }
         if(willVoice){
           patch(m=>({...m,content:display,revealed:0,streaming:true}));
           // One TTS call for the whole reply, played as a single clip — no gaps
