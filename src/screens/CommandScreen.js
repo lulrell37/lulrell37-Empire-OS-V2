@@ -14,9 +14,12 @@ import{drStart,drGetActive,drTick,drDismiss,drDeliverPending,DR_POLL_MS}from '..
 import{onAutoTrade}from '../services/autoTrader';
 import{handleCommands,stripCommands}from '../services/commandHandler';
 import{googleReadInjections,googleWriteCommands}from '../services/googleCommands';
-import{getMessages,saveMessage,getAllPersonaPics,savePersonaMemory,getSetting,setSetting,getExpenseSummary,addBuildJob,updateBuildJob,getBuildJob,getBuildJobByIssue,getBuildJobs,buildJobRepo,DEFAULT_BUILD_REPO,getCustomPrompt,getAllLeads}from '../services/database';
-import{fileBuildRequest,replyToBuild,mergeBuild,cancelBuild,createProjectRepo}from '../services/buildAgent';
+import{driveUploadFile,googleConnected}from '../services/googleClient';
+import{getMessages,saveMessage,getAllPersonaPics,savePersonaMemory,getSetting,setSetting,getExpenseSummary,addBuildJob,updateBuildJob,getBuildJob,getBuildJobByIssue,getBuildJobs,buildJobRepo,DEFAULT_BUILD_REPO,getCustomPrompt,getAllLeads,addClipJob}from '../services/database';
+import{fileBuildRequest,replyToBuild,mergeBuild,cancelBuild,createProjectRepo,fileClipJob}from '../services/buildAgent';
 import{pollBuildJobs}from '../services/buildJobs';
+import{pollClipJobs}from '../services/clipJobs';
+import ClipPanel from './command/ClipPanel';
 import{tlSnapshot,tlFormatSnapshot,tlPlaceOrder,tlClosePosition,tlModifyPosition,tlPositions,MAX_QTY,MAX_OPEN_POSITIONS}from '../services/tradeLocker';
 import{recordTradeOpen,reconcileOpenTrades,traderJournalBlock,setStrategy,setTradeReview,TRADER_ID}from '../services/tradeJournal';
 import{loadKeys,loadGitHubToken}from '../services/keyStore';
@@ -72,6 +75,7 @@ export default function CommandScreen({navigation}){
   const[personaPics,setPersonaPics]=useState({});
   const[showCamera,setShowCamera]=useState(false);
   const[cameraRef,setCameraRef]=useState(null);
+  const[clipUp,setClipUp]=useState(null); // 0..1 while uploading a clip for R.O.G.U.E., else null
   const[view,setView]=useState('viz'); // viz | text
   const[orbLevel,setOrbLevel]=useState('group'); // lifted so it survives the viz/text toggle
   const orbZoomRef=useRef(null);
@@ -925,6 +929,47 @@ export default function CommandScreen({navigation}){
     }catch(e){Alert.alert('Error',e.message);}
   }
 
+  // R.O.G.U.E. clip flow: pick a phone video, upload it to Drive for a shareable
+  // link, sample frames so she can see it, and hand her both so she can brief
+  // the edit and emit [EDIT_CLIP: <link> | ...].
+  async function pickClipForRogue(){
+    try{
+      if(!(await googleConnected().catch(()=>false))){
+        Alert.alert('Connect Google','R.O.G.U.E. uploads the raw clip to your Google Drive so the editor can reach it. Connect Google in Settings → GOOGLE first.');
+        return;
+      }
+      const{status}=await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if(status!=='granted'){Alert.alert('Permission','Photo library access required.');return;}
+      const result=await ImagePicker.launchImageLibraryAsync({mediaTypes:ImagePicker.MediaTypeOptions.Videos,quality:1});
+      if(result.canceled||!result.assets?.[0])return;
+      const asset=result.assets[0];
+      let dur=Number(asset.duration)||0;
+      if(dur>0&&dur<600)dur*=1000;
+      const N=6;
+      const times=dur>1500?Array.from({length:N},(_,i)=>Math.round((i+0.5)/N*dur)):[0,300,700,1200,2000,3000];
+      const frames=[];
+      for(const t of times){
+        try{const{uri}=await VideoThumbnails.getThumbnailAsync(asset.uri,{time:t,quality:0.6});frames.push({type:'image',uri,mime:'image/jpeg'});}catch{}
+      }
+      setClipUp(0);
+      let up;
+      try{
+        up=await driveUploadFile(
+          {fileUri:asset.uri,name:asset.fileName||`clip-${Date.now()}.mp4`,mimeType:asset.mimeType||'video/mp4'},
+          p=>setClipUp(Math.max(0,Math.min(0.99,p))),
+        );
+      }catch(e){setClipUp(null);Alert.alert('Upload failed',e.message);return;}
+      setClipUp(null);
+      const note=(inputRef.current||input).trim()||'Edit this into a short.';
+      const msg=`[Raw clip uploaded for editing — ${frames.length} frames sampled${dur?` over ${(dur/1000).toFixed(0)}s`:''}\nDrive link: ${up.viewLink}]\n${note}`;
+      setInput('');inputRef.current='';try{textInputRef.current?.clear();}catch{}
+      const userMsg={id:Date.now().toString(),role:'user',content:msg,persona:'user',image:frames[0]?.uri};
+      setMessages(prev=>[...prev,userMsg]);
+      await saveMessage('rogue','user',msg,'direct');
+      await runRound(msg,false,frames);
+    }catch(e){setClipUp(null);Alert.alert('Error',e.message);}
+  }
+
   async function openCamera(){
     const{status}=await Camera.requestCameraPermissionsAsync();
     if(status!=='granted'){Alert.alert('Permission','Camera access required.');return;}
@@ -1141,6 +1186,15 @@ export default function CommandScreen({navigation}){
             else if(e.action==='miss')pushSystemMsg(`— PIPELINE · no lead matches "${e.ref}" —`);
           },
           onMemoryPinned:(e)=>pushSystemMsg(`— pinned for ${e.days}d: ${e.text} —`),
+          onClipEdit:async({mediaUrl,instructions})=>{
+            try{
+              const r=await fileClipJob({mediaUrl,instructions});
+              await addClipJob({id:r.id,issueNumber:r.issueNumber,mediaUrl,instructions});
+              pushSystemMsg(`— CLIP · queued for editing (#${r.issueNumber}) — R.O.G.U.E. will bring back the link —`);
+            }catch(e){
+              pushSystemMsg(e?.noToken?'— CLIP · connect GitHub in Settings › Dev first —':`— CLIP · couldn't queue it: ${e.message} —`);
+            }
+          },
         };
 
         // --- THE FIRM — A.R.A. delegates to specialists, then synthesizes ---
@@ -1585,6 +1639,10 @@ export default function CommandScreen({navigation}){
     const tick=async()=>{
       if(stop)return;
       try{
+        try{
+          const clipEvents=await pollClipJobs();
+          if(!stop)for(const line of clipEvents)pushSystemMsg(line);
+        }catch{/* keep polling */}
         const events=await pollBuildJobs();
         if(stop||!events.length)return;
         for(const ev of events){
@@ -1723,6 +1781,7 @@ export default function CommandScreen({navigation}){
       {mode==='direct'&&activePersona===TRADER_ID&&<TradeRecordBar active={isFocused} style={{marginHorizontal:10,marginTop:6}}/>}
       {mode==='direct'&&activePersona===TRADER_ID&&<TradePanel active={isFocused} onEvent={pushSystemMsg}/>}
       {mode==='direct'&&activePersona==='scout'&&<LeadsPanel active={isFocused}/>}
+      {mode==='direct'&&activePersona==='rogue'&&<ClipPanel active={isFocused}/>}
       {mode==='direct'&&activePersona==='jarvis'&&<BuildPanel active={isFocused} onMerge={confirmBuildMerge} onCancel={confirmBuildCancel} filter={jarvisBuildFilter}/>}
 
       {project&&mode==='direct'&&activePersona==='ara'&&(
@@ -1823,6 +1882,12 @@ export default function CommandScreen({navigation}){
             <TouchableOpacity style={s.iact} onPress={pickVideo}>
               <View style={s.iactDot}/><Text style={s.iactT}>VIDEO</Text>
             </TouchableOpacity>
+            {activePersona==='rogue'&&mode==='direct'&&(
+              <TouchableOpacity style={[s.iact,clipUp!=null&&{borderColor:'#4A9E7A',backgroundColor:'#4A9E7A11'}]} onPress={pickClipForRogue} disabled={clipUp!=null}>
+                <View style={[s.iactDot,clipUp!=null&&{backgroundColor:'#4A9E7A'}]}/>
+                <Text style={[s.iactT,clipUp!=null&&{color:'#4A9E7A'}]}>{clipUp!=null?`UPLOADING ${Math.round(clipUp*100)}%`:'EDIT CLIP'}</Text>
+              </TouchableOpacity>
+            )}
             <TouchableOpacity style={s.iact} onPress={pickDocument}>
               <View style={s.iactDot}/><Text style={s.iactT}>DOCUMENT</Text>
             </TouchableOpacity>

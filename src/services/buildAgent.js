@@ -137,6 +137,38 @@ export async function fileBuildRequest(spec,repo=DEFAULT_REPO){
   return{issueNumber:issue.number,url:issue.html_url,title:issue.title};
 }
 
+// --- R.O.G.U.E. clip-edit queue ------------------------------------------
+// A labelled GitHub issue is the job. A scheduled Descript agent reads open
+// `rogue-clip` issues, edits the clip, and reports back via issue comments
+// carrying HTML-comment markers. Reuses the same PAT + gh() wrapper.
+const CLIP_LABEL='rogue-clip';
+export async function fileClipJob({mediaUrl,instructions},repo=DEFAULT_REPO){
+  const url=String(mediaUrl||'').trim();
+  const brief=String(instructions||'').trim();
+  if(!url)throw new Error('No media link for the clip.');
+  if(!brief)throw new Error('No edit brief for the clip.');
+  try{await gh(`${rp(repo)}/labels`,{method:'POST',body:{name:CLIP_LABEL,color:'4A9E7A',description:'R.O.G.U.E. clip edit queue'}});}catch{}
+  const title=`CLIP: ${brief.split('\n')[0].slice(0,80)}`;
+  const body=`R.O.G.U.E. wants this clip edited.\n\n**Source:** ${url}\n\n**Brief:**\n${brief}\n\n`+
+    `<!-- clip-job: ${JSON.stringify({media_url:url,instructions:brief})} -->\n`+
+    `<!-- filed by Empire OS -->`;
+  const issue=await gh(`${rp(repo)}/issues`,{method:'POST',body:{title,body,labels:[CLIP_LABEL]}});
+  return{issueNumber:issue.number,url:issue.html_url,id:`${repo.owner}/${repo.repo}#${issue.number}`};
+}
+export async function getClipActivity(issueNumber,sinceCommentId=0,repo=DEFAULT_REPO){
+  const[issue,comments]=await Promise.all([
+    gh(`${rp(repo)}/issues/${issueNumber}`),
+    gh(`${rp(repo)}/issues/${issueNumber}/comments?per_page=100`),
+  ]);
+  return{
+    state:issue.state,
+    comments:comments.filter(c=>c.id>(sinceCommentId||0)).map(c=>({id:c.id,body:c.body||''})),
+  };
+}
+export async function cancelClipJob(issueNumber,repo=DEFAULT_REPO){
+  try{await gh(`${rp(repo)}/issues/${issueNumber}`,{method:'PATCH',body:{state:'closed'}});}catch{}
+}
+
 // --- Read new comments since a known id ---
 export async function getIssueActivity(issueNumber,sinceCommentId=0,repo=DEFAULT_REPO){
   const comments=await gh(`${rp(repo)}/issues/${issueNumber}/comments?per_page=100`);

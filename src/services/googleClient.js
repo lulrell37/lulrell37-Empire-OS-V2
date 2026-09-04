@@ -3,6 +3,7 @@
 // token via getFreshGoogleToken(). Scopes granted at login: drive, gmail
 // (readonly + send), calendar, tasks.
 import{getFreshGoogleToken}from './googleAuth';
+import*as FileSystem from 'expo-file-system';
 
 const GBASE='https://www.googleapis.com';
 
@@ -303,6 +304,44 @@ export async function driveDelete(fileId){
   if(!fileId)throw new Error('no file id');
   await gapi(`/drive/v3/files/${fileId}`,{method:'DELETE'});
   return 'Drive: file deleted.';
+}
+
+// Resumable upload of a local file (a phone video) to Drive, then make it
+// link-shareable. Streams the bytes straight off disk — nothing large is held
+// in JS memory. `onProgress(0..1)` is optional. Returns { id, viewLink, downloadLink }.
+export async function driveUploadFile({fileUri,name,mimeType='video/mp4'},onProgress){
+  const token=await getFreshGoogleToken();
+  if(!token)throw new Error('Google not connected — link it in Settings → GOOGLE');
+  const info=await FileSystem.getInfoAsync(fileUri).catch(()=>({exists:false}));
+  if(!info.exists)throw new Error('clip file not found on device');
+
+  const start=await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id',{
+    method:'POST',
+    headers:{Authorization:'Bearer '+token,'Content-Type':'application/json; charset=UTF-8','X-Upload-Content-Type':mimeType},
+    body:JSON.stringify({name:name||`clip-${Date.now()}.mp4`,mimeType}),
+  });
+  if(!start.ok)throw new Error(`Drive upload start ${start.status}: ${(await start.text()).slice(0,120)}`);
+  const session=start.headers.get('location')||start.headers.get('Location');
+  if(!session)throw new Error('Drive: no resumable session URL returned');
+
+  const task=FileSystem.createUploadTask(session,fileUri,{
+    httpMethod:'PUT',
+    uploadType:FileSystem.FileSystemUploadType.BINARY_CONTENT,
+    headers:{'Content-Type':mimeType},
+  },(p)=>{
+    if(onProgress&&p.totalBytesExpectedToSend>0)onProgress(p.totalBytesSent/p.totalBytesExpectedToSend);
+  });
+  const res=await task.uploadAsync();
+  if(!res||res.status<200||res.status>=300)throw new Error(`Drive upload failed (${res?.status||'no response'})`);
+  const id=JSON.parse(res.body||'{}').id;
+  if(!id)throw new Error('Drive: upload returned no file id');
+
+  await gapi(`/drive/v3/files/${id}/permissions`,{method:'POST',json:{role:'reader',type:'anyone'}}).catch(()=>{});
+  return{
+    id,
+    viewLink:`https://drive.google.com/file/d/${id}/view`,
+    downloadLink:`https://drive.google.com/uc?export=download&id=${id}`,
+  };
 }
 
 // --- Sheets (the broad drive scope covers the Sheets API) --------------------

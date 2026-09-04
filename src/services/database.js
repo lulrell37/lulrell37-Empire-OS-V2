@@ -23,6 +23,7 @@ export async function initDatabase(){
     CREATE TABLE IF NOT EXISTS trades(id INTEGER PRIMARY KEY AUTOINCREMENT,persona TEXT DEFAULT 'talon',symbol TEXT,side TEXT,qty REAL,entry_ref REAL,entry_fill REAL,stop_loss REAL,take_profit REAL,setup TEXT,rationale TEXT,status TEXT DEFAULT 'open',order_id TEXT,position_id TEXT,opened_at INTEGER,closed_at INTEGER,exit_price REAL,realized_pl REAL,pl_estimated INTEGER DEFAULT 0,outcome TEXT,r_multiple REAL,review TEXT,misses INTEGER DEFAULT 0,last_unrealized REAL,auto INTEGER DEFAULT 0,created_at INTEGER,updated_at INTEGER);
     CREATE TABLE IF NOT EXISTS deep_research(id TEXT PRIMARY KEY,topic TEXT,persona TEXT,mode TEXT DEFAULT 'direct',model TEXT,status TEXT DEFAULT 'running',progress TEXT,result TEXT,error TEXT,started_at INTEGER,finished_at INTEGER,created_at INTEGER,updated_at INTEGER);
     CREATE TABLE IF NOT EXISTS leads(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT,business TEXT,website TEXT,contact TEXT,bottleneck TEXT,segment TEXT,value TEXT,stage TEXT DEFAULT 'new',next_action TEXT,next_touch TEXT,last_touch TEXT,log TEXT DEFAULT '',source TEXT DEFAULT 'scout',source_id TEXT,created_at INTEGER,updated_at INTEGER);
+    CREATE TABLE IF NOT EXISTS clip_jobs(id TEXT PRIMARY KEY,issue_number INTEGER,media_url TEXT,instructions TEXT,status TEXT DEFAULT 'queued',result_url TEXT,share_url TEXT,note TEXT,last_comment_id INTEGER DEFAULT 0,created_at INTEGER,updated_at INTEGER);
   `);
   await migrateHudColumns();
   await migratePersonaMemory();
@@ -54,6 +55,7 @@ const SYNC_TABLES={
   expenses:'lower(hex(randomblob(16)))',
   important_dates:'lower(hex(randomblob(16)))',
   build_jobs:'NEW.id',
+  clip_jobs:'NEW.id',
   trades:'lower(hex(randomblob(16)))',
   leads:'lower(hex(randomblob(16)))',
   business_targets:'NEW.business',
@@ -100,14 +102,14 @@ async function initSync(){
     // build_jobs is keyed on a synthetic `id` (`owner/repo#issue`) that equals
     // its sync_id. Rows arriving from another device via sync insert without an
     // `id`; backfill it from sync_id so getBuildJob(id) keeps working.
-    if(t==='build_jobs'){
+    if(t==='build_jobs'||t==='clip_jobs'){
       await db.execAsync(`
-        DROP TRIGGER IF EXISTS build_jobs_id_fill;
-        CREATE TRIGGER build_jobs_id_fill AFTER INSERT ON build_jobs
+        DROP TRIGGER IF EXISTS ${t}_id_fill;
+        CREATE TRIGGER ${t}_id_fill AFTER INSERT ON ${t}
         WHEN NEW.id IS NULL AND NEW.sync_id IS NOT NULL
-        BEGIN UPDATE build_jobs SET id=NEW.sync_id WHERE rowid=NEW.rowid; END;
+        BEGIN UPDATE ${t} SET id=NEW.sync_id WHERE rowid=NEW.rowid; END;
       `);
-      await db.execAsync(`UPDATE build_jobs SET id=sync_id WHERE id IS NULL AND sync_id IS NOT NULL`);
+      await db.execAsync(`UPDATE ${t} SET id=sync_id WHERE id IS NULL AND sync_id IS NOT NULL`);
     }
   }
 }
@@ -609,6 +611,33 @@ export async function getLeadsForOutreach(limit=5){
      ORDER BY (stage='inbound') DESC, created_at ASC
      LIMIT ?`,[limit]);
 }
+
+// --- R.O.G.U.E. clip-edit jobs -----------------------------------------
+// Mirrors build_jobs: id is `owner/repo#issue`, the GitHub issue is the queue,
+// a scheduled Descript agent works it and reports back via issue comments.
+// status: queued | editing | done | failed | cancelled
+const CLIP_TERMINAL=['done','failed','cancelled'];
+export async function addClipJob({id,issueNumber,mediaUrl,instructions}){
+  const now=Date.now();
+  await db.runAsync(
+    `INSERT INTO clip_jobs(id,issue_number,media_url,instructions,status,last_comment_id,created_at,updated_at)
+     VALUES(?,?,?,?,'queued',0,?,?)
+     ON CONFLICT(id) DO UPDATE SET media_url=excluded.media_url,instructions=excluded.instructions,updated_at=excluded.updated_at`,
+    [id,issueNumber,mediaUrl||'',instructions||'',now,now]);
+  return id;
+}
+export async function updateClipJob(id,patch){
+  const keys=Object.keys(patch);
+  if(!keys.length)return;
+  await db.runAsync(`UPDATE clip_jobs SET ${keys.map(k=>k+'=?').join(',')},updated_at=? WHERE id=?`,[...keys.map(k=>patch[k]),Date.now(),id]);
+}
+export async function getClipJobs(limit=40){return await db.getAllAsync('SELECT * FROM clip_jobs ORDER BY created_at DESC LIMIT ?',[limit]);}
+export async function getActiveClipJobs(){
+  const q=CLIP_TERMINAL.map(()=>'?').join(',');
+  return await db.getAllAsync(`SELECT * FROM clip_jobs WHERE status NOT IN (${q}) ORDER BY created_at DESC`,CLIP_TERMINAL);
+}
+export async function getClipJob(id){return await db.getFirstAsync('SELECT * FROM clip_jobs WHERE id=?',[id]);}
+export async function getClipJobByIssue(issueNumber){return await db.getFirstAsync('SELECT * FROM clip_jobs WHERE issue_number=? ORDER BY created_at DESC LIMIT 1',[issueNumber]);}
 
 // --- Trade journal (Atlas) -------------------------------------------------
 // One row per trade Mr. Burrus confirmed. Opened on confirm; reconciled against

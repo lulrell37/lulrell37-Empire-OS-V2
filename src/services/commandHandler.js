@@ -149,6 +149,11 @@ export async function handleCommands(response,personaId,callbacks={}){
     await appendLeadLog(lead.id,m[2].trim());
     callbacks.onLeadChange?.({action:'log',id:lead.id,name:lead.name});
   }
+  // --- R.O.G.U.E. clip editing ---
+  for(const m of response.matchAll(/\[EDIT_CLIP:\s*(\S+)\s*\|\s*([\s\S]+?)\]/gi)){
+    const mediaUrl=m[1].trim();const instructions=m[2].trim();
+    if(mediaUrl&&instructions)callbacks.onClipEdit?.({mediaUrl,instructions});
+  }
   // --- Pinned memory (any persona) ---
   for(const m of response.matchAll(/\[REMEMBER:\s*([^|\]]+?)(?:\s*\|\s*(\d+))?\]/gi)){
     const txt=m[1]?.trim();if(!txt)continue;
@@ -246,6 +251,7 @@ export function stripCommands(text){
     .replace(/\[LEAD_EMAIL:[^\]]*\]/gi,'').replace(/\[LEAD_LIST(?::[^\]]*)?\]/gi,'').replace(/\[LEADS\]/gi,'')
     .replace(/\[SCAN_INBOUND(?::[^\]]*)?\]/gi,'')
     .replace(/\[REMEMBER:[^\]]*\]/gi,'').replace(/\[UNPIN_MEMORY:[^\]]*\]/gi,'')
+    .replace(/\[EDIT_CLIP:[^\]]*\]/gi,'')
     .replace(/\[SHOW_CHART:[^\]]*\]/gi,'')
     .replace(/\[BUILD_REQUEST:[^\]]*\]/gi,'').replace(/\[BUILD_REPLY:[^\]]*\]/gi,'')
     .replace(/\[BUILD_MERGE:[^\]]*\]/gi,'').replace(/\[BUILD_CANCEL:[^\]]*\]/gi,'').replace(/\[BUILD_STATUS\]/gi,'')
