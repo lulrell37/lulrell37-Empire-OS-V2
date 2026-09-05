@@ -49,11 +49,13 @@ export default function NudgeBar({active}){
     const id=anim.addListener(({value})=>{
       if(!paused.current)scrollRef.current?.scrollTo({x:value,animated:false});
     });
+    // Scroll to the end, pause, then snap back to the start (no reverse-scroll
+    // animation) and go again — a continuous loop instead of a bounce.
     const loop=Animated.loop(Animated.sequence([
       Animated.delay(1500),
       Animated.timing(anim,{toValue:overflow,duration:Math.max(4000,overflow*45),easing:Easing.inOut(Easing.quad),useNativeDriver:false}),
       Animated.delay(1500),
-      Animated.timing(anim,{toValue:0,duration:Math.max(4000,overflow*45),easing:Easing.inOut(Easing.quad),useNativeDriver:false}),
+      Animated.timing(anim,{toValue:0,duration:0,useNativeDriver:false}),
     ]));
     loop.start();
     return()=>{loop.stop();anim.removeListener(id);};
