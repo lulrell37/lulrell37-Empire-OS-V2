@@ -62,8 +62,8 @@ const SCATTER=(()=>{
   for(let i=0;i<PERSONA_LIST.length;i++){
     if(pts[i])continue;
     let best=null,bestD=-1;
-    for(let tries=0;tries<14;tries++){
-      const c={x:(rnd()*2-1)*3.6,y:(rnd()*2-1)*2.7,z:REST_Z_MIN+rnd()*(REST_Z_MAX-REST_Z_MIN)};
+    for(let tries=0;tries<26;tries++){
+      const c={x:(rnd()*2-1)*4.6,y:(rnd()*2-1)*3.3,z:REST_Z_MIN+rnd()*(REST_Z_MAX-REST_Z_MIN)};
       let d=99;
       for(const p of pts)if(p)d=Math.min(d,Math.hypot(p.x-c.x,p.y-c.y,p.z-c.z));
       for(const p of fixed)d=Math.min(d,Math.hypot(p.x-c.x,p.y-c.y,p.z-c.z));
@@ -94,7 +94,7 @@ PERSONA_LIST.forEach((p,i)=>{ID_INDEX[p.id]=i;});
 // Mirrors the orb opacity-by-depth curve used below, as a plain function —
 // needed to fade tether lines the same way without going through Animated.
 function depthOpacity(depth){
-  const pts=[[0.15,0],[1.5,1],[6,0.18],[11,0.06]];
+  const pts=[[0.15,0],[1.0,1],[6,0.18],[11,0.06]];
   if(depth<=pts[0][0])return pts[0][1];
   for(let i=1;i<pts.length;i++){
     if(depth<=pts[i][0]){
@@ -386,9 +386,9 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,onPick,onLaunch,pinned
   const pinnedRef=useRef(pinned);
   useEffect(()=>{pinnedRef.current=pinned;},[pinned]);
   const yaw=useRef(new Animated.Value(0)).current;        // 0 = dead ahead, so the front pair sits exactly left/right of center
-  const dolly=useRef(new Animated.Value(-4.2)).current;   // start outside, cloud ahead
-  const yStart=useRef(0),dStart=useRef(-4.2);
-  const yawNow=useRef(0),dollyNow=useRef(-4.2);
+  const dolly=useRef(new Animated.Value(-3.6)).current;   // start outside, cloud ahead
+  const yStart=useRef(0),dStart=useRef(-3.6);
+  const yawNow=useRef(0),dollyNow=useRef(-3.6);
   const glowPulse=useRef(new Animated.Value(0)).current;
   const tetherGlow=useRef(new Animated.Value(0.35)).current; // slow on/off glow on the tether lines
   const sizeRef=useRef(size);
@@ -493,14 +493,16 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,onPick,onLaunch,pinned
   },[]);// eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(()=>{
-    // Same as sparkles below: this gets combined (Animated.add) with the
-    // fundamentally JS-driven yaw/dolly position math, so it must run
-    // JS-driven too — native-driven here throws "Attempting to run JS driven
-    // animation on animated node that has been moved to 'native'".
+    // The bob itself now applies as its own transform on a nested view (see
+    // the render below) instead of being summed via Animated.add into the
+    // JS-driven yaw/dolly position math — that mixing is what forced it onto
+    // the JS thread before, which stuttered under any JS-thread load (drag,
+    // re-renders, GC). Decoupled like this it can run on the native/UI
+    // thread, which is what "idle drift" actually needs to stay smooth.
     const loops=floats.map((v,i)=>Animated.loop(Animated.sequence([
       Animated.delay((i*233)%1100),
-      Animated.timing(v,{toValue:1,duration:2400+((i*173)%1600),easing:Easing.inOut(Easing.sin),useNativeDriver:false}),
-      Animated.timing(v,{toValue:0,duration:2400+((i*197)%1600),easing:Easing.inOut(Easing.sin),useNativeDriver:false}),
+      Animated.timing(v,{toValue:1,duration:2400+((i*173)%1600),easing:Easing.inOut(Easing.sin),useNativeDriver:true}),
+      Animated.timing(v,{toValue:0,duration:2400+((i*197)%1600),easing:Easing.inOut(Easing.sin),useNativeDriver:true}),
     ])));
     loops.forEach(l=>l.start());
     return()=>loops.forEach(l=>l.stop());
@@ -554,17 +556,19 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,onPick,onLaunch,pinned
       const depth=Animated.subtract(z1,dolly);
       const denom=Animated.add(1.0,Animated.multiply(depth,0.14))
         .interpolate({inputRange:[0.4,20],outputRange:[0.4,20],extrapolate:'clamp'});
-      const bobX=floats[i].interpolate({inputRange:[0,1],outputRange:[-3,3]});
-      const bobY=floats[i].interpolate({inputRange:[0,1],outputRange:[-7,7]});
       return{
         p,
-        translateX:Animated.add(Animated.divide(Animated.multiply(x1,RX),denom),bobX),
-        translateY:Animated.add(Animated.divide(Animated.multiply(pt.y,RY),denom),bobY),
+        translateX:Animated.divide(Animated.multiply(x1,RX),denom),
+        translateY:Animated.divide(Animated.multiply(pt.y,RY),denom),
+        // Kept off the JS-driven translateX/Y above (see the float loop) so
+        // the bob can run on the native thread via its own transform layer.
+        bobX:floats[i].interpolate({inputRange:[0,1],outputRange:[-3,3]}),
+        bobY:floats[i].interpolate({inputRange:[0,1],outputRange:[-7,7]}),
         scale:Animated.multiply(
           depth.interpolate({inputRange:[0.3,2.2,6,11],outputRange:[1.55,1.12,0.45,0.22],extrapolate:'clamp'}),
           sparkles[i].interpolate({inputRange:[0,1],outputRange:[0.92,1.1]})),
         opacity:Animated.multiply(
-          depth.interpolate({inputRange:[0.15,1.5,6,11],outputRange:[0,1,0.18,0.06],extrapolate:'clamp'}),
+          depth.interpolate({inputRange:[0.15,1.0,6,11],outputRange:[0,1,0.18,0.06],extrapolate:'clamp'}),
           sparkles[i].interpolate({inputRange:[0,1],outputRange:[0.6,1]})),
       };
     });
@@ -583,6 +587,11 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,onPick,onLaunch,pinned
   // call a stale closure.
   const onOrbPressRef=useRef(onOrbPress);
   useEffect(()=>{onOrbPressRef.current=onOrbPress;},[onOrbPress]);
+  // endpointFor gives an orb's real current screen position (cloud-projected
+  // or already-pinned, either way) — kept fresh via ref for the same reason
+  // onOrbPress is, since the responders below are built once.
+  const endpointForRef=useRef(endpointFor);
+  useEffect(()=>{endpointForRef.current=endpointFor;},[endpointFor]);
 
   // One PanResponder per persona, built once. A touch that never moves past
   // the threshold is a tap (or, held past 280ms, a long-press to toggle group
@@ -593,13 +602,25 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,onPick,onLaunch,pinned
   const orbResponders=useMemo(()=>{
     const map={};
     PERSONA_LIST.forEach(p=>{
-      const st=dragRef.current[p.id]={moved:false,longTimer:null,longFired:false};
+      const st=dragRef.current[p.id]={moved:false,longTimer:null,longFired:false,grabX:0,grabY:0};
       map[p.id]=PanResponder.create({
         onStartShouldSetPanResponder:()=>true,
         onMoveShouldSetPanResponder:()=>true,
         onPanResponderTerminationRequest:()=>false,
-        onPanResponderGrant:()=>{
+        onPanResponderGrant:(e,g)=>{
           st.moved=false;st.longFired=false;
+          // Grab offset = where you actually touched minus the orb's real
+          // current position (from the projection math, not RN's layout
+          // metrics — nativeEvent.locationX/Y is what threw the orb to the
+          // top-left before: it's reported relative to the target's
+          // pre-transform layout frame, not its actual on-screen position,
+          // once the parent has a translate/scale transform applied).
+          // Without this offset the orb re-centers on your finger the
+          // instant you touch it anywhere off its exact center, which reads
+          // as a jump/glitch even though nothing "breaks".
+          const{x:ox,y:oy}=endpointForRef.current(p.id,yawNow.current,dollyNow.current);
+          st.grabX=(g.x0-originRef.current.x)-ox;
+          st.grabY=(g.y0-originRef.current.y)-oy;
           st.longTimer=setTimeout(()=>{if(!st.moved){st.longFired=true;toggle(p.id);}},280);
         },
         onPanResponderMove:(e,g)=>{
@@ -608,15 +629,12 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,onPick,onLaunch,pinned
             if(st.longTimer){clearTimeout(st.longTimer);st.longTimer=null;}
           }
           if(!st.moved)return;
-          // moveX/moveY are the touch's raw page position — always reliable,
-          // unlike nativeEvent.locationX/Y (which is what threw the orb to
-          // the top-left: it's reported relative to the target's pre-
-          // transform layout frame, not its actual on-screen position, once
-          // the parent has a translate/scale transform applied). So the
-          // orb's center just tracks the finger directly instead of trying
-          // to preserve exactly where within the orb you grabbed it.
-          const lx=g.moveX-originRef.current.x;
-          const ly=g.moveY-originRef.current.y;
+          // moveX/moveY are the touch's raw page position — always reliable
+          // regardless of transforms. Subtracting the grab offset keeps the
+          // orb tracking the same point you grabbed it at, instead of
+          // snapping its center to the finger.
+          const lx=g.moveX-originRef.current.x-st.grabX;
+          const ly=g.moveY-originRef.current.y-st.grabY;
           setPinned(prev=>({...prev,[p.id]:{tx:lx-sizeRef.current.w/2,ty:ly-sizeRef.current.h*0.42}}));
           computeTethers();
         },
@@ -643,14 +661,19 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,onPick,onLaunch,pinned
               strokeOpacity={Animated.multiply(tetherGlow,t.opacity)}/>
           ))}
         </Svg>
-        {order.map(oi=>orbs[oi]).filter(({p})=>!pinned[p.id]).map(({p,translateX,translateY,scale,opacity})=>{
+        {order.map(oi=>orbs[oi]).filter(({p})=>!pinned[p.id]).map(({p,translateX,translateY,scale,opacity,bobX,bobY})=>{
           const selected=group.includes(p.id);
           return(
             <Animated.View key={p.id} style={[s.orbWrap,{opacity,transform:[{translateX},{translateY},{scale}]}]}>
-              <View style={s.orbBox} {...orbResponders[p.id].panHandlers}>
-                <OrbVisual p={p} selected={selected} pic={pics[p.id]} unread={unreadPersonas?.has?.(p.id)} glowPulse={glowPulse}/>
-              </View>
-              <Text style={[s.orbName,{color:p.color},selected&&{fontWeight:'700'}]} numberOfLines={1}>{p.name.replace(/\./g,'')}</Text>
+              {/* Idle bob lives on its own native-driven transform layer,
+                  separate from the JS-driven cloud position above — see the
+                  float loop for why. */}
+              <Animated.View style={{transform:[{translateX:bobX},{translateY:bobY}]}}>
+                <View style={s.orbBox} {...orbResponders[p.id].panHandlers}>
+                  <OrbVisual p={p} selected={selected} pic={pics[p.id]} unread={unreadPersonas?.has?.(p.id)} glowPulse={glowPulse}/>
+                </View>
+                <Text style={[s.orbName,{color:p.color},selected&&{fontWeight:'700'}]} numberOfLines={1}>{p.name.replace(/\./g,'')}</Text>
+              </Animated.View>
             </Animated.View>
           );
         })}
