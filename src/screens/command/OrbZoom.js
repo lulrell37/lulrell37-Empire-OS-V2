@@ -24,10 +24,10 @@ const WHEEL_MID=1200;// px of scroll slack each side of the wheel-catcher — bi
 const SAMP=[],SIN=[],COS=[];
 for(let k=0;k<=480;k++){const v=-12*Math.PI+(24*Math.PI)*(k/480);SAMP.push(v);SIN.push(Math.sin(v));COS.push(Math.cos(v));}
 
-// Personas scattered through a wide 3D volume (not a sphere shell). A.R.A. and
-// J.A.R.V.I.S. get fixed, symmetric front-row seats close to the camera — the
-// only two you land on, everyone else starts noticeably farther back (faint,
-// small) and only reads clearly once you've dollied in past the front pair.
+// Personas scattered through a wide 3D volume (not a sphere shell). A.R.A.
+// gets a fixed front-row seat close to the camera — the only one you land on
+// — everyone else, Jarvis included, starts noticeably farther back (faint,
+// small) and only reads clearly once you've dollied in past her.
 // Atlas+Talon and Selene+Rogue each get their own fixed "department" hub —
 // close to their partner, but the two hubs sit apart from each other and from
 // the general cloud so each department reads as its own space. Everyone else
@@ -35,9 +35,8 @@ for(let k=0;k<=480;k++){const v=-12*Math.PI+(24*Math.PI)*(k/480);SAMP.push(v);SI
 // stable across a session; a light min-distance pass keeps them from
 // clumping (and from landing on top of the fixed seats/hubs). You yaw the
 // cloud and fly forward/back through it.
-// Front pair sits a touch off-level from each other (not perfectly mirrored)
-// so they read as two individuals side by side rather than a symmetric icon.
-const FRONT_Z=-2.6, FRONT_X=0.95, FRONT_Y=0.35;
+const FRONT_Z=-2.6;   // Ara's fixed front-seat depth — the only one you land on
+const SIZE_BOOST={ara:1.2};   // flat size bump on top of the depth-driven scale
 const FINANCE_HUB={x:2.6,y:-1.4,z:3.2};   // Atlas + Talon
 const CONTENT_HUB={x:-2.6,y:1.3,z:3.6};   // Selene + Rogue
 const REST_Z_MIN=1.8,REST_Z_MAX=5.2;      // everyone else's depth range — well behind the front pair
@@ -53,8 +52,7 @@ const SCATTER=(()=>{
   };
   const ID_INDEX_BUILD={};
   PERSONA_LIST.forEach((p,i)=>{ID_INDEX_BUILD[p.id]=i;});
-  setFixed('ara',{x:-FRONT_X,y:FRONT_Y,z:FRONT_Z});
-  setFixed('jarvis',{x:FRONT_X,y:-FRONT_Y,z:FRONT_Z});
+  setFixed('ara',{x:0,y:0,z:FRONT_Z});
   setFixed('atlas',{x:FINANCE_HUB.x+0.35,y:FINANCE_HUB.y-0.15,z:FINANCE_HUB.z});
   setFixed('talon',{x:FINANCE_HUB.x-0.35,y:FINANCE_HUB.y+0.15,z:FINANCE_HUB.z+0.1});
   setFixed('selene',{x:CONTENT_HUB.x+0.35,y:CONTENT_HUB.y+0.1,z:CONTENT_HUB.z});
@@ -565,8 +563,10 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,onPick,onLaunch,pinned
         bobX:floats[i].interpolate({inputRange:[0,1],outputRange:[-3,3]}),
         bobY:floats[i].interpolate({inputRange:[0,1],outputRange:[-7,7]}),
         scale:Animated.multiply(
-          depth.interpolate({inputRange:[0.3,2.2,6,11],outputRange:[1.55,1.12,0.45,0.22],extrapolate:'clamp'}),
-          sparkles[i].interpolate({inputRange:[0,1],outputRange:[0.92,1.1]})),
+          Animated.multiply(
+            depth.interpolate({inputRange:[0.3,2.2,6,11],outputRange:[1.55,1.12,0.45,0.22],extrapolate:'clamp'}),
+            sparkles[i].interpolate({inputRange:[0,1],outputRange:[0.92,1.1]})),
+          SIZE_BOOST[p.id]||1),
         opacity:Animated.multiply(
           depth.interpolate({inputRange:[0.15,1.0,6,11],outputRange:[0,1,0.18,0.06],extrapolate:'clamp'}),
           sparkles[i].interpolate({inputRange:[0,1],outputRange:[0.6,1]})),
@@ -677,17 +677,24 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,onPick,onLaunch,pinned
             </Animated.View>
           );
         })}
-        {/* Manually placed orbs render last so they're always on top, fully
-            decoupled from the depth-sorted cloud and its idle drift/bob. */}
+        {/* Manually placed orbs render last so they're always on top, decoupled
+            from the depth-sorted cloud's position/scale/opacity (dragging one
+            fixes it to a screen spot instead of the camera) — but they keep
+            the same idle bob as everyone else instead of going dead still. */}
         {PERSONA_LIST.filter(p=>pinned[p.id]).map(p=>{
           const pin=pinned[p.id];
           const selected=group.includes(p.id);
+          const fi=ID_INDEX[p.id];
+          const bobX=floats[fi].interpolate({inputRange:[0,1],outputRange:[-3,3]});
+          const bobY=floats[fi].interpolate({inputRange:[0,1],outputRange:[-7,7]});
           return(
             <View key={p.id} style={[s.orbWrap,{transform:[{translateX:pin.tx},{translateY:pin.ty}]}]}>
-              <View style={s.orbBox} {...orbResponders[p.id].panHandlers}>
-                <OrbVisual p={p} selected={selected} pic={pics[p.id]} unread={unreadPersonas?.has?.(p.id)} glowPulse={glowPulse}/>
-              </View>
-              <Text style={[s.orbName,{color:p.color},selected&&{fontWeight:'700'}]} numberOfLines={1}>{p.name.replace(/\./g,'')}</Text>
+              <Animated.View style={{transform:[{translateX:bobX},{translateY:bobY}]}}>
+                <View style={s.orbBox} {...orbResponders[p.id].panHandlers}>
+                  <OrbVisual p={p} selected={selected} pic={pics[p.id]} unread={unreadPersonas?.has?.(p.id)} glowPulse={glowPulse}/>
+                </View>
+                <Text style={[s.orbName,{color:p.color},selected&&{fontWeight:'700'}]} numberOfLines={1}>{p.name.replace(/\./g,'')}</Text>
+              </Animated.View>
             </View>
           );
         })}

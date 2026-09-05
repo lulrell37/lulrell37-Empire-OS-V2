@@ -2,9 +2,10 @@
 //
 // Runs while the app is open (App.js starts/stops it on foreground), gated on
 // the `auto_scout` setting. Every `auto_scout_interval_min` minutes it:
-//   1. prospects one metro x segment cell of the nationwide grid and adds the
-//      genuine ICP fits to the pipeline (deduped),
-//   2. every 3rd cycle, sweeps Reddit/HN/X for inbound buying signals,
+//   1. sweeps X / Hacker News / Reddit for inbound buying signals — people
+//      already looking for us — and claims the lead budget first,
+//   2. prospects one metro x segment cell of the nationwide grid with
+//      whatever lead-budget room is left,
 //   3. cold-emails fresh leads their opener — NO confirmation prompt,
 //   4. sends due follow-ups.
 // Daily caps (`auto_scout_daily_leads`, `auto_scout_daily_emails`) bound the
@@ -16,7 +17,7 @@ import{gmailSend,googleConnected}from './googleClient';
 import{pickTarget,pickInboundQuery}from './scoutTargets';
 import{pushLeadsToSheet}from './leadsSheet';
 
-let timer=null,running=false,busy=false,cycle=0;
+let timer=null,running=false,busy=false;
 let lastHeartbeat=0,lastError=0;
 const HEARTBEAT_MS=1800000;
 const ERROR_MS=3600000;
@@ -63,7 +64,7 @@ function parseSubjectBody(text){
 }
 function plusDays(n){const d=new Date();d.setDate(d.getDate()+n);return d.toISOString().split('T')[0];}
 
-// --- 1. prospecting -----------------------------------------------------
+// --- outbound prospecting (fills whatever lead-budget room inbound left) --
 async function prospectPass(stats,dailyLeads){
   if(stats.added>=dailyLeads)return;
   let cursor=0;
@@ -106,7 +107,7 @@ async function prospectPass(stats,dailyLeads){
   if(added)emit(`AUTO-SCOUT · ${metro} / ${segment} — +${added} lead${added===1?'':'s'} (${stats.added}/${dailyLeads} today)`);
 }
 
-// --- 2. inbound signal sweep -------------------------------------------
+// --- inbound signal sweep (priority — runs first, claims budget first) ---
 async function inboundPass(stats,dailyLeads){
   if(stats.added>=dailyLeads)return;
   let cursor=0;
@@ -207,10 +208,12 @@ async function runOnce(){
     const dailyLeads=Math.max(1,parseInt(await getSetting('auto_scout_daily_leads','20'),10)||20);
     const dailyEmails=Math.max(0,parseInt(await getSetting('auto_scout_daily_emails','20'),10)||20);
     const stats=await loadStats();
-    cycle++;
 
+    // Inbound (X + Hacker News, then Reddit) is the priority — it goes first
+    // and claims the lead budget, with outbound prospecting filling whatever
+    // room is left rather than the other way around.
+    await inboundPass(stats,dailyLeads).catch(()=>{});
     await prospectPass(stats,dailyLeads).catch(()=>{});
-    if(cycle%3===0||stats.added>=dailyLeads)await inboundPass(stats,dailyLeads).catch(()=>{});
     await outreachPass(stats,dailyEmails).catch(()=>{});
     await followupPass(stats,dailyEmails).catch(()=>{});
 
@@ -228,7 +231,7 @@ async function runOnce(){
 export async function startAutoScout(){
   if(running)return;
   if((await getSetting('auto_scout','0'))!=='1')return;
-  running=true;cycle=0;lastHeartbeat=0;
+  running=true;lastHeartbeat=0;
   const mins=Math.max(1,parseInt(await getSetting('auto_scout_interval_min','30'),10)||30);
   timer=setInterval(runOnce,mins*60000);
   setTimeout(()=>{runOnce();},9000);

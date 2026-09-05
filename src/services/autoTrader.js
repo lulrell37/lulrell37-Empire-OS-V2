@@ -9,7 +9,7 @@
 // This is a deliberately unguarded experiment: no daily caps, no loss
 // kill-switch. The ONE hard rule is env must be 'demo' — the loop refuses to
 // place a single order on a live account and stops itself if it sees one.
-import{tlStatus,tlSnapshot,tlFormatSnapshot,tlPlaceOrder,tlClosePosition,tlModifyPosition,tlPositions,tlInstrumentsById,MAX_QTY,MAX_OPEN_POSITIONS}from './tradeLocker';
+import{tlStatus,tlConnect,tlSnapshot,tlFormatSnapshot,tlPlaceOrder,tlClosePosition,tlModifyPosition,tlPositions,tlInstrumentsById,MAX_QTY,MAX_OPEN_POSITIONS}from './tradeLocker';
 import{autoTradeDecision}from './aiService';
 import{reconcileOpenTrades,formatTradeRecord,getStrategy,recordTradeOpen,TRADER_ID}from './tradeJournal';
 import{getSetting,saveMessage,savePersonaMemory}from './database';
@@ -33,10 +33,19 @@ async function runOnce(){
   busy=true;
   try{
     if((await getSetting('auto_trade','0'))!=='1'){stopAutoTrader();return;}
-    const st=tlStatus();
+    let st=tlStatus();
     if(!st.connected){
-      if(!warnedDisconnected){warnedDisconnected=true;emit('AUTO-TRADE waiting — TradeLocker isn’t connected yet. Log in under Settings › TRADELOCKER; the loop starts watching once the session is live.');}
-      return;
+      // The session is memory-only (no backend), so it's gone every time the
+      // JS engine restarts — a cold app open, or Android reclaiming the app
+      // in the background. Previously this just waited for something else
+      // (the TradeStatus pill, if the user happened to open T.A.L.O.N.'s
+      // chat) to reconnect it, so auto-trade could sit dead indefinitely
+      // after any restart. Reconnect here directly instead.
+      try{await tlConnect();st=tlStatus();}
+      catch(e){
+        if(!warnedDisconnected){warnedDisconnected=true;emit('AUTO-TRADE waiting — TradeLocker login failed ('+String(e?.message||e).split('\n')[0]+'). Retrying each cycle; check Settings › TRADELOCKER if this persists.');}
+        return;
+      }
     }
     warnedDisconnected=false;
     if(st.env!=='demo'){

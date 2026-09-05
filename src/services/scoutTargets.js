@@ -35,13 +35,19 @@ export const SEGMENTS=[
   'solar installer','security system installer','locksmith','appliance repair','septic service',
 ];
 
-// cursor -> which cell of the grid to work this cycle
+// cursor -> which cell of the grid to work this cycle. Segment is the
+// fast-varying axis and metro the slow one — so one cycle sweeps every
+// business type in a metro (~a day) before moving to the next metro, instead
+// of sweeping every metro on one business type (~a day and a half) before
+// ever touching a second type. The cursor increments by 1 per auto-scout
+// cycle (~every 30 min), so with segment varying fastest, leads diversify by
+// business type within hours instead of only every ~40 hours.
 export function pickTarget(cursor=0){
   const c=Math.abs(Math.floor(cursor))||0;
   const total=US_METROS.length*SEGMENTS.length;
   const i=c%total;
-  const metro=US_METROS[i%US_METROS.length];
-  const segment=SEGMENTS[Math.floor(i/US_METROS.length)%SEGMENTS.length];
+  const segment=SEGMENTS[i%SEGMENTS.length];
+  const metro=US_METROS[Math.floor(i/SEGMENTS.length)%US_METROS.length];
   return{metro,segment,index:i,total};
 }
 

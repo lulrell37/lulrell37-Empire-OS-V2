@@ -1,8 +1,13 @@
 // Lightweight TradeLocker connection pill. Reads the synchronous tlStatus()
-// (no network) and makes ONE lazy tlConnect() on mount so the pill can turn
+// (no network) and makes a lazy tlConnect() on mount so the pill can turn
 // green on a screen that doesn't otherwise talk to the broker. After that it
 // just re-reads the sync flag on a timer — the trading panel's own polls keep
-// the session warm. No background heartbeat, no self-healing loop.
+// the session warm. A failed connect attempt (anything but missing creds)
+// retries quietly every 10s instead of sitting on OFFLINE until the user
+// happens to leave this screen and come back — the session is memory-only
+// (no backend), so every cold app start needs a fresh handshake, and a
+// transient failure right at launch (network not up yet, a brief
+// TradeLocker hiccup) shouldn't require a manual nudge to recover from.
 import React,{useState,useEffect,useRef}from 'react';
 import{View,Text,StyleSheet,TouchableOpacity}from 'react-native';
 import{tlStatus,tlConnect}from '../services/tradeLocker';
@@ -28,18 +33,28 @@ export default function TradeStatus({active=true,style,onPress}){
   useEffect(()=>{
     alive.current=true;
     if(!active)return()=>{alive.current=false;};
-    if(!tlStatus().connected){
+    let retryTimer=null;
+    const tryConnect=()=>{
+      if(!alive.current)return;
       setState('connecting');
       tlConnect()
         .then(a=>{if(alive.current){setState(tlStatus().rateLimited?'limited':'live');setEnv(a?.env||tlStatus().env);}})
-        .catch(e=>{if(alive.current)setState(/not connected|add your login/i.test(e?.message||'')?'unconfigured':'offline');});
-    }
+        .catch(e=>{
+          if(!alive.current)return;
+          const unconfigured=/not connected|add your login/i.test(e?.message||'');
+          setState(unconfigured?'unconfigured':'offline');
+          // Missing creds needs the user to act in Settings — don't hammer
+          // the API for that. Anything else is worth quietly retrying.
+          if(!unconfigured)retryTimer=setTimeout(tryConnect,10000);
+        });
+    };
+    if(!tlStatus().connected)tryConnect();
     const iv=setInterval(()=>{
       if(!alive.current)return;
       const s=tlStatus();
       if(s.connected){setState(s.rateLimited?'limited':'live');setEnv(s.env);}
     },POLL_MS);
-    return()=>{alive.current=false;clearInterval(iv);};
+    return()=>{alive.current=false;clearInterval(iv);if(retryTimer)clearTimeout(retryTimer);};
   },[active]);
 
   const tone=TONE[state]||TONE.connecting;

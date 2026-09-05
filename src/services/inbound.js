@@ -149,29 +149,49 @@ async function scanHackerNews(queries,signal){
   return dedupeByUrl(out);
 }
 
+// Two angles on X per sweep instead of one generic call — gives it real
+// coverage alongside Reddit/HN's multi-query loops rather than a single
+// afterthought search.
+const X_QUERIES=[
+  'small business owners on X this week saying "looking for someone to build" a custom tool or automation',
+  'X posts this week asking "does anyone know a developer who can automate" for a small business',
+];
+async function scanX(personaId,customQuery,signal){
+  const{webSearch}=await import('./aiService');
+  const queries=customQuery?[`${customQuery} — recent posts on X / Twitter, people asking for this`]:X_QUERIES;
+  const blocks=[];
+  for(const q of queries){
+    try{
+      const r=await webSearch(personaId,q,signal);
+      if(r&&String(r).trim())blocks.push(String(r).trim().slice(0,1200));
+    }catch(e){if(e?.name==='AbortError')throw e;}
+  }
+  return blocks;
+}
+
 // Returns a text digest for the [SCAN_INBOUND] tool injection in CommandScreen.
+// X and Hacker News are the priority channels — people there tend to post the
+// exact "does anyone know a tool that..." buying signal in public, searchable
+// form. Reddit still runs (it's free, direct-API, sometimes turns up real
+// signal too) but reads after the two priority channels in the digest.
 export async function runInboundScan(personaId,extraQuery,signal){
   const custom=String(extraQuery||'').trim();
   const queries=custom?[custom]:DEFAULT_QUERIES;
   const parts=[];
 
-  const[reddit,hn]=await Promise.all([
-    scanReddit(queries.slice(0,4),signal).catch(()=>[]),
+  const[hn,xBlocks,reddit]=await Promise.all([
     scanHackerNews(queries.slice(0,4),signal).catch(()=>[]),
+    scanX(personaId,custom,signal).catch(()=>[]),
+    scanReddit(queries.slice(0,4),signal).catch(()=>[]),
   ]);
-  const posts=[...reddit,...hn].slice(0,24);
-  parts.push(posts.length
-    ?'REDDIT / HACKER NEWS — recent posts matching the search:\n'+posts.map(p=>`  [${p.tag} · ${p.age}] ${p.title}${p.text?`\n    ${p.text}`:''}\n    ${p.url}`).join('\n')
-    :'REDDIT / HACKER NEWS — nothing matched in the last month.');
 
-  try{
-    const{webSearch}=await import('./aiService');
-    const xq=custom
-      ?`${custom} — recent posts on X / Twitter, people asking for this`
-      :'small business owners on X / Twitter this week asking for custom AI tools or "who builds custom software for small business"';
-    const x=await webSearch(personaId,xq,signal);
-    if(x&&String(x).trim())parts.push('X / WEB — people posting about this right now:\n'+String(x).slice(0,1500));
-  }catch{}
+  parts.push(hn.length
+    ?'HACKER NEWS — recent posts matching the search:\n'+hn.slice(0,12).map(p=>`  [${p.tag} · ${p.age}] ${p.title}${p.text?`\n    ${p.text}`:''}\n    ${p.url}`).join('\n')
+    :'HACKER NEWS — nothing matched in the last month.');
+  parts.push(xBlocks.length
+    ?'X / TWITTER — people posting about this right now:\n'+xBlocks.join('\n\n')
+    :'X / TWITTER — nothing matched.');
+  if(reddit.length)parts.push('REDDIT — recent posts matching the search:\n'+reddit.slice(0,12).map(p=>`  [${p.tag} · ${p.age}] ${p.title}${p.text?`\n    ${p.text}`:''}\n    ${p.url}`).join('\n'));
 
   return parts.join('\n\n---\n\n');
 }
