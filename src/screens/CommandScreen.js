@@ -1340,6 +1340,7 @@ export default function CommandScreen({navigation,route}){
             pushLeadsToSheet().catch(()=>{});
           },
           onMemoryPinned:(e)=>pushSystemMsg(`— pinned for ${e.days}d: ${e.text} —`),
+          onOpenAppFailed:({name})=>pushSystemMsg(`— couldn't open "${name}" — don't know that app yet —`),
           onClipEdit:async({mediaUrl,instructions})=>{
             try{
               const r=await fileClipJob({mediaUrl,instructions});

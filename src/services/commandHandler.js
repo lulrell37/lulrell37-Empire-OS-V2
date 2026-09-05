@@ -1,5 +1,6 @@
 import{addTask,updateTask,completeTask,deleteTask,saveNote,getNote,addRevenue,getTasks,getHudState,updateHudState,setRoutineDone,addRoutineItem,removeRoutineItem,renameRoutineItem,setBatmanDay,getBusinessTargets,setBusinessTarget,setPanelLayout,addExpense,addImportantDate,addLead,updateLead,appendLeadLog,findLead,pinMemory,unpinMemory,getPinnedMemories}from './database';
 import*as gtask from './googleClient';
+import{openApp,openWebpage}from './appLauncher';
 import useEmpireStore from '../store/useEmpireStore';
 const HUD_PANELS=['briefing','businesses','tasks','routine','batman','daily'];
 const PANEL_ALIASES=[['brief','briefing'],['business','businesses'],['revenue','businesses'],['empire','businesses'],['task','tasks'],['routine','routine'],['morning','routine'],['batman','batman'],['protocol','batman'],['training','batman'],['daily','daily'],['word','daily'],['verse','daily'],['fact','daily']];
@@ -58,6 +59,18 @@ export async function handleCommands(response,personaId,callbacks={}){
     if(!title||!content)continue;
     try{await gtask.driveSaveNote({title,content});}
     catch{await saveNote(title,content,personaId);}
+  }
+  // [OPEN_APP: name] launches the actual app (Spotify, Instagram, Maps, Uber,
+  // etc.) by its Android package — never a webpage fallback. [OPEN_WEBPAGE:
+  // url] is the separate, explicit escape hatch for when a webpage genuinely
+  // is what's wanted. Both fire-and-forget: no confirmation, no DB state.
+  for(const m of response.matchAll(/\[OPEN_APP:\s*([^\]]+)\]/gi)){
+    const name=m[1]?.trim();if(!name)continue;
+    openApp(name).then(r=>{if(!r.ok)callbacks.onOpenAppFailed?.({name,reason:r.reason});}).catch(()=>{});
+  }
+  for(const m of response.matchAll(/\[OPEN_WEBPAGE:\s*([^\]]+)\]/gi)){
+    const url=m[1]?.trim();if(!url)continue;
+    openWebpage(url).then(r=>{if(!r.ok)callbacks.onOpenAppFailed?.({name:url,reason:r.reason});}).catch(()=>{});
   }
   for(const m of response.matchAll(/\[ADD_REVENUE:\s*([^|\]]+)\|([^|\]]+)(?:\|([^|\]]+))?(?:\|([^\]]+))?\]/gi)){
     const amount=parseFloat(m[2]);
@@ -241,7 +254,7 @@ export function stripCommands(text){
   return text
     .replace(/\[ADD_TASK:[^\]]*\]/gi,'').replace(/\[COMPLETE_TASK:[^\]]*\]/gi,'')
     .replace(/\[DELETE_TASK:[^\]]*\]/gi,'').replace(/\[TASK_EDIT:[^\]]*\]/gi,'')
-    .replace(/\[SAVE_NOTE:[^\]]*\]/gi,'')
+    .replace(/\[SAVE_NOTE:[^\]]*\]/gi,'').replace(/\[OPEN_APP:[^\]]*\]/gi,'').replace(/\[OPEN_WEBPAGE:[^\]]*\]/gi,'')
     .replace(/\[READ_NOTE:[^\]]*\]/gi,'').replace(/\[ADD_REVENUE:[^\]]*\]/gi,'')
     .replace(/\[READ_HUD\]/gi,'').replace(/\[UPDATE_HUD:[^\]]*\]/gi,'')
     .replace(/\[UPDATE_SCORE:[^\]]*\]/gi,'').replace(/\[ROUTINE_DONE:[^\]]*\]/gi,'')

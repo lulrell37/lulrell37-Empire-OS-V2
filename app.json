@@ -17,7 +17,8 @@
       }
     },
     "plugins": [
-      ["expo-notifications", { "color": "#E8C98A" }]
+      ["expo-notifications", { "color": "#E8C98A" }],
+      "./plugins/withAppQueries"
     ],
     "extra": {
       "eas": {
