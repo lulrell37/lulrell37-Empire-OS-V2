@@ -2,6 +2,7 @@ import React,{useState,useEffect}from 'react';
 import{View,Text,StyleSheet,TextInput,TouchableOpacity,ScrollView,Alert,KeyboardAvoidingView,Platform,Image,Linking}from 'react-native';
 import{SafeAreaView}from 'react-native-safe-area-context';
 import*as ImagePicker from 'expo-image-picker';
+import*as Clipboard from 'expo-clipboard';
 import{saveKeys,loadKeys,saveGoogleToken,loadGoogleToken,clearGoogleToken,saveTradeCreds,loadTradeCreds,clearTradeCreds,saveGitHubToken,loadGitHubToken,clearGitHubToken,saveBackend,loadBackend,clearBackend}from '../services/keyStore';
 import{runSync,pingBackend,initSyncStatus}from '../services/sync';
 import{registerPushToken,unregisterPushToken,sendTestPush}from '../services/push';
@@ -588,9 +589,17 @@ export default function SettingsScreen({navigation}){
             {crashes.length===0&&<Text style={s.empty}>No crashes logged. Good sign.</Text>}
             {crashes.map((c,i)=>(
               <View key={i} style={s.usageCard}>
-                <Text style={s.crashHead}>{new Date(c.ts).toLocaleString()} · {c.source}</Text>
-                <Text style={s.crashMsg}>{c.message}</Text>
-                {!!c.stack&&<Text style={s.crashStack} numberOfLines={6}>{c.stack}</Text>}
+                <View style={{flexDirection:'row',justifyContent:'space-between',alignItems:'flex-start'}}>
+                  <Text style={s.crashHead}>{new Date(c.ts).toLocaleString()} · {c.source}</Text>
+                  <TouchableOpacity onPress={async()=>{
+                    await Clipboard.setStringAsync(`${c.message}\n\n${c.stack||''}`);
+                    Alert.alert('Copied','Full error + stack copied to clipboard.');
+                  }}>
+                    <Text style={s.crashCopy}>COPY</Text>
+                  </TouchableOpacity>
+                </View>
+                <Text style={s.crashMsg} selectable>{c.message}</Text>
+                {!!c.stack&&<Text style={s.crashStack} numberOfLines={6} selectable>{c.stack}</Text>}
               </View>
             ))}
           </View>}
@@ -617,7 +626,8 @@ const s=StyleSheet.create({
   tlAcctBal:{fontFamily:'monospace',fontSize:16,color:'#5FA779',fontWeight:'700'},
   toggleRow:{flexDirection:'row',alignItems:'center',paddingVertical:14,borderBottomWidth:1,borderBottomColor:'#0D0D0D'},
   infoRow:{paddingVertical:14,borderBottomWidth:1,borderBottomColor:'#0D0D0D'},
-  crashHead:{fontFamily:'monospace',fontSize:8,color:'#E8C98A',letterSpacing:1,marginBottom:6},
+  crashHead:{fontFamily:'monospace',fontSize:8,color:'#E8C98A',letterSpacing:1,marginBottom:6,flex:1},
+  crashCopy:{fontFamily:'monospace',fontSize:8,color:'#5B8DEF',letterSpacing:1,paddingLeft:10},
   crashMsg:{fontFamily:'monospace',fontSize:10,color:'#CCC',lineHeight:15,marginBottom:6},
   crashStack:{fontFamily:'monospace',fontSize:7,color:'#555',lineHeight:11},
   toggleLabel:{fontFamily:'monospace',fontSize:10,color:'#E8C98A',letterSpacing:2,marginBottom:4},

@@ -1867,10 +1867,10 @@ export default function CommandScreen({navigation,route}){
     if(item.role==='user')return(
       <View>
         {item.image&&<Image source={{uri:item.image}} style={{width:200,height:150,borderRadius:8,marginBottom:4,alignSelf:'flex-end'}}/>}
-        <View style={s.userBubble}><Text style={s.userText}>{item.content}</Text></View>
+        <View style={s.userBubble}><Text style={s.userText} selectable>{item.content}</Text></View>
       </View>
     );
-    if(item.role==='system')return(<View style={s.sysBubble}><Text style={s.sysText}>{item.content}</Text></View>);
+    if(item.role==='system')return(<View style={s.sysBubble}><Text style={s.sysText} selectable>{item.content}</Text></View>);
     const pic=personaPics[p?.id];
     const shown=item.streaming?String(item.content||'').slice(0,item.revealed||0):item.content;
     return(
@@ -1888,7 +1888,7 @@ export default function CommandScreen({navigation,route}){
           </TouchableOpacity>}
         </View>
         <View style={[s.aiDivider,{backgroundColor:p?.color||'#E8C98A'}]}/>
-        <Text style={s.aiText}>{shown}{item.streaming&&<Text style={[s.caret,{color:p?.color||'#E8C98A'}]}>▍</Text>}</Text>
+        <Text style={s.aiText} selectable>{shown}{item.streaming&&<Text style={[s.caret,{color:p?.color||'#E8C98A'}]}>▍</Text>}</Text>
       </View>
     );
   }

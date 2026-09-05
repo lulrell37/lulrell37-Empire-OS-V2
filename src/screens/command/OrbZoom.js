@@ -310,7 +310,9 @@ function OrbZoom({personaId,color,active,vizRef,personaPics={},unreadPersonas,on
       {level==='group'&&<SphereBackdrop/>}
       <Animated.View style={{flex:1,opacity:morph.opacity,transform:[{translateX:pinchTX},{translateY:pinchTY},{scale:contentScale}]}}>
         {level==='group'&&(
-          <PersonaSphere ref={sphereRef} activeId={personaId} pics={personaPics} unreadPersonas={unreadPersonas} onPick={pick} onLaunch={launch} pinned={pinned} setPinned={setPinned}/>
+          <Boundary label="The persona sphere">
+            <PersonaSphere ref={sphereRef} activeId={personaId} pics={personaPics} unreadPersonas={unreadPersonas} onPick={pick} onLaunch={launch} pinned={pinned} setPinned={setPinned}/>
+          </Boundary>
         )}
         {level==='orb'&&(
           <Boundary label="The visualization"><PersonaOrb viz={vizRef} color={color} active={active}/></Boundary>
@@ -454,10 +456,14 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,onPick,onLaunch,pinned
   },[]);// eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(()=>{
+    // Same as sparkles below: this gets combined (Animated.add) with the
+    // fundamentally JS-driven yaw/dolly position math, so it must run
+    // JS-driven too — native-driven here throws "Attempting to run JS driven
+    // animation on animated node that has been moved to 'native'".
     const loops=floats.map((v,i)=>Animated.loop(Animated.sequence([
       Animated.delay((i*233)%1100),
-      Animated.timing(v,{toValue:1,duration:2400+((i*173)%1600),easing:Easing.inOut(Easing.sin),useNativeDriver:true}),
-      Animated.timing(v,{toValue:0,duration:2400+((i*197)%1600),easing:Easing.inOut(Easing.sin),useNativeDriver:true}),
+      Animated.timing(v,{toValue:1,duration:2400+((i*173)%1600),easing:Easing.inOut(Easing.sin),useNativeDriver:false}),
+      Animated.timing(v,{toValue:0,duration:2400+((i*197)%1600),easing:Easing.inOut(Easing.sin),useNativeDriver:false}),
     ])));
     loops.forEach(l=>l.start());
     return()=>loops.forEach(l=>l.stop());

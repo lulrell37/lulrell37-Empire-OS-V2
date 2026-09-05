@@ -55,12 +55,12 @@ export default function CouncilScreen({navigation}){
   }
   function interject(){abortRef.current?.abort();setContinuous(false);contRef.current=false;Speech.stop();setLoading(false);setMessages(prev=>[...prev,{id:Date.now().toString(),role:'system',content:'— YOU HAVE THE FLOOR —',persona:'system'}]);}
   function renderMessage({item}){
-    if(item.role==='user')return(<View style={s.ub}><Text style={s.ut}>{item.content}</Text></View>);
-    if(item.role==='system')return(<View style={s.syb}><Text style={s.syt}>{item.content}</Text></View>);
+    if(item.role==='user')return(<View style={s.ub}><Text style={s.ut} selectable>{item.content}</Text></View>);
+    if(item.role==='system')return(<View style={s.syb}><Text style={s.syt} selectable>{item.content}</Text></View>);
     const p=getPersona(item.persona);
     return(<View style={s.ab}>
       <View style={s.ah}><View style={[s.av,{borderColor:p.color}]}><Text style={[s.avt,{color:p.color}]}>{p.icon}</Text></View><View><Text style={[s.an,{color:p.color}]}>{p.name}</Text><Text style={s.ar}>{p.role}</Text></View></View>
-      <Text style={s.at}>{item.content}</Text>
+      <Text style={s.at} selectable>{item.content}</Text>
     </View>);
   }
   const ml=mode==='custom'?`CUSTOM · ${targets.map(id=>getPersona(id).name.split('.')[0]).join(' · ')}`:mode.toUpperCase();
