@@ -57,9 +57,17 @@ export async function openApp(name){
   if(Platform.OS!=='android')return{ok:false,reason:'app launching is Android-only right now'};
   const pkg=resolvePackage(name);
   if(!pkg)return{ok:false,reason:`don't know how to open "${name}"`};
+  // action=MAIN + category=LAUNCHER is what actually says "the app's own icon
+  // entry point" — a package can hold many activities, so `package=` alone
+  // gives Android nothing to resolve a component against and the intent just
+  // fails to launch anything, even when the package is installed and visible.
   // launchFlags 0x10200000 = FLAG_ACTIVITY_NEW_TASK | FLAG_ACTIVITY_RESET_TASK_IF_NEEDED,
   // the standard combo for launching another app's default activity from outside it.
-  const intent=`intent:#Intent;package=${pkg};launchFlags=0x10200000;end`;
+  // `intent:` (single colon) isn't a valid intent-URI — Android's parser
+  // expects the `intent://` form (double slash) even with an empty host/path,
+  // so the single-colon version likely failed to parse into anything at all,
+  // silently doing nothing rather than throwing a catchable error.
+  const intent=`intent://#Intent;action=android.intent.action.MAIN;category=android.intent.category.LAUNCHER;package=${pkg};launchFlags=0x10200000;end`;
   try{await Linking.openURL(intent);return{ok:true};}
   catch(e){return{ok:false,reason:`"${name}" isn't installed`};}
 }
