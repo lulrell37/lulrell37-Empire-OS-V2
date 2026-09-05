@@ -36,7 +36,7 @@ for(let k=0;k<=480;k++){const v=-12*Math.PI+(24*Math.PI)*(k/480);SAMP.push(v);SI
 // clumping (and from landing on top of the fixed seats/hubs). You yaw the
 // cloud and fly forward/back through it.
 const FRONT_Z=-2.6;   // Ara's fixed front-seat depth — the only one you land on
-const SIZE_BOOST={ara:1.2};   // flat size bump on top of the depth-driven scale
+const SIZE_BOOST={ara:1.45};   // flat size bump on top of the depth-driven scale
 const FINANCE_HUB={x:2.6,y:-1.4,z:3.2};   // Atlas + Talon
 const CONTENT_HUB={x:-2.6,y:1.3,z:3.6};   // Selene + Rogue
 const REST_Z_MIN=1.8,REST_Z_MAX=5.2;      // everyone else's depth range — well behind the front pair
@@ -60,8 +60,8 @@ const SCATTER=(()=>{
   for(let i=0;i<PERSONA_LIST.length;i++){
     if(pts[i])continue;
     let best=null,bestD=-1;
-    for(let tries=0;tries<26;tries++){
-      const c={x:(rnd()*2-1)*4.6,y:(rnd()*2-1)*3.3,z:REST_Z_MIN+rnd()*(REST_Z_MAX-REST_Z_MIN)};
+    for(let tries=0;tries<34;tries++){
+      const c={x:(rnd()*2-1)*6.0,y:(rnd()*2-1)*4.3,z:REST_Z_MIN+rnd()*(REST_Z_MAX-REST_Z_MIN)};
       let d=99;
       for(const p of pts)if(p)d=Math.min(d,Math.hypot(p.x-c.x,p.y-c.y,p.z-c.z));
       for(const p of fixed)d=Math.min(d,Math.hypot(p.x-c.x,p.y-c.y,p.z-c.z));
@@ -419,14 +419,33 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,onPick,onLaunch,pinned
     return{x:cx+(x1*RX)/denom,y:cy+(pt.y*RY)/denom,depth};
   },[RX,RY]);
 
+  // A plain-JS mirror of each orb's current idle-bob progress (0..1), kept in
+  // sync via addListener on the native-driven Animated.Value below — RN pushes
+  // the latest value back over the bridge for exactly this purpose (reading a
+  // natively-animated value from JS without fighting the native driver). This
+  // is what lets the tether math (below) include the same bob offset the orb
+  // itself is rendered with, instead of only ever knowing its un-bobbed
+  // position — which is what "the tether just floats near the orb instead of
+  // touching it" actually was: the tether had no idea the bob offset existed.
+  const floatsNow=useRef(PERSONA_LIST.map(()=>0)).current;
+  const bobOffsetFor=useCallback((i)=>{
+    const v=floatsNow[i]??0;
+    return{bx:-3+6*v,by:-7+14*v}; // mirrors floats[i].interpolate([0,1],[-3,3]/[-7,7]) in the orbs memo
+  },[floatsNow]);
+
   // A pinned orb's endpoint for tether purposes: its fixed screen position,
   // reported at a mid-range depth so its lines fade the same as anything else
-  // in easy view (pinned orbs are deliberately decoupled from the camera).
+  // in easy view (pinned orbs are deliberately decoupled from the camera, but
+  // still bob in place — see the pinned render pass — so the tether needs
+  // that same bob folded in too).
   const endpointFor=useCallback((id,yv,dv)=>{
+    const i=ID_INDEX[id];
+    const{bx,by}=bobOffsetFor(i);
     const pin=pinnedRef.current[id];
-    if(pin)return{x:sizeRef.current.w/2+pin.tx,y:sizeRef.current.h*0.42+pin.ty,depth:2};
-    return project(ID_INDEX[id],yv,dv);
-  },[project]);
+    if(pin)return{x:sizeRef.current.w/2+pin.tx+bx,y:sizeRef.current.h*0.42+pin.ty+by,depth:2};
+    const p=project(i,yv,dv);
+    return{x:p.x+bx,y:p.y+by,depth:p.depth};
+  },[project,bobOffsetFor]);
 
   const computeTethers=useCallback(()=>{
     const yv=yawNow.current,dv=dollyNow.current;
@@ -454,8 +473,22 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,onPick,onLaunch,pinned
     sortNow();                                        // initial depth order
     const idY=yaw.addListener(e=>{yawNow.current=e.value;recompute();});
     const idD=dolly.addListener(e=>{dollyNow.current=e.value;recompute();});
-    return()=>{yaw.removeListener(idY);dolly.removeListener(idD);};
+    // The idle bob keeps every orb (pinned ones included) drifting even when
+    // yaw/dolly never change, so tethers need their own standing refresh —
+    // otherwise they only ever move when you actually drag the cloud, and sit
+    // frozen (visibly detached from the drifting orbs) the rest of the time.
+    // Just the tethers here, not the full sortNow — depth order doesn't
+    // change from bob alone, no need to re-sort on every tick.
+    const bobTick=setInterval(computeTethers,120);
+    return()=>{yaw.removeListener(idY);dolly.removeListener(idD);clearInterval(bobTick);};
   },[depthOf,computeTethers]);// eslint-disable-line react-hooks/exhaustive-deps
+
+  // Mirrors each floats[i] Animated.Value into the plain floatsNow array so
+  // the tether math above can read it synchronously (see bobOffsetFor).
+  useEffect(()=>{
+    const ids=floats.map((v,i)=>v.addListener(e=>{floatsNow[i]=e.value;}));
+    return()=>floats.forEach((v,i)=>v.removeListener(ids[i]));
+  },[]);// eslint-disable-line react-hooks/exhaustive-deps
 
   // Slow pulse on the ring shown around an orb held into a custom group.
   useEffect(()=>{
@@ -606,7 +639,12 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,onPick,onLaunch,pinned
       map[p.id]=PanResponder.create({
         onStartShouldSetPanResponder:()=>true,
         onMoveShouldSetPanResponder:()=>true,
-        onPanResponderTerminationRequest:()=>false,
+        // Yield to the parent (cloud yaw/dolly pan) for as long as we haven't
+        // actually committed to THIS orb — otherwise any swipe that happens
+        // to start on top of an orb (Ara sits dead-center, so this was
+        // constant) permanently hijacks the touch and the cloud can never be
+        // panned/dollied past it, no matter how far the touch moves.
+        onPanResponderTerminationRequest:()=>!st.longFired,
         onPanResponderGrant:(e,g)=>{
           st.moved=false;st.longFired=false;
           // Grab offset = where you actually touched minus the orb's real
@@ -624,11 +662,20 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,onPick,onLaunch,pinned
           st.longTimer=setTimeout(()=>{if(!st.moved){st.longFired=true;toggle(p.id);}},280);
         },
         onPanResponderMove:(e,g)=>{
-          if(!st.moved&&(Math.abs(g.dx)>6||Math.abs(g.dy)>6)){
-            st.moved=true;
-            if(st.longTimer){clearTimeout(st.longTimer);st.longTimer=null;}
+          // Movement before the long-press has fired reads as a swipe meant
+          // for the cloud, not a grab on this orb — bail out (the parent
+          // steals the touch via onPanResponderTerminationRequest above)
+          // instead of starting a drag. Dragging an orb now needs a brief
+          // hold first, same gesture shape as the long-press-to-select — a
+          // quick touch-and-slide no longer instantly repositions it, which
+          // is the trade-off for a swipe-through no longer getting stuck.
+          if(!st.longFired){
+            if(Math.abs(g.dx)>6||Math.abs(g.dy)>6){
+              if(st.longTimer){clearTimeout(st.longTimer);st.longTimer=null;}
+            }
+            return;
           }
-          if(!st.moved)return;
+          st.moved=true;
           // moveX/moveY are the touch's raw page position — always reliable
           // regardless of transforms. Subtracting the grab offset keeps the
           // orb tracking the same point you grabbed it at, instead of
@@ -641,7 +688,7 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,onPick,onLaunch,pinned
         onPanResponderRelease:()=>{
           if(st.longTimer){clearTimeout(st.longTimer);st.longTimer=null;}
           if(!st.moved&&!st.longFired)onOrbPressRef.current(p.id);
-          st.longFired=false;
+          st.longFired=false;st.moved=false;
         },
       });
     });
