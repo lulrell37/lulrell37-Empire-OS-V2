@@ -33,6 +33,8 @@ export async function initDatabase(){
   await migrateColumn('leads','source_id','TEXT');
   await migrateColumn('persona_memory','pinned_until','INTEGER');
   await migrateColumn('messages','unread','INTEGER DEFAULT 0');
+  await migrateColumn('hud_layout','w','REAL DEFAULT 0');
+  await migrateColumn('hud_layout','h','REAL DEFAULT 0');
   await migrateTraderPersona();
   await ensureHudState();
   await ensureBusinessTargets();
@@ -393,22 +395,24 @@ export async function saveBatmanTemplate(days){
 export async function getHudLayout(){
   const rows=await db.getAllAsync('SELECT * FROM hud_layout');
   const map={};
-  rows.forEach(r=>{map[r.panel]={detached:!!r.detached,x:r.x,y:r.y,scale:r.scale||1,z:r.z||0};});
+  rows.forEach(r=>{map[r.panel]={detached:!!r.detached,x:r.x,y:r.y,scale:r.scale||1,z:r.z||0,w:r.w||0,h:r.h||0};});
   return map;
 }
 export async function setPanelLayout(panel,patch){
   const cur=await db.getFirstAsync('SELECT * FROM hud_layout WHERE panel=?',[panel]);
-  const base=cur||{detached:0,x:0,y:0,scale:1,z:0};
+  const base=cur||{detached:0,x:0,y:0,scale:1,z:0,w:0,h:0};
   const next={
     detached:patch.detached!=null?(patch.detached?1:0):(base.detached?1:0),
     x:patch.x!=null?patch.x:base.x,
     y:patch.y!=null?patch.y:base.y,
     scale:patch.scale!=null?patch.scale:(base.scale||1),
     z:patch.z!=null?patch.z:(base.z||0),
+    w:patch.w!=null?patch.w:(base.w||0),
+    h:patch.h!=null?patch.h:(base.h||0),
   };
   await db.runAsync(
-    'INSERT INTO hud_layout(panel,detached,x,y,scale,z) VALUES(?,?,?,?,?,?) ON CONFLICT(panel) DO UPDATE SET detached=excluded.detached,x=excluded.x,y=excluded.y,scale=excluded.scale,z=excluded.z',
-    [panel,next.detached,next.x,next.y,next.scale,next.z]
+    'INSERT INTO hud_layout(panel,detached,x,y,scale,z,w,h) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(panel) DO UPDATE SET detached=excluded.detached,x=excluded.x,y=excluded.y,scale=excluded.scale,z=excluded.z,w=excluded.w,h=excluded.h',
+    [panel,next.detached,next.x,next.y,next.scale,next.z,next.w,next.h]
   );
 }
 export async function setBatmanDay(day,label,desc){
@@ -427,6 +431,20 @@ export async function getRevenueByBusiness(){return await db.getAllAsync("SELECT
 export async function getMonthlyRevenueByBusiness(){const month=getMonthStr();return await db.getAllAsync("SELECT business,SUM(amount) as total FROM revenue WHERE type='income' AND date LIKE ? GROUP BY business",[month+'%']);}
 export async function getBusinessTargets(){return await db.getAllAsync('SELECT * FROM business_targets ORDER BY sort_order ASC');}
 export async function setBusinessTarget(business,target,weekGoal){await db.runAsync('UPDATE business_targets SET target=?,week_goal=? WHERE business=?',[target,weekGoal,business]);}
+export async function addBusiness(name,target=0,weekGoal=0){
+  const clean=String(name||'').trim();
+  if(!clean)return false;
+  const existing=await db.getFirstAsync('SELECT business FROM business_targets WHERE lower(business)=lower(?)',[clean]);
+  if(existing)return false;
+  const row=await db.getFirstAsync('SELECT MAX(sort_order) as m FROM business_targets');
+  const nextOrder=(row?.m??-1)+1;
+  await db.runAsync('INSERT INTO business_targets(business,target,week_goal,sort_order) VALUES(?,?,?,?)',[clean,target||0,weekGoal||0,nextOrder]);
+  return true;
+}
+export async function deleteBusiness(name){
+  await db.runAsync('DELETE FROM business_targets WHERE business=?',[name]);
+  await db.runAsync('DELETE FROM revenue WHERE business=?',[name]);
+}
 export async function getBusinessesWithRevenue(){
   const targets=await getBusinessTargets();
   const revenue=await getMonthlyRevenueByBusiness();

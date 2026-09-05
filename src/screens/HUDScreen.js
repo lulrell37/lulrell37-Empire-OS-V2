@@ -3,7 +3,7 @@ import{View,Text,StyleSheet,ScrollView,TouchableOpacity,TextInput,Modal}from 're
 import{SafeAreaView}from 'react-native-safe-area-context';
 import{useFocusEffect,useIsFocused}from '@react-navigation/native';
 import{Feather}from '@expo/vector-icons';
-import{getHudState,updateHudState,getTasks,getBusinessesWithRevenue,setBusinessTarget,addRevenue,updateEmpireScore,getMorningRoutine,saveMorningRoutine,getBatmanTemplate,saveBatmanTemplate,ensureHudState,getHudLayout,setPanelLayout,DEFAULT_BATMAN}from '../services/database';
+import{getHudState,updateHudState,getTasks,getBusinessesWithRevenue,setBusinessTarget,addBusiness,deleteBusiness,addRevenue,updateEmpireScore,getMorningRoutine,saveMorningRoutine,getBatmanTemplate,saveBatmanTemplate,ensureHudState,getHudLayout,setPanelLayout,DEFAULT_BATMAN}from '../services/database';
 import{loadHudTasks,addHudTask,setHudTaskDone,renameHudTask,deleteHudTask}from '../services/hudTasks';
 import{colors,space,radius,FONTS}from '../theme';
 import{PANEL_META,BriefingPanel,AgendaPanel,BusinessPanel,TasksPanel,RoutinePanel,BatmanPanel,DailyPanel,MarketPanel,BuildBoardPanel}from './hud/panels';
@@ -14,7 +14,7 @@ import{HudFrame,ScoreBar,TelemetryLine,HudModule,HudDivider,useHudPulse}from './
 const MODULES=[
   ['briefing','BRIEFING'],
   ['agenda','AGENDA'],
-  ['businesses','THE EMPIRE'],
+  ['businesses','BUSINESS'],
   ['tasks','TASKS'],
   ['routine','MORNING ROUTINE'],
   ['batman','BATMAN PROTOCOL'],
@@ -38,11 +38,15 @@ export default function HUDScreen({navigation}){
   const[bizTargetInput,setBizTargetInput]=useState('');
   const[bizWeekGoalInput,setBizWeekGoalInput]=useState('');
   const[bizLogInput,setBizLogInput]=useState('');
+  const[showAddBiz,setShowAddBiz]=useState(false);
+  const[newBizName,setNewBizName]=useState('');
+  const[newBizTarget,setNewBizTarget]=useState('');
+  const[newBizWeekGoal,setNewBizWeekGoal]=useState('');
   const[taskEdit,setTaskEdit]=useState(null);
   const[taskEditInput,setTaskEditInput]=useState('');
   const[detachedKeys,setDetachedKeys]=useState([]); // modules pulled out as floating cards
   const busyRef=useRef(false);
-  busyRef.current=panelEditing||showAddTask||!!taskEdit||!!bizModal;
+  busyRef.current=panelEditing||showAddTask||!!taskEdit||!!bizModal||showAddBiz;
   const pulse=useHudPulse();
   const isFocused=useIsFocused();
 
@@ -169,6 +173,19 @@ export default function HUDScreen({navigation}){
     setBizModal(null);
     const b=await getBusinessesWithRevenue();setBusinesses(b);
   }
+  async function deleteBizModal(){
+    if(!bizModal)return;
+    await deleteBusiness(bizModal.name);
+    setBizModal(null);
+    const b=await getBusinessesWithRevenue();setBusinesses(b);
+  }
+  async function addNewBusiness(){
+    const name=newBizName.trim();
+    if(!name)return;
+    await addBusiness(name,parseFloat(newBizTarget)||0,parseFloat(newBizWeekGoal)||0);
+    setNewBizName('');setNewBizTarget('');setNewBizWeekGoal('');setShowAddBiz(false);
+    const b=await getBusinessesWithRevenue();setBusinesses(b);
+  }
 
   const score=hud?.empire_score||0;
   const streak=hud?.streak||0;
@@ -184,7 +201,7 @@ export default function HUDScreen({navigation}){
     switch(key){
       case 'briefing':return <BriefingPanel tasksDone={tasksDone} tasksTotal={tasks.length} routineDone={routineDone} routineTotal={routineItems.length} todayBatman={todayBatman} workoutDone={!!(todayBatman&&batman[todayBatman.day])} onToggleWorkout={()=>todayBatman&&toggleBatman(todayBatman.day)}/>;
       case 'agenda':return <Boundary label="The agenda panel"><AgendaPanel/></Boundary>;
-      case 'businesses':return <BusinessPanel businesses={businesses} onOpenBiz={openBizModal}/>;
+      case 'businesses':return <BusinessPanel businesses={businesses} onOpenBiz={openBizModal} onAddBiz={()=>setShowAddBiz(true)}/>;
       case 'tasks':return <TasksPanel tasks={openTasks} onComplete={doneTask} onEdit={openTaskEdit} onAdd={()=>setShowAddTask(true)}/>;
       case 'routine':return <RoutinePanel items={routineItems} done={routine} onToggle={toggleRoutine} onSave={handleSaveRoutine} onEditingChange={setPanelEditing}/>;
       case 'batman':return <BatmanPanel template={batmanTemplate} done={batman} today={todayBatman} onToggleDay={toggleBatman} onSaveTemplate={handleSaveBatman} onEditingChange={setPanelEditing}/>;
@@ -276,9 +293,26 @@ export default function HUDScreen({navigation}){
             <TextInput style={s.modalInput} value={bizLogInput} onChangeText={setBizLogInput} keyboardType="numeric" placeholder="Amount to add" placeholderTextColor={colors.textFaint}/>
             <View style={s.modalActions}>
               <TouchableOpacity style={[s.modalBtn,s.modalBtnPrimary]} onPress={saveBizModal}><Text style={s.modalBtnPrimaryT}>SAVE</Text></TouchableOpacity>
+              <TouchableOpacity style={[s.modalBtn,s.modalBtnDanger]} onPress={deleteBizModal}><Text style={s.modalBtnDangerT}>DELETE</Text></TouchableOpacity>
               <TouchableOpacity style={[s.modalBtn,s.modalBtnGhost]} onPress={()=>setBizModal(null)}><Text style={s.modalBtnGhostT}>CANCEL</Text></TouchableOpacity>
             </View>
           </>}
+        </View></View>
+      </Modal>
+
+      <Modal visible={showAddBiz} transparent animationType="slide">
+        <View style={s.modalOver}><View style={s.modalContent}>
+          <Text style={s.modalTitle}>NEW BUSINESS</Text>
+          <Text style={s.fieldLabel}>NAME</Text>
+          <TextInput style={s.modalInput} value={newBizName} onChangeText={setNewBizName} placeholder="Business name…" placeholderTextColor={colors.textFaint} autoFocus/>
+          <Text style={s.fieldLabel}>MONTHLY TARGET (OPTIONAL)</Text>
+          <TextInput style={s.modalInput} value={newBizTarget} onChangeText={setNewBizTarget} keyboardType="numeric" placeholder="0" placeholderTextColor={colors.textFaint}/>
+          <Text style={s.fieldLabel}>WEEKLY GOAL (OPTIONAL)</Text>
+          <TextInput style={s.modalInput} value={newBizWeekGoal} onChangeText={setNewBizWeekGoal} keyboardType="numeric" placeholder="0" placeholderTextColor={colors.textFaint}/>
+          <View style={s.modalActions}>
+            <TouchableOpacity style={[s.modalBtn,s.modalBtnPrimary]} onPress={addNewBusiness}><Text style={s.modalBtnPrimaryT}>ADD</Text></TouchableOpacity>
+            <TouchableOpacity style={[s.modalBtn,s.modalBtnGhost]} onPress={()=>setShowAddBiz(false)}><Text style={s.modalBtnGhostT}>CANCEL</Text></TouchableOpacity>
+          </View>
         </View></View>
       </Modal>
 

@@ -20,7 +20,7 @@ const{width}=Dimensions.get('window');
 export const PANEL_META={
   briefing:{title:'BRIEFING'},
   agenda:{title:'AGENDA'},
-  businesses:{title:'THE EMPIRE'},
+  businesses:{title:'BUSINESS'},
   tasks:{title:'TASKS'},
   routine:{title:'MORNING ROUTINE'},
   batman:{title:'BATMAN PROTOCOL'},
@@ -60,8 +60,16 @@ export function BriefingPanel({tasksDone,tasksTotal,routineDone,routineTotal,tod
   );
 }
 
-export function BusinessPanel({businesses,onOpenBiz}){
+export function BusinessPanel({businesses,onOpenBiz,onAddBiz}){
   return(
+    <>
+      <View style={ps.headRow}>
+        <Text style={ps.headHint}>{businesses.length} {businesses.length===1?'business':'businesses'}</Text>
+        <TouchableOpacity style={ps.addBtn} onPress={()=>onAddBiz?.()} activeOpacity={0.7}>
+          <Feather name="plus" size={11} color={colors.bg}/>
+          <Text style={ps.addBtnT}>ADD</Text>
+        </TouchableOpacity>
+      </View>
     <View style={ps.bizGrid}>
       {businesses.map((b)=>{
         const pct=b.target>0?Math.min(100,Math.round((b.rev/b.target)*100)):0;
@@ -81,7 +89,9 @@ export function BusinessPanel({businesses,onOpenBiz}){
           </TouchableOpacity>
         );
       })}
+      {!businesses.length&&<Text style={ps.emptyText}>No businesses yet. Tap ADD.</Text>}
     </View>
+    </>
   );
 }
 

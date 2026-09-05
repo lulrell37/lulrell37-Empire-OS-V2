@@ -117,7 +117,7 @@ function FloatDataPanel({kind,active,onOpenHud}){
         </>
       );
     case 'businesses':
-      return <BusinessPanel businesses={businesses} onOpenBiz={()=>onOpenHud?.()}/>;
+      return <BusinessPanel businesses={businesses} onOpenBiz={()=>onOpenHud?.()} onAddBiz={()=>onOpenHud?.()}/>;
     case 'routine':
       return <RoutinePanel items={routineItems} done={routine} onToggle={toggleRoutine}
         onSave={async(clean)=>{try{await saveMorningRoutine(clean);}catch{}load();}}/>;

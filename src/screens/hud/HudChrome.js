@@ -6,11 +6,11 @@
 // the whole screen's chrome. JS-driven (not native) so a value can feed both an
 // opacity and a layout prop without RN's mixed-driver warning.
 import React,{useEffect,useRef,useState}from 'react';
-import{View,Text,StyleSheet,Animated,Easing,Dimensions,TouchableOpacity}from 'react-native';
+import{View,Text,StyleSheet,Animated,Easing,TouchableOpacity}from 'react-native';
 import{Feather}from '@expo/vector-icons';
 import{colors,space,radius,FONTS}from '../../theme';
 
-const{width:SCREEN_W,height:SCREEN_H}=Dimensions.get('window');
+// (screen dimensions no longer needed here — the vertical scan sweep was removed)
 
 // A 0→1→0 heartbeat other bits of chrome subscribe to for their glow.
 export function useHudPulse(){
@@ -26,16 +26,9 @@ export function useHudPulse(){
   return pulse;
 }
 
-// --- Full-screen frame: corner brackets + a slow vertical scan sweep ---------
+// --- Full-screen frame: corner brackets + edge tick ladder -------------------
 export function HudFrame({pulse}){
-  const scan=useRef(new Animated.Value(0)).current;
-  useEffect(()=>{
-    const loop=Animated.loop(Animated.timing(scan,{toValue:1,duration:7200,easing:Easing.linear,useNativeDriver:false}));
-    loop.start();
-    return()=>loop.stop();
-  },[scan]);
   const glow=pulse.interpolate({inputRange:[0,1],outputRange:[0.28,0.7]});
-  const y=scan.interpolate({inputRange:[0,1],outputRange:[-40,SCREEN_H+40]});
   const B=22;
   return(
     <View style={StyleSheet.absoluteFill} pointerEvents="none">
@@ -49,10 +42,6 @@ export function HudFrame({pulse}){
           <View key={i} style={[c.tick,i%5===0&&c.tickLong]}/>
         ))}
       </View>
-      <Animated.View style={[c.scan,{transform:[{translateY:y}]}]}>
-        <View style={c.scanCore}/>
-        <View style={c.scanFade}/>
-      </Animated.View>
     </View>
   );
 }
@@ -177,9 +166,6 @@ const c=StyleSheet.create({
   ladder:{position:'absolute',left:2,top:'32%',gap:7},
   tick:{width:4,height:1,backgroundColor:colors.goldFaint},
   tickLong:{width:9,backgroundColor:colors.goldDim},
-  scan:{position:'absolute',left:0,right:0,height:60},
-  scanCore:{height:1,backgroundColor:'rgba(232,201,138,0.5)'},
-  scanFade:{flex:1,backgroundColor:'rgba(232,201,138,0.035)'},
 
   // score bar
   scoreWrap:{paddingHorizontal:space.xl,paddingTop:space.md,paddingBottom:space.lg},
