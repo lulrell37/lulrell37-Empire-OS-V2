@@ -17,3 +17,7 @@ run = ["sh", "-c", "cd server && npm start"]
 [[ports]]
 localPort = 3000
 externalPort = 80
+
+[[ports]]
+localPort = 3099
+externalPort = 3000
