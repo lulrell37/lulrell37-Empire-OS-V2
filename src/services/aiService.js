@@ -54,6 +54,7 @@ async function buildSys(personaId,persona,convo=[]){
   const customPrompt=await getCustomPrompt(personaId);
   let sys=customPrompt||persona.system;
   sys+=`\n\n[RESPONSE STYLE: Reply directly to what Mr. Burrus just said. Do not open with a status briefing, HUD summary, morning-routine readout, or any unprompted overview unless he explicitly asks for one. Skip "here is where things stand" preambles — answer the message and stop.]`;
+  sys+=`\n\n[SAVE_NOTE STYLE: The [SAVE_NOTE:title|content] tag itself is what writes the note — don't also narrate the full content back in your visible reply first. A short acknowledgment ("Saved that as '<title>'.") is enough; spelling out everything you just put in the tag is redundant.]`;
   sys+=`\n\n[MEMORY RECALL: The memory block below is routed to the topic Mr. Burrus is on right now — your full history for that area, plus anything pinned. If he references something specific that ISN'T shown, emit [MEMORY_QUERY: your precise question] and your memory index answers before you reply — use it whenever he points back to a past conversation, not just rarely.
 PINNING: when he tells you something that matters over the next few days — a trip, a deadline, a decision in progress, something he is waiting on — keep it in front of you with [REMEMBER: the thing | days] (1-30, default 3). It rides in your context every turn until it expires. [UNPIN_MEMORY: a few words of it] drops it early. Never mention these mechanisms — just remember.]`;
   sys+=`\n\n[CHARTS: When numbers would land better as a picture, emit [SHOW_CHART: type | title | data]. type = line, area, bar, or pie. data = "label:value, label:value, ..." for one series, or "A=x:1,y:2; B=x:3,y:4" for several. It takes over the visualization panel until Mr. Burrus closes it. Use it when it genuinely helps — trends, breakdowns, comparisons — not for one or two numbers.]`;
@@ -602,11 +603,18 @@ export async function deepResearchPoll(id){
 // the surrounding context so per-sentence chunks keep their prosody.
 // Retries once on a transient failure before giving up (a dropped TTS call is
 // what makes a persona fall back to the flat native voice mid-answer).
+// Last reason textToSpeech fell back to null, for whoever calls it to surface
+// (a dropped ElevenLabs call otherwise fails completely silently — the caller
+// just falls back to the flat native voice with zero indication why, which is
+// what actually makes it look like a persona "lost" its voice for no reason).
+let lastTtsFailReason=null;
+export function getLastTtsFailReason(){return lastTtsFailReason;}
+
 export async function textToSpeech(text,voiceId,personaName,opts={}){
   const k=await ensureKeys();
   const be=await loadBackend();
-  if(!be&&!k?.elevenlabs)return null;
-  if(!voiceId)return null;
+  if(!be&&!k?.elevenlabs){lastTtsFailReason='no ElevenLabs key set (Settings → API Keys → ELEVENLABS)';return null;}
+  if(!voiceId){lastTtsFailReason='persona has no voice id configured';return null;}
   const clean=text.replace(/\[[^\]]*\]/g,'').replace(/[*#`]/g,'').trim().substring(0,2000);
   if(!clean)return null;
   const body={
@@ -622,6 +630,8 @@ export async function textToSpeech(text,voiceId,personaName,opts={}){
       const res=await fetch(`${base}/v1/text-to-speech/${voiceId}`,{method:'POST',headers:{'Content-Type':'application/json',...auth},body:JSON.stringify(body),signal:opts.signal});
       if(!res.ok){
         if(attempt===0&&(res.status===429||res.status>=500))continue;
+        let detail='';try{detail=(await res.text()).slice(0,150);}catch{}
+        lastTtsFailReason=`ElevenLabs ${res.status}${res.status===401?' (invalid/expired key)':res.status===429?' (rate limited or out of quota)':''}${detail?': '+detail:''}`;
         return null;
       }
       const arrayBuffer=await res.arrayBuffer();
@@ -631,10 +641,12 @@ export async function textToSpeech(text,voiceId,personaName,opts={}){
       const base64=btoa(binary);
       const uri=FileSystem.cacheDirectory+'tts_'+Date.now()+'_'+Math.random().toString(36).slice(2,7)+'.mp3';
       await FileSystem.writeAsStringAsync(uri,base64,{encoding:FileSystem.EncodingType.Base64});
+      lastTtsFailReason=null;
       return uri;
     }catch(err){
       if(err?.name==='AbortError')return null;
       if(attempt===0)continue;
+      lastTtsFailReason='ElevenLabs request failed: '+(err?.message||err);
       return null;
     }
   }

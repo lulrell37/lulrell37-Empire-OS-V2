@@ -9,7 +9,8 @@ import*as VideoThumbnails from 'expo-video-thumbnails';
 import{Camera}from 'expo-camera';
 import*as FileSystem from 'expo-file-system';
 import{PERSONA_LIST,getPersona,resolveSpecialist}from '../personas/personas';
-import{callPersona,textToSpeech,transcribeAudio,queryMemory,webSearch}from '../services/aiService';
+import{callPersona,textToSpeech,transcribeAudio,queryMemory,webSearch,getLastTtsFailReason}from '../services/aiService';
+import{reportError}from '../../ErrorBanner';
 import{drStart,drGetActive,drTick,drDismiss,drDeliverPending,DR_POLL_MS}from '../services/deepResearch';
 import{onAutoTrade}from '../services/autoTrader';
 import{handleCommands,stripCommands}from '../services/commandHandler';
@@ -120,6 +121,17 @@ export default function CommandScreen({navigation,route}){
   const contRef=useRef(false);
   const soundRef=useRef(null);
   const speakCancelRef=useRef(null); // stops the in-progress voice+text reveal
+  // A dropped ElevenLabs call used to fail completely silently — the reply
+  // just fell back to the phone's flat native voice with no indication why,
+  // which read as a persona randomly "losing" its voice. Surface the reason
+  // once per distinct cause instead of repeating it on every single reply.
+  const voiceWarnRef=useRef(null);
+  function warnVoiceFallback(){
+    const reason=getLastTtsFailReason();
+    if(!reason||voiceWarnRef.current===reason)return;
+    voiceWarnRef.current=reason;
+    reportError('Voice fell back to the device voice — '+reason);
+  }
   const voiceControlRef=useRef(null); // {pause(),resume()} for whatever is currently speaking — set by speakWithReveal, null when nothing is
   // --- streamed sentence-chunked TTS (ElevenLabs personas, voice on) ---
   const streamSpeakActiveRef=useRef(false);
@@ -520,6 +532,7 @@ export default function CommandScreen({navigation,route}){
           soundRef.current=sound;
           sound.setOnPlaybackStatusUpdate(st=>{if(st.didJustFinish){clearSound();maybeAutoListen();}});
         }else{
+          warnVoiceFallback();
           Speech.speak(text.substring(0,500),{language:'en-US',rate:0.95,onDone:()=>maybeAutoListen(),onStopped:()=>maybeAutoListen()});
         }
       }else{
@@ -624,6 +637,7 @@ export default function CommandScreen({navigation,route}){
         },90);
       };
       const nativeFallback=()=>{
+        warnVoiceFallback();
         try{Speech.speak(fullText.slice(0,700),{language:'en-US',rate:0.95,onDone:()=>done(true),onStopped:()=>{if(!nativePaused)done(false);}});}catch{done(false);return;}
         safety=setTimeout(()=>done(true),Math.min(60000,(fullText.length/11)*1000+4000));
         nativeRevealTimer();
