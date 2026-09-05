@@ -218,6 +218,28 @@ async function runNudgeCycle({ force = false } = {}) {
   return result;
 }
 
+// One "the council met" push after the nightly Empire Council. De-duped to one
+// send per day via a push_log row, same as the scheduled nudges.
+async function pushCouncil(dateStr, headline) {
+  const key = `council:${dateStr}`;
+  if (await seen(key)) return { skipped: 'already sent' };
+  const tokens = await deviceTokens();
+  if (!tokens.length) return { skipped: 'no devices' };
+  const tickets = await sendExpo([
+    {
+      to: tokens,
+      title: 'The council met',
+      body: headline || 'New next steps for the Empire.',
+      data: { kind: 'council' },
+      priority: 'high',
+      channelId: 'default',
+    },
+  ]);
+  await pruneDead(tokens, tickets);
+  await markSeen(key);
+  return { sent: tokens.length };
+}
+
 // One-off "does push work" ping to every registered device.
 async function sendTest() {
   const tokens = await deviceTokens();
@@ -229,4 +251,4 @@ async function sendTest() {
   return { devices: tokens.length };
 }
 
-module.exports = { runNudgeCycle, sendTest, computeNudges };
+module.exports = { runNudgeCycle, sendTest, computeNudges, pushCouncil };

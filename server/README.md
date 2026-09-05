@@ -27,6 +27,35 @@ Delivery needs Expo's push credentials for the app: run `eas credentials` once
 (Android → FCM V1 service account key) so `exp.host` can reach the device.
 Without it tokens still register but pushes silently fail.
 
+## Daily briefing
+
+`dailyBriefing.js` runs at 05:10 ET (plus once at boot). Generates the HUD Word +
+Fact + Verse of the day via Claude and writes them into `sync_rows`. Idempotent
+per day. Needs `ANTHROPIC_API_KEY`; set `DAILY_BRIEFING=off` to disable.
+
+## Nightly Empire Council
+
+`councilMeeting.js` runs at **05:00 ET** every day (`node-cron`, no boot run).
+A.R.A. + the council (everyone except Ghost, Talon, Rogue, Batman) hold a strategy
+meeting on their own: it reads the current businesses + month-to-date revenue +
+the owner's queued ideas (`app_settings` `council_ideas`) out of `sync_rows`,
+pulls **live web research** on each business/idea via Claude's `web_search` tool,
+runs a `COUNCIL_ROUNDS` (default 2) discussion, and A.R.A. writes the next steps.
+Results land back in `sync_rows`: a `notes` row (`Empire Council — <date>`, the
+full transcript), an `app_settings` digest `council_last` that A.R.A. surfaces
+on "how's the empire", a pinned A.R.A. `persona_memory` row, and a
+"The council met" push (de-duped in `push_log` as `council:<date>`). Idempotent
+per day via `app_settings` `council_last_date`.
+
+Each persona speaks on its **real provider** when that key is set on the server —
+A.R.A. on Grok (`XAI_API_KEY`), S.E.L.E.N.E. on GPT-4o (`OPENAI_API_KEY`), N.O.V.A.
+on Gemini (`GEMINI_API_KEY`), the rest on Claude — and falls back to
+`claude-sonnet-5` for any persona whose key is missing (or on an API error /
+empty reply). The web research always runs on Claude. Needs `ANTHROPIC_API_KEY`;
+set `COUNCIL=off` to disable. Tunables: `COUNCIL_ROUNDS`, `COUNCIL_RESEARCH_MAX`
+(default 8), `COUNCIL_SEARCH_MAX` (default 6). The persona roster is a distilled
+copy of `src/personas/personas.js` kept in `councilMeeting.js`.
+
 ## Local dev
 
 ```sh

@@ -1,4 +1,4 @@
-import{addTask,updateTask,completeTask,deleteTask,saveNote,getNote,addRevenue,getTasks,getHudState,updateHudState,setRoutineDone,addRoutineItem,removeRoutineItem,renameRoutineItem,setBatmanDay,getBusinessTargets,setBusinessTarget,setPanelLayout,addExpense,addImportantDate,addLead,updateLead,appendLeadLog,findLead,pinMemory,unpinMemory,getPinnedMemories}from './database';
+import{addTask,updateTask,completeTask,deleteTask,saveNote,getNote,addRevenue,getTasks,getHudState,updateHudState,setRoutineDone,addRoutineItem,removeRoutineItem,renameRoutineItem,setBatmanDay,getBusinessTargets,setBusinessTarget,setPanelLayout,addExpense,addImportantDate,addLead,updateLead,appendLeadLog,findLead,pinMemory,unpinMemory,getPinnedMemories,getSetting,setSetting}from './database';
 import*as gtask from './googleClient';
 import{openApp,openWebpage}from './appLauncher';
 import useEmpireStore from '../store/useEmpireStore';
@@ -59,6 +59,23 @@ export async function handleCommands(response,personaId,callbacks={}){
     if(!title||!content)continue;
     try{await gtask.driveSaveNote({title,content});}
     catch{await saveNote(title,content,personaId);}
+  }
+  // [COUNCIL_IDEA: text] — the owner hands A.R.A. a strategy idea for the nightly
+  // Empire Council to work through. Appended to the `council_ideas` app-setting
+  // (a JSON list), which syncs to the backend where the 5am meeting reads it.
+  // [COUNCIL_IDEAS_CLEAR] wipes the agenda.
+  for(const m of response.matchAll(/\[COUNCIL_IDEA:\s*([^\]]+)\]/gi)){
+    const text=m[1]?.trim();if(!text)continue;
+    let list=[];try{list=JSON.parse((await getSetting('council_ideas',''))||'[]');}catch{}
+    if(!Array.isArray(list))list=[];
+    if(!list.some(i=>(typeof i==='string'?i:i.text||'').toLowerCase()===text.toLowerCase())){
+      list.push({text,added_at:Date.now()});
+      await setSetting('council_ideas',JSON.stringify(list));
+      callbacks.onCouncilIdea?.({text});
+    }
+  }
+  if(/\[COUNCIL_IDEAS_CLEAR\]/i.test(response)){
+    await setSetting('council_ideas','[]');
   }
   // [OPEN_APP: name] launches the actual app (Spotify, Instagram, Maps, Uber,
   // etc.) by its Android package — never a webpage fallback. [OPEN_WEBPAGE:
@@ -264,6 +281,7 @@ export function stripCommands(text){
     .replace(/\[SET_FACT:[^\]]*\]/gi,'').replace(/\[SET_TARGET:[^\]]*\]/gi,'')
     .replace(/\[HUD_DETACH:[^\]]*\]/gi,'').replace(/\[HUD_DOCK:[^\]]*\]/gi,'').replace(/\[DIAGRAM_SHOW:[^\]]*\]/gi,'')
     .replace(/\[RELAY_TO:[^\]]*\]/gi,'').replace(/\[SEARCH_WEB:[^\]]*\]/gi,'')
+    .replace(/\[COUNCIL_IDEA:[^\]]*\]/gi,'').replace(/\[COUNCIL_IDEAS_CLEAR\]/gi,'')
     .replace(/\[PROJECT_START:[\s\S]*?\]/gi,'').replace(/\[DELEGATE:[^\]]*\]/gi,'')
     .replace(/\[PROJECT_(?:DONE|CLOSE|COMPLETE|END)\]/gi,'')
     .replace(/\[READ_CALENDAR\]/gi,'').replace(/\[READ_EMAIL\]/gi,'')

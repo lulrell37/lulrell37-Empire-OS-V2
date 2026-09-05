@@ -51,7 +51,7 @@ const HANDS_FREE_NOMETER_MS=8000;   // devices that don't report metering -> fix
 const HANDS_FREE_NOVOICE_MS=7000;   // mic open this long with no voice at all -> give up, discard the take
 const MANUAL_MAX_MS=120000;         // manual SPEAK take: 2-min safety backstop only (user taps STOP REC)
 // Faster models for voice turns (lower latency to first audio). Gated behind the
-// voice_fast_model setting; grok is omitted so ROGUE keeps grok-3-latest.
+// voice_fast_model setting; grok is omitted so ROGUE keeps its own grok model.
 const VOICE_MODELS={claude:'claude-haiku-4-5',openai:'gpt-4o-mini'};
 const PLAYBACK_WEDGE_MS=4000;       // playback position frozen this long -> treat as finished
 const PLAYBACK_MAX_MS=20000;        // absolute ceiling on one spoken segment
@@ -1369,6 +1369,7 @@ export default function CommandScreen({navigation,route}){
             pushLeadsToSheet().catch(()=>{});
           },
           onMemoryPinned:(e)=>pushSystemMsg(`— pinned for ${e.days}d: ${e.text} —`),
+          onCouncilIdea:({text})=>pushSystemMsg(`— COUNCIL · on the agenda for the 5am meeting: ${text} —`),
           onOpenAppFailed:({name})=>pushSystemMsg(`— couldn't open "${name}" — don't know that app yet —`),
           onClipEdit:async({mediaUrl,instructions})=>{
             try{

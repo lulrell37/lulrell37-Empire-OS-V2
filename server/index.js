@@ -5,6 +5,7 @@ const db = require('./db');
 const auth = require('./auth');
 const { runNudgeCycle } = require('./pushSender');
 const { runDailyBriefing } = require('./dailyBriefing');
+const { runCouncilMeeting } = require('./councilMeeting');
 
 const app = express();
 app.disable('x-powered-by');
@@ -33,6 +34,7 @@ db.init()
     app.listen(PORT, '0.0.0.0', () => console.log(`Empire OS backend listening on :${PORT}`));
     startNudgeCron();
     startDailyBriefingCron();
+    startCouncilCron();
   })
   .catch((e) => {
     console.error('DB init failed:', e.message);
@@ -64,4 +66,18 @@ function startDailyBriefingCron() {
   }, { timezone: 'America/New_York' });
   runDailyBriefing().then((r) => console.log('daily briefing (startup):', JSON.stringify(r))).catch(() => {});
   console.log('daily briefing cron scheduled (05:10 ET)');
+}
+
+// The nightly Empire Council — A.R.A. + the council discuss the businesses (with
+// live web research) and set next steps. 05:00 ET, idempotent per day. No startup
+// run: it's ~20+ Claude calls, the daily cron is enough. Set COUNCIL=off to disable.
+function startCouncilCron() {
+  if (process.env.COUNCIL === 'off') return console.log('council cron disabled (COUNCIL=off)');
+  if (!process.env.ANTHROPIC_API_KEY) return console.log('council cron off (no ANTHROPIC_API_KEY)');
+  cron.schedule('0 5 * * *', () => {
+    runCouncilMeeting()
+      .then((r) => console.log('council meeting:', JSON.stringify(r)))
+      .catch((e) => console.error('council meeting failed:', e.message));
+  }, { timezone: 'America/New_York' });
+  console.log('council cron scheduled (05:00 ET)');
 }

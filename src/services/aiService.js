@@ -102,7 +102,7 @@ PINNING: when he tells you something that matters over the next few days — a t
   if(personaId==='ara'||personaId==='nova'){
     try{
       const{empireStatusBlock}=await import('./empireStatus');
-      sys+=await empireStatusBlock();
+      sys+=await empireStatusBlock(personaId);
     }catch{}
   }
   // THE EMPIRE ROSTER + THE FIRM — every persona knows who the others are, and
@@ -281,7 +281,7 @@ export async function callPersona(personaId,messages,signal=null,onDelta=null,op
     const{base,auth}=await aiRoute('claude',k?.claude,'Claude');
     const url=base+'/v1/messages';
     const headers={'Content-Type':'application/json',...auth};
-    const body=JSON.stringify({model:hasVision?'claude-sonnet-4-6':(opts.model||persona.model||'claude-sonnet-4-6'),max_tokens:maxTokens,system:sys,messages:hist,stream});
+    const body=JSON.stringify({model:hasVision?'claude-sonnet-5':(opts.model||persona.model||'claude-sonnet-5'),max_tokens:maxTokens,system:sys,messages:hist,stream});
     if(stream){
       let tin=0,tout=0;
       await xhrStream({url,headers,body,signal,onEvent:(e)=>{
@@ -302,7 +302,7 @@ export async function callPersona(personaId,messages,signal=null,onDelta=null,op
     const{base,auth}=await aiRoute('grok',k?.grok,'Grok');
     const url=base+'/v1/chat/completions';
     const headers={'Content-Type':'application/json',...auth};
-    const body=JSON.stringify({model:grokVisionModel||opts.model||persona.model||'grok-3-latest',max_tokens:maxTokens,messages:[{role:'system',content:sys},...hist],stream});
+    const body=JSON.stringify({model:grokVisionModel||opts.model||persona.model||'grok-4',max_tokens:maxTokens,messages:[{role:'system',content:sys},...hist],stream});
     if(stream){
       await xhrStream({url,headers,body,signal,onEvent:(e)=>{
         const c=e.choices?.[0]?.delta?.content;if(c)emit(c);
@@ -319,7 +319,10 @@ export async function callPersona(personaId,messages,signal=null,onDelta=null,op
     const{base,auth}=await aiRoute('openai',k?.openai,'OpenAI');
     const url=base+'/v1/chat/completions';
     const headers={'Content-Type':'application/json',...auth};
-    const body=JSON.stringify({model:hasVision?'gpt-4o':(opts.model||persona.model||'gpt-4o'),max_tokens:maxTokens,messages:[{role:'system',content:sys},...hist],stream,...(stream?{stream_options:{include_usage:true}}:{})});
+    const oaModel=hasVision?'gpt-5':(opts.model||persona.model||'gpt-5');
+    // GPT-5 and the o-series reject `max_tokens` — they take `max_completion_tokens`.
+    const tokKey=/^(gpt-5|o\d)/.test(oaModel)?'max_completion_tokens':'max_tokens';
+    const body=JSON.stringify({model:oaModel,[tokKey]:maxTokens,messages:[{role:'system',content:sys},...hist],stream,...(stream?{stream_options:{include_usage:true}}:{})});
     if(stream){
       await xhrStream({url,headers,body,signal,onEvent:(e)=>{
         const c=e.choices?.[0]?.delta?.content;if(c)emit(c);
@@ -394,7 +397,7 @@ export async function queryMemory(personaId,question,signal=null){
   if(!rows.length){try{rows=(await getMemoriesByPersona(personaId)).slice(0,150);}catch{}}
   const corpus=rows.map(r=>`[${r.date}${r.category?' · '+r.category:''}]\n${r.content}`).join('\n\n').slice(0,60000);
   const sys=`You are the private memory index for ${persona.name}, the assistant to Mr. Burrus. Below are stored exchanges between Mr. Burrus and ${persona.name}, newest first. Answer the recall question using ONLY what is in these memories. Be specific — quote dates and details. If the memories do not cover it, say so in one sentence. No preamble.\n\n=== STORED MEMORIES ===\n${corpus||'(none)'}\n=== END ===`;
-  const res=await fetch(base+'/v1/messages',{method:'POST',headers:{'Content-Type':'application/json',...auth},body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:700,system:sys,messages:[{role:'user',content:question}]}),signal});
+  const res=await fetch(base+'/v1/messages',{method:'POST',headers:{'Content-Type':'application/json',...auth},body:JSON.stringify({model:'claude-sonnet-5',max_tokens:700,system:sys,messages:[{role:'user',content:question}]}),signal});
   if(!res.ok){const e=await res.text();throw new Error(`memory recall: ${e.substring(0,80)}`);}
   const d=await res.json();
   if(d.usage)await trackApiUsage('claude',d.usage.input_tokens||0,d.usage.output_tokens||0).catch(()=>{});
@@ -420,7 +423,7 @@ export async function dailyGenerate(kind,avoid=[]){
     user=`Do NOT repeat any of these already-used references: ${seen}`;
   }
   const res=await fetch(base+'/v1/messages',{method:'POST',headers:{'Content-Type':'application/json',...auth},body:JSON.stringify({
-    model:'claude-sonnet-4-6',max_tokens:500,system:sys,messages:[{role:'user',content:user}],
+    model:'claude-sonnet-5',max_tokens:500,system:sys,messages:[{role:'user',content:user}],
   })});
   if(!res.ok)throw new Error(`${apiErrorMessage(await res.text()).slice(0,140)}`);
   const d=await res.json();
@@ -444,7 +447,7 @@ Reply with ONLY a JSON object, no prose, no code fence:
 Use "enter" to open one position, "close" to close open positions by id, "none" to wait. "breakevenIds" moves those open positions' stops to entry — only positions already comfortably in profit — and may accompany any action. You may hold up to 5 positions at once (one per pair); if 5 are already open, do not "enter". Omit fields that don't apply. If unsure: {"action":"none"}.`;
   const user=`MARKET SNAPSHOT ${symbol}:\n${snapshot}\n\nYOUR TRADE RECORD:\n${record||'(none yet)'}\n\nYOUR STRATEGY:\n${strategy||'(none yet)'}\n\nYOUR OPEN POSITIONS ON ${symbol}:\n${positions||'none'}`;
   const res=await fetch(base+'/v1/messages',{method:'POST',headers:{'Content-Type':'application/json',...auth},body:JSON.stringify({
-    model:'claude-sonnet-4-6',max_tokens:400,system:sys,messages:[{role:'user',content:user}],
+    model:'claude-sonnet-5',max_tokens:400,system:sys,messages:[{role:'user',content:user}],
   })});
   if(!res.ok)throw new Error(`auto-trade decision: ${apiErrorMessage(await res.text()).slice(0,100)}`);
   const d=await res.json();
@@ -472,7 +475,7 @@ async function grokLiveSearch(persona,query,signal){
   const k=await ensureKeys();
   const{base,auth}=await aiRoute('grok',k?.grok,'Grok');
   const res=await fetch(base+'/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json',...auth},body:JSON.stringify({
-    model:persona.model&&!/latest/.test(persona.model)?persona.model:'grok-3',max_tokens:900,
+    model:persona.model&&!/latest/.test(persona.model)?persona.model:'grok-4',max_tokens:900,
     messages:[{role:'system',content:SEARCH_BRIEF},{role:'user',content:query}],
     search_parameters:{mode:'on',return_citations:true,sources:[{type:'web'},{type:'news'},{type:'x'}],max_search_results:10},
   }),signal});
@@ -488,7 +491,7 @@ async function claudeWebSearch(query,signal){
   const k=await ensureKeys();
   const{base,auth}=await aiRoute('claude',k?.claude,'Claude');
   const res=await fetch(base+'/v1/messages',{method:'POST',headers:{'Content-Type':'application/json',...auth},body:JSON.stringify({
-    model:'claude-sonnet-4-6',max_tokens:1000,
+    model:'claude-sonnet-5',max_tokens:1000,
     tools:[{type:'web_search_20250305',name:'web_search',max_uses:5}],
     messages:[{role:'user',content:`${SEARCH_BRIEF}\n\nQuery: ${query}`}],
   }),signal});

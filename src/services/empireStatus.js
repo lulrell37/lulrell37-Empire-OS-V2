@@ -5,7 +5,7 @@ import{getBusinessesWithRevenue,getAllLeads,getInboundLeads,getLeadsDue,getOpenT
 
 const money=n=>`$${Math.round(Number(n)||0).toLocaleString()}`;
 
-export async function empireStatusBlock(){
+export async function empireStatusBlock(personaId){
   const L=[];
 
   try{
@@ -53,6 +53,27 @@ export async function empireStatusBlock(){
     if(jobs.length)L.push(`BUILDS: ${jobs.length} active — ${jobs.map(j=>`#${j.issue_number} ${j.state}${j.project_name?` (${j.project_name})`:''}`).join(', ')}`);
   }catch{}
 
-  if(!L.length)return '';
-  return `\n\n[EMPIRE STATUS — a live read of every front, refreshed each turn. Reference it naturally when it's relevant, and raise anything that needs Mr. Burrus's attention rather than waiting to be asked:\n${L.join('\n')}\n]`;
+  // Outcome of the last nightly Empire Council (runs server-side at 5am ET — the
+  // personas meet on their own, pull live market research, and set next steps).
+  // The full transcript is one [READ_NOTE: Empire Council] away.
+  try{
+    const raw=await getSetting('council_last','');
+    if(raw){
+      const c=JSON.parse(raw);
+      if(c&&c.headline){
+        const lines=[`LATEST COUNCIL (${c.date}) — ${c.headline}`];
+        (c.perItem||[]).slice(0,8).forEach(it=>{
+          if(it&&it.name)lines.push(` · ${it.name}: ${(it.steps&&it.steps[0])||'see the note'}`);
+        });
+        lines.push('Full transcript + reasoning: [READ_NOTE: Empire Council]');
+        L.push(lines.join('\n'));
+      }
+    }
+  }catch{}
+
+  const ideaLine=personaId==='ara'
+    ?"\nWhen Mr. Burrus gives you a strategy idea for the nightly council to work through, emit [COUNCIL_IDEA: the idea] to put it on the agenda."
+    :'';
+  if(!L.length&&!ideaLine)return '';
+  return `\n\n[EMPIRE STATUS — a live read of every front, refreshed each turn. Reference it naturally when it's relevant, and raise anything that needs Mr. Burrus's attention rather than waiting to be asked:\n${L.join('\n')}${ideaLine}\n]`;
 }

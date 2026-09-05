@@ -60,7 +60,7 @@ async function claude(system, user) {
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 300, system, messages: [{ role: 'user', content: user }] }),
+    body: JSON.stringify({ model: 'claude-sonnet-5', max_tokens: 300, system, messages: [{ role: 'user', content: user }] }),
   });
   if (!res.ok) throw new Error(`anthropic ${res.status}: ${(await res.text()).slice(0, 120)}`);
   const d = await res.json();
