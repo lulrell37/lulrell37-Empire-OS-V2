@@ -1,5 +1,5 @@
-// The orb screen as one continuous zoom:
-//   persona sphere  ->  the persona you zoomed into  ->  its memory spiral  ->  a memory
+// The Galaxy screen, as one continuous zoom:
+//   persona galaxy  ->  the persona you zoomed into  ->  its memory spiral  ->  a memory
 // Pinch out drills in toward wherever your fingers are; pinch in backs out.
 // Each level change animates. The + / - buttons and the mouse wheel (web) do the
 // same. `level` is owned by the parent so it survives the viz/chat toggle.
@@ -8,7 +8,7 @@
 // worklets, which is what hard-crashed the earlier 3D version.
 import React,{useState,useEffect,useMemo,useCallback,useRef,useImperativeHandle,forwardRef}from 'react';
 import{View,Text,StyleSheet,TouchableOpacity,ActivityIndicator,Dimensions,Platform,Animated,PanResponder,Image,Easing,ScrollView}from 'react-native';
-import Svg,{Line}from 'react-native-svg';
+import Svg,{Path}from 'react-native-svg';
 import PersonaOrb from './PersonaOrb';
 import SphereBackdrop from './SphereBackdrop';
 import MemorySpiral from './MemorySpiral';
@@ -17,6 +17,7 @@ import Boundary from '../hud/Boundary';
 import{getMemoriesByPersona,deletePersonaMemory}from '../../services/database';
 import{getPersona,PERSONA_LIST}from '../../personas/personas';
 
+const AnimatedPath=Animated.createAnimatedComponent(Path);
 const LEVELS=['group','orb','memory'];
 const WHEEL_MID=1200;// px of scroll slack each side of the wheel-catcher — big enough one fast notch can't reach an edge
 
@@ -24,28 +25,45 @@ const SAMP=[],SIN=[],COS=[];
 for(let k=0;k<=480;k++){const v=-12*Math.PI+(24*Math.PI)*(k/480);SAMP.push(v);SIN.push(Math.sin(v));COS.push(Math.cos(v));}
 
 // Personas scattered through a wide 3D volume (not a sphere shell). A.R.A. and
-// J.A.R.V.I.S. get fixed, symmetric front-row seats — the two you land on —
-// everyone else is seeded further back so they're visible-but-small in the
-// background until you dolly forward. The "everyone else" layout is seeded so
-// it's stable across a session; a light min-distance pass keeps them from
-// clumping. You yaw the cloud and fly forward/back through it.
+// J.A.R.V.I.S. get fixed, symmetric front-row seats close to the camera — the
+// only two you land on, everyone else starts noticeably farther back (faint,
+// small) and only reads clearly once you've dollied in past the front pair.
+// Atlas+Talon and Selene+Rogue each get their own fixed "department" hub —
+// close to their partner, but the two hubs sit apart from each other and from
+// the general cloud so each department reads as its own space. Everyone else
+// is seeded randomly through the remaining volume, seeded so that layout is
+// stable across a session; a light min-distance pass keeps them from
+// clumping (and from landing on top of the fixed seats/hubs). You yaw the
+// cloud and fly forward/back through it.
 // Front pair sits a touch off-level from each other (not perfectly mirrored)
 // so they read as two individuals side by side rather than a symmetric icon.
 const FRONT_Z=-2.6, FRONT_X=0.95, FRONT_Y=0.35;
+const FINANCE_HUB={x:2.6,y:-1.4,z:3.2};   // Atlas + Talon
+const CONTENT_HUB={x:-2.6,y:1.3,z:3.6};   // Selene + Rogue
+const REST_Z_MIN=1.8,REST_Z_MAX=5.2;      // everyone else's depth range — well behind the front pair
 const SCATTER=(()=>{
   let a=0x9e3779b9;
   const rnd=()=>{a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};
   const pts=new Array(PERSONA_LIST.length);
   const fixed=[];
-  PERSONA_LIST.forEach((p,i)=>{
-    if(p.id==='ara'){pts[i]={x:-FRONT_X,y:FRONT_Y,z:FRONT_Z};fixed.push(pts[i]);}
-    else if(p.id==='jarvis'){pts[i]={x:FRONT_X,y:-FRONT_Y,z:FRONT_Z};fixed.push(pts[i]);}
-  });
+  const setFixed=(id,pt)=>{
+    const i=ID_INDEX_BUILD[id];
+    if(i==null)return;
+    pts[i]=pt;fixed.push(pt);
+  };
+  const ID_INDEX_BUILD={};
+  PERSONA_LIST.forEach((p,i)=>{ID_INDEX_BUILD[p.id]=i;});
+  setFixed('ara',{x:-FRONT_X,y:FRONT_Y,z:FRONT_Z});
+  setFixed('jarvis',{x:FRONT_X,y:-FRONT_Y,z:FRONT_Z});
+  setFixed('atlas',{x:FINANCE_HUB.x+0.35,y:FINANCE_HUB.y-0.15,z:FINANCE_HUB.z});
+  setFixed('talon',{x:FINANCE_HUB.x-0.35,y:FINANCE_HUB.y+0.15,z:FINANCE_HUB.z+0.1});
+  setFixed('selene',{x:CONTENT_HUB.x+0.35,y:CONTENT_HUB.y+0.1,z:CONTENT_HUB.z});
+  setFixed('rogue',{x:CONTENT_HUB.x-0.35,y:CONTENT_HUB.y-0.15,z:CONTENT_HUB.z+0.15});
   for(let i=0;i<PERSONA_LIST.length;i++){
     if(pts[i])continue;
     let best=null,bestD=-1;
     for(let tries=0;tries<14;tries++){
-      const c={x:(rnd()*2-1)*3.6,y:(rnd()*2-1)*2.7,z:0.6+rnd()*3.8};
+      const c={x:(rnd()*2-1)*3.6,y:(rnd()*2-1)*2.7,z:REST_Z_MIN+rnd()*(REST_Z_MAX-REST_Z_MIN)};
       let d=99;
       for(const p of pts)if(p)d=Math.min(d,Math.hypot(p.x-c.x,p.y-c.y,p.z-c.z));
       for(const p of fixed)d=Math.min(d,Math.hypot(p.x-c.x,p.y-c.y,p.z-c.z));
@@ -55,7 +73,7 @@ const SCATTER=(()=>{
   }
   return pts;
 })();
-const Z_SPAN=4.4;     // half-depth of the cloud; dolly ranges ±(Z_SPAN+2)
+const Z_SPAN=5.2;     // half-depth of the cloud; dolly ranges ±(Z_SPAN+2)
 
 // Org-chart tethers drawn between orbs. Talon and Rogue report through their
 // department head (Atlas = finance, Selene = content) rather than straight to
@@ -76,7 +94,7 @@ PERSONA_LIST.forEach((p,i)=>{ID_INDEX[p.id]=i;});
 // Mirrors the orb opacity-by-depth curve used below, as a plain function —
 // needed to fade tether lines the same way without going through Animated.
 function depthOpacity(depth){
-  const pts=[[0.15,0],[1.5,1],[7,0.6],[13,0.1]];
+  const pts=[[0.15,0],[1.5,1],[6,0.18],[11,0.06]];
   if(depth<=pts[0][0])return pts[0][1];
   for(let i=1;i<pts.length;i++){
     if(depth<=pts[i][0]){
@@ -372,6 +390,7 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,onPick,onLaunch,pinned
   const yStart=useRef(0),dStart=useRef(-4.2);
   const yawNow=useRef(0),dollyNow=useRef(-4.2);
   const glowPulse=useRef(new Animated.Value(0)).current;
+  const tetherGlow=useRef(new Animated.Value(0.35)).current; // slow on/off glow on the tether lines
   const sizeRef=useRef(size);
   const sparkles=useRef(PERSONA_LIST.map(()=>new Animated.Value(Math.random()))).current;
   // Idle drift — a slow, independent bob per orb so the cloud feels alive
@@ -416,7 +435,12 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,onPick,onLaunch,pinned
     setTethers(TETHERS.map(([a,b])=>{
       const pa=endpointFor(a,yv,dv),pb=endpointFor(b,yv,dv);
       const vis=pa.depth>0.35&&pb.depth>0.35;
-      return{key:a+'-'+b,x1:pa.x,y1:pa.y,x2:pb.x,y2:pb.y,
+      // A slight downward sag at the midpoint, like a rope under its own
+      // weight, instead of a taut straight line — bigger for a longer span.
+      const dist=Math.hypot(pb.x-pa.x,pb.y-pa.y);
+      const sag=Math.min(40,Math.max(6,dist*0.12));
+      const midX=(pa.x+pb.x)/2,midY=(pa.y+pb.y)/2+sag;
+      return{key:a+'-'+b,d:`M${pa.x},${pa.y} Q${midX},${midY} ${pb.x},${pb.y}`,
         opacity:vis?Math.min(depthOpacity(pa.depth),depthOpacity(pb.depth))*0.55:0};
     }));
   },[endpointFor]);
@@ -440,6 +464,19 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,onPick,onLaunch,pinned
     const loop=Animated.loop(Animated.sequence([
       Animated.timing(glowPulse,{toValue:1,duration:700,easing:Easing.inOut(Easing.sin),useNativeDriver:true}),
       Animated.timing(glowPulse,{toValue:0,duration:700,easing:Easing.inOut(Easing.sin),useNativeDriver:true}),
+    ]));
+    loop.start();
+    return()=>loop.stop();
+  },[]);// eslint-disable-line react-hooks/exhaustive-deps
+
+  // Slow on/off glow for the org-chart tethers. react-native-svg's native-
+  // driver support for props like strokeOpacity is inconsistent across
+  // versions, so this stays JS-driven (it's a slow ambient effect, not
+  // something that needs native-driver performance anyway).
+  useEffect(()=>{
+    const loop=Animated.loop(Animated.sequence([
+      Animated.timing(tetherGlow,{toValue:1,duration:1800,easing:Easing.inOut(Easing.sin),useNativeDriver:false}),
+      Animated.timing(tetherGlow,{toValue:0.35,duration:1800,easing:Easing.inOut(Easing.sin),useNativeDriver:false}),
     ]));
     loop.start();
     return()=>loop.stop();
@@ -524,10 +561,10 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,onPick,onLaunch,pinned
         translateX:Animated.add(Animated.divide(Animated.multiply(x1,RX),denom),bobX),
         translateY:Animated.add(Animated.divide(Animated.multiply(pt.y,RY),denom),bobY),
         scale:Animated.multiply(
-          depth.interpolate({inputRange:[0.3,2.2,7,14],outputRange:[1.55,1.12,0.62,0.34],extrapolate:'clamp'}),
+          depth.interpolate({inputRange:[0.3,2.2,6,11],outputRange:[1.55,1.12,0.45,0.22],extrapolate:'clamp'}),
           sparkles[i].interpolate({inputRange:[0,1],outputRange:[0.92,1.1]})),
         opacity:Animated.multiply(
-          depth.interpolate({inputRange:[0.15,1.5,7,13],outputRange:[0,1,0.6,0.1],extrapolate:'clamp'}),
+          depth.interpolate({inputRange:[0.15,1.5,6,11],outputRange:[0,1,0.18,0.06],extrapolate:'clamp'}),
           sparkles[i].interpolate({inputRange:[0,1],outputRange:[0.6,1]})),
       };
     });
@@ -556,15 +593,13 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,onPick,onLaunch,pinned
   const orbResponders=useMemo(()=>{
     const map={};
     PERSONA_LIST.forEach(p=>{
-      const st=dragRef.current[p.id]={moved:false,longTimer:null,longFired:false,grabX:0,grabY:0};
+      const st=dragRef.current[p.id]={moved:false,longTimer:null,longFired:false};
       map[p.id]=PanResponder.create({
         onStartShouldSetPanResponder:()=>true,
         onMoveShouldSetPanResponder:()=>true,
         onPanResponderTerminationRequest:()=>false,
-        onPanResponderGrant:(e)=>{
+        onPanResponderGrant:()=>{
           st.moved=false;st.longFired=false;
-          st.grabX=e.nativeEvent.locationX-26;  // where within the 52px orb you grabbed it
-          st.grabY=e.nativeEvent.locationY-26;
           st.longTimer=setTimeout(()=>{if(!st.moved){st.longFired=true;toggle(p.id);}},280);
         },
         onPanResponderMove:(e,g)=>{
@@ -573,8 +608,15 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,onPick,onLaunch,pinned
             if(st.longTimer){clearTimeout(st.longTimer);st.longTimer=null;}
           }
           if(!st.moved)return;
-          const lx=g.moveX-originRef.current.x-st.grabX;
-          const ly=g.moveY-originRef.current.y-st.grabY;
+          // moveX/moveY are the touch's raw page position — always reliable,
+          // unlike nativeEvent.locationX/Y (which is what threw the orb to
+          // the top-left: it's reported relative to the target's pre-
+          // transform layout frame, not its actual on-screen position, once
+          // the parent has a translate/scale transform applied). So the
+          // orb's center just tracks the finger directly instead of trying
+          // to preserve exactly where within the orb you grabbed it.
+          const lx=g.moveX-originRef.current.x;
+          const ly=g.moveY-originRef.current.y;
           setPinned(prev=>({...prev,[p.id]:{tx:lx-sizeRef.current.w/2,ty:ly-sizeRef.current.h*0.42}}));
           computeTethers();
         },
@@ -597,7 +639,8 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,onPick,onLaunch,pinned
       <View style={StyleSheet.absoluteFill} {...pan.panHandlers}>
         <Svg style={StyleSheet.absoluteFill} pointerEvents="none">
           {tethers.map(t=>t.opacity>0.02&&(
-            <Line key={t.key} x1={t.x1} y1={t.y1} x2={t.x2} y2={t.y2} stroke="#E8C98A" strokeWidth={1} strokeOpacity={t.opacity}/>
+            <AnimatedPath key={t.key} d={t.d} stroke="#E8C98A" strokeWidth={1} fill="none"
+              strokeOpacity={Animated.multiply(tetherGlow,t.opacity)}/>
           ))}
         </Svg>
         {order.map(oi=>orbs[oi]).filter(({p})=>!pinned[p.id]).map(({p,translateX,translateY,scale,opacity})=>{
