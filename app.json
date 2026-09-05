@@ -6,10 +6,13 @@
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "scheme": "empireos",
+    "icon": "./assets/icon.png",
     "android": {
       "package": "com.lulrell37.empireos",
       "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png",
         "backgroundColor": "#000000"
       }
     },
