@@ -8,6 +8,7 @@ import{registerPushToken,unregisterPushToken,sendTestPush}from '../services/push
 import{tlConnect,tlReset}from '../services/tradeLocker';
 import{refreshAutoTrader}from '../services/autoTrader';
 import{refreshAutoScout}from '../services/autoScout';
+import{refreshAutoAtlas}from '../services/autoAtlas';
 import{createLeadsSheet,unlinkLeadsSheet,leadsSheetUrl}from '../services/leadsSheet';
 import{resetWeather}from '../services/weather';
 import{ghVerify}from '../services/buildAgent';
@@ -41,6 +42,8 @@ export default function SettingsScreen({navigation}){
   const[scoutEvery,setScoutEvery]=useState('30');
   const[scoutLeads,setScoutLeads]=useState('20');
   const[scoutEmails,setScoutEmails]=useState('20');
+  const[autoAtlas,setAutoAtlas]=useState(false);
+  const[atlasEvery,setAtlasEvery]=useState('24');
   const[leadsSheetId,setLeadsSheetId]=useState('');
   const[sheetBusy,setSheetBusy]=useState(false);
   const[ghToken,setGhToken]=useState('');
@@ -84,6 +87,8 @@ export default function SettingsScreen({navigation}){
     setScoutEvery(await getSetting('auto_scout_interval_min','30'));
     setScoutLeads(await getSetting('auto_scout_daily_leads','20'));
     setScoutEmails(await getSetting('auto_scout_daily_emails','20'));
+    setAutoAtlas((await getSetting('auto_atlas','0'))==='1');
+    setAtlasEvery(await getSetting('auto_atlas_interval_hours','24'));
     setLeadsSheetId(await getSetting('leads_sheet_id',''));
     const gt=await loadGitHubToken();if(gt){setGhToken(gt);ghVerify().then(setGhStatus);}
     const be=await loadBackend();if(be){setBeUrl(be.url);setBeToken(be.token);setBeConfigured(true);}
@@ -166,6 +171,16 @@ export default function SettingsScreen({navigation}){
   async function saveScoutNum(key,val,setter,def,min){
     const n=Math.max(min,parseInt(val,10)||def);
     setter(String(n));await setSetting(key,String(n));await refreshAutoScout().catch(()=>{});
+  }
+  async function toggleAutoAtlas(){
+    const nv=!autoAtlas;
+    setAutoAtlas(nv);
+    await setSetting('auto_atlas',nv?'1':'0');
+    await refreshAutoAtlas().catch(()=>{});
+  }
+  async function saveAtlasEvery(){
+    const n=Math.max(1,parseInt(atlasEvery,10)||24);
+    setAtlasEvery(String(n));await setSetting('auto_atlas_interval_hours',String(n));await refreshAutoAtlas().catch(()=>{});
   }
   async function makeLeadsSheet(){
     setSheetBusy(true);
@@ -425,6 +440,20 @@ export default function SettingsScreen({navigation}){
                 <Text style={s.saveBtnT}>{sheetBusy?'CREATING…':'CREATE PIPELINE SHEET'}</Text>
               </TouchableOpacity>
             )}
+
+            <Text style={[s.secTitle,{marginTop:28}]}>A.T.L.A.S. AUTO-REVIEW</Text>
+            <Text style={s.secSub}>Lets A.T.L.A.S. read the whole empire on her own — revenue, trading, outreach, builds — and drop one unprompted money review into her own chat, no confirmation. She also hands the finished read straight to A.R.A. so she has it too. Analysis only: nothing spends, sends or trades. It's waiting in A.T.L.A.S.'s orb next time you open it (voiced as a catch-up line if voice is on). Needs a Claude key.</Text>
+            <TouchableOpacity style={s.toggleRow} onPress={toggleAutoAtlas} activeOpacity={0.7}>
+              <View style={{flex:1,paddingRight:12}}>
+                <Text style={s.toggleLabel}>AUTONOMOUS REVIEW</Text>
+                <Text style={s.toggleSub}>{autoAtlas?`On — a fresh read every ${atlasEvery}h.`:'Off — A.T.L.A.S. only reads the empire when you ask.'}</Text>
+              </View>
+              <View style={[s.switch,autoAtlas&&s.switchOn]}><View style={[s.knob,autoAtlas&&s.knobOn]}/></View>
+            </TouchableOpacity>
+            <View style={s.keyField}>
+              <Text style={s.keyLabel}>REVIEW EVERY (HOURS)</Text>
+              <TextInput style={s.keyInput} value={String(atlasEvery)} onChangeText={setAtlasEvery} onBlur={saveAtlasEvery} placeholder="24" placeholderTextColor="#1A1A1A" keyboardType="number-pad"/>
+            </View>
           </View>}
           {tab==='DEV'&&<View>
             <Text style={s.secTitle}>BUILD PIPELINE</Text>

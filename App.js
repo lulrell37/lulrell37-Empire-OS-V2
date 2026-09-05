@@ -25,6 +25,7 @@ import{registerPushToken}from './src/services/push';
 import{tlInit}from './src/services/tradeLocker';
 import{startAutoTrader,stopAutoTrader}from './src/services/autoTrader';
 import{startAutoScout,stopAutoScout}from './src/services/autoScout';
+import{startAutoAtlas,stopAutoAtlas}from './src/services/autoAtlas';
 import{refreshDailyBriefing}from './src/services/dailyBriefing';
 import{importInboundForm}from './src/services/inbound';
 import{pushLeadsToSheet}from './src/services/leadsSheet';
@@ -84,15 +85,17 @@ export default function App(){
     return()=>{sub.remove();clearInterval(iv);clearInterval(inb);clearInterval(lsh);};
   },[]);
   useEffect(()=>{
-    // A.T.L.A.S. auto-trader — only actually runs when enabled in Settings (demo only).
+    // T.A.L.O.N. auto-trader — only actually runs when enabled in Settings (demo only).
     startAutoTrader().catch(()=>{});
     // S.C.O.U.T. auto-scout — only runs when enabled in Settings › OUTREACH.
     startAutoScout().catch(()=>{});
+    // A.T.L.A.S. auto-review — only runs when enabled in Settings › OUTREACH.
+    startAutoAtlas().catch(()=>{});
     const sub=AppState.addEventListener('change',(st)=>{
-      if(st==='active'){startAutoTrader().catch(()=>{});startAutoScout().catch(()=>{});}
-      else{stopAutoTrader();stopAutoScout();}
+      if(st==='active'){startAutoTrader().catch(()=>{});startAutoScout().catch(()=>{});startAutoAtlas().catch(()=>{});}
+      else{stopAutoTrader();stopAutoScout();stopAutoAtlas();}
     });
-    return()=>{sub.remove();stopAutoTrader();stopAutoScout();};
+    return()=>{sub.remove();stopAutoTrader();stopAutoScout();stopAutoAtlas();};
   },[]);
   if(!isReady||!navReady)return null;
   return(
