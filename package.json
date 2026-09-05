@@ -51,5 +51,8 @@
   "private": true,
   "overrides": {
     "tar": "6.2.1"
+  },
+  "resolutions": {
+    "tar": "6.2.1"
   }
 }
