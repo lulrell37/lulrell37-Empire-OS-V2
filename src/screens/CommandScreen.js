@@ -1,4 +1,4 @@
-import React,{useState,useEffect,useRef,useCallback}from 'react';
+import React,{useState,useEffect,useRef,useCallback,useMemo}from 'react';
 import{View,Text,StyleSheet,TextInput,TouchableOpacity,FlatList,KeyboardAvoidingView,Platform,ActivityIndicator,ScrollView,Modal,Image,Alert,Keyboard,BackHandler}from 'react-native';
 import{SafeAreaView}from 'react-native-safe-area-context';
 import{Audio}from 'expo-av';
@@ -12,7 +12,9 @@ import{PERSONA_LIST,getPersona,resolveSpecialist}from '../personas/personas';
 import{callPersona,textToSpeech,transcribeAudio,queryMemory,webSearch,getLastTtsFailReason}from '../services/aiService';
 import{reportError}from '../../ErrorBanner';
 import{drStart,drGetActive,drTick,drDismiss,drDeliverPending,DR_POLL_MS}from '../services/deepResearch';
-import{onAutoTrade}from '../services/autoTrader';
+import{onAutoTrade,autoTraderBusy}from '../services/autoTrader';
+import{autoScoutBusy}from '../services/autoScout';
+import{autoAtlasBusy}from '../services/autoAtlas';
 import{handleCommands,stripCommands}from '../services/commandHandler';
 import{googleReadInjections,googleWriteCommands}from '../services/googleCommands';
 import{driveUploadFile,googleConnected}from '../services/googleClient';
@@ -108,6 +110,12 @@ export default function CommandScreen({navigation,route}){
   // before it landed (zoomed out, switched orbs, or went back to the city).
   // Drives the badge dot on the sphere; cleared the moment he zooms back in.
   const[unreadPersonas,setUnreadPersonas]=useState(()=>new Set());
+  // Personas mid-relay — one persona asked another and is waiting on its answer
+  // right now. Feeds the pulsing gold "working" aura on the galaxy sphere.
+  const[relayBusy,setRelayBusy]=useState(()=>new Set());
+  // S.C.O.U.T. / A.T.L.A.S. / T.A.L.O.N. running an auto-cycle right now — polled
+  // while the galaxy is open so their orb gets the same working aura.
+  const[agentBusy,setAgentBusy]=useState(()=>new Set());
   const[googleAction,setGoogleAction]=useState(null); // pending Google action awaiting a confirm tap
   const[googleBusy,setGoogleBusy]=useState(false);
   const googleActionRef=useRef(null);
@@ -178,6 +186,24 @@ export default function CommandScreen({navigation,route}){
   // (the screen fully remounts on a return from the city, so this can't live
   // in component state alone).
   useEffect(()=>{getUnreadPersonas().then(list=>setUnreadPersonas(new Set(list))).catch(()=>{});},[]);
+  // Poll the auto-agents' cycle flags while the galaxy is on screen so
+  // S.C.O.U.T. / A.T.L.A.S. / T.A.L.O.N. light up their orb while working.
+  useEffect(()=>{
+    if(!isFocused||view!=='viz'||orbLevel!=='group'){setAgentBusy(prev=>prev.size?new Set():prev);return;}
+    const tick=()=>{
+      const next=new Set();
+      try{if(autoScoutBusy())next.add('scout');}catch{}
+      try{if(autoAtlasBusy())next.add('atlas');}catch{}
+      try{if(autoTraderBusy())next.add('talon');}catch{}
+      setAgentBusy(prev=>{
+        if(prev.size===next.size&&[...next].every(id=>prev.has(id)))return prev;
+        return next;
+      });
+    };
+    tick();
+    const iv=setInterval(tick,600);
+    return()=>clearInterval(iv);
+  },[isFocused,view,orbLevel]);
   // Zooming into a persona's orb for direct chat — if a reply was queued while
   // Mr. Burrus was away, it's already visible as text (loadHistory just pulled
   // it in); this delivers the catch-up voice line and clears the badge.
@@ -1306,6 +1332,7 @@ export default function CommandScreen({navigation,route}){
             const target=getPersona(targetId);
             if(!ask||!target||targetId===pid)continue;
             toolLabel=`◇ asking ${target.name}…`;
+            setRelayBusy(s=>{const n=new Set(s);n.add(targetId);return n;});
             try{
               const rResp=await callPersona(targetId,[{role:'user',content:
                 `${p.name} is relaying a question from Mr. Burrus while talking to him — your answer goes straight back into that conversation, so answer directly and concretely.\n\n${ask}`}],
@@ -1316,6 +1343,8 @@ export default function CommandScreen({navigation,route}){
             }catch(e){
               if(e.name==='AbortError')break;
               injections.push(`YOU ASKED ${target.name.toUpperCase()}: "${ask}"\n(couldn't reach ${target.name}: ${e.message})`);
+            }finally{
+              setRelayBusy(s=>{const n=new Set(s);n.delete(targetId);return n;});
             }
           }
         }
@@ -1911,6 +1940,17 @@ export default function CommandScreen({navigation,route}){
   const cp=getPersona(activePersona);
   const displayMessages=mode==='direct'?messages:groupMessages;
 
+  // Personas the galaxy sphere should show a pulsing gold "working" aura on:
+  // one running a deep-research job, one mid-relay for another persona, or the
+  // persona whose reply is still streaming while Mr. Burrus has zoomed out.
+  const busyPersonas=useMemo(()=>{
+    const set=new Set(relayBusy);
+    agentBusy.forEach(id=>set.add(id));
+    if(deepResearch&&deepResearch.status==='running'&&deepResearch.persona)set.add(deepResearch.persona);
+    if(loading&&activePersona&&orbLevel==='group')set.add(activePersona);
+    return set;
+  },[relayBusy,agentBusy,deepResearch,loading,activePersona,orbLevel]);
+
   if(showCamera){
     return(
       <View style={{flex:1,backgroundColor:'#000'}}>
@@ -2012,6 +2052,7 @@ export default function CommandScreen({navigation,route}){
           level={orbLevel}
           onLevelChange={setOrbLevel}
           unreadPersonas={unreadPersonas}
+          busyPersonas={busyPersonas}
           onPickPersona={pickPersonaFromOrb}
           onLaunchGroup={launchGroupFromOrb}
           onZoomOut={goToCity}

@@ -26,6 +26,7 @@ const EMAIL_RE=/^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export function onAutoScout(cb){listeners.add(cb);return()=>listeners.delete(cb);}
 export function autoScoutRunning(){return running;}
+export function autoScoutBusy(){return busy;}
 
 function emit(text){
   saveMessage('scout','system',text,'direct').catch(()=>{});

@@ -15,6 +15,10 @@ export async function empireStatusBlock(){
     const active=biz.filter(b=>b.rev>0).sort((a,b)=>b.rev-a.rev);
     L.push(`REVENUE this month: ${money(total)}${targetTotal?` of ${money(targetTotal)} target`:''}`
       +(active.length?` — ${active.slice(0,6).map(b=>`${b.name} ${money(b.rev)}`).join(', ')}`:' — nothing logged yet'));
+    // The full roster from the HUD Business panel (add/delete there flows straight
+    // through here), so A.R.A. always knows exactly which businesses exist —
+    // not just the ones with revenue logged this month.
+    if(biz.length)L.push(`BUSINESSES (${biz.length}) — ${biz.map(b=>b.target>0?`${b.name} (target ${money(b.target)}/mo)`:b.name).join(', ')}`);
   }catch{}
 
   try{

@@ -105,7 +105,7 @@ function depthOpacity(depth){
 
 function touchDist(t){return Math.hypot(t[0].pageX-t[1].pageX,t[0].pageY-t[1].pageY);}
 
-function OrbZoom({personaId,color,active,vizRef,personaPics={},unreadPersonas,onPickPersona,onLaunchGroup,onZoomOut,level='group',onLevelChange},ref){
+function OrbZoom({personaId,color,active,vizRef,personaPics={},unreadPersonas,busyPersonas,onPickPersona,onLaunchGroup,onZoomOut,level='group',onLevelChange},ref){
   const persona=getPersona(personaId);
   // Manually dragged orb positions — lifted up here (rather than living inside
   // PersonaSphereInner) so they survive zooming into a persona and back out,
@@ -327,7 +327,7 @@ function OrbZoom({personaId,color,active,vizRef,personaPics={},unreadPersonas,on
       <Animated.View style={{flex:1,opacity:morph.opacity,transform:[{translateX:pinchTX},{translateY:pinchTY},{scale:contentScale}]}}>
         {level==='group'&&(
           <Boundary label="The persona sphere">
-            <PersonaSphere ref={sphereRef} activeId={personaId} pics={personaPics} unreadPersonas={unreadPersonas} onPick={pick} onLaunch={launch} pinned={pinned} setPinned={setPinned}/>
+            <PersonaSphere ref={sphereRef} activeId={personaId} pics={personaPics} unreadPersonas={unreadPersonas} busyPersonas={busyPersonas} onPick={pick} onLaunch={launch} pinned={pinned} setPinned={setPinned}/>
           </Boundary>
         )}
         {level==='orb'&&(
@@ -374,7 +374,7 @@ function OrbZoom({personaId,color,active,vizRef,personaPics={},unreadPersonas,on
 // spread + depth fade sell the movement; nearest-in-front is what a tap or a
 // pinch-in selects.
 
-function PersonaSphereInner({activeId,pics,unreadPersonas,onPick,onLaunch,pinned,setPinned},ref){
+function PersonaSphereInner({activeId,pics,unreadPersonas,busyPersonas,onPick,onLaunch,pinned,setPinned},ref){
   const[size,setSize]=useState({w:Dimensions.get('window').width,h:340});
   const[group,setGroup]=useState([]);
   const[order,setOrder]=useState(()=>PERSONA_LIST.map((_,i)=>i));
@@ -514,10 +514,15 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,onPick,onLaunch,pinned
   },[]);// eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(()=>{
+    // Native-driven: the twinkle (scale + opacity) now rides its own transform
+    // layer alongside the idle bob (see the orbs memo + render), so no orb has
+    // any JS-thread animation running while the camera sits still — which is
+    // what made the bob look janky on some orbs before (13 JS sine loops +
+    // the 120ms tether refresh were fighting for the JS thread).
     const loops=sparkles.map((v,i)=>Animated.loop(Animated.sequence([
       Animated.delay(i*160),
-      Animated.timing(v,{toValue:1,duration:900+((i*137)%700),easing:Easing.inOut(Easing.sin),useNativeDriver:false}),
-      Animated.timing(v,{toValue:0,duration:900+((i*211)%700),easing:Easing.inOut(Easing.sin),useNativeDriver:false}),
+      Animated.timing(v,{toValue:1,duration:900+((i*137)%700),easing:Easing.inOut(Easing.sin),useNativeDriver:true}),
+      Animated.timing(v,{toValue:0,duration:900+((i*211)%700),easing:Easing.inOut(Easing.sin),useNativeDriver:true}),
     ])));
     loops.forEach(l=>l.start());
     return()=>loops.forEach(l=>l.stop());
@@ -591,18 +596,19 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,onPick,onLaunch,pinned
         p,
         translateX:Animated.divide(Animated.multiply(x1,RX),denom),
         translateY:Animated.divide(Animated.multiply(pt.y,RY),denom),
-        // Kept off the JS-driven translateX/Y above (see the float loop) so
-        // the bob can run on the native thread via its own transform layer.
+        // Bob + twinkle both ride one native-driven transform layer (see the
+        // render). Kept off the JS-driven position/scale below so they stay
+        // smooth no matter what the JS thread is doing.
         bobX:floats[i].interpolate({inputRange:[0,1],outputRange:[-3,3]}),
         bobY:floats[i].interpolate({inputRange:[0,1],outputRange:[-7,7]}),
+        sparkleScale:sparkles[i].interpolate({inputRange:[0,1],outputRange:[0.92,1.1]}),
+        sparkleOpacity:sparkles[i].interpolate({inputRange:[0,1],outputRange:[0.6,1]}),
+        // Depth-driven scale/opacity — JS-driven (they track yaw/dolly) but
+        // completely static while the camera is still.
         scale:Animated.multiply(
-          Animated.multiply(
-            depth.interpolate({inputRange:[0.3,2.2,6,11],outputRange:[1.55,1.12,0.45,0.22],extrapolate:'clamp'}),
-            sparkles[i].interpolate({inputRange:[0,1],outputRange:[0.92,1.1]})),
+          depth.interpolate({inputRange:[0.3,2.2,6,11],outputRange:[1.55,1.12,0.45,0.22],extrapolate:'clamp'}),
           SIZE_BOOST[p.id]||1),
-        opacity:Animated.multiply(
-          depth.interpolate({inputRange:[0.15,1.0,6,11],outputRange:[0,1,0.18,0.06],extrapolate:'clamp'}),
-          sparkles[i].interpolate({inputRange:[0,1],outputRange:[0.6,1]})),
+        opacity:depth.interpolate({inputRange:[0.15,1.0,6,11],outputRange:[0,1,0.18,0.06],extrapolate:'clamp'}),
       };
     });
   },[yaw,dolly,RX,RY]);// eslint-disable-line react-hooks/exhaustive-deps
@@ -708,16 +714,16 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,onPick,onLaunch,pinned
               strokeOpacity={Animated.multiply(tetherGlow,t.opacity)}/>
           ))}
         </Svg>
-        {order.map(oi=>orbs[oi]).filter(({p})=>!pinned[p.id]).map(({p,translateX,translateY,scale,opacity,bobX,bobY})=>{
+        {order.map(oi=>orbs[oi]).filter(({p})=>!pinned[p.id]).map(({p,translateX,translateY,scale,opacity,bobX,bobY,sparkleScale,sparkleOpacity})=>{
           const selected=group.includes(p.id);
           return(
             <Animated.View key={p.id} style={[s.orbWrap,{opacity,transform:[{translateX},{translateY},{scale}]}]}>
-              {/* Idle bob lives on its own native-driven transform layer,
+              {/* Idle bob + twinkle live on one native-driven transform layer,
                   separate from the JS-driven cloud position above — see the
                   float loop for why. */}
-              <Animated.View style={{transform:[{translateX:bobX},{translateY:bobY}]}}>
+              <Animated.View style={{opacity:sparkleOpacity,transform:[{translateX:bobX},{translateY:bobY},{scale:sparkleScale}]}}>
                 <View style={s.orbBox} {...orbResponders[p.id].panHandlers}>
-                  <OrbVisual p={p} selected={selected} pic={pics[p.id]} unread={unreadPersonas?.has?.(p.id)} glowPulse={glowPulse}/>
+                  <OrbVisual p={p} selected={selected} pic={pics[p.id]} unread={unreadPersonas?.has?.(p.id)} busy={busyPersonas?.has?.(p.id)} glowPulse={glowPulse}/>
                 </View>
                 <Text style={[s.orbName,{color:p.color},selected&&{fontWeight:'700'}]} numberOfLines={1}>{p.name.replace(/\./g,'')}</Text>
               </Animated.View>
@@ -731,14 +737,12 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,onPick,onLaunch,pinned
         {PERSONA_LIST.filter(p=>pinned[p.id]).map(p=>{
           const pin=pinned[p.id];
           const selected=group.includes(p.id);
-          const fi=ID_INDEX[p.id];
-          const bobX=floats[fi].interpolate({inputRange:[0,1],outputRange:[-3,3]});
-          const bobY=floats[fi].interpolate({inputRange:[0,1],outputRange:[-7,7]});
+          const o=orbs[ID_INDEX[p.id]];
           return(
             <View key={p.id} style={[s.orbWrap,{transform:[{translateX:pin.tx},{translateY:pin.ty}]}]}>
-              <Animated.View style={{transform:[{translateX:bobX},{translateY:bobY}]}}>
+              <Animated.View style={{opacity:o.sparkleOpacity,transform:[{translateX:o.bobX},{translateY:o.bobY},{scale:o.sparkleScale}]}}>
                 <View style={s.orbBox} {...orbResponders[p.id].panHandlers}>
-                  <OrbVisual p={p} selected={selected} pic={pics[p.id]} unread={unreadPersonas?.has?.(p.id)} glowPulse={glowPulse}/>
+                  <OrbVisual p={p} selected={selected} pic={pics[p.id]} unread={unreadPersonas?.has?.(p.id)} busy={busyPersonas?.has?.(p.id)} glowPulse={glowPulse}/>
                 </View>
                 <Text style={[s.orbName,{color:p.color},selected&&{fontWeight:'700'}]} numberOfLines={1}>{p.name.replace(/\./g,'')}</Text>
               </Animated.View>
@@ -754,9 +758,15 @@ const PersonaSphere=forwardRef(PersonaSphereInner);
 // Shared visual for one orb — the glow ring (while held for a custom group),
 // the core/picture, and the unread dot. Used by both the depth-sorted cloud
 // and the manually-pinned pass so dragging an orb doesn't change how it looks.
-function OrbVisual({p,selected,pic,unread,glowPulse}){
+function OrbVisual({p,selected,pic,unread,busy,glowPulse}){
   return(
     <>
+      {/* A persona working in the background — a soft gold aura that breathes.
+          Rendered first so it sits behind the orb core. */}
+      {busy&&<Animated.View pointerEvents="none" style={[s.orbAura,{
+        opacity:glowPulse.interpolate({inputRange:[0,1],outputRange:[0.2,0.6]}),
+        transform:[{scale:glowPulse.interpolate({inputRange:[0,1],outputRange:[1,1.16]})}],
+      }]}/>}
       {selected&&<Animated.View style={[s.orbSelRing,{borderColor:p.color,
         opacity:glowPulse.interpolate({inputRange:[0,1],outputRange:[0.45,1]})}]}/>}
       <View style={[s.orbGlow,{backgroundColor:p.color+(selected?'40':'20')}]}>
@@ -790,6 +800,11 @@ const s=StyleSheet.create({
   // Pulsing ring around an orb held into a custom group (long-press toggles
   // it). Sized just outside orbGlow's own clip so it isn't cropped.
   orbSelRing:{position:'absolute',top:-6,left:-6,right:-6,bottom:-6,borderRadius:32,borderWidth:2},
+  // Background-work aura: a filled gold disc with a brighter rim + native glow,
+  // pulsed via glowPulse. Sits outside orbGlow's clip so it isn't cropped.
+  orbAura:{position:'absolute',top:-15,left:-15,right:-15,bottom:-15,borderRadius:42,
+    backgroundColor:'rgba(232,201,138,0.20)',borderWidth:1.5,borderColor:'rgba(232,201,138,0.75)',
+    shadowColor:'#E8C98A',shadowOpacity:0.9,shadowRadius:14,shadowOffset:{width:0,height:0},elevation:10},
   orbGlow:{width:52,height:52,borderRadius:26,alignItems:'center',justifyContent:'center',overflow:'hidden'},
   // A reply is waiting — landed while this orb wasn't the one open. Sits
   // outside orbGlow's own clip so the dot isn't cropped by its circle mask.

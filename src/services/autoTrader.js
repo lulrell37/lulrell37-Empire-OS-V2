@@ -22,6 +22,7 @@ const listeners=new Set();
 
 export function onAutoTrade(cb){listeners.add(cb);return()=>listeners.delete(cb);}
 export function autoTraderRunning(){return running;}
+export function autoTraderBusy(){return busy;}
 
 function emit(text){
   saveMessage(TRADER_ID,'system',text,'direct').catch(()=>{});

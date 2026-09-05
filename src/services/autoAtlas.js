@@ -18,6 +18,7 @@ let timer=null,running=false,busy=false;
 const listeners=new Set();
 export function onAutoAtlas(cb){listeners.add(cb);return()=>listeners.delete(cb);}
 export function autoAtlasRunning(){return running;}
+export function autoAtlasBusy(){return busy;}
 function emit(text){for(const cb of listeners){try{cb(text);}catch{}}}
 
 async function runOnce(){
