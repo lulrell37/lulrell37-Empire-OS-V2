@@ -60,12 +60,18 @@ export async function uploadToHiggsfield(localUri,contentType='image/jpeg',key){
   const link=await hf('/files/generate-upload-url',{method:'POST',key:cred,body:{content_type:contentType}});
   const uploadUrl=link?.upload_url,publicUrl=link?.public_url;
   if(!uploadUrl||!publicUrl)throw new Error('Higgsfield returned no upload URL');
+  // The presigned PUT is signed over a specific set of headers (Content-Type,
+  // x-amz-tagging, …). Replay every header Higgsfield hands back verbatim or the
+  // storage layer rejects the signature with a 403. Do NOT add the API creds here.
+  const signed=link?.upload_headers||{};
+  const hasCT=Object.keys(signed).some(h=>h.toLowerCase()==='content-type');
+  const putHeaders=hasCT?{...signed}:{'Content-Type':contentType,...signed};
   const res=await FileSystem.uploadAsync(uploadUrl,localUri,{
     httpMethod:'PUT',
     uploadType:FileSystem.FileSystemUploadType.BINARY_CONTENT,
-    headers:{'Content-Type':contentType},
+    headers:putHeaders,
   });
-  if(res.status<200||res.status>=300)throw new Error(`upload failed (${res.status})`);
+  if(res.status<200||res.status>=300)throw new Error(`upload failed (${res.status}) ${String(res.body||'').slice(0,180)}`);
   return publicUrl;
 }
 
