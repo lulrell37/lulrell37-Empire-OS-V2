@@ -6,7 +6,7 @@
 // target is a PanResponder strip inside PersonaSphereInner.
 import React,{useEffect,useMemo,useRef}from 'react';
 import{Animated,Dimensions,Easing,StyleSheet,View}from 'react-native';
-import Svg,{Defs,ClipPath,RadialGradient,Stop,Circle,Ellipse,G,Rect}from 'react-native-svg';
+import Svg,{Defs,ClipPath,RadialGradient,Stop,Circle,Ellipse,G}from 'react-native-svg';
 
 const AView=Animated.createAnimatedComponent(View);
 
@@ -100,7 +100,7 @@ export default function EarthHorizon(){
         </Svg>
       </AView>
 
-      {/* night-side falloff + atmosphere limb, no space fade */}
+      {/* night-side falloff + a hard limb line — no atmosphere haze above it */}
       <Svg width={W} height={CAP} style={StyleSheet.absoluteFill}>
         <Defs>
           <RadialGradient id="eh_night" cx={SUN_X} cy={SUN_Y} r={R*2.1} gradientUnits="userSpaceOnUse">
@@ -108,17 +108,10 @@ export default function EarthHorizon(){
             <Stop offset="0.85" stopColor="#000814" stopOpacity="0.35"/>
             <Stop offset="1" stopColor="#000510" stopOpacity="0.62"/>
           </RadialGradient>
-          <RadialGradient id="eh_space" cx="50%" cy="100%" r="70%">
-            <Stop offset="0.6" stopColor="#000000" stopOpacity="0"/>
-            <Stop offset="0.94" stopColor="#4FB6E8" stopOpacity="0.16"/>
-            <Stop offset="1" stopColor="#BEEBFF" stopOpacity="0.30"/>
-          </RadialGradient>
         </Defs>
         <Circle cx={CX} cy={CY} r={R} fill="url(#eh_night)"/>
-        <Rect x="0" y="0" width={W} height={CAP} fill="url(#eh_space)"/>
-        {/* thin bright rim on the limb + a soft outer haze, both cool */}
+        {/* thin bright rim right on the limb, nothing beyond it */}
         <Circle cx={CX} cy={CY} r={R+1.5} fill="none" stroke="#DFF4FF" strokeOpacity="0.6" strokeWidth={1.4}/>
-        <Circle cx={CX} cy={CY} r={R+9} fill="none" stroke="#7FD3FF" strokeOpacity="0.14" strokeWidth={14}/>
       </Svg>
     </View>
   );
