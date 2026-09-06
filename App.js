@@ -111,7 +111,7 @@ export default function App(){
           onStateChange={(state)=>{AsyncStorage.setItem(NAV_STATE_KEY,JSON.stringify(state)).catch(()=>{});}}
         >
           <StatusBar style="light" backgroundColor="#000"/>
-          <Stack.Navigator initialRouteName={hasKeys?'Map':'Splash'} screenOptions={{headerShown:false,animation:'fade',animationDuration:320,contentStyle:{backgroundColor:'#000'}}}>
+          <Stack.Navigator initialRouteName={hasKeys?'Command':'Splash'} screenOptions={{headerShown:false,animation:'fade',animationDuration:320,contentStyle:{backgroundColor:'#000'}}}>
             <Stack.Screen name="Splash" component={SplashScreenComponent}/>
             <Stack.Screen name="Map" component={EmpireCityScreen}/>
             <Stack.Screen name="Command" component={CommandScreen}/>

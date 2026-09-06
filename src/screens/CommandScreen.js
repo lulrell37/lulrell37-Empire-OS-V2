@@ -1167,14 +1167,23 @@ export default function CommandScreen({navigation,route}){
   // Header back button: on the visualization, step back one zoom level
   // (a memory -> the memory spiral -> the persona orb -> the persona sphere);
   // only leave for the city once you're already at the sphere.
+  // The galaxy (view==='viz', group level) is the app's home screen. Back steps
+  // in from the edges toward it: chart overlay -> chat -> deeper viz levels ->
+  // the galaxy; once there, returns false so the OS handles it (exits the app).
   function handleBack(){
-    if(chartOverlay){setChartOverlay(null);return;}
-    if(view==='viz'&&orbZoomRef.current&&orbZoomRef.current.back())return;
-    goToCity();
+    if(chartOverlay){setChartOverlay(null);return true;}
+    if(view==='text'){
+      setHandsFree(false);handsFreeRef.current=false;clearSilenceTimer();
+      if(recordingRef.current)stopRecording();
+      stopAudio();
+      setView('viz');return true;
+    }
+    if(view==='viz'&&orbZoomRef.current&&orbZoomRef.current.back())return true;
+    return false;
   }
   // Android hardware back does the same thing.
   useFocusEffect(useCallback(()=>{
-    const sub=BackHandler.addEventListener('hardwareBackPress',()=>{handleBack();return true;});
+    const sub=BackHandler.addEventListener('hardwareBackPress',()=>handleBack());
     return()=>sub.remove();
   },[view,chartOverlay]));// eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1981,9 +1990,14 @@ export default function CommandScreen({navigation,route}){
   return(
     <SafeAreaView style={s.container} edges={['top','bottom']}>
       <View style={s.header}>
-        <TouchableOpacity onPress={handleBack} hitSlop={{top:10,bottom:10,left:10,right:10}}>
-          <Text style={s.empireOS}>{view==='viz'&&orbLevel!=='group'?'‹ BACK':'♔ EMPIRE OS'}</Text>
-        </TouchableOpacity>
+        {view==='text'||(view==='viz'&&orbLevel!=='group')?(
+          <TouchableOpacity onPress={handleBack} hitSlop={{top:10,bottom:10,left:10,right:10}}>
+            <Text style={s.empireOS}>‹ BACK</Text>
+          </TouchableOpacity>
+        ):(
+          // The galaxy is home — brand mark only, no back affordance.
+          <Text style={s.empireOS}>♔ EMPIRE OS</Text>
+        )}
         <View style={s.headerRight}>
           <View style={s.viewToggle}>
             {[['viz','◉'],['text','≣']].map(([v,ic])=>(
@@ -2064,6 +2078,7 @@ export default function CommandScreen({navigation,route}){
           onPickPersona={pickPersonaFromOrb}
           onLaunchGroup={launchGroupFromOrb}
           onZoomOut={goToCity}
+          onEarth={goToCity}
         />
         )
       ):(
@@ -2086,7 +2101,8 @@ export default function CommandScreen({navigation,route}){
         <Text style={[s.thinkT,{color:'#E05555'}]}>Listening...</Text>
       </View>)}
 
-      <KeyboardAvoidingView behavior={Platform.OS==='ios'?'padding':'height'}>
+      {/* The composer belongs to the chat view — the galaxy (viz) has no chat bar. */}
+      {view==='text'&&<KeyboardAvoidingView behavior={Platform.OS==='ios'?'padding':'height'}>
         <View style={s.inputArea}>
           <View style={s.inputRow}>
             <TextInput ref={textInputRef} style={s.input} defaultValue="" onChangeText={t=>{inputRef.current=t;setInput(t);}} placeholder="Speak your directive..." placeholderTextColor="#333" multiline maxLength={2000} autoCorrect={false} autoComplete="off" autoCapitalize="sentences" spellCheck={false}/>
@@ -2141,7 +2157,7 @@ export default function CommandScreen({navigation,route}){
             </TouchableOpacity>
           </ScrollView>
         </View>
-      </KeyboardAvoidingView>
+      </KeyboardAvoidingView>}
 
       <Modal visible={showCustomPicker} transparent animationType="slide">
         <View style={s.modalOver}><View style={s.modalContent}>

@@ -11,6 +11,7 @@ import{View,Text,StyleSheet,TouchableOpacity,ActivityIndicator,Dimensions,Platfo
 import Svg,{Path}from 'react-native-svg';
 import PersonaOrb from './PersonaOrb';
 import SphereBackdrop from './SphereBackdrop';
+import EarthHorizon from './EarthHorizon';
 import MemorySpiral from './MemorySpiral';
 import MemoryPopup from './MemoryPopup';
 import Boundary from '../hud/Boundary';
@@ -105,7 +106,7 @@ function depthOpacity(depth){
 
 function touchDist(t){return Math.hypot(t[0].pageX-t[1].pageX,t[0].pageY-t[1].pageY);}
 
-function OrbZoom({personaId,color,active,vizRef,personaPics={},unreadPersonas,busyPersonas,onPickPersona,onLaunchGroup,onZoomOut,level='group',onLevelChange},ref){
+function OrbZoom({personaId,color,active,vizRef,personaPics={},unreadPersonas,busyPersonas,onPickPersona,onLaunchGroup,onZoomOut,onEarth,level='group',onLevelChange},ref){
   const persona=getPersona(personaId);
   // Manually dragged orb positions — lifted up here (rather than living inside
   // PersonaSphereInner) so they survive zooming into a persona and back out,
@@ -309,8 +310,6 @@ function OrbZoom({personaId,color,active,vizRef,personaPics={},unreadPersonas,bu
     setUndo(null);
   }
 
-  const idx=LEVELS.indexOf(level);
-
   return(
     <View ref={wrapRef} style={s.wrap} {...stagePan.panHandlers}
       onLayout={()=>{wrapRef.current&&wrapRef.current.measureInWindow&&wrapRef.current.measureInWindow((x,y,w,h)=>{
@@ -324,10 +323,14 @@ function OrbZoom({personaId,color,active,vizRef,personaPics={},unreadPersonas,bu
           onContentSizeChange={()=>{wheelY.current=WHEEL_MID;wheelScrollRef.current&&wheelScrollRef.current.scrollTo({y:WHEEL_MID,animated:false});}}/>
       )}
       {level==='group'&&<SphereBackdrop/>}
+      {/* Earth curving up along the bottom edge — pure backdrop art, behind the
+          cloud and never touch-interactive. The "descend" button below is the
+          way down to the city map. */}
+      {level==='group'&&<EarthHorizon/>}
       <Animated.View style={{flex:1,opacity:morph.opacity,transform:[{translateX:pinchTX},{translateY:pinchTY},{scale:contentScale}]}}>
         {level==='group'&&(
           <Boundary label="The persona sphere">
-            <PersonaSphere ref={sphereRef} activeId={personaId} pics={personaPics} unreadPersonas={unreadPersonas} busyPersonas={busyPersonas} onPick={pick} onLaunch={launch} pinned={pinned} setPinned={setPinned}/>
+            <PersonaSphere ref={sphereRef} activeId={personaId} pics={personaPics} unreadPersonas={unreadPersonas} busyPersonas={busyPersonas} onPick={pick} onLaunch={launch} onEarth={onEarth} pinned={pinned} setPinned={setPinned}/>
           </Boundary>
         )}
         {level==='orb'&&(
@@ -343,14 +346,12 @@ function OrbZoom({personaId,color,active,vizRef,personaPics={},unreadPersonas,bu
 
       {memories===null&&level==='memory'&&<View style={s.loading}><ActivityIndicator color={color}/></View>}
 
-      <View style={s.rail} pointerEvents="none">
-        <Text style={[s.railLabel,{color}]}>
-          {level==='group'?'':persona.name}
-        </Text>
-        <View style={s.dots}>
-          {LEVELS.map((l,i)=>(<View key={l} style={[s.dot,i<=idx&&{backgroundColor:color,opacity:i===idx?1:0.4}]}/>))}
+
+      {level!=='group'&&(
+        <View style={s.rail} pointerEvents="none">
+          <Text style={[s.railLabel,{color}]}>{persona.name}</Text>
         </View>
-      </View>
+      )}
 
       <View style={s.zoomCtl} pointerEvents="box-none">
         <TouchableOpacity style={s.zBtn} onPress={()=>shallower()}><Text style={s.zT}>−</Text></TouchableOpacity>
@@ -374,7 +375,7 @@ function OrbZoom({personaId,color,active,vizRef,personaPics={},unreadPersonas,bu
 // spread + depth fade sell the movement; nearest-in-front is what a tap or a
 // pinch-in selects.
 
-function PersonaSphereInner({activeId,pics,unreadPersonas,busyPersonas,onPick,onLaunch,pinned,setPinned},ref){
+function PersonaSphereInner({activeId,pics,unreadPersonas,busyPersonas,onPick,onLaunch,onEarth,pinned,setPinned},ref){
   const[size,setSize]=useState({w:Dimensions.get('window').width,h:340});
   const[group,setGroup]=useState([]);
   const[order,setOrder]=useState(()=>PERSONA_LIST.map((_,i)=>i));
@@ -566,6 +567,18 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,busyPersonas,onPick,on
     },
   }),[RX,RY]);
 
+  // Earth fills the bottom strip of the galaxy — a tap there descends to the
+  // city map. It claims the touch on start (so a tap registers) but yields on
+  // any real drag, so panning/dollying the cloud from the bottom still works.
+  const onEarthRef=useRef(onEarth);
+  useEffect(()=>{onEarthRef.current=onEarth;},[onEarth]);
+  const earthTap=useMemo(()=>PanResponder.create({
+    onStartShouldSetPanResponder:()=>true,
+    onMoveShouldSetPanResponder:()=>false,
+    onPanResponderTerminationRequest:()=>true,
+    onPanResponderRelease:(_,g)=>{if(Math.hypot(g.dx,g.dy)<8)onEarthRef.current&&onEarthRef.current();},
+  }),[]);
+
   const pan=useMemo(()=>PanResponder.create({
     onStartShouldSetPanResponder:()=>false,
     onMoveShouldSetPanResponder:(e,g)=>(!e.nativeEvent.touches||e.nativeEvent.touches.length<2)&&(Math.abs(g.dx)>6||Math.abs(g.dy)>6),
@@ -708,6 +721,7 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,busyPersonas,onPick,on
         boxRef.current&&boxRef.current.measureInWindow&&boxRef.current.measureInWindow((x,y)=>{originRef.current={x:x||0,y:y||0};});
       }}>
       <View style={StyleSheet.absoluteFill} {...pan.panHandlers}>
+        {onEarth&&<View style={s.earthTap} {...earthTap.panHandlers}/>}
         <Svg style={StyleSheet.absoluteFill} pointerEvents="none">
           {tethers.map(t=>t.opacity>0.02&&(
             <AnimatedPath key={t.key} d={t.d} stroke="#E8C98A" strokeWidth={1} fill="none"
@@ -787,6 +801,7 @@ const s=StyleSheet.create({
   railLabel:{fontFamily:'monospace',fontSize:10,fontWeight:'700',letterSpacing:3},
   dots:{flexDirection:'row',gap:5,marginTop:6},
   dot:{width:5,height:5,borderRadius:2.5,backgroundColor:'#222'},
+  earthTap:{position:'absolute',left:0,right:0,bottom:0,height:'25%'},
   zoomCtl:{position:'absolute',right:12,bottom:16,gap:8},
   zBtn:{width:34,height:34,borderRadius:6,borderWidth:1,borderColor:'#222',backgroundColor:'rgba(0,0,0,0.5)',alignItems:'center',justifyContent:'center'},
   zT:{color:'#999',fontSize:18,fontFamily:'monospace'},

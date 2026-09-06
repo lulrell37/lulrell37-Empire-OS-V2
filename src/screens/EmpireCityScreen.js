@@ -705,6 +705,8 @@ function EmpireCity({navigation}){
   const applyWheelZoom=useCallback((delta)=>{
     if(!delta)return;
     const lo=engine.minR-engine.baseR,hi=engine.maxR-engine.baseR;
+    // Already zoomed all the way out and still pulling back — leave for the galaxy.
+    if(delta>0&&engine.dolly>=hi-0.001){engine.wantExit=true;return;}
     engine.dolly=Math.max(lo,Math.min(hi,engine.dolly+delta*0.02));
     engine.idle=0;
   },[engine]);
@@ -734,7 +736,7 @@ function EmpireCity({navigation}){
 
   useFocusEffect(useCallback(()=>{
     engine.active=true;engine.entering=null;engine.navigated=false;
-    engine.dolly=0;engine.wantEnter=false;
+    engine.dolly=0;engine.wantEnter=false;engine.wantExit=false;
     return()=>{engine.active=false;};
   },[engine]));
 
@@ -803,6 +805,8 @@ function EmpireCity({navigation}){
       .onEnd(e=>{
         const r=engine.baseR+engine.dolly;
         if(e.scale>1&&r<=engine.minR+0.5)engine.wantEnter=true;
+        // pinched all the way out and still going — rise back to the galaxy
+        if(e.scale<1&&r>=engine.maxR-3)engine.wantExit=true;
       });
     const tap=Gesture.Tap().runOnJS(true).maxDistance(18)
       .onEnd((e,ok)=>{if(ok){const t=raycastAt(e.x,e.y);if(t){const h=HEROES.find(x=>x.name===t);if(h)enterHero(h);}}});
@@ -842,6 +846,7 @@ function EmpireCity({navigation}){
         const dt=Math.min(0.05,(now-engine.last)/1000);
         engine.last=now;
         if(engine.active===false)return;
+        if(engine.wantExit&&!engine.navigated){engine.navigated=true;navigation.navigate('Command');return;}
 
         const T=engine.uniforms.uTime.value+=dt;
         engine.idle+=dt;
@@ -1020,7 +1025,7 @@ function EmpireCity({navigation}){
 
       {/* nav hint */}
       <SafeAreaView style={s.hint} edges={['bottom']} pointerEvents="none">
-        <Text style={s.hintText}>DRAG TO MOVE · TWO FINGERS TO ROTATE · PINCH TO ENTER A DISTRICT</Text>
+        <Text style={s.hintText}>DRAG TO MOVE · TWO FINGERS TO ROTATE · PINCH TO ENTER A DISTRICT · ZOOM ALL THE WAY OUT FOR THE GALAXY</Text>
       </SafeAreaView>
 
       {status==='loading'&&(
