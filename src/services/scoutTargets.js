@@ -51,6 +51,22 @@ export function pickTarget(cursor=0){
   return{metro,segment,index:i,total};
 }
 
+// metro string ("New York NY") -> its craigslist subdomain ("newyork"), for the
+// computer-gigs RSS the inbound sweep reads. Most metros are just the city name
+// with spaces/punctuation stripped and the state dropped ("Little Rock AR" ->
+// "littlerock"); the handful craigslist names differently are listed explicitly.
+const CL_OVERRIDES={
+  'San Francisco CA':'sfbay','San Jose CA':'sfbay','Riverside CA':'inlandempire',
+  'Virginia Beach VA':'norfolk','Birmingham AL':'bham','Colorado Springs CO':'cosprings',
+  'Washington DC':'washingtondc','Grand Rapids MI':'grandrapids',
+};
+export function craigslistSub(metro){
+  if(CL_OVERRIDES[metro])return CL_OVERRIDES[metro];
+  const parts=String(metro||'').trim().split(/\s+/);
+  if(parts.length>1)parts.pop();                    // drop the trailing state code
+  return parts.join('').toLowerCase().replace(/[^a-z]/g,'');
+}
+
 // Rotating inbound-scan phrases so the loop doesn't hit the same query every cycle.
 export const INBOUND_QUERIES=[
   'looking for someone to build a custom tool for my business',

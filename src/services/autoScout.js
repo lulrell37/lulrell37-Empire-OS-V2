@@ -2,8 +2,12 @@
 //
 // Runs while the app is open (App.js starts/stops it on foreground), gated on
 // the `auto_scout` setting. Every `auto_scout_interval_min` minutes it:
-//   1. sweeps X / Hacker News / Reddit for inbound buying signals — people
-//      already looking for us — and claims the lead budget first,
+//   1. sweeps for people already looking for us — X, Bluesky, Hacker News
+//      (incl. the monthly SEEKING FREELANCER thread), Reddit (business + city
+//      subs), the freelance gig boards (r/forhire, r/jobbit, r/slavelabour),
+//      Software Recommendations StackExchange, the no-code/automation forums,
+//      and one metro's Craigslist gig/job boards — and claims the lead budget
+//      first,
 //   2. prospects one metro x segment cell of the nationwide grid with
 //      whatever lead-budget room is left,
 //   3. cold-emails fresh leads their opener — NO confirmation prompt,
@@ -116,17 +120,20 @@ async function inboundPass(stats,dailyLeads){
   let cursor=0;
   try{cursor=parseInt(await getSetting('auto_scout_inbound_cursor','0'),10)||0;}catch{}
   await setSetting('auto_scout_inbound_cursor',String(cursor+1)).catch(()=>{});
+  // Rotate the Craigslist computer-gigs board through the same metro grid the
+  // outbound pass walks, so local job posts get nationwide coverage over time.
+  const{metro}=pickTarget(cursor);
 
   let digest='';
-  try{digest=await runInboundScan('scout',pickInboundQuery(cursor),null);}catch{return;}
+  try{digest=await runInboundScan('scout',pickInboundQuery(cursor),null,{metro});}catch{return;}
   if(!String(digest||'').trim())return;
 
   const room=Math.min(4,Math.max(1,dailyLeads-stats.added));
   const ask=[{role:'user',content:
-`INBOUND SCAN — public posts where people may be asking for what Empire Digital builds:\n\n${String(digest).slice(0,4000)}\n\n`+
-`For each post that is genuinely a business owner or operator asking for a custom tool, automation, or software help, emit:\n`+
+`INBOUND SCAN — public posts and open gigs where someone may want what Empire Digital builds:\n\n${String(digest).slice(0,8500)}\n\n`+
+`Emit a line for each one that is a real buyer — a business owner/operator asking for a custom tool, automation, or software help, OR an open [Hiring]/gig post whose work is genuinely ours to do:\n`+
 `[LEAD_ADD: name or handle | what their business does | the post URL | | what they said they need | inbound-signal]\n\n`+
-`Skip developers offering services, job posts, generic discussion, anything that isn't a real buying signal. Add at most ${room}. Output ONLY [LEAD_ADD:] lines.`}];
+`KEEP the gig-board and Craigslist job posts — those are buyers with a budget; the post URL is the reply channel. SKIP developers/agencies advertising their own services, generic discussion, roles that aren't software/automation work, and anything already stale. Add at most ${room}. Output ONLY [LEAD_ADD:] lines.`}];
   let resp='';
   try{resp=await callPersona('scout',ask,null,null,{skipSave:true,maxTokens:1200});}catch{return;}
 
