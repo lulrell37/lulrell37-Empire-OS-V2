@@ -77,6 +77,30 @@ export async function handleCommands(response,personaId,callbacks={}){
   if(/\[COUNCIL_IDEAS_CLEAR\]/i.test(response)){
     await setSetting('council_ideas','[]');
   }
+  // [COUNCIL_NOTE: text] — the owner leaves a freeform note on his own thinking
+  // for the whole council to read and weigh before they answer at the next
+  // meeting. Same synced app-setting shape as `council_ideas` (a JSON list);
+  // [COUNCIL_NOTES_CLEAR] wipes it. The meeting surfaces the brief to every
+  // persona and clears it once it's been used.
+  for(const m of response.matchAll(/\[COUNCIL_NOTE:\s*([^\]]+)\]/gi)){
+    const text=m[1]?.trim();if(!text)continue;
+    let list=[];try{list=JSON.parse((await getSetting('council_notes',''))||'[]');}catch{}
+    if(!Array.isArray(list))list=[];
+    if(!list.some(i=>(typeof i==='string'?i:i.text||'').toLowerCase()===text.toLowerCase())){
+      list.push({text,added_at:Date.now()});
+      await setSetting('council_notes',JSON.stringify(list));
+      callbacks.onCouncilNote?.({text});
+    }
+  }
+  if(/\[COUNCIL_NOTES_CLEAR\]/i.test(response)){
+    await setSetting('council_notes','[]');
+  }
+  // [COUNCIL_CONVENE] — the owner asks A.R.A. to run the Empire Council now,
+  // off its 5am schedule. The callback force-syncs and fires the backend
+  // meeting (a few minutes; lands the usual push + transcript note when done).
+  if(/\[COUNCIL_CONVENE\]/i.test(response)){
+    callbacks.onCouncilConvene?.();
+  }
   // [OPEN_APP: name] launches the actual app (Spotify, Instagram, Maps, Uber,
   // etc.) by its Android package — never a webpage fallback. [OPEN_WEBPAGE:
   // url] is the separate, explicit escape hatch for when a webpage genuinely
@@ -282,6 +306,7 @@ export function stripCommands(text){
     .replace(/\[HUD_DETACH:[^\]]*\]/gi,'').replace(/\[HUD_DOCK:[^\]]*\]/gi,'').replace(/\[DIAGRAM_SHOW:[^\]]*\]/gi,'')
     .replace(/\[RELAY_TO:[^\]]*\]/gi,'').replace(/\[SEARCH_WEB:[^\]]*\]/gi,'')
     .replace(/\[COUNCIL_IDEA:[^\]]*\]/gi,'').replace(/\[COUNCIL_IDEAS_CLEAR\]/gi,'')
+    .replace(/\[COUNCIL_NOTE:[^\]]*\]/gi,'').replace(/\[COUNCIL_NOTES_CLEAR\]/gi,'').replace(/\[COUNCIL_CONVENE\]/gi,'')
     .replace(/\[PROJECT_START:[\s\S]*?\]/gi,'').replace(/\[DELEGATE:[^\]]*\]/gi,'')
     .replace(/\[PROJECT_(?:DONE|CLOSE|COMPLETE|END)\]/gi,'')
     .replace(/\[READ_CALENDAR\]/gi,'').replace(/\[READ_EMAIL\]/gi,'')

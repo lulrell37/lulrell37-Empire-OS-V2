@@ -29,6 +29,7 @@ import{startAutoAtlas,stopAutoAtlas}from './src/services/autoAtlas';
 import{refreshDailyBriefing}from './src/services/dailyBriefing';
 import{importInboundForm}from './src/services/inbound';
 import{pushLeadsToSheet}from './src/services/leadsSheet';
+import{syncGoogleTokenToBackend}from './src/services/googleClient';
 import{getAllPersonaPics}from './src/services/database';
 import useEmpireStore from './src/store/useEmpireStore';
 import{recentCrashCount}from './src/services/crashLog';
@@ -52,6 +53,7 @@ export default function App(){
         await initSyncStatus().catch(()=>{});
         runSync().catch(()=>{}); // no-op unless a backend is configured
         registerPushToken().catch(()=>{}); // no-op unless a backend is configured
+        syncGoogleTokenToBackend().catch(()=>{}); // no-op unless backend + Google both linked
       }
       catch(e){console.warn('Init error:',e);reportError('Init error: '+e.message);}
       finally{setIsReady(true);await SplashScreen.hideAsync();}
@@ -74,7 +76,7 @@ export default function App(){
   },[]);
   useEffect(()=>{
     // Sync on every return to the foreground + a gentle background interval.
-    const sub=AppState.addEventListener('change',(st)=>{if(st==='active'){runSync().catch(()=>{});refreshDailyBriefing().catch(()=>{});importInboundForm().catch(()=>{});pushLeadsToSheet().catch(()=>{});}});
+    const sub=AppState.addEventListener('change',(st)=>{if(st==='active'){runSync().catch(()=>{});refreshDailyBriefing().catch(()=>{});importInboundForm().catch(()=>{});pushLeadsToSheet().catch(()=>{});syncGoogleTokenToBackend().catch(()=>{});}});
     const iv=setInterval(()=>{runSync().catch(()=>{});},120000);
     const inb=setInterval(()=>{importInboundForm().catch(()=>{});},300000);
     const lsh=setInterval(()=>{pushLeadsToSheet().catch(()=>{});},300000);

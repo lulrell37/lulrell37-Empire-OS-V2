@@ -3,9 +3,41 @@
 // token via getFreshGoogleToken(). Scopes granted at login: drive, gmail
 // (readonly + send), calendar, tasks.
 import{getFreshGoogleToken}from './googleAuth';
+import{loadBackend,loadGoogleToken}from './keyStore';
 import*as FileSystem from 'expo-file-system';
 
 const GBASE='https://www.googleapis.com';
+
+// Hand the Google refresh token to the backend once, so the server-side crons —
+// specifically the nightly Empire Council reading the "Council Brief" Drive note
+// — can act as this account without the phone. No-op with no backend, no refresh
+// token, or if the same token was already sent this launch. Called on Google
+// connect, on backend connect, and on app start / foreground.
+let lastPushedRefresh=null;
+export async function syncGoogleTokenToBackend(){
+  const be=await loadBackend();
+  const tok=await loadGoogleToken();
+  const rt=tok&&tok.refreshToken;
+  if(!be||!rt||rt===lastPushedRefresh)return;
+  try{
+    const res=await fetch(be.url+'/google/token',{
+      method:'POST',
+      headers:{Authorization:'Bearer '+be.token,'Content-Type':'application/json'},
+      body:JSON.stringify({refreshToken:rt}),
+    });
+    if(res.ok)lastPushedRefresh=rt;
+  }catch{}
+}
+
+// Drop the refresh token from the backend (called when Google is disconnected).
+export async function clearGoogleTokenOnBackend(){
+  lastPushedRefresh=null;
+  const be=await loadBackend();
+  if(!be)return;
+  try{
+    await fetch(be.url+'/google/token',{method:'DELETE',headers:{Authorization:'Bearer '+be.token}});
+  }catch{}
+}
 
 // UTF-8 -> bytes without relying on TextEncoder (not guaranteed on Hermes/SDK 51).
 function utf8Bytes(str){

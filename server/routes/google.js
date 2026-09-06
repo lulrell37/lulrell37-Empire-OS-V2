@@ -1,6 +1,8 @@
-// Stores the Google OAuth refresh token so the server can make Gmail / Calendar
-// calls on a schedule later. Storage only for now — no server-side Google
-// features are wired up yet.
+// Stores the Google OAuth refresh token so server-side crons can act as the
+// owner's account. Today that's the nightly Empire Council reading the "Council
+// Brief" Drive note (see server/google.js + server/councilMeeting.js). The app
+// posts the token on Google connect / backend connect / app start, and deletes
+// it here when Google is disconnected.
 const express = require('express');
 const { query } = require('../db');
 
@@ -19,6 +21,15 @@ r.post('/token', async (req, res) => {
          SET refresh_token = EXCLUDED.refresh_token, updated_at = EXCLUDED.updated_at`,
       [refreshToken, Date.now()],
     );
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+r.delete('/token', async (req, res) => {
+  try {
+    await query('DELETE FROM google_tokens WHERE id = 1');
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: e.message });

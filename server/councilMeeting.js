@@ -8,7 +8,12 @@
 //
 // What it does each run:
 //   1. Reads the current businesses (HUD Business panel), month-to-date revenue,
-//      and the owner's queued ideas (app_settings `council_ideas`).
+//      the owner's queued ideas (app_settings `council_ideas`), and his
+//      pre-meeting brief: the "Council Brief" Google Drive note (read via
+//      server/google.js with the synced refresh token) plus any quick lines he
+//      added in chat with [COUNCIL_NOTE] (app_settings `council_notes`). A.R.A.
+//      reads the brief to the room to open the meeting; the Drive note is left
+//      untouched, the chat quick-adds are cleared afterward.
 //   2. Pulls LIVE web research on each business + idea — what's actually working
 //      in that market right now — via Claude's web_search tool.
 //   3. A.R.A. opens the meeting; the council (everyone except Ghost, Talon, Rogue,
@@ -18,7 +23,13 @@
 //      that A.R.A. surfaces on "how's the empire", a pinned A.R.A. memory, and a
 //      push notification.
 //
-// Disabled unless ANTHROPIC_API_KEY is set. Set COUNCIL=off to force off.
+// Runs on its 5am cron, and also on demand: A.R.A. emits [COUNCIL_CONVENE] in
+// chat -> the app hits POST /council/run -> runCouncilMeeting({ force: true }),
+// which bypasses the once-a-day guard (and COUNCIL=off) and stamps the transcript
+// note with the time so an off-schedule run doesn't overwrite the morning one.
+//
+// Disabled unless ANTHROPIC_API_KEY is set. Set COUNCIL=off to force off (a
+// forced /council/run still goes through).
 // Personas speak on their real provider when its key is set on the server
 // (XAI_API_KEY for A.R.A., OPENAI_API_KEY for S.E.L.E.N.E., GEMINI_API_KEY for
 // N.O.V.A.); anyone whose key is missing falls back to Claude. Research is Claude.
@@ -29,6 +40,12 @@
 const crypto = require('crypto');
 const { query } = require('./db');
 const { pushCouncil } = require('./pushSender');
+const { readDriveNote } = require('./google');
+
+// The owner keeps a running brief for the council in a Google Drive note with
+// this exact title. A.R.A. reads whatever's in it to the room at the top of each
+// meeting; it's never modified from here. Rename it with COUNCIL_BRIEF_NOTE.
+const BRIEF_NOTE_TITLE = process.env.COUNCIL_BRIEF_NOTE || 'Council Brief';
 
 const TZ = 'America/New_York';
 const CLAUDE_MODEL = 'claude-sonnet-5';
@@ -82,6 +99,11 @@ function todayET() {
 }
 function monthET() {
   return todayET().slice(0, 7); // YYYY-MM
+}
+// HHMM in ET, for stamping an off-schedule (convened) run's transcript + push key.
+function timeET() {
+  return new Intl.DateTimeFormat('en-GB', { timeZone: TZ, hour: '2-digit', minute: '2-digit', hour12: false })
+    .format(new Date()).replace(':', '');
 }
 
 // --- sync store helpers (mirror server/dailyBriefing.js) --------------------
@@ -240,6 +262,15 @@ async function gatherContext() {
     .sort((a, b) => a.order - b.order);
 
   const ideas = asObject(await getSetting('council_ideas'), []) || [];
+  const notes = asObject(await getSetting('council_notes'), []) || [];
+  // The owner's living brief, straight from the "Council Brief" Drive note.
+  let driveBrief = null;
+  try {
+    const d = await readDriveNote(BRIEF_NOTE_TITLE);
+    if (d && d.text) driveBrief = d;
+  } catch (e) {
+    console.error('council: could not read the brief note:', e.message);
+  }
 
   const leads = await syncedRows('leads').catch(() => []);
   const leadTally = {};
@@ -249,11 +280,32 @@ async function gatherContext() {
     .filter((j) => j.state && !['pushed', 'failed', 'cancelled'].includes(j.state));
   const hud = (await syncedRows('hud_state').catch(() => []))[0] || {};
 
-  return { businesses, ideas, leadTally, openTrades, builds, hud };
+  return { businesses, ideas, notes, driveBrief, leadTally, openTrades, builds, hud };
+}
+
+const noteText = (n) => (typeof n === 'string' ? n : n && n.text) || '';
+
+// The owner's brief for this meeting: his "Council Brief" Drive note (primary),
+// plus any quick lines he added in chat with [COUNCIL_NOTE]. Empty string if none.
+function ownerBriefText(ctx) {
+  const parts = [];
+  if (ctx.driveBrief && ctx.driveBrief.text) {
+    parts.push(`From his Drive note "${ctx.driveBrief.name}":\n${ctx.driveBrief.text}`);
+  }
+  if (ctx.notes && ctx.notes.length) {
+    parts.push(`Added in chat:\n${ctx.notes.map((n) => `• ${noteText(n)}`).join('\n')}`);
+  }
+  return parts.join('\n\n');
 }
 
 function contextBlock(ctx) {
   const L = [];
+  const brief = ownerBriefText(ctx);
+  if (brief) {
+    L.push("OWNER'S BRIEF — Mr. Burrus's own notes and thinking, written for the council to read and weigh BEFORE you answer. A.R.A. reads this to the room to open the meeting. Take it seriously and fold it into your reasoning:");
+    L.push(brief);
+    L.push('');
+  }
   L.push('BUSINESSES (from the HUD Business panel) — month-to-date revenue vs monthly target:');
   for (const b of ctx.businesses) {
     L.push(`  • ${b.name}: ${money(b.rev)}${b.target ? ` of ${money(b.target)} target` : ' (no target set)'}`);
@@ -271,18 +323,22 @@ function contextBlock(ctx) {
 
 // --- the meeting --------------------------------------------------------
 
-async function runCouncilMeeting() {
-  if (process.env.COUNCIL === 'off') return { skipped: 'disabled' };
+async function runCouncilMeeting(opts = {}) {
+  const force = !!opts.force; // convened on demand — bypass the once-a-day guard and COUNCIL=off
+  if (process.env.COUNCIL === 'off' && !force) return { skipped: 'disabled' };
   if (!process.env.ANTHROPIC_API_KEY) return { skipped: 'no ANTHROPIC_API_KEY' };
   const date = todayET();
-  if ((await getSetting('council_last_date')) === date) return { skipped: 'already ran today', date };
+  if (!force && (await getSetting('council_last_date')) === date) return { skipped: 'already ran today', date };
 
   const ctx = await gatherContext();
-  if (!ctx.businesses.length && !ctx.ideas.length) {
-    await setSetting('council_last_date', date);
+  const brief = ownerBriefText(ctx);
+  if (!ctx.businesses.length && !ctx.ideas.length && !brief) {
+    if (!force) await setSetting('council_last_date', date);
     return { skipped: 'nothing to discuss', date };
   }
   const ctxText = contextBlock(ctx);
+  // A forced run is stamped with the time so it doesn't overwrite the 5am note.
+  const stamp = force ? `${date}_${timeET()}` : date;
 
   // 1) Live web research on each business + idea (capped, batched).
   const researchTargets = [
@@ -304,7 +360,7 @@ async function runCouncilMeeting() {
   const opening = await chatPersona(
     'ara',
     personaSystem('ara'),
-    `You are opening the Empire's nightly strategy council. Present the state of play and hand it to the team.\n\n=== CURRENT STATE ===\n${ctxText}\n\n=== LIVE MARKET RESEARCH ===\n${researchText}\n\nGive a focused opening (250 words max): where we stand, the 2-3 things the research says we should pay attention to, and the specific questions you want the council to answer tonight.`,
+    `You are opening the Empire's nightly strategy council. Present the state of play and hand it to the team.\n\n=== CURRENT STATE ===\n${ctxText}\n\n=== LIVE MARKET RESEARCH ===\n${researchText}\n\nGive a focused opening (250 words max): where we stand, the 2-3 things the research says we should pay attention to, and the specific questions you want the council to answer tonight.${brief ? " Mr. Burrus left an OWNER'S BRIEF above (from his Drive note). READ IT OUT to the council first — quote it or paraphrase it closely so everyone has heard it — then build his thinking into the questions you put to the room." : ''}`,
     { maxTokens: 700 },
   );
 
@@ -360,14 +416,16 @@ async function runCouncilMeeting() {
 
   // 5) Persist everything into sync_rows.
   const now = Date.now();
+  const ownerBrief = brief ? `=== OWNER'S BRIEF (Mr. Burrus, going in) ===\n${brief}\n\n` : '';
   const noteContent =
-    `EMPIRE COUNCIL — ${date}\n\n${headline}\n\n` +
+    `EMPIRE COUNCIL — ${date}${force ? ` (convened ${timeET().replace(/(\d\d)(\d\d)/, '$1:$2')})` : ''}\n\n${headline}\n\n` +
+    ownerBrief +
     `=== OPENING (A.R.A.) ===\n${opening}\n\n` +
     `=== LIVE MARKET RESEARCH ===\n${researchText}\n\n` +
     `=== DISCUSSION ===\n${fullDiscussion}\n\n` +
     `=== NEXT STEPS ===\n${synthesis}\n`;
-  await upsertSyncRow('notes', `council_${date}`, {
-    title: `Empire Council — ${date}`,
+  await upsertSyncRow('notes', `council_${stamp}`, {
+    title: `Empire Council — ${date}${force ? ' (convened)' : ''}`,
     content: noteContent,
     persona: 'ara',
     created_at: now,
@@ -398,15 +456,22 @@ async function runCouncilMeeting() {
     if (remaining.length !== ctx.ideas.length) await setSetting('council_ideas', JSON.stringify(remaining));
   }
 
+  // Clear only the chat quick-adds — they were for this one meeting. The Drive
+  // note is the owner's own document; never touch it from here.
+  if (ctx.notes.length) await setSetting('council_notes', '[]');
+
   await setSetting('council_last_date', date);
 
   let push = { skipped: 'not attempted' };
-  try { push = await pushCouncil(date, headline); } catch (e) { push = { error: e.message }; }
+  try { push = await pushCouncil(date, headline, stamp); } catch (e) { push = { error: e.message }; }
 
   return {
     date,
+    convened: force,
     businesses: ctx.businesses.length,
     ideas: ctx.ideas.length,
+    notes: ctx.notes.length,
+    driveBrief: ctx.driveBrief ? ctx.driveBrief.text.length : 0,
     researched: research.length,
     rounds: ROUNDS,
     turns: transcript.length,

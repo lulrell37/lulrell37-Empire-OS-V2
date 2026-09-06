@@ -37,6 +37,7 @@ import TradeRecordBar from './command/TradeRecordBar';
 import DeepResearchBanner from './command/DeepResearchBanner';
 import BuildPanel from './command/BuildPanel';
 import LeadsPanel from './command/LeadsPanel';
+import{convokeCouncil}from '../services/council';
 import{runInboundScan,importInboundForm}from '../services/inbound';
 import{pushLeadsToSheet}from '../services/leadsSheet';
 import NudgeBar from './command/NudgeBar';
@@ -1370,6 +1371,11 @@ export default function CommandScreen({navigation,route}){
           },
           onMemoryPinned:(e)=>pushSystemMsg(`— pinned for ${e.days}d: ${e.text} —`),
           onCouncilIdea:({text})=>pushSystemMsg(`— COUNCIL · on the agenda for the 5am meeting: ${text} —`),
+          onCouncilNote:({text})=>pushSystemMsg(`— COUNCIL · brief noted for the next meeting: ${text} —`),
+          onCouncilConvene:()=>{
+            pushSystemMsg('— COUNCIL · convening now — runs a few minutes; the push lands when they\'re done —');
+            convokeCouncil().catch(e=>pushSystemMsg(`— COUNCIL · couldn't convene: ${e.message} —`));
+          },
           onOpenAppFailed:({name})=>pushSystemMsg(`— couldn't open "${name}" — don't know that app yet —`),
           onClipEdit:async({mediaUrl,instructions})=>{
             try{

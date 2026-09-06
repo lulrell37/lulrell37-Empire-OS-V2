@@ -17,6 +17,7 @@ import{saveCustomPrompt,getCustomPrompt,getApiUsage,getAllPersonaPics,savePerson
 import{getCrashLog,clearCrashLog}from '../services/crashLog';
 import{PERSONA_LIST,getPersona}from '../personas/personas';
 import{useGoogleAuth,exchangeGoogleCode,revokeGoogle}from '../services/googleAuth';
+import{syncGoogleTokenToBackend,clearGoogleTokenOnBackend}from '../services/googleClient';
 import useEmpireStore from '../store/useEmpireStore';
 const TABS=['KEYS','GOOGLE','TRADING','OUTREACH','DEV','BACKEND','AI','PROFILES','PROMPTS','USAGE','DIAGNOSTICS'];
 export default function SettingsScreen({navigation}){
@@ -106,6 +107,7 @@ export default function SettingsScreen({navigation}){
       const st=await runSync({full:true});
       setBeSync({lastSync:st.lastSync,error:st.error,running:st.running});
       registerPushToken().catch(()=>{});
+      syncGoogleTokenToBackend().catch(()=>{}); // let the server-side council read the Drive brief
       Alert.alert(st.error?'Connected · first sync failed':'Connected',st.error||'Backend linked. This device now syncs, routes AI calls through it, and gets scheduled nudges.');
     }catch(e){Alert.alert('Backend',e.message);}
     finally{setBeBusy(false);}
@@ -258,6 +260,7 @@ export default function SettingsScreen({navigation}){
     await saveGoogleToken(tok);
     setGoogleConnected(true);
     setGoogleConnecting(false);
+    syncGoogleTokenToBackend().catch(()=>{}); // so the 5am council can read the "Council Brief" Drive note
     Alert.alert('Connected',tok?.refreshToken
       ?'Google account connected. The token now refreshes itself in the background.'
       :'Google account connected — but no refresh token was issued, so it will expire in ~1 hour. Disconnect and reconnect once to enable auto-refresh.');
@@ -269,6 +272,7 @@ export default function SettingsScreen({navigation}){
   async function disconnectGoogle(){
     await revokeGoogle();
     await clearGoogleToken();
+    clearGoogleTokenOnBackend().catch(()=>{});
     setGoogleConnected(false);
     Alert.alert('Disconnected','Google account disconnected.');
   }

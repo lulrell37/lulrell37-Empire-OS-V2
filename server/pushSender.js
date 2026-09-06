@@ -220,8 +220,8 @@ async function runNudgeCycle({ force = false } = {}) {
 
 // One "the council met" push after the nightly Empire Council. De-duped to one
 // send per day via a push_log row, same as the scheduled nudges.
-async function pushCouncil(dateStr, headline) {
-  const key = `council:${dateStr}`;
+async function pushCouncil(dateStr, headline, runKey) {
+  const key = `council:${runKey || dateStr}`;
   if (await seen(key)) return { skipped: 'already sent' };
   const tokens = await deviceTokens();
   if (!tokens.length) return { skipped: 'no devices' };

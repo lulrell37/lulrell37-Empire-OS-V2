@@ -21,6 +21,7 @@ const json = express.json({ limit: '25mb' });
 app.use('/sync', auth, json, require('./routes/sync'));
 app.use('/push', auth, json, require('./routes/push'));
 app.use('/google', auth, json, require('./routes/google'));
+app.use('/council', auth, json, require('./routes/council'));
 
 app.use((req, res) => res.status(404).json({ error: 'not found' }));
 app.use((err, req, res, next) => {

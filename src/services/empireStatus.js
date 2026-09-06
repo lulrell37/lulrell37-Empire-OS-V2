@@ -71,8 +71,14 @@ export async function empireStatusBlock(personaId){
     }
   }catch{}
 
+  let notesPending=0;
+  try{const nl=JSON.parse((await getSetting('council_notes',''))||'[]');if(Array.isArray(nl))notesPending=nl.length;}catch{}
   const ideaLine=personaId==='ara'
-    ?"\nWhen Mr. Burrus gives you a strategy idea for the nightly council to work through, emit [COUNCIL_IDEA: the idea] to put it on the agenda."
+    ?"\nNIGHTLY COUNCIL — Mr. Burrus keeps a running brief for the council in a Google Drive note titled \"Council Brief\". You read whatever is in it to the room to open every meeting; he edits it directly in Drive, so treat it as the living word on where his head is. Read it yourself any time with [READ_NOTE: Council Brief], and update it for him on request with [SAVE_NOTE: Council Brief | the full new text]."
+      +" To add a quick line on top of the Drive brief without opening it, emit [COUNCIL_NOTE: the line] — it's read alongside the brief at the next meeting, then cleared."
+      +" To put a strategy idea on the agenda for the council to work through, emit [COUNCIL_IDEA: the idea]."
+      +" When he wants the council to meet now instead of waiting for 5am, emit [COUNCIL_CONVENE]."
+      +(notesPending?` (${notesPending} chat quick-add${notesPending===1?'':'s'} already waiting for the next meeting, on top of the Drive brief.)`:'')
     :'';
   if(!L.length&&!ideaLine)return '';
   return `\n\n[EMPIRE STATUS — a live read of every front, refreshed each turn. Reference it naturally when it's relevant, and raise anything that needs Mr. Burrus's attention rather than waiting to be asked:\n${L.join('\n')}${ideaLine}\n]`;
