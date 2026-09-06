@@ -24,7 +24,7 @@ export async function initDatabase(){
     CREATE TABLE IF NOT EXISTS deep_research(id TEXT PRIMARY KEY,topic TEXT,persona TEXT,mode TEXT DEFAULT 'direct',model TEXT,status TEXT DEFAULT 'running',progress TEXT,result TEXT,error TEXT,started_at INTEGER,finished_at INTEGER,created_at INTEGER,updated_at INTEGER);
     CREATE TABLE IF NOT EXISTS leads(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT,business TEXT,website TEXT,contact TEXT,bottleneck TEXT,segment TEXT,value TEXT,stage TEXT DEFAULT 'new',next_action TEXT,next_touch TEXT,last_touch TEXT,log TEXT DEFAULT '',source TEXT DEFAULT 'scout',source_id TEXT,created_at INTEGER,updated_at INTEGER);
     CREATE TABLE IF NOT EXISTS clip_jobs(id TEXT PRIMARY KEY,issue_number INTEGER,media_url TEXT,instructions TEXT,status TEXT DEFAULT 'queued',result_url TEXT,share_url TEXT,note TEXT,last_comment_id INTEGER DEFAULT 0,created_at INTEGER,updated_at INTEGER);
-    CREATE TABLE IF NOT EXISTS content_items(id TEXT PRIMARY KEY,page TEXT,kind TEXT DEFAULT 'reel',slot TEXT,prompt TEXT,caption TEXT,hashtags TEXT,status TEXT DEFAULT 'queued',media_uri TEXT,media_type TEXT,thumb_uri TEXT,gen_job_id TEXT,scheduled_for TEXT,posted_id TEXT,posted_url TEXT,posted_at INTEGER,error TEXT,note TEXT,created_at INTEGER,updated_at INTEGER);
+    CREATE TABLE IF NOT EXISTS content_items(id TEXT PRIMARY KEY,page TEXT,kind TEXT DEFAULT 'reel',slot TEXT,prompt TEXT,caption TEXT,hashtags TEXT,status TEXT DEFAULT 'queued',media_uri TEXT,media_type TEXT,thumb_uri TEXT,gen_job_id TEXT,gen_phase TEXT,scheduled_for TEXT,posted_id TEXT,posted_url TEXT,posted_at INTEGER,error TEXT,note TEXT,created_at INTEGER,updated_at INTEGER);
   `);
   await migrateHudColumns();
   await migratePersonaMemory();
@@ -37,6 +37,7 @@ export async function initDatabase(){
   await migrateColumn('business_targets','notes','TEXT');
   await migrateColumn('hud_layout','w','REAL DEFAULT 0');
   await migrateColumn('hud_layout','h','REAL DEFAULT 0');
+  await migrateColumn('content_items','gen_phase','TEXT');
   await migrateTraderPersona();
   await ensureHudState();
   await ensureBusinessTargets();
@@ -667,7 +668,9 @@ export async function getLeadsForOutreach(limit=5){
 // publishes the approved ones. Status flow:
 //   queued -> awaiting_media -> needs_review -> approved -> posted
 //   (also: rejected, failed)
-const CONTENT_FIELDS=['page','kind','slot','prompt','caption','hashtags','status','media_uri','media_type','thumb_uri','gen_job_id','scheduled_for','posted_id','posted_url','posted_at','error','note'];
+// While a row is generating on Higgsfield it stays at 'awaiting_media' with a
+// gen_job_id set; gen_phase is 'image' (still) then 'video' (reels only).
+const CONTENT_FIELDS=['page','kind','slot','prompt','caption','hashtags','status','media_uri','media_type','thumb_uri','gen_job_id','gen_phase','scheduled_for','posted_id','posted_url','posted_at','error','note'];
 export async function addContentItem(fields={}){
   const id=Array.from({length:24},()=>Math.floor(Math.random()*16).toString(16)).join('');
   const cols=CONTENT_FIELDS.filter(k=>fields[k]!==undefined&&fields[k]!==null);
@@ -695,6 +698,11 @@ export async function getContentItems({page,status}={}){
 export async function getContentTally(){
   const rows=await db.getAllAsync('SELECT page,status,COUNT(*) n FROM content_items GROUP BY page,status');
   return rows;
+}
+// Rows currently generating on Higgsfield — what contentJobs.js reconciles.
+export async function getGeneratingContentItems(){
+  return await db.getAllAsync(
+    "SELECT * FROM content_items WHERE status='awaiting_media' AND gen_job_id IS NOT NULL AND gen_job_id!='' ORDER BY created_at ASC LIMIT 100");
 }
 // Page config lives in one app_settings JSON row: { muse1:{name,handle,ig_user_id,fb_page_id,active,look}, ... }
 export async function getContentPages(){

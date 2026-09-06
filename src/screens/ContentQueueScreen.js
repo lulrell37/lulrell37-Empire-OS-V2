@@ -1,10 +1,11 @@
 // The AI-influencer content review queue. The page personas (muse1/2/3) write
-// prompts + captions; F.O.R.G.E. compiles them into a batch; Mr. Burrus runs the
-// prompts in Higgsfield and attaches each result here; then he approves, and
-// H.E.R.A.L.D. publishes the approved ones to Instagram / Facebook.
+// prompts + captions; F.O.R.G.E. compiles the batch and (with a Higgsfield key
+// set) submits it — the finished media appears here on its own; then Mr. Burrus
+// approves, and H.E.R.A.L.D. publishes the approved ones to Instagram / Facebook.
 //
 // Status flow: queued -> awaiting_media -> needs_review -> approved -> posted
-// (plus rejected / failed). Nothing leaves this screen for social without an
+// (plus rejected / failed). While 'awaiting_media' has a gen_job_id it's
+// generating on Higgsfield. Nothing leaves this screen for social without an
 // approve tap.
 import React,{useCallback,useEffect,useState}from 'react';
 import{View,Text,StyleSheet,TouchableOpacity,ScrollView,TextInput,Image,Alert}from 'react-native';
@@ -18,6 +19,7 @@ import Boundary from './hud/Boundary';
 import{FONTS}from '../theme';
 import{getContentItems,getContentPages,updateContentItem,deleteContentItem}from '../services/database';
 import{compileBatch}from '../services/socialPublish';
+import{pollContentJobs}from '../services/contentJobs';
 
 const POLL_MS=4000;
 const PAGES=['muse1','muse2','muse3'];
@@ -30,6 +32,14 @@ const STATUS_LABEL={
   queued:'QUEUED',awaiting_media:'NEEDS MEDIA',needs_review:'REVIEW',
   approved:'APPROVED · WAITING TO POST',posted:'POSTED',rejected:'REJECTED',failed:'FAILED',
 };
+// awaiting_media splits by whether Higgsfield is generating it.
+function statusLabel(it){
+  if(it.status==='awaiting_media'&&it.gen_job_id){
+    return it.gen_phase==='video'?'ANIMATING…':'RENDERING…';
+  }
+  return STATUS_LABEL[it.status]||String(it.status||'').toUpperCase();
+}
+const isGenerating=it=>it.status==='awaiting_media'&&!!it.gen_job_id;
 
 export default function ContentQueueScreen({navigation}){
   return(
@@ -54,7 +64,10 @@ function ContentQueue({navigation}){
   useFocusEffect(useCallback(()=>{
     let on=true;const alive=()=>on;
     load(alive);
-    const iv=setInterval(()=>load(alive),POLL_MS);
+    const iv=setInterval(async()=>{
+      try{await pollContentJobs();}catch{}
+      if(alive())load(alive);
+    },POLL_MS);
     return()=>{on=false;clearInterval(iv);};
   },[load]));
 
@@ -76,7 +89,7 @@ function ContentQueue({navigation}){
         if(!doc.canceled&&doc.assets&&doc.assets[0]){uri=doc.assets[0].uri;type=wantVideo?'video':'image';}
       }
       if(!uri)return;
-      await patch(item.id,{media_uri:uri,media_type:type,status:'needs_review',error:''});
+      await patch(item.id,{media_uri:uri,media_type:type,status:'needs_review',error:'',gen_job_id:'',gen_phase:''});
     }catch(e){Alert.alert('Attach failed',String(e.message||e));}
   };
 
@@ -90,9 +103,16 @@ function ContentQueue({navigation}){
 
   const shown=filter?items.filter(i=>i.page===filter):items;
   const tally=PAGES.reduce((a,p)=>{a[p]=items.filter(i=>i.page===p).length;return a;},{});
-  const needMedia=items.filter(i=>i.status==='awaiting_media').length;
+  const generating=items.filter(isGenerating).length;
+  const needMedia=items.filter(i=>i.status==='awaiting_media'&&!i.gen_job_id).length;
   const toReview=items.filter(i=>i.status==='needs_review').length;
   const approved=items.filter(i=>i.status==='approved').length;
+  const subParts=[
+    generating&&`${generating} generating`,
+    needMedia&&`${needMedia} need media`,
+    `${toReview} to review`,
+    `${approved} approved`,
+  ].filter(Boolean);
 
   return(
     <SafeAreaView style={s.safe} edges={['top','bottom']}>
@@ -102,7 +122,7 @@ function ContentQueue({navigation}){
         </TouchableOpacity>
         <View style={{flex:1,alignItems:'center'}}>
           <Text style={s.title}>CONTENT QUEUE</Text>
-          <Text style={s.sub}>{needMedia} need media · {toReview} to review · {approved} approved</Text>
+          <Text style={s.sub}>{subParts.join(' · ')}</Text>
         </View>
         <View style={{width:44}}/>
       </View>
@@ -134,14 +154,20 @@ function ContentQueue({navigation}){
                 <Text style={[s.page,{color:pc}]}>{pages[it.page]?.name||it.page.toUpperCase()}</Text>
                 <Text style={s.meta}>{it.kind}{it.slot?` · ${it.slot}`:''}</Text>
                 <View style={{flex:1}}/>
-                <Text style={[s.status,{color:sc}]}>{STATUS_LABEL[it.status]||String(it.status||'').toUpperCase()}</Text>
+                <Text style={[s.status,{color:sc}]}>{statusLabel(it)}</Text>
               </View>
 
               {['queued','awaiting_media'].includes(it.status)&&(
-                <TouchableOpacity onPress={()=>{Clipboard.setStringAsync(it.prompt||'');Alert.alert('Copied','Prompt copied — paste it into Higgsfield.');}}>
+                <TouchableOpacity onPress={()=>{Clipboard.setStringAsync(it.prompt||'');Alert.alert('Copied','Prompt copied.');}}>
                   <Text style={s.prompt} numberOfLines={6}>{it.prompt||'(no prompt)'}</Text>
-                  <Text style={s.tapHint}>tap to copy prompt</Text>
+                  <Text style={s.tapHint}>{isGenerating(it)
+                    ?(it.gen_phase==='video'?'Higgsfield is animating the still…':'Higgsfield is rendering this…')
+                    :'tap to copy prompt'}</Text>
                 </TouchableOpacity>
+              )}
+
+              {isGenerating(it)&&!!it.thumb_uri&&(
+                <Image source={{uri:it.thumb_uri}} style={s.media} resizeMode="cover"/>
               )}
 
               {!!it.media_uri&&(it.media_type==='video'
@@ -159,14 +185,14 @@ function ContentQueue({navigation}){
               {!!it.posted_url&&<Text style={s.link}>{it.posted_url}</Text>}
 
               <View style={s.actions}>
-                {it.status==='awaiting_media'&&<Btn label="ATTACH MEDIA" onPress={()=>attach(it)}/>}
+                {it.status==='awaiting_media'&&<Btn label={isGenerating(it)?'ATTACH MANUALLY':'ATTACH MEDIA'} onPress={()=>attach(it)}/>}
                 {it.status==='needs_review'&&<>
                   <Btn label="APPROVE" primary onPress={()=>patch(it.id,{caption:capVal,status:'approved'})}/>
                   <Btn label="REDO MEDIA" onPress={()=>attach(it)}/>
                   <Btn label="REJECT" danger onPress={()=>patch(it.id,{status:'rejected',note:'rejected in review'})}/>
                 </>}
                 {it.status==='approved'&&<Btn label="UNAPPROVE" onPress={()=>patch(it.id,{status:'needs_review'})}/>}
-                {['rejected','failed'].includes(it.status)&&<Btn label="REQUEUE" onPress={()=>patch(it.id,{status:'queued',media_uri:'',error:''})}/>}
+                {['rejected','failed'].includes(it.status)&&<Btn label="REQUEUE" onPress={()=>patch(it.id,{status:'queued',media_uri:'',gen_job_id:'',gen_phase:'',error:''})}/>}
                 {it.status!=='posted'&&<Btn label="DELETE" danger onPress={()=>{
                   Alert.alert('Delete this item?','',[{text:'Cancel'},{text:'Delete',style:'destructive',onPress:async()=>{await deleteContentItem(it.id);load(()=>true);}}]);
                 }}/>}
