@@ -3,6 +3,12 @@
 // reconciles the jobs). Dormant until a Higgsfield key pair is set in
 // Settings → KEYS.
 //
+// No training, no character IDs. Each page keeps a set of reference photos
+// (uploaded to Higgsfield's CDN, URLs stored on the page). Every generation
+// sends those reference photos + the MUSE's prompt straight to Higgsfield:
+//   image / carousel  ->  /v1/text2image/soul  with image_reference
+//   reel              ->  /v1/image2video/dop  with the photos as input_images
+//
 // v1 API (https://platform.higgsfield.ai): POST a job to a model endpoint, get
 // back a job-set { id, jobs:[{status,results}] }, then GET /v1/job-sets/{id}
 // until every job is completed (or one is failed / nsfw / canceled). Auth is a
@@ -13,13 +19,14 @@ import{loadKeys}from './keyStore';
 
 const BASE='https://platform.higgsfield.ai';
 
-// Instagram-shaped output, at the largest size Soul offers for each ratio.
-// Soul has no true 4:5 — 1152x1536 (3:4) is the closest portrait; H.E.R.A.L.D.
-// crops to 4:5 at publish time. Reels are the tallest 9:16 Soul supports.
-export const REEL_SIZE='1152x2048';    // 9:16, the largest Soul offers
+// Instagram-shaped output. Soul has no true 4:5 — 1536x2048 (3:4) is the
+// closest portrait; H.E.R.A.L.D. crops to 4:5 at publish. Reels follow the
+// reference photos' aspect (DoP has no size param).
 export const POST_SIZE='1536x2048';    // 3:4, the largest portrait Soul offers (≈ IG's 4:5)
 export const SOUL_QUALITY='1080p';     // Soul's top quality tier
 export const DOP_MODEL='dop-standard'; // image->video: highest-quality model
+
+const clip=s=>String(s||'').slice(0,2000);
 
 export async function higgsfieldKey(){
   const k=await loadKeys();
@@ -45,46 +52,9 @@ async function hf(path,{method='GET',body,key}={}){
   return json;
 }
 
-// --- submit ---------------------------------------------------------------
-// Each returns the job-set id to poll with checkJobSet().
-// customReferenceId is the page's trained Higgsfield Soul ID — passing it here
-// is what keeps every render for that page the same character.
-export async function submitImage(prompt,{size=POST_SIZE,batch=1,customReferenceId,referenceStrength,key}={}){
-  const params={
-    prompt:String(prompt||'').slice(0,2000),
-    width_and_height:size,
-    quality:SOUL_QUALITY,
-    batch_size:batch,
-  };
-  if(customReferenceId){
-    params.custom_reference_id=String(customReferenceId).trim();
-    params.custom_reference_strength=Number.isFinite(referenceStrength)?referenceStrength:0.8;
-  }
-  const j=await hf('/v1/text2image/soul',{method:'POST',key,body:{params}});
-  return j?.id||null;
-}
-export async function submitVideo(prompt,imageUrl,{key}={}){
-  const j=await hf('/v1/image2video/dop',{method:'POST',key,body:{params:{
-    model:DOP_MODEL,
-    prompt:String(prompt||'').slice(0,2000),
-    input_images:[{type:'image_url',image_url:imageUrl}],
-  }}});
-  return j?.id||null;
-}
-
-// --- trained characters (Soul IDs) -------------------------------------
-// A Soul ID is a trained character reference. Train one straight from the app:
-// upload reference photos to Higgsfield's CDN, then POST them to
-// /v1/custom-references; poll checkSoulId() until status is 'completed'
-// (~3-5 min). listSoulIds() surfaces ones already on the account.
-export async function listSoulIds({page=1,pageSize=50,key}={}){
-  const j=await hf(`/v1/custom-references/list?page=${page}&page_size=${pageSize}`,{key});
-  const items=Array.isArray(j?.items)?j.items:Array.isArray(j)?j:[];
-  return items.map(x=>({id:x.id,name:x.name||'(unnamed)',status:x.status||'ready'}));
-}
-
-// Upload one local image to Higgsfield's CDN, return its public URL.
-export async function uploadReferenceImage(localUri,{contentType='image/jpeg',key}={}){
+// --- reference media upload ---------------------------------------------
+// Push a local image or video to Higgsfield's CDN; returns its public URL.
+export async function uploadToHiggsfield(localUri,contentType='image/jpeg',key){
   const cred=key||await higgsfieldKey();
   if(!cred)throw new Error('No Higgsfield key.');
   const link=await hf('/files/generate-upload-url',{method:'POST',key:cred,body:{content_type:contentType}});
@@ -95,26 +65,28 @@ export async function uploadReferenceImage(localUri,{contentType='image/jpeg',ke
     uploadType:FileSystem.FileSystemUploadType.BINARY_CONTENT,
     headers:{'Content-Type':contentType},
   });
-  if(res.status<200||res.status>=300)throw new Error(`image upload failed (${res.status})`);
+  if(res.status<200||res.status>=300)throw new Error(`upload failed (${res.status})`);
   return publicUrl;
 }
 
-// Train a new Soul ID from already-uploaded reference image URLs.
-export async function createSoulId(name,imageUrls,{key}={}){
-  const j=await hf('/v1/custom-references',{method:'POST',key,body:{
-    name:String(name||'character').slice(0,80),
-    input_images:(imageUrls||[]).map(u=>({type:'image_url',image_url:u})),
-  }});
-  return{id:j?.id||null,name:j?.name||name,status:j?.status||'in_progress'};
+// --- submit ------------------------------------------------------------
+// Each returns the job-set id to poll with checkJobSet().
+export async function submitImage(prompt,{size=POST_SIZE,batch=1,referenceUrl,key}={}){
+  const params={prompt:clip(prompt),width_and_height:size,quality:SOUL_QUALITY,batch_size:batch};
+  if(referenceUrl)params.image_reference={type:'image_url',image_url:referenceUrl};
+  const j=await hf('/v1/text2image/soul',{method:'POST',key,body:{params}});
+  return j?.id||null;
 }
-export async function checkSoulId(id,key){
-  const j=await hf(`/v1/custom-references/${id}`,{key});
-  return{id,name:j?.name,status:j?.status||'in_progress'};
+export async function submitVideo(prompt,referenceUrls,{key}={}){
+  const imgs=(referenceUrls||[]).filter(Boolean).slice(0,4).map(u=>({type:'image_url',image_url:u}));
+  if(!imgs.length)throw new Error('a reel needs at least one reference photo on the page');
+  const j=await hf('/v1/image2video/dop',{method:'POST',key,body:{params:{
+    model:DOP_MODEL,prompt:clip(prompt),input_images:imgs,
+  }}});
+  return j?.id||null;
 }
-export const SOUL_DONE=s=>s==='completed';
-export const SOUL_DEAD=s=>s==='failed';
 
-// --- poll ----------------------------------------------------------------
+// --- poll ------------------------------------------------------------
 // Returns { status, media:[{url,type}] }.
 // status: queued | in_progress | completed | failed | nsfw | canceled
 export async function checkJobSet(jobSetId,key){

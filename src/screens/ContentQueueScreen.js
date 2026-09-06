@@ -1,7 +1,10 @@
-// The AI-influencer content review queue. The page personas (muse1/2/3) write
-// prompts + captions; F.O.R.G.E. compiles the batch and (with a Higgsfield key
-// set) submits it — the finished media appears here on its own; then Mr. Burrus
-// approves, and H.E.R.A.L.D. publishes the approved ones to Instagram / Facebook.
+// The Studio — two tabs:
+//   QUEUE  the page personas (muse1/2/3) write prompts + captions; F.O.R.G.E.
+//          sends each item's prompt + its page's reference photos to Higgsfield;
+//          the finished media appears here on its own; Mr. Burrus approves;
+//          H.E.R.A.L.D. publishes the approved ones.
+//   PAGES  per page: reference photos/videos of the influencer (uploaded to
+//          Higgsfield's CDN), name, handle, and the IG/FB fields for later.
 //
 // Status flow: queued -> awaiting_media -> needs_review -> approved -> posted
 // (plus rejected / failed). While 'awaiting_media' has a gen_job_id it's
@@ -20,8 +23,7 @@ import{FONTS}from '../theme';
 import{getContentItems,getContentPages,setContentPages,updateContentItem,deleteContentItem}from '../services/database';
 import{compileBatch}from '../services/socialPublish';
 import{pollContentJobs}from '../services/contentJobs';
-import{pollSoulTraining}from '../services/soulTraining';
-import{listSoulIds,higgsfieldKey,uploadReferenceImage,createSoulId}from '../services/higgsfield';
+import{higgsfieldKey,uploadToHiggsfield}from '../services/higgsfield';
 
 const POLL_MS=4000;
 const PAGES=['muse1','muse2','muse3'];
@@ -37,7 +39,7 @@ const STATUS_LABEL={
 // awaiting_media splits by whether Higgsfield is generating it.
 function statusLabel(it){
   if(it.status==='awaiting_media'&&it.gen_job_id){
-    return it.gen_phase==='video'?'ANIMATING…':'RENDERING…';
+    return it.kind==='reel'?'RENDERING VIDEO…':'RENDERING…';
   }
   return STATUS_LABEL[it.status]||String(it.status||'').toUpperCase();
 }
@@ -58,11 +60,9 @@ function ContentQueue({navigation}){
   const[filter,setFilter]=useState(null);   // null = all pages
   const[caps,setCaps]=useState({});         // id -> in-progress caption edit
   const[busy,setBusy]=useState(false);
-  const[pf,setPf]=useState({});             // page-setup form: {muse1:{name,handle,soul_id,...}}
+  const[pf,setPf]=useState({});             // page-setup form: {muse1:{name,handle,refs:[{url,type}],...}}
   const[pfSaved,setPfSaved]=useState(false);
-  const[souls,setSouls]=useState(null);     // trained Higgsfield characters, once loaded
-  const[soulsBusy,setSoulsBusy]=useState(false);
-  const[train,setTrain]=useState({});       // page -> {phase,done,total} while uploading/creating
+  const[refBusy,setRefBusy]=useState({});    // page -> {done,total} while uploading reference media
 
   const load=useCallback(async(alive)=>{
     try{const i=await getContentItems({});if(alive())setItems(i);}catch{}
@@ -73,56 +73,46 @@ function ContentQueue({navigation}){
   // form owns its state so the background poll doesn't stomp an edit.
   useEffect(()=>{setPf(prev=>Object.keys(prev).length?prev:pages);},[pages]);
   const setPageField=(page,k,val)=>setPf(f=>({...f,[page]:{...(f[page]||{}),[k]:val}}));
-  const trainCharacter=async(p)=>{
+
+  // Reference photos/videos for a page: upload each to Higgsfield's CDN and
+  // keep the URLs on the page. F.O.R.G.E. sends the photos + the prompt on
+  // every generation.
+  const addRefs=async(p)=>{
     const key=await higgsfieldKey();
     if(!key){Alert.alert('No Higgsfield key','Add the key ID + secret in Settings → KEYS first.');return;}
     const pick=await ImagePicker.launchImageLibraryAsync({
-      mediaTypes:ImagePicker.MediaTypeOptions.Images,
-      allowsMultipleSelection:true,selectionLimit:0,quality:0.7,
+      mediaTypes:ImagePicker.MediaTypeOptions.All,
+      allowsMultipleSelection:true,selectionLimit:0,quality:0.85,
     });
     if(pick.canceled||!pick.assets?.length)return;
     const assets=pick.assets;
-    if(assets.length<15){
-      const go=await new Promise(r=>Alert.alert('Not many photos',
-        `Higgsfield wants 20+ for a solid likeness — you picked ${assets.length}. Train anyway?`,
-        [{text:'Cancel',onPress:()=>r(false)},{text:'Train',onPress:()=>r(true)}]));
-      if(!go)return;
-    }
-    setTrain(t=>({...t,[p]:{phase:'uploading',done:0,total:assets.length}}));
+    setRefBusy(b=>({...b,[p]:{done:0,total:assets.length}}));
     try{
-      const urls=[];
+      const added=[];
       for(const a of assets){
-        const ct=a.mimeType||(/\.png($|\?)/i.test(a.uri||'')?'image/png':'image/jpeg');
-        urls.push(await uploadReferenceImage(a.uri,{contentType:ct,key}));
-        setTrain(t=>({...t,[p]:{phase:'uploading',done:urls.length,total:assets.length}}));
+        const isVid=a.type==='video'||/\.(mp4|mov|m4v|webm)($|\?)/i.test(a.uri||'');
+        const ct=a.mimeType||(isVid?'video/mp4':/\.png($|\?)/i.test(a.uri||'')?'image/png':'image/jpeg');
+        const url=await uploadToHiggsfield(a.uri,ct,key);
+        added.push({url,type:isVid?'video':'image'});
+        setRefBusy(b=>({...b,[p]:{done:added.length,total:assets.length}}));
       }
-      setTrain(t=>({...t,[p]:{phase:'creating'}}));
-      const name=`${(pf[p]?.name||p.toUpperCase())} ${new Date().toISOString().slice(0,10)}`;
-      const{id,status}=await createSoulId(name,urls,{key});
-      if(!id)throw new Error('Higgsfield returned no character id');
-      const merged={...pages};
-      merged[p]={...(merged[p]||{}),...(pf[p]||{}),soul_id:id,soul_name:name,soul_status:status||'in_progress'};
+      // Persist straight away so a successful upload isn't lost on leaving.
+      const nextRefs=[...((pages[p]?.refs)||(pf[p]?.refs)||[]),...added];
+      const merged={...pages,[p]:{...(pages[p]||{}),...(pf[p]||{}),refs:nextRefs}};
       await setContentPages(merged);
       setPages(merged);
-      setPf(f=>({...f,[p]:{...(f[p]||{}),soul_id:id,soul_name:name}}));
-      setTrain(t=>{const n={...t};delete n[p];return n;});
-      Alert.alert('Training started',`${name} is training on Higgsfield (~3–5 min). It'll flip to READY here when it's done.`);
-    }catch(e){
-      Alert.alert('Training failed',String(e.message||e));
-      setTrain(t=>{const n={...t};delete n[p];return n;});
-    }
+      setPf(f=>({...f,[p]:{...(f[p]||{}),refs:nextRefs}}));
+    }catch(e){Alert.alert('Upload failed',String(e.message||e));}
+    finally{setRefBusy(b=>{const n={...b};delete n[p];return n;});}
+  };
+  const removeRef=async(p,idx)=>{
+    const nextRefs=((pf[p]?.refs)||[]).filter((_,i)=>i!==idx);
+    setPf(f=>({...f,[p]:{...(f[p]||{}),refs:nextRefs}}));
+    const merged={...pages,[p]:{...(pages[p]||{}),...(pf[p]||{}),refs:nextRefs}};
+    await setContentPages(merged).catch(()=>{});
+    setPages(merged);
   };
 
-  const loadSouls=async()=>{
-    setSoulsBusy(true);
-    try{
-      if(!await higgsfieldKey()){Alert.alert('No Higgsfield key','Add the key ID + secret in Settings → KEYS first.');return;}
-      const list=await listSoulIds({});
-      setSouls(list);
-      if(!list.length)Alert.alert('No characters','No trained Soul characters on this Higgsfield account yet.');
-    }catch(e){Alert.alert('Couldn’t load characters',String(e.message||e));}
-    finally{setSoulsBusy(false);}
-  };
   const savePages=async()=>{
     try{
       const merged={...pages};
@@ -138,7 +128,6 @@ function ContentQueue({navigation}){
     load(alive);
     const iv=setInterval(async()=>{
       try{await pollContentJobs();}catch{}
-      try{await pollSoulTraining();}catch{}
       if(alive())load(alive);
     },POLL_MS);
     return()=>{on=false;clearInterval(iv);};
@@ -207,44 +196,34 @@ function ContentQueue({navigation}){
 
       {tab==='pages'&&(
         <ScrollView contentContainerStyle={s.list} keyboardShouldPersistTaps="handled">
-          <Text style={s.pgIntro}>One influencer per page. Train each page's character from reference photos (20+, varied angles, clear face) — Higgsfield locks that identity into every reel and post for the page. Needs a Higgsfield key in Settings → KEYS.</Text>
-          <TouchableOpacity style={s.compileBar} disabled={soulsBusy} activeOpacity={0.8} onPress={loadSouls}>
-            <Text style={s.compileT}>{soulsBusy?'LOADING…':souls?`↻ RELOAD EXISTING CHARACTERS (${souls.length})`:'◆ LOAD CHARACTERS I ALREADY TRAINED'}</Text>
-          </TouchableOpacity>
+          <Text style={s.pgIntro}>One influencer per page. Add reference photos of her (and clips if you want) — F.O.R.G.E. sends those plus the MUSE's prompt to Higgsfield on every render, so each page looks like herself. 5–15 clear shots, varied angles. Needs a Higgsfield key in Settings → KEYS.</Text>
           {PAGES.map(p=>{
             const v=pf[p]||{};
-            const live=pages[p]||{};
-            const tr=train[p];
-            const stText=tr?(tr.phase==='uploading'?`UPLOADING ${tr.done}/${tr.total}…`:'CREATING CHARACTER…')
-              :live.soul_id?(live.soul_status==='completed'?`✓ READY${live.soul_name?` — ${live.soul_name}`:''}`
-                :live.soul_status==='failed'?'TRAINING FAILED — retrain below'
-                :'TRAINING… ~3–5 min (keep the app open)')
-              :'no character yet — train one below';
-            const stColor=tr?'#D9A441':live.soul_status==='completed'?'#5FA779':live.soul_status==='failed'?'#C7614B':'#7a715d';
+            const refs=v.refs||[];
+            const rb=refBusy[p];
             return(
               <View key={p} style={[s.card,{borderColor:(PAGE_COLOR[p]||'#888')+'44'}]}>
                 <Text style={[s.page,{color:PAGE_COLOR[p]}]}>{p.toUpperCase()}</Text>
 
-                <Text style={s.pgHdr}>CHARACTER</Text>
-                <Text style={[s.soulOk,{color:stColor}]}>{stText}</Text>
-                <View style={s.actions}>
-                  <Btn label={tr?'…':(live.soul_id?'RETRAIN FROM PHOTOS':'TRAIN FROM PHOTOS')} onPress={()=>!tr&&trainCharacter(p)}/>
-                </View>
-                {!!souls&&!!souls.length&&(
-                  <View style={s.soulPick}>
-                    {souls.map(sd=>{
-                      const on=sd.id===(v.soul_id||'').trim();
-                      return(
-                        <TouchableOpacity key={sd.id} onPress={()=>setPageField(p,'soul_id',on?'':sd.id)}
-                          style={[s.soulChip,on&&{borderColor:PAGE_COLOR[p],backgroundColor:(PAGE_COLOR[p]||'#888')+'22'}]}>
-                          <Text style={[s.soulChipT,on&&{color:PAGE_COLOR[p]}]} numberOfLines={1}>{sd.name}</Text>
+                <Text style={s.pgHdr}>REFERENCE PHOTOS &amp; VIDEOS  ({refs.length})</Text>
+                {!!refs.length&&(
+                  <View style={s.refGrid}>
+                    {refs.map((r,i)=>(
+                      <View key={r.url+i} style={s.refThumb}>
+                        {r.type==='video'
+                          ?<View style={[s.refImg,s.refVid]}><Text style={s.refVidT}>▶ CLIP</Text></View>
+                          :<Image source={{uri:r.url}} style={s.refImg}/>}
+                        <TouchableOpacity style={s.refX} onPress={()=>removeRef(p,i)} hitSlop={{top:8,bottom:8,left:8,right:8}}>
+                          <Text style={s.refXT}>×</Text>
                         </TouchableOpacity>
-                      );
-                    })}
+                      </View>
+                    ))}
                   </View>
                 )}
-                <Field label="SOUL ID" value={v.soul_id} onChangeText={t=>setPageField(p,'soul_id',t)} placeholder="set by training, or paste one" autoCapitalize="none"/>
-                <Field label="SOUL STRENGTH  (0–1, default 0.8)" value={v.soul_strength} onChangeText={t=>setPageField(p,'soul_strength',t)} placeholder="0.8" keyboardType="decimal-pad"/>
+                {!!rb&&<Text style={[s.soulOk,{color:'#D9A441'}]}>uploading {rb.done}/{rb.total}…</Text>}
+                <View style={s.actions}>
+                  <Btn label={rb?'…':(refs.length?'ADD MORE':'ADD PHOTOS / VIDEOS')} onPress={()=>!rb&&addRefs(p)}/>
+                </View>
 
                 <Text style={s.pgHdr}>PAGE</Text>
                 <Field label="NAME" value={v.name} onChangeText={t=>setPageField(p,'name',t)} placeholder="influencer name"/>
@@ -298,13 +277,9 @@ function ContentQueue({navigation}){
                 <TouchableOpacity onPress={()=>{Clipboard.setStringAsync(it.prompt||'');Alert.alert('Copied','Prompt copied.');}}>
                   <Text style={s.prompt} numberOfLines={6}>{it.prompt||'(no prompt)'}</Text>
                   <Text style={s.tapHint}>{isGenerating(it)
-                    ?(it.gen_phase==='video'?'Higgsfield is animating the still…':'Higgsfield is rendering this…')
+                    ?'Higgsfield is rendering this…'
                     :'tap to copy prompt'}</Text>
                 </TouchableOpacity>
-              )}
-
-              {isGenerating(it)&&!!it.thumb_uri&&(
-                <Image source={{uri:it.thumb_uri}} style={s.media} resizeMode="cover"/>
               )}
 
               {!!it.media_uri&&(it.media_type==='video'
@@ -391,10 +366,14 @@ const s=StyleSheet.create({
   pgIntro:{fontFamily:FONTS.mono,fontSize:9,color:'#6a6250',lineHeight:15,marginBottom:2},
   pgHdr:{fontFamily:FONTS.mono,fontSize:7,color:'#5a5145',letterSpacing:2,marginTop:8,marginBottom:1},
   field:{gap:3},
-  soulPick:{flexDirection:'row',flexWrap:'wrap',gap:5,marginTop:1},
-  soulChip:{borderWidth:1,borderColor:'#2A2620',borderRadius:12,paddingHorizontal:9,paddingVertical:4,maxWidth:'46%'},
-  soulChipT:{fontFamily:FONTS.mono,fontSize:8,color:'#8a8069',letterSpacing:0.5},
   soulOk:{fontFamily:FONTS.mono,fontSize:8,color:'#5FA779',letterSpacing:1},
+  refGrid:{flexDirection:'row',flexWrap:'wrap',gap:6,marginTop:2},
+  refThumb:{width:64,height:80,borderRadius:5,overflow:'hidden',backgroundColor:'#050403',borderWidth:1,borderColor:'#1F1B14'},
+  refImg:{width:'100%',height:'100%'},
+  refVid:{alignItems:'center',justifyContent:'center'},
+  refVidT:{fontFamily:FONTS.mono,fontSize:7,color:'#8a8069',letterSpacing:1},
+  refX:{position:'absolute',top:2,right:2,width:16,height:16,borderRadius:8,backgroundColor:'#000A',alignItems:'center',justifyContent:'center'},
+  refXT:{color:'#E8938C',fontSize:12,lineHeight:14,fontWeight:'700'},
   fieldL:{fontFamily:FONTS.mono,fontSize:7,color:'#7a715d',letterSpacing:1.5},
   fieldI:{fontFamily:FONTS.mono,fontSize:11,color:'#C9BEA6',borderWidth:1,borderColor:'#1F1B14',borderRadius:6,paddingHorizontal:8,paddingVertical:7,backgroundColor:'#050403'},
   saveBtn:{borderWidth:1,borderColor:'#5FA779',borderRadius:8,paddingVertical:13,alignItems:'center',marginTop:8},

@@ -1,17 +1,24 @@
 // AI-influencer content pipeline — batch compile + publish.
 //
 // compileBatch()   F.O.R.G.E. takes the page personas' `queued` items. With a
-//                  Higgsfield key set it submits every prompt to Higgsfield
-//                  (reels 9:16, posts 3:4≈4:5, top quality) and moves them to
-//                  `awaiting_media`; contentJobs.js then drops the finished
-//                  media into the queue on its own. With no key it returns the
-//                  shot sheet for Mr. Burrus to run by hand and attach.
+//                  Higgsfield key set it sends each item's prompt + that page's
+//                  reference photos to Higgsfield — image/carousel to Soul, reel
+//                  to DoP image->video — and moves them to `awaiting_media`;
+//                  contentJobs.js drops the finished media into the queue on its
+//                  own. With no key it returns the shot sheet to run by hand.
 // publishContent() H.E.R.A.L.D. posts `approved` items to their page's
 //                  Instagram / Facebook. Real publishing runs on the backend
 //                  (needs the Meta app + per-page tokens) — until that's set up
 //                  this reports what it would post without sending anything.
 import{getContentItems,getContentItem,updateContentItem,getContentTally,getContentPages}from './database';
-import{higgsfieldKey,submitImage,REEL_SIZE,POST_SIZE}from './higgsfield';
+import{higgsfieldKey,submitImage,submitVideo,POST_SIZE}from './higgsfield';
+
+// Reference photo URLs stored on a page (videos are kept but not sent — the
+// generation models take images).
+function pagePhotoRefs(cfg){
+  const refs=Array.isArray(cfg?.refs)?cfg.refs:[];
+  return refs.filter(r=>r&&r.url&&r.type!=='video').map(r=>r.url);
+}
 
 const short=id=>String(id||'').slice(0,8);
 
@@ -43,26 +50,29 @@ export async function compileBatch(page){
     return lines.join('\n');
   }
 
-  // Submit each prompt to Higgsfield. Reels render a 9:16 still first, then
-  // contentJobs.js chains the image->video pass; posts render one 3:4 image,
-  // carousels a batch of four. Each page's Soul ID (from the Pages tab) rides
-  // along so its influencer stays consistent.
+  // Send each item's prompt + its page's reference photos to Higgsfield.
+  // image / carousel -> Soul text2image (one photo as image_reference);
+  // reel -> DoP image->video (the photos as input_images).
   const pages=await getContentPages().catch(()=>({}));
-  let ok=0;const fails=[];const noSoul=new Set();
+  let ok=0;const fails=[];const noRef=new Set();
   for(const it of items){
     try{
-      const isReel=it.kind==='reel';
       const cfg=pages[it.page]||{};
-      if(!cfg.soul_id)noSoul.add(it.page);
-      const jobId=await submitImage(it.prompt,{
-        size:isReel?REEL_SIZE:POST_SIZE,
-        batch:it.kind==='carousel'?4:1,
-        customReferenceId:cfg.soul_id||undefined,
-        referenceStrength:cfg.soul_strength!=null&&cfg.soul_strength!==''?Number(cfg.soul_strength):undefined,
-        key,
-      });
+      const photos=pagePhotoRefs(cfg);
+      if(!photos.length)noRef.add(it.page);
+      let jobId;
+      if(it.kind==='reel'){
+        jobId=await submitVideo(it.prompt,photos,{key});
+      }else{
+        jobId=await submitImage(it.prompt,{
+          size:POST_SIZE,
+          batch:it.kind==='carousel'?4:1,
+          referenceUrl:photos[0]||undefined,
+          key,
+        });
+      }
       if(!jobId)throw new Error('no job id returned');
-      await updateContentItem(it.id,{status:'awaiting_media',gen_job_id:jobId,gen_phase:'image',error:''});
+      await updateContentItem(it.id,{status:'awaiting_media',gen_job_id:jobId,gen_phase:'',error:''});
       ok++;
     }catch(e){
       fails.push(`${short(it.id)} — ${e.message}`);
@@ -70,8 +80,8 @@ export async function compileBatch(page){
     }
   }
   return `BATCH SUBMITTED to Higgsfield — ${ok}/${items.length} generating${page?` for ${page}`:''}.`
-    +` They drop into the queue as they finish (reels: still → animate).`
-    +(noSoul.size?`\nNo Soul ID set for ${[...noSoul].join(', ')} — add it in the Studio → Pages tab so the character stays consistent.`:'')
+    +` They drop into the queue as they finish.`
+    +(noRef.size?`\nNo reference photos for ${[...noRef].join(', ')} — add them in Studio → Pages so she's recognisable.`:'')
     +(fails.length?`\nFailed to submit: ${fails.join('; ')}`:'');
 }
 

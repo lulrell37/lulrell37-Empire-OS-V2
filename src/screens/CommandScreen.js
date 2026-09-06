@@ -21,7 +21,6 @@ import{driveUploadFile,googleConnected}from '../services/googleClient';
 import{getMessages,saveMessage,getAllPersonaPics,savePersonaMemory,getSetting,setSetting,getExpenseSummary,addBuildJob,updateBuildJob,getBuildJob,getBuildJobByIssue,getBuildJobs,buildJobRepo,DEFAULT_BUILD_REPO,getCustomPrompt,getAllLeads,addClipJob,getUnreadPersonas,getUnreadMessages,markPersonaRead,getContentItems,getContentTally,getContentPages,updateContentItem}from '../services/database';
 import{compileBatch,publishContent,contentStatusLine}from '../services/socialPublish';
 import{pollContentJobs}from '../services/contentJobs';
-import{pollSoulTraining}from '../services/soulTraining';
 import{speak as speakOneShot}from '../services/voice';
 import{fileBuildRequest,replyToBuild,mergeBuild,cancelBuild,createProjectRepo,fileClipJob}from '../services/buildAgent';
 import{pollBuildJobs}from '../services/buildJobs';
@@ -1977,10 +1976,6 @@ export default function CommandScreen({navigation,route}){
         try{
           const contentEvents=await pollContentJobs();
           if(!stop)for(const line of contentEvents)pushSystemMsg(line);
-        }catch{/* keep polling */}
-        try{
-          const soulEvents=await pollSoulTraining();
-          if(!stop)for(const line of soulEvents)pushSystemMsg(line);
         }catch{/* keep polling */}
         const events=await pollBuildJobs();
         if(stop||!events.length)return;
