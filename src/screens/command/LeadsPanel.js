@@ -2,7 +2,7 @@
 // which S.C.O.U.T. drives from chat via [LEAD_ADD] / [LEAD_UPDATE] / [LEAD_LOG].
 // Shown for S.C.O.U.T. in the Command screen. Mirrors BuildPanel / TradePanel.
 import React,{useState,useEffect,useRef,useCallback}from 'react';
-import{View,Text,StyleSheet,TouchableOpacity}from 'react-native';
+import{View,Text,StyleSheet,TouchableOpacity,ScrollView}from 'react-native';
 import{getAllLeads,deleteLead,getSetting}from '../../services/database';
 
 const POLL_MS=5000;
@@ -64,7 +64,9 @@ export default function LeadsPanel({active}){
         <Text style={s.hdrChevron}>{collapsed?'▸':'▾'}</Text>
       </TouchableOpacity>
       {!collapsed&&!!tally&&<Text style={s.tally}>{tally}</Text>}
-      {!collapsed&&leads.map(l=>{
+      {!collapsed&&(
+      <ScrollView style={s.list} nestedScrollEnabled showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+      {leads.map(l=>{
         const tl=touchLabel(l.next_touch);
         const topLog=(l.log||'').split('\n')[0]||'';
         const isOpen=open===l.id;
@@ -98,12 +100,15 @@ export default function LeadsPanel({active}){
           </View>
         );
       })}
+      </ScrollView>
+      )}
     </View>
   );
 }
 
 const s=StyleSheet.create({
   wrap:{marginHorizontal:10,marginTop:4,borderWidth:1,borderRadius:8,backgroundColor:'#080706',overflow:'hidden'},
+  list:{maxHeight:340},
   hdr:{flexDirection:'row',justifyContent:'space-between',alignItems:'center',paddingHorizontal:12,paddingVertical:8},
   hdrLabel:{fontFamily:'monospace',fontSize:9,letterSpacing:2},
   hdrChevron:{fontFamily:'monospace',fontSize:9,color:'#555'},
