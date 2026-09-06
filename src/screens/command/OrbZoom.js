@@ -801,7 +801,7 @@ const s=StyleSheet.create({
   railLabel:{fontFamily:'monospace',fontSize:10,fontWeight:'700',letterSpacing:3},
   dots:{flexDirection:'row',gap:5,marginTop:6},
   dot:{width:5,height:5,borderRadius:2.5,backgroundColor:'#222'},
-  earthTap:{position:'absolute',left:0,right:0,bottom:0,height:'25%'},
+  earthTap:{position:'absolute',left:0,right:0,bottom:0,height:'14%'},
   zoomCtl:{position:'absolute',right:12,bottom:16,gap:8},
   zBtn:{width:34,height:34,borderRadius:6,borderWidth:1,borderColor:'#222',backgroundColor:'rgba(0,0,0,0.5)',alignItems:'center',justifyContent:'center'},
   zT:{color:'#999',fontSize:18,fontFamily:'monospace'},
