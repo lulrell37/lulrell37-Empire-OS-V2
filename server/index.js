@@ -5,7 +5,7 @@ const db = require('./db');
 const auth = require('./auth');
 const { runNudgeCycle } = require('./pushSender');
 const { runDailyBriefing } = require('./dailyBriefing');
-const { runCouncilMeeting } = require('./councilMeeting');
+const { runCouncilMeeting, endCouncilLive } = require('./councilMeeting');
 
 const app = express();
 app.disable('x-powered-by');
@@ -78,7 +78,7 @@ function startCouncilCron() {
   cron.schedule('0 5 * * *', () => {
     runCouncilMeeting()
       .then((r) => console.log('council meeting:', JSON.stringify(r)))
-      .catch((e) => console.error('council meeting failed:', e.message));
+      .catch((e) => { console.error('council meeting failed:', e.message); endCouncilLive(e.message).catch(() => {}); });
   }, { timezone: 'America/New_York' });
   console.log('council cron scheduled (05:00 ET)');
 }

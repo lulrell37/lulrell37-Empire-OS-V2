@@ -47,6 +47,12 @@ on "how's the empire", a pinned A.R.A. `persona_memory` row, and a
 "The council met" push (de-duped in `push_log` as `council:<date>`). Idempotent
 per day via `app_settings` `council_last_date`.
 
+While a meeting runs, `councilMeeting.js` keeps a `council_live` `app_settings`
+row updated turn by turn (`phase`, `round`, `speaking`, `progress`, …).
+`GET /council/status` serves it (with a 150s stale-guard for a crashed run); the
+app fast-polls that endpoint to drive its notification banner and the gold
+"speaking now" glow on the galaxy orbs.
+
 Each persona speaks on its **real provider** when that key is set on the server —
 A.R.A. on Grok (`XAI_API_KEY`), S.E.L.E.N.E. on GPT-4o (`OPENAI_API_KEY`), N.O.V.A.
 on Gemini (`GEMINI_API_KEY`), the rest on Claude — and falls back to

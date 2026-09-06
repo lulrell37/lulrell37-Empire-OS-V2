@@ -146,6 +146,27 @@ function asObject(v, fallback) {
 }
 const money = (n) => `$${Math.round(Number(n) || 0).toLocaleString()}`;
 
+// --- live meeting status (drives the app's notification banner + the gold
+// "speaking now" glow on the galaxy orbs) --------------------------------
+// Written into sync_rows app_settings/council_live throughout the meeting;
+// the app fast-polls GET /council/status for it while a meeting is on.
+let councilLive = { active: false };
+async function publishLive(patch) {
+  councilLive = { ...councilLive, ...patch, updatedAt: Date.now() };
+  try { await setSetting('council_live', JSON.stringify(councilLive)); } catch {}
+}
+async function getCouncilLive() {
+  let s = asObject(await getSetting('council_live').catch(() => null), null) || councilLive;
+  // A meeting that stopped updating crashed mid-run — don't leave the banner up.
+  if (s && s.active && Date.now() - (s.updatedAt || 0) > 150000) {
+    s = { ...s, active: false, phase: 'stale', speaking: null };
+  }
+  return s || { active: false };
+}
+async function endCouncilLive(error) {
+  await publishLive({ active: false, speaking: null, phase: error ? 'error' : 'done', error: error || null });
+}
+
 // --- model calls ---------------------------------------------------------
 
 // Anthropic messages call. `tools` optional (web search). Joined text of all text
@@ -340,6 +361,14 @@ async function runCouncilMeeting(opts = {}) {
   // A forced run is stamped with the time so it doesn't overwrite the 5am note.
   const stamp = force ? `${date}_${timeET()}` : date;
 
+  const spoke = [];
+  const liveTurns = Math.max(1, ROUNDS * (SPEAKING_ORDER.length - 1));
+  let turnsDone = 0;
+  await publishLive({
+    active: true, phase: 'research', round: 0, rounds: ROUNDS, speaking: null, spoke: [],
+    date, convened: force, headline: null, error: null, progress: 0.06, startedAt: Date.now(),
+  });
+
   // 1) Live web research on each business + idea (capped, batched).
   const researchTargets = [
     ...ctx.businesses
@@ -357,6 +386,7 @@ async function runCouncilMeeting(opts = {}) {
     : '(no research this run)';
 
   // 2) A.R.A. opens the meeting.
+  await publishLive({ phase: 'opening', speaking: 'ara', progress: 0.2 });
   const opening = await chatPersona(
     'ara',
     personaSystem('ara'),
@@ -370,6 +400,12 @@ async function runCouncilMeeting(opts = {}) {
   for (let round = 1; round <= ROUNDS; round++) {
     for (const id of SPEAKING_ORDER) {
       if (id === 'ara') continue; // the chair opens and closes, doesn't take a numbered turn
+      spoke.push(id);
+      await publishLive({
+        phase: 'discussion', round, rounds: ROUNDS, speaking: id, spoke,
+        progress: 0.25 + 0.6 * (turnsDone / liveTurns),
+      });
+      turnsDone += 1;
       const prior = transcript.map((t) => `${t.who}: ${t.text}`).join('\n\n');
       let sys = personaSystem(id);
       let ask = `Round ${round} of the Empire's nightly strategy council.\n\n=== STATE ===\n${ctxText}\n\n=== LIVE MARKET RESEARCH ===\n${researchText}\n\n=== DISCUSSION SO FAR ===\n${prior}\n\nRespond as ${COUNCIL_ROSTER[id].name}. Stay in your lane, build on or push back on what others said, and be concrete: name the specific next step you'd take for a specific business or idea. 150 words max.`;
@@ -394,6 +430,7 @@ async function runCouncilMeeting(opts = {}) {
   }
 
   // 4) A.R.A. synthesises.
+  await publishLive({ phase: 'synthesis', speaking: 'ara', progress: 0.92 });
   const fullDiscussion = transcript.map((t) => `${t.who}: ${t.text}`).join('\n\n');
   const synthesis = await chatPersona(
     'ara',
@@ -465,6 +502,8 @@ async function runCouncilMeeting(opts = {}) {
   let push = { skipped: 'not attempted' };
   try { push = await pushCouncil(date, headline, stamp); } catch (e) { push = { error: e.message }; }
 
+  await publishLive({ active: false, phase: 'done', speaking: null, headline, progress: 1 });
+
   return {
     date,
     convened: force,
@@ -488,4 +527,4 @@ function personaSystem(id) {
   return `You are ${p.name} — ${p.role}. ${p.blurb}\n\nYou serve Mr. Burrus and sit on the Empire's council alongside the other personas. This is an internal working meeting — no greetings, no sign-offs, no "great question". Speak plainly and specifically, like a senior operator who has to deliver. Everything you say is about moving the Empire's businesses forward.`;
 }
 
-module.exports = { runCouncilMeeting, COUNCIL_ROSTER };
+module.exports = { runCouncilMeeting, COUNCIL_ROSTER, getCouncilLive, endCouncilLive };

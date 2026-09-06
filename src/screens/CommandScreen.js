@@ -38,6 +38,7 @@ import DeepResearchBanner from './command/DeepResearchBanner';
 import BuildPanel from './command/BuildPanel';
 import LeadsPanel from './command/LeadsPanel';
 import{convokeCouncil}from '../services/council';
+import{fetchCouncilLive,COUNCIL_PHASE_LABEL}from '../services/councilLive';
 import{runInboundScan,importInboundForm}from '../services/inbound';
 import{pushLeadsToSheet}from '../services/leadsSheet';
 import NudgeBar from './command/NudgeBar';
@@ -117,6 +118,11 @@ export default function CommandScreen({navigation,route}){
   // S.C.O.U.T. / A.T.L.A.S. / T.A.L.O.N. running an auto-cycle right now — polled
   // while the galaxy is open so their orb gets the same working aura.
   const[agentBusy,setAgentBusy]=useState(()=>new Set());
+  // Live status of a running Empire Council meeting (backend-driven) — feeds the
+  // notification strip and the gold "speaking now" glow on the galaxy orbs.
+  const[councilLive,setCouncilLive]=useState(null);
+  const councilLiveRef=useRef(null);
+  const councilWasActiveRef=useRef(false);
   const[googleAction,setGoogleAction]=useState(null); // pending Google action awaiting a confirm tap
   const[googleBusy,setGoogleBusy]=useState(false);
   const googleActionRef=useRef(null);
@@ -205,6 +211,52 @@ export default function CommandScreen({navigation,route}){
     const iv=setInterval(tick,600);
     return()=>clearInterval(iv);
   },[isFocused,view,orbLevel]);
+  // Poll the backend for a running council meeting while this screen is focused:
+  // fast (5s) once one is live so the banner + speaking-orb glow track it turn
+  // by turn, slow (every ~4th tick = 20s) the rest of the time.
+  useEffect(()=>{councilLiveRef.current=councilLive;},[councilLive]);
+  useEffect(()=>{
+    if(!isFocused)return;
+    let alive=true,slow=0;
+    const pull=()=>fetchCouncilLive().then(s=>{if(alive)setCouncilLive(s);}).catch(()=>{});
+    pull();
+    const iv=setInterval(()=>{
+      if(councilLiveRef.current&&councilLiveRef.current.active){pull();}
+      else{slow=(slow+1)%4;if(slow===0)pull();}
+    },5000);
+    return()=>{alive=false;clearInterval(iv);};
+  },[isFocused]);
+  // Council meeting status -> the notification strip, and a chat line when it
+  // finishes. The gold "speaking now" glow is wired through busyPersonas below.
+  const councilBannerRef=useRef('');
+  useEffect(()=>{
+    const cl=councilLive;
+    if(cl&&cl.active){
+      const who=cl.speaking?getPersona(cl.speaking)?.name:null;
+      const pct=typeof cl.progress==='number'?` · ${Math.round(cl.progress*100)}%`:'';
+      const text=who
+        ? `COUNCIL in session — ${who} speaking${pct}`
+        : `COUNCIL · ${COUNCIL_PHASE_LABEL[cl.phase]||cl.phase||'meeting'}${pct}`;
+      if(text!==councilBannerRef.current){
+        councilBannerRef.current=text;
+        flagIssue('council-live',text,
+          cl.round?`Round ${cl.round} of ${cl.rounds}. The full transcript lands as a note when they finish.`
+                  :'The council is meeting now — this runs a few minutes.','info');
+      }
+    }else if(councilBannerRef.current){
+      councilBannerRef.current='';
+      clearIssue('council-live');
+    }
+    const nowActive=!!(cl&&cl.active);
+    if(councilWasActiveRef.current&&!nowActive){
+      if(cl&&cl.phase==='done'){
+        pushSystemMsg(`— COUNCIL · meeting complete${cl.headline?` — "${cl.headline}"`:''} — ask any persona for [READ_NOTE: Empire Council] for the full transcript —`);
+      }else if(cl&&(cl.phase==='error'||cl.phase==='stale')){
+        pushSystemMsg('— COUNCIL · the meeting ended early — check the backend logs —');
+      }
+    }
+    councilWasActiveRef.current=nowActive;
+  },[councilLive]);// eslint-disable-line react-hooks/exhaustive-deps
   // Zooming into a persona's orb for direct chat — if a reply was queued while
   // Mr. Burrus was away, it's already visible as text (loadHistory just pulled
   // it in); this delivers the catch-up voice line and clears the badge.
@@ -1384,7 +1436,13 @@ export default function CommandScreen({navigation,route}){
           onCouncilNote:({text})=>pushSystemMsg(`— COUNCIL · brief noted for the next meeting: ${text} —`),
           onCouncilConvene:()=>{
             pushSystemMsg('— COUNCIL · convening now — runs a few minutes; the push lands when they\'re done —');
-            convokeCouncil().catch(e=>pushSystemMsg(`— COUNCIL · couldn't convene: ${e.message} —`));
+            convokeCouncil()
+              .then(()=>{
+                // Poll a few times over the next ~30s so the banner + orb glow
+                // pick up the meeting without waiting for the idle interval.
+                [3000,9000,18000,30000].forEach(d=>setTimeout(()=>fetchCouncilLive().then(s=>setCouncilLive(s)).catch(()=>{}),d));
+              })
+              .catch(e=>pushSystemMsg(`— COUNCIL · couldn't convene: ${e.message} —`));
           },
           onOpenAppFailed:({name})=>pushSystemMsg(`— couldn't open "${name}" — don't know that app yet —`),
           onClipEdit:async({mediaUrl,instructions})=>{
@@ -1965,8 +2023,10 @@ export default function CommandScreen({navigation,route}){
     agentBusy.forEach(id=>set.add(id));
     if(deepResearch&&deepResearch.status==='running'&&deepResearch.persona)set.add(deepResearch.persona);
     if(loading&&activePersona&&orbLevel==='group')set.add(activePersona);
+    // The persona holding the floor in a live council meeting glows gold too.
+    if(councilLive&&councilLive.active&&councilLive.speaking)set.add(councilLive.speaking);
     return set;
-  },[relayBusy,agentBusy,deepResearch,loading,activePersona,orbLevel]);
+  },[relayBusy,agentBusy,deepResearch,loading,activePersona,orbLevel,councilLive]);
 
   if(showCamera){
     return(
