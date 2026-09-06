@@ -457,6 +457,7 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,busyPersonas,onPick,on
   // touching it" actually was: the tether had no idea the bob offset existed.
   const floatsNow=useRef(PERSONA_LIST.map(()=>0)).current;
   const bobOffsetFor=useCallback((i)=>{
+    if(PERSONA_LIST[i]?.id==='ara')return{bx:0,by:0}; // A.R.A. doesn't bob — keep her tethers static
     const v=floatsNow[i]??0;
     return{bx:-3+6*v,by:-7+14*v}; // mirrors floats[i].interpolate([0,1],[-3,3]/[-7,7]) in the orbs memo
   },[floatsNow]);
@@ -563,11 +564,11 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,busyPersonas,onPick,on
     // the JS thread before, which stuttered under any JS-thread load (drag,
     // re-renders, GC). Decoupled like this it can run on the native/UI
     // thread, which is what "idle drift" actually needs to stay smooth.
-    const loops=floats.map((v,i)=>Animated.loop(Animated.sequence([
+    const loops=floats.map((v,i)=>PERSONA_LIST[i].id==='ara'?null:Animated.loop(Animated.sequence([
       Animated.delay((i*233)%1100),
       Animated.timing(v,{toValue:1,duration:2400+((i*173)%1600),easing:Easing.inOut(Easing.sin),useNativeDriver:true}),
       Animated.timing(v,{toValue:0,duration:2400+((i*197)%1600),easing:Easing.inOut(Easing.sin),useNativeDriver:true}),
-    ])));
+    ]))).filter(Boolean);
     loops.forEach(l=>l.start());
     return()=>loops.forEach(l=>l.stop());
   },[]);// eslint-disable-line react-hooks/exhaustive-deps
@@ -639,8 +640,9 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,busyPersonas,onPick,on
         // Bob + twinkle both ride one native-driven transform layer (see the
         // render). Kept off the JS-driven position/scale below so they stay
         // smooth no matter what the JS thread is doing.
-        bobX:floats[i].interpolate({inputRange:[0,1],outputRange:[-3,3]}),
-        bobY:floats[i].interpolate({inputRange:[0,1],outputRange:[-7,7]}),
+        // A.R.A. holds dead still on her front seat — no idle bob.
+        bobX:p.id==='ara'?0:floats[i].interpolate({inputRange:[0,1],outputRange:[-3,3]}),
+        bobY:p.id==='ara'?0:floats[i].interpolate({inputRange:[0,1],outputRange:[-7,7]}),
         sparkleScale:sparkles[i].interpolate({inputRange:[0,1],outputRange:[0.92,1.1]}),
         sparkleOpacity:sparkles[i].interpolate({inputRange:[0,1],outputRange:[0.6,1]}),
         // Depth-driven scale/opacity — JS-driven (they track yaw/dolly) but
