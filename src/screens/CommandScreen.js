@@ -1987,10 +1987,17 @@ export default function CommandScreen({navigation,route}){
     );
   }
 
+  // The galaxy (viz + group) is the bare home screen — no back affordance, no
+  // view toggle, no composer. Step into a persona's orb and the chrome comes
+  // back: the ◉/≣ toggle and the back arrow at any non-group level, the chat
+  // composer specifically at the orb level (talk to that persona) and in chat.
+  const chromeVisible=view==='text'||(view==='viz'&&orbLevel!=='group');
+  const composerVisible=view==='text'||(view==='viz'&&orbLevel==='orb');
+
   return(
     <SafeAreaView style={s.container} edges={['top','bottom']}>
       <View style={s.header}>
-        {view==='text'||(view==='viz'&&orbLevel!=='group')?(
+        {chromeVisible?(
           <TouchableOpacity onPress={handleBack} hitSlop={{top:10,bottom:10,left:10,right:10}}>
             <Text style={s.empireOS}>‹ BACK</Text>
           </TouchableOpacity>
@@ -1999,13 +2006,15 @@ export default function CommandScreen({navigation,route}){
           <Text style={s.empireOS}>♔ EMPIRE OS</Text>
         )}
         <View style={s.headerRight}>
-          <View style={s.viewToggle}>
-            {[['viz','◉'],['text','≣']].map(([v,ic])=>(
-              <TouchableOpacity key={v} style={[s.viewTab,view===v&&{backgroundColor:cp.color+'22',borderColor:cp.color}]} onPress={()=>setView(v)}>
-                <Text style={[s.viewTabT,view===v&&{color:cp.color}]}>{ic}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
+          {chromeVisible&&(
+            <View style={s.viewToggle}>
+              {[['viz','◉'],['text','≣']].map(([v,ic])=>(
+                <TouchableOpacity key={v} style={[s.viewTab,view===v&&{backgroundColor:cp.color+'22',borderColor:cp.color}]} onPress={()=>setView(v)}>
+                  <Text style={[s.viewTabT,view===v&&{color:cp.color}]}>{ic}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
           <View style={s.onlinePill}><View style={s.onlineDot}/><Text style={s.onlineText}>ONLINE</Text></View>
         </View>
       </View>
@@ -2100,8 +2109,9 @@ export default function CommandScreen({navigation,route}){
         <Text style={[s.thinkT,{color:'#E05555'}]}>Listening...</Text>
       </View>)}
 
-      {/* The composer belongs to the chat view — the galaxy (viz) has no chat bar. */}
-      {view==='text'&&<KeyboardAvoidingView behavior={Platform.OS==='ios'?'padding':'height'}>
+      {/* Composer: in chat, and at a persona's orb so you can talk to them there.
+          The galaxy (group) and the memory spiral have no chat bar. */}
+      {composerVisible&&<KeyboardAvoidingView behavior={Platform.OS==='ios'?'padding':'height'}>
         <View style={s.inputArea}>
           <View style={s.inputRow}>
             <TextInput ref={textInputRef} style={s.input} defaultValue="" onChangeText={t=>{inputRef.current=t;setInput(t);}} placeholder="Speak your directive..." placeholderTextColor="#333" multiline maxLength={2000} autoCorrect={false} autoComplete="off" autoCapitalize="sentences" spellCheck={false}/>
