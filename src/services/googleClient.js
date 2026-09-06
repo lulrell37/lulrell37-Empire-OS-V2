@@ -233,15 +233,91 @@ export async function calendarDelete(eventId){
   return 'Calendar: event deleted.';
 }
 
-// --- Drive ("notes" = text/plain files + Google Docs) -------------------------
+// --- Drive ("notes" = text/plain or text/markdown files + Google Docs) --------
+// Notes are written into a dedicated "Empire OS Notes" folder as .md files so a
+// Google-Drive-synced Obsidian vault can point straight at that folder. The
+// folder id is resolved once per launch. `.md` in the filename is what Obsidian
+// keys on; the Drive mimeType is text/markdown to match.
+const NOTES_FOLDER='Empire OS Notes';
+let notesFolderId=null;
+const mdName=t=>/\.md$/i.test(t)?t:`${String(t||'').trim()}.md`;
+const baseName=n=>String(n||'').replace(/\.md$/i,'').trim();
+
+export function resetNotesFolderCache(){notesFolderId=null;}
+
+// Look up the folder without creating it — returns null when it doesn't exist.
+async function findNotesFolderId(){
+  if(notesFolderId)return notesFolderId;
+  const found=await gapi('/drive/v3/files',{query:{
+    q:`trashed=false and mimeType='application/vnd.google-apps.folder' and name='${NOTES_FOLDER}'`,
+    pageSize:1,fields:'files(id)',
+  }});
+  if(found.files&&found.files[0]){notesFolderId=found.files[0].id;return notesFolderId;}
+  return null;
+}
+async function getNotesFolderId(){
+  const existing=await findNotesFolderId();
+  if(existing)return existing;
+  const made=await gapi('/drive/v3/files',{
+    method:'POST',json:{name:NOTES_FOLDER,mimeType:'application/vnd.google-apps.folder'},query:{fields:'id'},
+  });
+  notesFolderId=made.id;
+  return notesFolderId;
+}
+
+// Move a note file into the notes folder and give it a .md name, in place.
+// Best-effort — a failure here never blocks the write that triggered it.
+async function ensureFiledAsNote(file){
+  const fid=await getNotesFolderId();
+  const parents=file.parents||[];
+  const inFolder=parents.includes(fid);
+  const hasMd=/\.md$/i.test(file.name||'');
+  if(inFolder&&hasMd)return;
+  const query={fields:'id'};
+  if(!inFolder){query.addParents=fid;if(parents.length)query.removeParents=parents.join(',');}
+  const patch=hasMd?{}:{name:mdName(baseName(file.name))};
+  await gapi(`/drive/v3/files/${file.id}`,{method:'PATCH',json:patch,query});
+}
+
 export async function driveList(max=30){
   const data=await gapi('/drive/v3/files',{query:{
-    q:"trashed=false and (mimeType='text/plain' or mimeType='application/vnd.google-apps.document')",
+    q:"trashed=false and (mimeType='text/plain' or mimeType='text/markdown' or mimeType='application/vnd.google-apps.document')",
     orderBy:'modifiedTime desc',pageSize:max,fields:'files(id,name,mimeType,modifiedTime)',
   }});
   const files=data.files||[];
   if(!files.length)return 'Drive: no notes found.';
   return `Drive notes (${files.length}):\n`+files.map(f=>`• ${f.name}  [id:${f.id}]`).join('\n');
+}
+
+// One-shot: pull loose note files sitting in My Drive root into the notes
+// folder and rename them .md, so an Obsidian vault on that folder sees the
+// whole history. Files the user has filed into their own folders are left
+// alone. Triggered by [SYNC_NOTES].
+export async function driveSyncNotesFolder(){
+  const fid=await getNotesFolderId();
+  const root=(await gapi('/drive/v3/files/root',{query:{fields:'id'}})).id;
+  const data=await gapi('/drive/v3/files',{query:{
+    q:"trashed=false and 'me' in owners and (mimeType='text/plain' or mimeType='text/markdown')",
+    pageSize:300,fields:'files(id,name,parents)',
+  }});
+  let moved=0,renamed=0;
+  for(const f of (data.files||[])){
+    const parents=f.parents||[];
+    const inFolder=parents.includes(fid);
+    const hasMd=/\.md$/i.test(f.name||'');
+    if(inFolder&&hasMd)continue;
+    if(!inFolder&&!parents.includes(root))continue;   // user filed it elsewhere — don't touch
+    try{
+      const query={fields:'id'};
+      if(!inFolder){query.addParents=fid;if(parents.length)query.removeParents=parents.join(',');}
+      const patch=hasMd?{}:{name:mdName(baseName(f.name))};
+      await gapi(`/drive/v3/files/${f.id}`,{method:'PATCH',json:patch,query});
+      if(!inFolder)moved++;
+      if(patch.name)renamed++;
+    }catch{}
+  }
+  return `"${NOTES_FOLDER}" synced — ${moved} note${moved===1?'':'s'} moved in${renamed?`, ${renamed} renamed to .md`:''}. `
+    +`In Obsidian, open a vault on that Drive folder (turn on "Detect all file extensions" if a note doesn't show).`;
 }
 
 export async function driveSearch(kw){
@@ -257,14 +333,23 @@ export async function driveSearch(kw){
 }
 
 async function driveFindByName(name){
-  const esc=name.replace(/'/g,"\\'");
+  const clean=baseName(name);
+  const esc=clean.replace(/'/g,"\\'");
   const data=await gapi('/drive/v3/files',{query:{
-    q:`trashed=false and name contains '${esc}'`,pageSize:5,fields:'files(id,name,mimeType)',
+    q:`trashed=false and name contains '${esc}'`,pageSize:10,fields:'files(id,name,mimeType,parents)',
   }});
   const files=data.files||[];
-  // Prefer an exact (case-insensitive) title match over Drive's loose "contains"
-  // search, so editing "Trip Plan" doesn't land on "Trip Plan — Backup" instead.
-  return files.find(f=>f.name.toLowerCase()===name.toLowerCase())||files[0]||null;
+  // Prefer an exact (case-insensitive) title match — with or without the .md
+  // extension — over Drive's loose "contains" search, so editing "Trip Plan"
+  // doesn't land on "Trip Plan — Backup" instead. Among exact matches, prefer
+  // the copy already in the notes folder.
+  const want=clean.toLowerCase();
+  const exact=files.filter(f=>baseName(f.name).toLowerCase()===want);
+  if(exact.length){
+    let fid=null;try{fid=await findNotesFolderId();}catch{}
+    return exact.find(f=>fid&&(f.parents||[]).includes(fid))||exact[0];
+  }
+  return files[0]||null;
 }
 
 // Long documents are paged so one read can't blow out the context window.
@@ -313,17 +398,20 @@ export function sliceDoc(header,full,page,refName){
 
 export async function driveCreate({title,content}){
   if(!title)throw new Error('no title');
+  const clean=baseName(title);
+  let parents;
+  try{parents=[await getNotesFolderId()];}catch{/* fall back to My Drive root */}
   const boundary='empireos'+Date.now();
-  const meta={name:title,mimeType:'text/plain'};
+  const meta={name:mdName(clean),mimeType:'text/markdown',...(parents?{parents}:{})};
   const body=
     `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n`+
-    `--${boundary}\r\nContent-Type: text/plain\r\n\r\n${content||''}\r\n`+
+    `--${boundary}\r\nContent-Type: text/markdown\r\n\r\n${content||''}\r\n`+
     `--${boundary}--`;
   const f=await gapi('/upload/drive/v3/files',{
     method:'POST',query:{uploadType:'multipart'},
     headers:{'Content-Type':`multipart/related; boundary=${boundary}`},body,
   });
-  return `Drive: note "${title}" created  [id:${f.id}]`;
+  return `Drive: note "${clean}" created  [id:${f.id}]`;
 }
 
 // Create-or-update by title: what every persona's [SAVE_NOTE] actually needs
@@ -332,16 +420,22 @@ export async function driveCreate({title,content}){
 // lookup itself fails (still better than losing the write).
 export async function driveSaveNote({title,content}){
   if(!title)throw new Error('no title');
-  const existing=await driveFindByName(title).catch(()=>null);
-  if(existing)return driveUpdate({fileId:existing.id,content}).then(()=>`Drive: note "${title}" updated  [id:${existing.id}]`);
-  return driveCreate({title,content});
+  const clean=baseName(title);
+  const existing=await driveFindByName(clean).catch(()=>null);
+  if(existing){
+    await driveUpdate({fileId:existing.id,content});
+    // migrate-on-touch: older notes drift into the folder + .md as they're edited
+    await ensureFiledAsNote(existing).catch(()=>{});
+    return `Drive: note "${clean}" updated  [id:${existing.id}]`;
+  }
+  return driveCreate({title:clean,content});
 }
 
 export async function driveUpdate({fileId,content}){
   if(!fileId)throw new Error('no file id');
   await gapi(`/upload/drive/v3/files/${fileId}`,{
     method:'PATCH',query:{uploadType:'media'},
-    headers:{'Content-Type':'text/plain'},body:content||'',
+    headers:{'Content-Type':'text/markdown'},body:content||'',
   });
   return 'Drive: note updated.';
 }

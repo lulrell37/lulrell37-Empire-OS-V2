@@ -17,7 +17,7 @@ import{saveCustomPrompt,getCustomPrompt,getApiUsage,getAllPersonaPics,savePerson
 import{getCrashLog,clearCrashLog}from '../services/crashLog';
 import{PERSONA_LIST,getPersona}from '../personas/personas';
 import{useGoogleAuth,exchangeGoogleCode,revokeGoogle}from '../services/googleAuth';
-import{syncGoogleTokenToBackend,clearGoogleTokenOnBackend}from '../services/googleClient';
+import{syncGoogleTokenToBackend,clearGoogleTokenOnBackend,resetNotesFolderCache}from '../services/googleClient';
 import useEmpireStore from '../store/useEmpireStore';
 const TABS=['KEYS','GOOGLE','TRADING','OUTREACH','DEV','BACKEND','AI','PROFILES','PROMPTS','USAGE','DIAGNOSTICS'];
 export default function SettingsScreen({navigation}){
@@ -273,6 +273,7 @@ export default function SettingsScreen({navigation}){
     await revokeGoogle();
     await clearGoogleToken();
     clearGoogleTokenOnBackend().catch(()=>{});
+    resetNotesFolderCache();
     setGoogleConnected(false);
     Alert.alert('Disconnected','Google account disconnected.');
   }

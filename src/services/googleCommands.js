@@ -95,6 +95,9 @@ export async function googleWriteCommands(text,{onConfirm}={}){
   for(const m of t.matchAll(/\[EDIT_NOTE:\s*([^|\]]+)\|([^\]]*)\]/ig))
     await run(()=>g.driveUpdate({fileId:m[1].trim(),content:(m[2]||'').trim()}));
 
+  if(/\[SYNC_NOTES\]/i.test(t))
+    await run(()=>g.driveSyncNotesFolder());
+
   for(const m of t.matchAll(/\[CREATE_SHEET:\s*([^|\]]+)(?:\|([^|\]]*))?(?:\|([^\]]*))?\]/ig)){
     const cols=(m[2]||'').split(',').map(s=>s.trim()).filter(Boolean);
     const vals=(m[3]||'').split(',').map(s=>s.trim()).filter(Boolean);

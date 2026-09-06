@@ -10,6 +10,7 @@
 // that never finishes is failed out after DR_TIMEOUT_MS.
 import{drInsert,drUpdate,drGet,drActive,drRecent,getSetting,saveMessage,savePersonaMemory,saveNote}from './database';
 import{deepResearchStart,deepResearchPoll}from './aiService';
+import{driveSaveNote}from './googleClient';
 import{getPersona}from '../personas/personas';
 
 // Deliver a finished job exactly once — into the starting persona's chat, its
@@ -24,8 +25,11 @@ async function deliverResult(id,persona,topic,text){
   await saveMessage(persona,'assistant',body,'direct').catch(()=>{});
   await savePersonaMemory(persona,`YOU: [deep research] ${topic}\n${name}: ${body.slice(0,12000)}`).catch(()=>{});
   // A Note survives even if memory retrieval misses it, and it's cross-persona.
-  await saveNote(`Deep Research — ${String(topic||'').slice(0,80)}`,
-    `Deep research requested via ${name} on ${new Date().toLocaleDateString()}.\nTopic: ${topic}\n\n${body}`,persona).catch(()=>{});
+  // Drive-first (so it lands in the Obsidian-synced notes folder), local table
+  // as the fallback when Google isn't connected — mirrors [SAVE_NOTE].
+  const noteTitle=`Deep Research — ${String(topic||'').slice(0,80)}`;
+  const noteBody=`Deep research requested via ${name} on ${new Date().toLocaleDateString()}.\nTopic: ${topic}\n\n${body}`;
+  await driveSaveNote({title:noteTitle,content:noteBody}).catch(()=>saveNote(noteTitle,noteBody,persona).catch(()=>{}));
   await drUpdate(id,{delivered:1}).catch(()=>{});
 }
 
