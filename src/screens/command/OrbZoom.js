@@ -106,7 +106,7 @@ function depthOpacity(depth){
 
 function touchDist(t){return Math.hypot(t[0].pageX-t[1].pageX,t[0].pageY-t[1].pageY);}
 
-function OrbZoom({personaId,color,active,vizRef,personaPics={},unreadPersonas,busyPersonas,onPickPersona,onLaunchGroup,onZoomOut,onEarth,level='group',onLevelChange},ref){
+function OrbZoom({personaId,color,active,vizRef,personaPics={},unreadPersonas,busyPersonas,onPickPersona,onLaunchGroup,onEarth,level='group',onLevelChange},ref){
   const persona=getPersona(personaId);
   // Manually dragged orb positions — lifted up here (rather than living inside
   // PersonaSphereInner) so they survive zooming into a persona and back out,
@@ -189,8 +189,9 @@ function OrbZoom({personaId,color,active,vizRef,personaPics={},unreadPersonas,bu
       setLvl('orb',-1);return;
     }
     if(cur==='orb'){setLvl('group',-1);return;}
-    if(cur==='group'){onZoomOut?.();return;} // zoom out past the sphere -> the city
-  },[setLvl,onZoomOut]);
+    // group is the galaxy root — the only way down to the city is the Earth
+    // along the bottom edge; zooming out past the sphere does nothing.
+  },[setLvl]);
 
   // Step back one zoom level (memory -> orb -> the persona sphere). Returns true
   // if it consumed the back action, false when already at the sphere so the

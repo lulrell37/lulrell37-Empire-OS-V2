@@ -2077,7 +2077,6 @@ export default function CommandScreen({navigation,route}){
           busyPersonas={busyPersonas}
           onPickPersona={pickPersonaFromOrb}
           onLaunchGroup={launchGroupFromOrb}
-          onZoomOut={goToCity}
           onEarth={goToCity}
         />
         )
