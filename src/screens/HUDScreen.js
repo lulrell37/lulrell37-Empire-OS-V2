@@ -3,7 +3,7 @@ import{View,Text,StyleSheet,ScrollView,TouchableOpacity,TextInput,Modal}from 're
 import{SafeAreaView}from 'react-native-safe-area-context';
 import{useFocusEffect,useIsFocused}from '@react-navigation/native';
 import{Feather}from '@expo/vector-icons';
-import{getHudState,updateHudState,getTasks,getBusinessesWithRevenue,setBusinessTarget,addBusiness,deleteBusiness,addRevenue,updateEmpireScore,getMorningRoutine,saveMorningRoutine,getBatmanTemplate,saveBatmanTemplate,ensureHudState,getHudLayout,setPanelLayout,DEFAULT_BATMAN}from '../services/database';
+import{getHudState,updateHudState,getTasks,getBusinessesWithRevenue,setBusinessTarget,setBusinessNote,addBusiness,deleteBusiness,addRevenue,updateEmpireScore,getMorningRoutine,saveMorningRoutine,getBatmanTemplate,saveBatmanTemplate,ensureHudState,getHudLayout,setPanelLayout,DEFAULT_BATMAN}from '../services/database';
 import{loadHudTasks,addHudTask,setHudTaskDone,renameHudTask,deleteHudTask}from '../services/hudTasks';
 import{colors,space,radius,FONTS}from '../theme';
 import{PANEL_META,BriefingPanel,AgendaPanel,BusinessPanel,TasksPanel,RoutinePanel,BatmanPanel,DailyPanel,MarketPanel,BuildBoardPanel}from './hud/panels';
@@ -38,6 +38,7 @@ export default function HUDScreen({navigation}){
   const[bizTargetInput,setBizTargetInput]=useState('');
   const[bizWeekGoalInput,setBizWeekGoalInput]=useState('');
   const[bizLogInput,setBizLogInput]=useState('');
+  const[bizNoteInput,setBizNoteInput]=useState('');
   const[showAddBiz,setShowAddBiz]=useState(false);
   const[newBizName,setNewBizName]=useState('');
   const[newBizTarget,setNewBizTarget]=useState('');
@@ -160,12 +161,14 @@ export default function HUDScreen({navigation}){
     setBizTargetInput(String(b.target||0));
     setBizWeekGoalInput(String(b.weekGoal||0));
     setBizLogInput('');
+    setBizNoteInput(b.notes||'');
   }
   async function saveBizModal(){
     if(!bizModal)return;
     const target=parseFloat(bizTargetInput)||0;
     const weekGoal=parseFloat(bizWeekGoalInput)||0;
     await setBusinessTarget(bizModal.name,target,weekGoal);
+    await setBusinessNote(bizModal.name,bizNoteInput);
     if(bizLogInput.trim()){
       const amt=parseFloat(bizLogInput);
       if(!isNaN(amt)&&amt>0)await addRevenue(bizModal.name,amt);
@@ -282,7 +285,7 @@ export default function HUDScreen({navigation}){
 
       <Modal visible={!!bizModal} transparent animationType="slide">
         <View style={s.modalOver}><View style={s.modalContent}>
-          {bizModal&&<>
+          {bizModal&&<ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
             <Text style={s.modalTitle}>{bizModal.name}</Text>
             <Text style={s.modalSub}>THIS MONTH · ${bizModal.rev.toLocaleString()}</Text>
             <Text style={s.fieldLabel}>MONTHLY TARGET</Text>
@@ -291,12 +294,14 @@ export default function HUDScreen({navigation}){
             <TextInput style={s.modalInput} value={bizWeekGoalInput} onChangeText={setBizWeekGoalInput} keyboardType="numeric" placeholderTextColor={colors.textFaint}/>
             <Text style={s.fieldLabel}>LOG REVENUE (OPTIONAL)</Text>
             <TextInput style={s.modalInput} value={bizLogInput} onChangeText={setBizLogInput} keyboardType="numeric" placeholder="Amount to add" placeholderTextColor={colors.textFaint}/>
+            <Text style={s.fieldLabel}>NOTES — WHERE THIS BUSINESS STANDS</Text>
+            <TextInput style={[s.modalInput,s.modalInputNote]} value={bizNoteInput} onChangeText={setBizNoteInput} placeholder="What's live, what's stuck, what you're waiting on — the personas read this" placeholderTextColor={colors.textFaint} multiline numberOfLines={4} textAlignVertical="top"/>
             <View style={s.modalActions}>
               <TouchableOpacity style={[s.modalBtn,s.modalBtnPrimary]} onPress={saveBizModal}><Text style={s.modalBtnPrimaryT}>SAVE</Text></TouchableOpacity>
               <TouchableOpacity style={[s.modalBtn,s.modalBtnDanger]} onPress={deleteBizModal}><Text style={s.modalBtnDangerT}>DELETE</Text></TouchableOpacity>
               <TouchableOpacity style={[s.modalBtn,s.modalBtnGhost]} onPress={()=>setBizModal(null)}><Text style={s.modalBtnGhostT}>CANCEL</Text></TouchableOpacity>
             </View>
-          </>}
+          </ScrollView>}
         </View></View>
       </Modal>
 
@@ -336,11 +341,12 @@ const s=StyleSheet.create({
   floatingNote:{fontFamily:FONTS.mono,fontSize:8,color:colors.textDim,letterSpacing:1,textAlign:'center',marginTop:space.lg,marginHorizontal:space.lg},
 
   modalOver:{flex:1,backgroundColor:'rgba(0,0,0,0.92)',justifyContent:'flex-end'},
-  modalContent:{backgroundColor:colors.card,borderTopWidth:1,borderTopColor:colors.hairlineGold,borderTopLeftRadius:radius.xl,borderTopRightRadius:radius.xl,padding:space.xl},
+  modalContent:{backgroundColor:colors.card,borderTopWidth:1,borderTopColor:colors.hairlineGold,borderTopLeftRadius:radius.xl,borderTopRightRadius:radius.xl,padding:space.xl,maxHeight:'88%'},
   modalTitle:{fontFamily:FONTS.monoMed,fontSize:12,color:colors.gold,letterSpacing:3,marginBottom:6},
   modalSub:{fontFamily:FONTS.mono,fontSize:9,color:colors.online,letterSpacing:1.5,marginBottom:space.lg},
   fieldLabel:{fontFamily:FONTS.mono,fontSize:8,color:colors.textDim,letterSpacing:1.5,marginBottom:6,marginTop:space.md},
   modalInput:{backgroundColor:colors.surface,borderWidth:1,borderColor:colors.hairline,borderRadius:radius.md,paddingHorizontal:space.md,paddingVertical:space.md,color:colors.text,fontFamily:FONTS.mono,fontSize:14},
+  modalInputNote:{minHeight:88,fontSize:13,lineHeight:19},
   modalActions:{flexDirection:'row',gap:space.md,marginTop:space.xl},
   modalBtn:{flex:1,paddingVertical:space.md,borderRadius:radius.md,alignItems:'center'},
   modalBtnPrimary:{backgroundColor:colors.gold},

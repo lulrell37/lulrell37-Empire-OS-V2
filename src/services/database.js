@@ -9,7 +9,7 @@ export async function initDatabase(){
     CREATE TABLE IF NOT EXISTS tasks(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT,notes TEXT,due_date TEXT,priority TEXT DEFAULT 'normal',completed INTEGER DEFAULT 0,created_at INTEGER);
     CREATE TABLE IF NOT EXISTS hud_state(id INTEGER PRIMARY KEY DEFAULT 1,date TEXT,empire_score INTEGER DEFAULT 0,streak INTEGER DEFAULT 0,batman_protocol TEXT DEFAULT '{}',batman_template TEXT DEFAULT '[]',morning_routine TEXT DEFAULT '[]',morning_routine_done TEXT DEFAULT '{}',word_of_day TEXT,word_phonetic TEXT,word_def TEXT,verse_of_day TEXT,verse_ref TEXT,fact_of_day TEXT,updated_at INTEGER);
     CREATE TABLE IF NOT EXISTS revenue(id INTEGER PRIMARY KEY AUTOINCREMENT,business TEXT,amount REAL,type TEXT DEFAULT 'income',note TEXT,date TEXT,created_at INTEGER);
-    CREATE TABLE IF NOT EXISTS business_targets(business TEXT PRIMARY KEY,target REAL DEFAULT 0,week_goal REAL DEFAULT 0,sort_order INTEGER DEFAULT 0);
+    CREATE TABLE IF NOT EXISTS business_targets(business TEXT PRIMARY KEY,target REAL DEFAULT 0,week_goal REAL DEFAULT 0,sort_order INTEGER DEFAULT 0,notes TEXT DEFAULT '');
     CREATE TABLE IF NOT EXISTS persona_memory(id INTEGER PRIMARY KEY AUTOINCREMENT,persona TEXT,content TEXT,category TEXT,keywords TEXT,date TEXT,created_at INTEGER,pinned_until INTEGER);
     CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT,content TEXT,persona TEXT,created_at INTEGER,updated_at INTEGER);
     CREATE TABLE IF NOT EXISTS persona_pics(id INTEGER PRIMARY KEY AUTOINCREMENT,persona TEXT UNIQUE,pic_data TEXT);
@@ -33,6 +33,7 @@ export async function initDatabase(){
   await migrateColumn('leads','source_id','TEXT');
   await migrateColumn('persona_memory','pinned_until','INTEGER');
   await migrateColumn('messages','unread','INTEGER DEFAULT 0');
+  await migrateColumn('business_targets','notes','TEXT');
   await migrateColumn('hud_layout','w','REAL DEFAULT 0');
   await migrateColumn('hud_layout','h','REAL DEFAULT 0');
   await migrateTraderPersona();
@@ -431,6 +432,9 @@ export async function getRevenueByBusiness(){return await db.getAllAsync("SELECT
 export async function getMonthlyRevenueByBusiness(){const month=getMonthStr();return await db.getAllAsync("SELECT business,SUM(amount) as total FROM revenue WHERE type='income' AND date LIKE ? GROUP BY business",[month+'%']);}
 export async function getBusinessTargets(){return await db.getAllAsync('SELECT * FROM business_targets ORDER BY sort_order ASC');}
 export async function setBusinessTarget(business,target,weekGoal){await db.runAsync('UPDATE business_targets SET target=?,week_goal=? WHERE business=?',[target,weekGoal,business]);}
+// Mr. Burrus's own running note on where a business stands — extra context the
+// personas (and the nightly council) read. Synced with the rest of the row.
+export async function setBusinessNote(business,notes){await db.runAsync('UPDATE business_targets SET notes=? WHERE business=?',[String(notes||''),business]);}
 export async function addBusiness(name,target=0,weekGoal=0){
   const clean=String(name||'').trim();
   if(!clean)return false;
@@ -449,7 +453,7 @@ export async function getBusinessesWithRevenue(){
   const targets=await getBusinessTargets();
   const revenue=await getMonthlyRevenueByBusiness();
   const revMap={};revenue.forEach(r=>{revMap[r.business]=r.total;});
-  return targets.map(t=>({name:t.business,target:t.target,weekGoal:t.week_goal,rev:revMap[t.business]||0}));
+  return targets.map(t=>({name:t.business,target:t.target,weekGoal:t.week_goal,notes:t.notes||'',rev:revMap[t.business]||0}));
 }
 // One row per exchange, stored verbatim (no truncation), tagged with a category.
 // opts.pinnedUntil (ms) keeps the row in every turn's context until it expires.
