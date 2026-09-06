@@ -438,14 +438,15 @@ export async function dailyGenerate(kind,avoid=[]){
 
 // One unattended trading decision for A.T.L.A.S. — a single Claude call that
 // returns strict JSON. Used by the auto-trader loop (demo account only).
-export async function autoTradeDecision({symbol,snapshot,record,strategy,positions}){
+export async function autoTradeDecision({symbol,snapshot,record,strategy,positions,openCount=0,maxOpen=5}){
   const k=await ensureKeys();
   const{base,auth}=await aiRoute('claude',k?.claude,'Claude');
   const sys=`You are T.A.L.O.N., running UNATTENDED on a DEMO trading account. No human reviews your call before it fires. Every order is 0.01 lot.
 Look at ${symbol} right now and decide. Patience is still the edge — never force a trade in chop or against clear structure. BUT this is a live demo you are meant to be actively working: when a clean setup is in front of you that fits your strategy and your record — a defined level, a clear bias, a sensible stop — take it rather than holding out for a perfect one. A reasonable A-/B+ setup with tight risk is a yes. Stops and targets go off structure, tight, as concrete prices.
+You currently hold ${openCount} of ${maxOpen} allowed positions (one per pair). ${openCount>=maxOpen?`You are FULL — do not "enter", only manage or close.`:`${maxOpen-openCount} slot(s) are open — when a valid setup is here, take it to put a slot to work; do not sit the whole watchlist out waiting for perfection.`}
 Reply with ONLY a JSON object, no prose, no code fence:
 {"action":"enter"|"close"|"none","side":"buy"|"sell","stopLoss":<price>,"takeProfit":<price>,"setup":"scalp|swing|<label>","rationale":"<=140 chars","closeIds":["<id>"],"breakevenIds":["<id>"]}
-Use "enter" to open one position, "close" to close open positions by id, "none" to wait. "breakevenIds" moves those open positions' stops to entry — only positions already comfortably in profit — and may accompany any action. You may hold up to 5 positions at once (one per pair); if 5 are already open, do not "enter". Omit fields that don't apply. If unsure: {"action":"none"}.`;
+Use "enter" to open one position, "close" to close open positions by id, "none" to wait. "breakevenIds" moves those open positions' stops to entry — only positions already comfortably in profit — and may accompany any action. Respect the position limit stated above. Omit fields that don't apply. "none" is for genuine chop or an already-full book — not a default you reach for while slots sit open and a clean level is in front of you.`;
   const user=`MARKET SNAPSHOT ${symbol}:\n${snapshot}\n\nYOUR TRADE RECORD:\n${record||'(none yet)'}\n\nYOUR STRATEGY:\n${strategy||'(none yet)'}\n\nYOUR OPEN POSITIONS ON ${symbol}:\n${positions||'none'}`;
   const res=await fetch(base+'/v1/messages',{method:'POST',headers:{'Content-Type':'application/json',...auth},body:JSON.stringify({
     model:'claude-sonnet-5',max_tokens:400,system:sys,messages:[{role:'user',content:user}],

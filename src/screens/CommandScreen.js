@@ -2003,8 +2003,9 @@ export default function CommandScreen({navigation,route}){
     const sym=symbol||'XAUUSD';
     try{
       const open=await tlPositions().catch(()=>[]);
-      if(open.length>=MAX_OPEN_POSITIONS){
-        pushSystemMsg(`— ${MAX_OPEN_POSITIONS} positions already open — close one before adding another —`);
+      const maxOpen=Math.min(MAX_OPEN_POSITIONS,Math.max(1,parseInt(await getSetting('auto_trade_max_open',String(MAX_OPEN_POSITIONS)),10)||MAX_OPEN_POSITIONS));
+      if(open.length>=maxOpen){
+        pushSystemMsg(`— ${maxOpen} positions already open (the limit) — close one before adding another —`);
         return;
       }
       const r=await tlPlaceOrder({symbol:sym,side,qty:Math.min(qty||MAX_QTY,MAX_QTY),stopLoss,takeProfit});

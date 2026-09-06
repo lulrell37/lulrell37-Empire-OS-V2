@@ -37,8 +37,9 @@ export default function SettingsScreen({navigation}){
   const[tlBusy,setTlBusy]=useState(false);
   const[tlAccount,setTlAccount]=useState(null);
   const[autoTrade,setAutoTrade]=useState(false);
-  const[autoSyms,setAutoSyms]=useState('XAUUSD, EURUSD, GBPJPY, BTCUSD');
+  const[autoSyms,setAutoSyms]=useState('XAUUSD, EURUSD, GBPUSD, USDJPY, GBPJPY, AUDUSD, XAGUSD, BTCUSD');
   const[autoEvery,setAutoEvery]=useState('5');
+  const[autoMaxOpen,setAutoMaxOpen]=useState('5');
   const[weatherPlace,setWeatherPlace]=useState('Waldorf, MD');
   const[inboundSheet,setInboundSheet]=useState('');
   const[autoScout,setAutoScout]=useState(false);
@@ -82,8 +83,9 @@ export default function SettingsScreen({navigation}){
     setDeepModel(await getSetting('deep_research_model','auto'));
     const tc=await loadTradeCreds();if(tc)setTl({email:tc.email||'',password:tc.password||'',server:tc.server||'',env:tc.env||'demo'});
     setAutoTrade((await getSetting('auto_trade','0'))==='1');
-    setAutoSyms(await getSetting('auto_trade_symbols','XAUUSD, EURUSD, GBPJPY, BTCUSD'));
+    setAutoSyms(await getSetting('auto_trade_symbols','XAUUSD, EURUSD, GBPUSD, USDJPY, GBPJPY, AUDUSD, XAGUSD, BTCUSD'));
     setAutoEvery(await getSetting('auto_trade_interval_min','5'));
+    setAutoMaxOpen(await getSetting('auto_trade_max_open','5'));
     setWeatherPlace(await getSetting('weather_place','Waldorf, MD'));
     setInboundSheet(await getSetting('inbound_sheet_id',''));
     setAutoScout((await getSetting('auto_scout','0'))==='1');
@@ -165,6 +167,10 @@ export default function SettingsScreen({navigation}){
   async function saveAutoEvery(){
     const n=Math.max(1,parseInt(autoEvery,10)||5);
     setAutoEvery(String(n));await setSetting('auto_trade_interval_min',String(n));await refreshAutoTrader().catch(()=>{});
+  }
+  async function saveAutoMaxOpen(){
+    const n=Math.min(5,Math.max(1,parseInt(autoMaxOpen,10)||5));
+    setAutoMaxOpen(String(n));await setSetting('auto_trade_max_open',String(n));await refreshAutoTrader().catch(()=>{});
   }
   async function toggleAutoScout(){
     const nv=!autoScout;
@@ -407,6 +413,11 @@ export default function SettingsScreen({navigation}){
             <View style={s.keyField}>
               <Text style={s.keyLabel}>CHECK EVERY (MINUTES)</Text>
               <TextInput style={s.keyInput} value={String(autoEvery)} onChangeText={setAutoEvery} onBlur={saveAutoEvery} placeholder="5" placeholderTextColor="#1A1A1A" keyboardType="number-pad"/>
+            </View>
+            <View style={s.keyField}>
+              <Text style={s.keyLabel}>MAX OPEN POSITIONS (1–5)</Text>
+              <TextInput style={s.keyInput} value={String(autoMaxOpen)} onChangeText={setAutoMaxOpen} onBlur={saveAutoMaxOpen} placeholder="5" placeholderTextColor="#1A1A1A" keyboardType="number-pad"/>
+              <Text style={[s.secSub,{marginTop:6,marginBottom:0}]}>How many trades T.A.L.O.N. runs at once — one per pair. List at least this many watched symbols above or it can't fill every slot.</Text>
             </View>
           </View>}
           {tab==='OUTREACH'&&<View>

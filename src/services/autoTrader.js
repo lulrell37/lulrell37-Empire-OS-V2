@@ -58,15 +58,19 @@ async function runOnce(){
 
     await reconcileOpenTrades().catch(()=>{});
 
-    const symsRaw=await getSetting('auto_trade_symbols','XAUUSD, EURUSD, GBPJPY, BTCUSD');
-    const syms=[...new Set(symsRaw.split(/[\s,]+/).map(s=>s.trim().toUpperCase()).filter(Boolean))].slice(0,6);
+    const symsRaw=await getSetting('auto_trade_symbols','XAUUSD, EURUSD, GBPUSD, USDJPY, GBPJPY, AUDUSD, XAGUSD, BTCUSD');
+    const syms=[...new Set(symsRaw.split(/[\s,]+/).map(s=>s.trim().toUpperCase()).filter(Boolean))].slice(0,12);
     if(!syms.length)return;
+
+    // How many positions T.A.L.O.N. may run at once — user-set in Settings ›
+    // Trading, hard-capped at MAX_OPEN_POSITIONS.
+    const maxOpen=Math.min(MAX_OPEN_POSITIONS,Math.max(1,parseInt(await getSetting('auto_trade_max_open',String(MAX_OPEN_POSITIONS)),10)||MAX_OPEN_POSITIONS));
 
     const positions=await tlPositions().catch(()=>[]);
     const idToSym=await tlInstrumentsById().catch(()=>({}));
     const symOf=p=>String(idToSym[String(p.tradableInstrumentId)]||'').toUpperCase();
     const openSyms=new Set(positions.map(symOf));
-    let openCount=positions.length;   // grows as we open this cycle; capped at MAX_OPEN_POSITIONS
+    let openCount=positions.length;   // grows as we open this cycle; capped at maxOpen
     const record=await formatTradeRecord().catch(()=>'');
     const strategy=await getStrategy().catch(()=>'');
 
@@ -79,7 +83,7 @@ async function runOnce(){
       const posText=mine.map(p=>`#${p.id} ${p.side} ${p.qty} @ ${p.avgPrice} (uP/L ${p.unrealizedPl})`).join('; ')||'none';
 
       let dec;
-      try{dec=await autoTradeDecision({symbol:sym,snapshot:tlFormatSnapshot(snap),record,strategy,positions:posText});}
+      try{dec=await autoTradeDecision({symbol:sym,snapshot:tlFormatSnapshot(snap),record,strategy,positions:posText,openCount,maxOpen});}
       catch(e){emit(`AUTO ${sym} — decision failed: ${e.message}`);continue;}
 
       // Break-even management runs alongside whatever else she decides.
@@ -102,7 +106,7 @@ async function runOnce(){
 
       if(dec.action==='enter'&&(dec.side==='buy'||dec.side==='sell')){
         if(openSyms.has(sym))continue; // already in this pair — don't stack
-        if(openCount>=MAX_OPEN_POSITIONS){emit(`AUTO · skipped ${sym} — ${MAX_OPEN_POSITIONS} positions already open`);continue;}
+        if(openCount>=maxOpen){emit(`AUTO · skipped ${sym} — ${maxOpen} positions already open (the limit)`);continue;}
         const price=snap.quote?.mid??(dec.side==='buy'?snap.quote?.ask:snap.quote?.bid);
         try{
           const r=await tlPlaceOrder({symbol:sym,side:dec.side,qty:MAX_QTY,stopLoss:dec.stopLoss,takeProfit:dec.takeProfit});
@@ -122,7 +126,7 @@ async function runOnce(){
       if(entered)bits.push(`${entered} new`);
       if(closed)bits.push(`${closed} closed`);
       if(!bits.length)bits.push('standing pat');
-      emit(`AUTO · reviewed ${syms.join(', ')} — ${bits.join(', ')} (${openCount}/${MAX_OPEN_POSITIONS} open)`);
+      emit(`AUTO · reviewed ${syms.join(', ')} — ${bits.join(', ')} (${openCount}/${maxOpen} open)`);
     }
   }catch(e){/* never let the loop throw */}
   finally{busy=false;}

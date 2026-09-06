@@ -527,6 +527,9 @@ export async function getAllPersonaMemory(){return await db.getAllAsync('SELECT 
 export async function getMemoriesByPersona(persona){return await db.getAllAsync('SELECT * FROM persona_memory WHERE persona=? ORDER BY created_at DESC',[persona]);}
 // User prunes memory by hand — swipe a memory away to remove it permanently.
 export async function deletePersonaMemory(id){await db.runAsync('DELETE FROM persona_memory WHERE id=?',[id]);}
+// Wipe every memory row for one persona — pinned rows included. Used by the
+// "erase all" control on the memory spiral.
+export async function deleteAllPersonaMemory(persona){await db.runAsync('DELETE FROM persona_memory WHERE persona=?',[persona]);}
 // Simple app-wide key/value settings (feature toggles, etc.).
 export async function getSetting(key,fallback=null){const r=await db.getFirstAsync('SELECT value FROM app_settings WHERE key=?',[key]);return r?r.value:fallback;}
 export async function setSetting(key,value){await db.runAsync('INSERT INTO app_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',[key,String(value)]);}

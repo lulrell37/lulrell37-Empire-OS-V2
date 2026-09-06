@@ -7,7 +7,7 @@
 // Built entirely on React Native's own Animated + PanResponder — no reanimated
 // worklets, which is what hard-crashed the earlier 3D version.
 import React,{useState,useEffect,useMemo,useCallback,useRef,useImperativeHandle,forwardRef}from 'react';
-import{View,Text,StyleSheet,TouchableOpacity,ActivityIndicator,Dimensions,Platform,Animated,PanResponder,Image,Easing,ScrollView}from 'react-native';
+import{View,Text,StyleSheet,TouchableOpacity,ActivityIndicator,Dimensions,Platform,Animated,PanResponder,Image,Easing,ScrollView,Alert}from 'react-native';
 import Svg,{Path}from 'react-native-svg';
 import PersonaOrb from './PersonaOrb';
 import SphereBackdrop from './SphereBackdrop';
@@ -15,7 +15,7 @@ import EarthHorizon from './EarthHorizon';
 import MemorySpiral from './MemorySpiral';
 import MemoryPopup from './MemoryPopup';
 import Boundary from '../hud/Boundary';
-import{getMemoriesByPersona,deletePersonaMemory}from '../../services/database';
+import{getMemoriesByPersona,deletePersonaMemory,deleteAllPersonaMemory}from '../../services/database';
 import{getPersona,PERSONA_LIST}from '../../personas/personas';
 
 const AnimatedPath=Animated.createAnimatedComponent(Path);
@@ -336,6 +336,23 @@ function OrbZoom({personaId,color,active,vizRef,personaPics={},unreadPersonas,bu
     setMemories(prev=>[undo.mem,...(prev||[])].sort((a,b)=>(b.created_at||0)-(a.created_at||0)));
     setUndo(null);
   }
+  function eraseAllMemory(){
+    const n=(memories||[]).length;
+    if(!n)return;
+    Alert.alert(
+      `Erase all of ${persona.name}'s memory?`,
+      `This permanently deletes ${n} ${n===1?'memory':'memories'}, pinned ones included. It can't be undone.`,
+      [
+        {text:'Cancel',style:'cancel'},
+        {text:'Erase all',style:'destructive',onPress:async()=>{
+          if(pendingRef.current){clearTimeout(undoTimer.current);pendingRef.current=null;setUndo(null);}
+          setMemories([]);setMemory(null);
+          try{await deleteAllPersonaMemory(personaId);}catch{}
+          reload();
+        }},
+      ],
+    );
+  }
 
   return(
     <View ref={wrapRef} style={s.wrap} {...stagePan.panHandlers}
@@ -385,6 +402,12 @@ function OrbZoom({personaId,color,active,vizRef,personaPics={},unreadPersonas,bu
         <TouchableOpacity style={s.zBtn} onPress={()=>deeper()}><Text style={s.zT}>+</Text></TouchableOpacity>
       </View>
 
+
+      {level==='memory'&&!undo&&(memories||[]).length>0&&(
+        <TouchableOpacity style={s.eraseAll} activeOpacity={0.8} onPress={eraseAllMemory}>
+          <Text style={s.eraseAllT}>ERASE ALL MEMORY</Text>
+        </TouchableOpacity>
+      )}
 
       {undo&&<TouchableOpacity style={s.undoBar} activeOpacity={0.8} onPress={undoMemory}>
         <Text style={s.undoT}>Memory deleted</Text>
@@ -835,6 +858,8 @@ const s=StyleSheet.create({
   zBtn:{width:34,height:34,borderRadius:6,borderWidth:1,borderColor:'#222',backgroundColor:'rgba(0,0,0,0.5)',alignItems:'center',justifyContent:'center'},
   zT:{color:'#999',fontSize:18,fontFamily:'monospace'},
   hint:{position:'absolute',bottom:16,left:0,right:0,textAlign:'center',fontFamily:'monospace',fontSize:8,letterSpacing:2,opacity:0.5},
+  eraseAll:{position:'absolute',left:16,bottom:16,backgroundColor:'rgba(0,0,0,0.5)',borderWidth:1,borderColor:'#5A2020',borderRadius:6,paddingHorizontal:12,paddingVertical:9},
+  eraseAllT:{fontFamily:'monospace',fontSize:9,letterSpacing:2,color:'#E05555'},
   undoBar:{position:'absolute',left:16,right:16,bottom:60,backgroundColor:'#161616',borderWidth:1,borderColor:'#2A2A2A',borderRadius:8,flexDirection:'row',alignItems:'center',justifyContent:'space-between',paddingHorizontal:16,paddingVertical:12},
   undoT:{fontFamily:'monospace',fontSize:10,color:'#999',letterSpacing:1},
   undoAction:{fontFamily:'monospace',fontSize:10,color:'#E8C98A',fontWeight:'700',letterSpacing:2},
