@@ -8,6 +8,7 @@
 // until every job is completed (or one is failed / nsfw / canceled). Auth is a
 // key id + secret pair sent as `hf-api-key` / `hf-secret` headers. Output URLs
 // stay live ~7 days.
+import*as FileSystem from 'expo-file-system';
 import{loadKeys}from './keyStore';
 
 const BASE='https://platform.higgsfield.ai';
@@ -72,13 +73,46 @@ export async function submitVideo(prompt,imageUrl,{key}={}){
 }
 
 // --- trained characters (Soul IDs) -------------------------------------
-// Higgsfield's web app trains the character but doesn't surface its id; this
-// lists them so a page can be assigned one. Returns [{id,name,status}].
+// A Soul ID is a trained character reference. Train one straight from the app:
+// upload reference photos to Higgsfield's CDN, then POST them to
+// /v1/custom-references; poll checkSoulId() until status is 'completed'
+// (~3-5 min). listSoulIds() surfaces ones already on the account.
 export async function listSoulIds({page=1,pageSize=50,key}={}){
   const j=await hf(`/v1/custom-references/list?page=${page}&page_size=${pageSize}`,{key});
   const items=Array.isArray(j?.items)?j.items:Array.isArray(j)?j:[];
   return items.map(x=>({id:x.id,name:x.name||'(unnamed)',status:x.status||'ready'}));
 }
+
+// Upload one local image to Higgsfield's CDN, return its public URL.
+export async function uploadReferenceImage(localUri,{contentType='image/jpeg',key}={}){
+  const cred=key||await higgsfieldKey();
+  if(!cred)throw new Error('No Higgsfield key.');
+  const link=await hf('/files/generate-upload-url',{method:'POST',key:cred,body:{content_type:contentType}});
+  const uploadUrl=link?.upload_url,publicUrl=link?.public_url;
+  if(!uploadUrl||!publicUrl)throw new Error('Higgsfield returned no upload URL');
+  const res=await FileSystem.uploadAsync(uploadUrl,localUri,{
+    httpMethod:'PUT',
+    uploadType:FileSystem.FileSystemUploadType.BINARY_CONTENT,
+    headers:{'Content-Type':contentType},
+  });
+  if(res.status<200||res.status>=300)throw new Error(`image upload failed (${res.status})`);
+  return publicUrl;
+}
+
+// Train a new Soul ID from already-uploaded reference image URLs.
+export async function createSoulId(name,imageUrls,{key}={}){
+  const j=await hf('/v1/custom-references',{method:'POST',key,body:{
+    name:String(name||'character').slice(0,80),
+    input_images:(imageUrls||[]).map(u=>({type:'image_url',image_url:u})),
+  }});
+  return{id:j?.id||null,name:j?.name||name,status:j?.status||'in_progress'};
+}
+export async function checkSoulId(id,key){
+  const j=await hf(`/v1/custom-references/${id}`,{key});
+  return{id,name:j?.name,status:j?.status||'in_progress'};
+}
+export const SOUL_DONE=s=>s==='completed';
+export const SOUL_DEAD=s=>s==='failed';
 
 // --- poll ----------------------------------------------------------------
 // Returns { status, media:[{url,type}] }.

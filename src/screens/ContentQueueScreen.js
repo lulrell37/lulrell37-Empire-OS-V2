@@ -20,7 +20,8 @@ import{FONTS}from '../theme';
 import{getContentItems,getContentPages,setContentPages,updateContentItem,deleteContentItem}from '../services/database';
 import{compileBatch}from '../services/socialPublish';
 import{pollContentJobs}from '../services/contentJobs';
-import{listSoulIds,higgsfieldKey}from '../services/higgsfield';
+import{pollSoulTraining}from '../services/soulTraining';
+import{listSoulIds,higgsfieldKey,uploadReferenceImage,createSoulId}from '../services/higgsfield';
 
 const POLL_MS=4000;
 const PAGES=['muse1','muse2','muse3'];
@@ -61,6 +62,7 @@ function ContentQueue({navigation}){
   const[pfSaved,setPfSaved]=useState(false);
   const[souls,setSouls]=useState(null);     // trained Higgsfield characters, once loaded
   const[soulsBusy,setSoulsBusy]=useState(false);
+  const[train,setTrain]=useState({});       // page -> {phase,done,total} while uploading/creating
 
   const load=useCallback(async(alive)=>{
     try{const i=await getContentItems({});if(alive())setItems(i);}catch{}
@@ -71,6 +73,46 @@ function ContentQueue({navigation}){
   // form owns its state so the background poll doesn't stomp an edit.
   useEffect(()=>{setPf(prev=>Object.keys(prev).length?prev:pages);},[pages]);
   const setPageField=(page,k,val)=>setPf(f=>({...f,[page]:{...(f[page]||{}),[k]:val}}));
+  const trainCharacter=async(p)=>{
+    const key=await higgsfieldKey();
+    if(!key){Alert.alert('No Higgsfield key','Add the key ID + secret in Settings → KEYS first.');return;}
+    const pick=await ImagePicker.launchImageLibraryAsync({
+      mediaTypes:ImagePicker.MediaTypeOptions.Images,
+      allowsMultipleSelection:true,selectionLimit:0,quality:0.7,
+    });
+    if(pick.canceled||!pick.assets?.length)return;
+    const assets=pick.assets;
+    if(assets.length<15){
+      const go=await new Promise(r=>Alert.alert('Not many photos',
+        `Higgsfield wants 20+ for a solid likeness — you picked ${assets.length}. Train anyway?`,
+        [{text:'Cancel',onPress:()=>r(false)},{text:'Train',onPress:()=>r(true)}]));
+      if(!go)return;
+    }
+    setTrain(t=>({...t,[p]:{phase:'uploading',done:0,total:assets.length}}));
+    try{
+      const urls=[];
+      for(const a of assets){
+        const ct=a.mimeType||(/\.png($|\?)/i.test(a.uri||'')?'image/png':'image/jpeg');
+        urls.push(await uploadReferenceImage(a.uri,{contentType:ct,key}));
+        setTrain(t=>({...t,[p]:{phase:'uploading',done:urls.length,total:assets.length}}));
+      }
+      setTrain(t=>({...t,[p]:{phase:'creating'}}));
+      const name=`${(pf[p]?.name||p.toUpperCase())} ${new Date().toISOString().slice(0,10)}`;
+      const{id,status}=await createSoulId(name,urls,{key});
+      if(!id)throw new Error('Higgsfield returned no character id');
+      const merged={...pages};
+      merged[p]={...(merged[p]||{}),...(pf[p]||{}),soul_id:id,soul_name:name,soul_status:status||'in_progress'};
+      await setContentPages(merged);
+      setPages(merged);
+      setPf(f=>({...f,[p]:{...(f[p]||{}),soul_id:id,soul_name:name}}));
+      setTrain(t=>{const n={...t};delete n[p];return n;});
+      Alert.alert('Training started',`${name} is training on Higgsfield (~3–5 min). It'll flip to READY here when it's done.`);
+    }catch(e){
+      Alert.alert('Training failed',String(e.message||e));
+      setTrain(t=>{const n={...t};delete n[p];return n;});
+    }
+  };
+
   const loadSouls=async()=>{
     setSoulsBusy(true);
     try{
@@ -96,6 +138,7 @@ function ContentQueue({navigation}){
     load(alive);
     const iv=setInterval(async()=>{
       try{await pollContentJobs();}catch{}
+      try{await pollSoulTraining();}catch{}
       if(alive())load(alive);
     },POLL_MS);
     return()=>{on=false;clearInterval(iv);};
@@ -164,19 +207,29 @@ function ContentQueue({navigation}){
 
       {tab==='pages'&&(
         <ScrollView contentContainerStyle={s.list} keyboardShouldPersistTaps="handled">
-          <Text style={s.pgIntro}>One influencer per page. The Soul ID is that page's trained Higgsfield character — every reel and post for the page renders with it, so the three stay distinct and consistent. Create each character in Higgsfield, then load them here and assign one per page.</Text>
+          <Text style={s.pgIntro}>One influencer per page. Train each page's character from reference photos (20+, varied angles, clear face) — Higgsfield locks that identity into every reel and post for the page. Needs a Higgsfield key in Settings → KEYS.</Text>
           <TouchableOpacity style={s.compileBar} disabled={soulsBusy} activeOpacity={0.8} onPress={loadSouls}>
-            <Text style={s.compileT}>{soulsBusy?'LOADING…':souls?`↻ RELOAD HIGGSFIELD CHARACTERS (${souls.length})`:'◆ LOAD MY HIGGSFIELD CHARACTERS'}</Text>
+            <Text style={s.compileT}>{soulsBusy?'LOADING…':souls?`↻ RELOAD EXISTING CHARACTERS (${souls.length})`:'◆ LOAD CHARACTERS I ALREADY TRAINED'}</Text>
           </TouchableOpacity>
           {PAGES.map(p=>{
             const v=pf[p]||{};
-            const matched=souls&&souls.find(x=>x.id===(v.soul_id||'').trim());
+            const live=pages[p]||{};
+            const tr=train[p];
+            const stText=tr?(tr.phase==='uploading'?`UPLOADING ${tr.done}/${tr.total}…`:'CREATING CHARACTER…')
+              :live.soul_id?(live.soul_status==='completed'?`✓ READY${live.soul_name?` — ${live.soul_name}`:''}`
+                :live.soul_status==='failed'?'TRAINING FAILED — retrain below'
+                :'TRAINING… ~3–5 min (keep the app open)')
+              :'no character yet — train one below';
+            const stColor=tr?'#D9A441':live.soul_status==='completed'?'#5FA779':live.soul_status==='failed'?'#C7614B':'#7a715d';
             return(
               <View key={p} style={[s.card,{borderColor:(PAGE_COLOR[p]||'#888')+'44'}]}>
                 <Text style={[s.page,{color:PAGE_COLOR[p]}]}>{p.toUpperCase()}</Text>
-                <Field label="NAME" value={v.name} onChangeText={t=>setPageField(p,'name',t)} placeholder="influencer name"/>
-                <Field label="HANDLE" value={v.handle} onChangeText={t=>setPageField(p,'handle',t)} placeholder="@handle" autoCapitalize="none"/>
-                <Field label="HIGGSFIELD SOUL ID" value={v.soul_id} onChangeText={t=>setPageField(p,'soul_id',t)} placeholder="assign below, or paste an id" autoCapitalize="none"/>
+
+                <Text style={s.pgHdr}>CHARACTER</Text>
+                <Text style={[s.soulOk,{color:stColor}]}>{stText}</Text>
+                <View style={s.actions}>
+                  <Btn label={tr?'…':(live.soul_id?'RETRAIN FROM PHOTOS':'TRAIN FROM PHOTOS')} onPress={()=>!tr&&trainCharacter(p)}/>
+                </View>
                 {!!souls&&!!souls.length&&(
                   <View style={s.soulPick}>
                     {souls.map(sd=>{
@@ -190,8 +243,13 @@ function ContentQueue({navigation}){
                     })}
                   </View>
                 )}
-                {!!matched&&<Text style={s.soulOk}>✓ {matched.name}</Text>}
+                <Field label="SOUL ID" value={v.soul_id} onChangeText={t=>setPageField(p,'soul_id',t)} placeholder="set by training, or paste one" autoCapitalize="none"/>
                 <Field label="SOUL STRENGTH  (0–1, default 0.8)" value={v.soul_strength} onChangeText={t=>setPageField(p,'soul_strength',t)} placeholder="0.8" keyboardType="decimal-pad"/>
+
+                <Text style={s.pgHdr}>PAGE</Text>
+                <Field label="NAME" value={v.name} onChangeText={t=>setPageField(p,'name',t)} placeholder="influencer name"/>
+                <Field label="HANDLE" value={v.handle} onChangeText={t=>setPageField(p,'handle',t)} placeholder="@handle" autoCapitalize="none"/>
+
                 <Text style={s.pgHdr}>PUBLISHING — needed later for H.E.R.A.L.D.</Text>
                 <Field label="INSTAGRAM USER ID" value={v.ig_user_id} onChangeText={t=>setPageField(p,'ig_user_id',t)} placeholder="IG business account id" autoCapitalize="none"/>
                 <Field label="FACEBOOK PAGE ID" value={v.fb_page_id} onChangeText={t=>setPageField(p,'fb_page_id',t)} placeholder="linked FB page id" autoCapitalize="none"/>
