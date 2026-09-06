@@ -71,6 +71,15 @@ export async function submitVideo(prompt,imageUrl,{key}={}){
   return j?.id||null;
 }
 
+// --- trained characters (Soul IDs) -------------------------------------
+// Higgsfield's web app trains the character but doesn't surface its id; this
+// lists them so a page can be assigned one. Returns [{id,name,status}].
+export async function listSoulIds({page=1,pageSize=50,key}={}){
+  const j=await hf(`/v1/custom-references/list?page=${page}&page_size=${pageSize}`,{key});
+  const items=Array.isArray(j?.items)?j.items:Array.isArray(j)?j:[];
+  return items.map(x=>({id:x.id,name:x.name||'(unnamed)',status:x.status||'ready'}));
+}
+
 // --- poll ----------------------------------------------------------------
 // Returns { status, media:[{url,type}] }.
 // status: queued | in_progress | completed | failed | nsfw | canceled

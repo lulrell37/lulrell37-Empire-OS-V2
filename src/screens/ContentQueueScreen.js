@@ -20,6 +20,7 @@ import{FONTS}from '../theme';
 import{getContentItems,getContentPages,setContentPages,updateContentItem,deleteContentItem}from '../services/database';
 import{compileBatch}from '../services/socialPublish';
 import{pollContentJobs}from '../services/contentJobs';
+import{listSoulIds,higgsfieldKey}from '../services/higgsfield';
 
 const POLL_MS=4000;
 const PAGES=['muse1','muse2','muse3'];
@@ -58,6 +59,8 @@ function ContentQueue({navigation}){
   const[busy,setBusy]=useState(false);
   const[pf,setPf]=useState({});             // page-setup form: {muse1:{name,handle,soul_id,...}}
   const[pfSaved,setPfSaved]=useState(false);
+  const[souls,setSouls]=useState(null);     // trained Higgsfield characters, once loaded
+  const[soulsBusy,setSoulsBusy]=useState(false);
 
   const load=useCallback(async(alive)=>{
     try{const i=await getContentItems({});if(alive())setItems(i);}catch{}
@@ -68,6 +71,16 @@ function ContentQueue({navigation}){
   // form owns its state so the background poll doesn't stomp an edit.
   useEffect(()=>{setPf(prev=>Object.keys(prev).length?prev:pages);},[pages]);
   const setPageField=(page,k,val)=>setPf(f=>({...f,[page]:{...(f[page]||{}),[k]:val}}));
+  const loadSouls=async()=>{
+    setSoulsBusy(true);
+    try{
+      if(!await higgsfieldKey()){Alert.alert('No Higgsfield key','Add the key ID + secret in Settings → KEYS first.');return;}
+      const list=await listSoulIds({});
+      setSouls(list);
+      if(!list.length)Alert.alert('No characters','No trained Soul characters on this Higgsfield account yet.');
+    }catch(e){Alert.alert('Couldn’t load characters',String(e.message||e));}
+    finally{setSoulsBusy(false);}
+  };
   const savePages=async()=>{
     try{
       const merged={...pages};
@@ -151,15 +164,33 @@ function ContentQueue({navigation}){
 
       {tab==='pages'&&(
         <ScrollView contentContainerStyle={s.list} keyboardShouldPersistTaps="handled">
-          <Text style={s.pgIntro}>One influencer per page. The Soul ID is that page's trained Higgsfield character — every reel and post for the page renders with it, so the three stay distinct and consistent. Create each character in Higgsfield, then paste its ID here.</Text>
+          <Text style={s.pgIntro}>One influencer per page. The Soul ID is that page's trained Higgsfield character — every reel and post for the page renders with it, so the three stay distinct and consistent. Create each character in Higgsfield, then load them here and assign one per page.</Text>
+          <TouchableOpacity style={s.compileBar} disabled={soulsBusy} activeOpacity={0.8} onPress={loadSouls}>
+            <Text style={s.compileT}>{soulsBusy?'LOADING…':souls?`↻ RELOAD HIGGSFIELD CHARACTERS (${souls.length})`:'◆ LOAD MY HIGGSFIELD CHARACTERS'}</Text>
+          </TouchableOpacity>
           {PAGES.map(p=>{
             const v=pf[p]||{};
+            const matched=souls&&souls.find(x=>x.id===(v.soul_id||'').trim());
             return(
               <View key={p} style={[s.card,{borderColor:(PAGE_COLOR[p]||'#888')+'44'}]}>
                 <Text style={[s.page,{color:PAGE_COLOR[p]}]}>{p.toUpperCase()}</Text>
                 <Field label="NAME" value={v.name} onChangeText={t=>setPageField(p,'name',t)} placeholder="influencer name"/>
                 <Field label="HANDLE" value={v.handle} onChangeText={t=>setPageField(p,'handle',t)} placeholder="@handle" autoCapitalize="none"/>
-                <Field label="HIGGSFIELD SOUL ID" value={v.soul_id} onChangeText={t=>setPageField(p,'soul_id',t)} placeholder="custom reference id" autoCapitalize="none"/>
+                <Field label="HIGGSFIELD SOUL ID" value={v.soul_id} onChangeText={t=>setPageField(p,'soul_id',t)} placeholder="assign below, or paste an id" autoCapitalize="none"/>
+                {!!souls&&!!souls.length&&(
+                  <View style={s.soulPick}>
+                    {souls.map(sd=>{
+                      const on=sd.id===(v.soul_id||'').trim();
+                      return(
+                        <TouchableOpacity key={sd.id} onPress={()=>setPageField(p,'soul_id',on?'':sd.id)}
+                          style={[s.soulChip,on&&{borderColor:PAGE_COLOR[p],backgroundColor:(PAGE_COLOR[p]||'#888')+'22'}]}>
+                          <Text style={[s.soulChipT,on&&{color:PAGE_COLOR[p]}]} numberOfLines={1}>{sd.name}</Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                )}
+                {!!matched&&<Text style={s.soulOk}>✓ {matched.name}</Text>}
                 <Field label="SOUL STRENGTH  (0–1, default 0.8)" value={v.soul_strength} onChangeText={t=>setPageField(p,'soul_strength',t)} placeholder="0.8" keyboardType="decimal-pad"/>
                 <Text style={s.pgHdr}>PUBLISHING — needed later for H.E.R.A.L.D.</Text>
                 <Field label="INSTAGRAM USER ID" value={v.ig_user_id} onChangeText={t=>setPageField(p,'ig_user_id',t)} placeholder="IG business account id" autoCapitalize="none"/>
@@ -302,6 +333,10 @@ const s=StyleSheet.create({
   pgIntro:{fontFamily:FONTS.mono,fontSize:9,color:'#6a6250',lineHeight:15,marginBottom:2},
   pgHdr:{fontFamily:FONTS.mono,fontSize:7,color:'#5a5145',letterSpacing:2,marginTop:8,marginBottom:1},
   field:{gap:3},
+  soulPick:{flexDirection:'row',flexWrap:'wrap',gap:5,marginTop:1},
+  soulChip:{borderWidth:1,borderColor:'#2A2620',borderRadius:12,paddingHorizontal:9,paddingVertical:4,maxWidth:'46%'},
+  soulChipT:{fontFamily:FONTS.mono,fontSize:8,color:'#8a8069',letterSpacing:0.5},
+  soulOk:{fontFamily:FONTS.mono,fontSize:8,color:'#5FA779',letterSpacing:1},
   fieldL:{fontFamily:FONTS.mono,fontSize:7,color:'#7a715d',letterSpacing:1.5},
   fieldI:{fontFamily:FONTS.mono,fontSize:11,color:'#C9BEA6',borderWidth:1,borderColor:'#1F1B14',borderRadius:6,paddingHorizontal:8,paddingVertical:7,backgroundColor:'#050403'},
   saveBtn:{borderWidth:1,borderColor:'#5FA779',borderRadius:8,paddingVertical:13,alignItems:'center',marginTop:8},
