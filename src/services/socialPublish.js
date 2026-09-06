@@ -45,14 +45,20 @@ export async function compileBatch(page){
 
   // Submit each prompt to Higgsfield. Reels render a 9:16 still first, then
   // contentJobs.js chains the image->video pass; posts render one 3:4 image,
-  // carousels a batch of four.
-  let ok=0;const fails=[];
+  // carousels a batch of four. Each page's Soul ID (from the Pages tab) rides
+  // along so its influencer stays consistent.
+  const pages=await getContentPages().catch(()=>({}));
+  let ok=0;const fails=[];const noSoul=new Set();
   for(const it of items){
     try{
       const isReel=it.kind==='reel';
+      const cfg=pages[it.page]||{};
+      if(!cfg.soul_id)noSoul.add(it.page);
       const jobId=await submitImage(it.prompt,{
         size:isReel?REEL_SIZE:POST_SIZE,
         batch:it.kind==='carousel'?4:1,
+        customReferenceId:cfg.soul_id||undefined,
+        referenceStrength:cfg.soul_strength!=null&&cfg.soul_strength!==''?Number(cfg.soul_strength):undefined,
         key,
       });
       if(!jobId)throw new Error('no job id returned');
@@ -65,6 +71,7 @@ export async function compileBatch(page){
   }
   return `BATCH SUBMITTED to Higgsfield — ${ok}/${items.length} generating${page?` for ${page}`:''}.`
     +` They drop into the queue as they finish (reels: still → animate).`
+    +(noSoul.size?`\nNo Soul ID set for ${[...noSoul].join(', ')} — add it in the Studio → Pages tab so the character stays consistent.`:'')
     +(fails.length?`\nFailed to submit: ${fails.join('; ')}`:'');
 }
 

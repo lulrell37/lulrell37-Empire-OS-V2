@@ -17,7 +17,7 @@ import*as DocumentPicker from 'expo-document-picker';
 import*as Clipboard from 'expo-clipboard';
 import Boundary from './hud/Boundary';
 import{FONTS}from '../theme';
-import{getContentItems,getContentPages,updateContentItem,deleteContentItem}from '../services/database';
+import{getContentItems,getContentPages,setContentPages,updateContentItem,deleteContentItem}from '../services/database';
 import{compileBatch}from '../services/socialPublish';
 import{pollContentJobs}from '../services/contentJobs';
 
@@ -52,14 +52,31 @@ export default function ContentQueueScreen({navigation}){
 function ContentQueue({navigation}){
   const[items,setItems]=useState([]);
   const[pages,setPages]=useState({});
+  const[tab,setTab]=useState('queue');      // 'queue' | 'pages'
   const[filter,setFilter]=useState(null);   // null = all pages
   const[caps,setCaps]=useState({});         // id -> in-progress caption edit
   const[busy,setBusy]=useState(false);
+  const[pf,setPf]=useState({});             // page-setup form: {muse1:{name,handle,soul_id,...}}
+  const[pfSaved,setPfSaved]=useState(false);
 
   const load=useCallback(async(alive)=>{
     try{const i=await getContentItems({});if(alive())setItems(i);}catch{}
     try{const p=await getContentPages();if(alive())setPages(p||{});}catch{}
   },[]);
+
+  // Seed the Pages form once, from whatever config is stored; after that the
+  // form owns its state so the background poll doesn't stomp an edit.
+  useEffect(()=>{setPf(prev=>Object.keys(prev).length?prev:pages);},[pages]);
+  const setPageField=(page,k,val)=>setPf(f=>({...f,[page]:{...(f[page]||{}),[k]:val}}));
+  const savePages=async()=>{
+    try{
+      const merged={...pages};
+      for(const p of PAGES)merged[p]={...(merged[p]||{}),...(pf[p]||{})};
+      await setContentPages(merged);
+      setPages(merged);
+      setPfSaved(true);setTimeout(()=>setPfSaved(false),2000);
+    }catch(e){Alert.alert('Save failed',String(e.message||e));}
+  };
 
   useFocusEffect(useCallback(()=>{
     let on=true;const alive=()=>on;
@@ -121,12 +138,43 @@ function ContentQueue({navigation}){
           <Text style={s.back}>‹ MAP</Text>
         </TouchableOpacity>
         <View style={{flex:1,alignItems:'center'}}>
-          <Text style={s.title}>CONTENT QUEUE</Text>
-          <Text style={s.sub}>{subParts.join(' · ')}</Text>
+          <Text style={s.title}>{tab==='pages'?'PAGE SETUP':'CONTENT QUEUE'}</Text>
+          {tab!=='pages'&&<Text style={s.sub}>{subParts.join(' · ')}</Text>}
         </View>
         <View style={{width:44}}/>
       </View>
 
+      <View style={s.tabs}>
+        <Tab label="QUEUE" active={tab==='queue'} onPress={()=>setTab('queue')}/>
+        <Tab label="PAGES" active={tab==='pages'} onPress={()=>setTab('pages')}/>
+      </View>
+
+      {tab==='pages'&&(
+        <ScrollView contentContainerStyle={s.list} keyboardShouldPersistTaps="handled">
+          <Text style={s.pgIntro}>One influencer per page. The Soul ID is that page's trained Higgsfield character — every reel and post for the page renders with it, so the three stay distinct and consistent. Create each character in Higgsfield, then paste its ID here.</Text>
+          {PAGES.map(p=>{
+            const v=pf[p]||{};
+            return(
+              <View key={p} style={[s.card,{borderColor:(PAGE_COLOR[p]||'#888')+'44'}]}>
+                <Text style={[s.page,{color:PAGE_COLOR[p]}]}>{p.toUpperCase()}</Text>
+                <Field label="NAME" value={v.name} onChangeText={t=>setPageField(p,'name',t)} placeholder="influencer name"/>
+                <Field label="HANDLE" value={v.handle} onChangeText={t=>setPageField(p,'handle',t)} placeholder="@handle" autoCapitalize="none"/>
+                <Field label="HIGGSFIELD SOUL ID" value={v.soul_id} onChangeText={t=>setPageField(p,'soul_id',t)} placeholder="custom reference id" autoCapitalize="none"/>
+                <Field label="SOUL STRENGTH  (0–1, default 0.8)" value={v.soul_strength} onChangeText={t=>setPageField(p,'soul_strength',t)} placeholder="0.8" keyboardType="decimal-pad"/>
+                <Text style={s.pgHdr}>PUBLISHING — needed later for H.E.R.A.L.D.</Text>
+                <Field label="INSTAGRAM USER ID" value={v.ig_user_id} onChangeText={t=>setPageField(p,'ig_user_id',t)} placeholder="IG business account id" autoCapitalize="none"/>
+                <Field label="FACEBOOK PAGE ID" value={v.fb_page_id} onChangeText={t=>setPageField(p,'fb_page_id',t)} placeholder="linked FB page id" autoCapitalize="none"/>
+                <Field label="ACCESS TOKEN" value={v.access_token} onChangeText={t=>setPageField(p,'access_token',t)} placeholder="long-lived page token" autoCapitalize="none" secureTextEntry/>
+              </View>
+            );
+          })}
+          <TouchableOpacity style={s.saveBtn} onPress={savePages}>
+            <Text style={s.saveBtnT}>{pfSaved?'✓ SAVED':'SAVE PAGES'}</Text>
+          </TouchableOpacity>
+        </ScrollView>
+      )}
+
+      {tab==='queue'&&<>
       <View style={s.filters}>
         <Chip label="ALL" active={!filter} color="#C9BEA6" onPress={()=>setFilter(null)}/>
         {PAGES.map(p=>(
@@ -201,6 +249,7 @@ function ContentQueue({navigation}){
           );
         })}
       </ScrollView>
+      </>}
     </SafeAreaView>
   );
 }
@@ -210,6 +259,22 @@ function Chip({label,active,color,onPress}){
     <TouchableOpacity onPress={onPress} style={[s.chip,active&&{borderColor:color,backgroundColor:color+'22'}]}>
       <Text style={[s.chipT,active&&{color}]} numberOfLines={1}>{label}</Text>
     </TouchableOpacity>
+  );
+}
+function Tab({label,active,onPress}){
+  return(
+    <TouchableOpacity onPress={onPress} style={[s.tab,active&&s.tabActive]}>
+      <Text style={[s.tabT,active&&s.tabTActive]}>{label}</Text>
+    </TouchableOpacity>
+  );
+}
+function Field({label,value,...p}){
+  return(
+    <View style={s.field}>
+      <Text style={s.fieldL}>{label}</Text>
+      <TextInput style={s.fieldI} placeholderTextColor="#3a362e" autoCorrect={false}
+        value={value==null?'':String(value)} {...p}/>
+    </View>
   );
 }
 function Btn({label,onPress,primary,danger}){
@@ -229,6 +294,18 @@ const s=StyleSheet.create({
   filters:{flexDirection:'row',gap:6,paddingHorizontal:12,paddingVertical:8,flexWrap:'wrap'},
   chip:{borderWidth:1,borderColor:'#2A2620',borderRadius:14,paddingHorizontal:10,paddingVertical:5},
   chipT:{fontFamily:FONTS.mono,fontSize:8,color:'#8a8069',letterSpacing:1},
+  tabs:{flexDirection:'row',gap:6,paddingHorizontal:12,paddingTop:8,paddingBottom:2},
+  tab:{borderWidth:1,borderColor:'#2A2620',borderRadius:6,paddingHorizontal:18,paddingVertical:6},
+  tabActive:{borderColor:'#C9BEA6',backgroundColor:'#C9BEA622'},
+  tabT:{fontFamily:FONTS.mono,fontSize:9,color:'#8a8069',letterSpacing:2},
+  tabTActive:{color:'#C9BEA6'},
+  pgIntro:{fontFamily:FONTS.mono,fontSize:9,color:'#6a6250',lineHeight:15,marginBottom:2},
+  pgHdr:{fontFamily:FONTS.mono,fontSize:7,color:'#5a5145',letterSpacing:2,marginTop:8,marginBottom:1},
+  field:{gap:3},
+  fieldL:{fontFamily:FONTS.mono,fontSize:7,color:'#7a715d',letterSpacing:1.5},
+  fieldI:{fontFamily:FONTS.mono,fontSize:11,color:'#C9BEA6',borderWidth:1,borderColor:'#1F1B14',borderRadius:6,paddingHorizontal:8,paddingVertical:7,backgroundColor:'#050403'},
+  saveBtn:{borderWidth:1,borderColor:'#5FA779',borderRadius:8,paddingVertical:13,alignItems:'center',marginTop:8},
+  saveBtnT:{fontFamily:FONTS.mono,fontSize:10,color:'#5FA779',letterSpacing:2},
   compileBar:{marginHorizontal:12,marginBottom:4,borderWidth:1,borderColor:'#7A6326',borderRadius:8,backgroundColor:'#171207',paddingVertical:10,alignItems:'center'},
   compileT:{fontFamily:FONTS.mono,fontSize:9,color:'#E8C98A',letterSpacing:1.5},
   list:{padding:12,gap:12,paddingBottom:40},

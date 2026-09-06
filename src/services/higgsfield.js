@@ -46,13 +46,20 @@ async function hf(path,{method='GET',body,key}={}){
 
 // --- submit ---------------------------------------------------------------
 // Each returns the job-set id to poll with checkJobSet().
-export async function submitImage(prompt,{size=POST_SIZE,batch=1,key}={}){
-  const j=await hf('/v1/text2image/soul',{method:'POST',key,body:{params:{
+// customReferenceId is the page's trained Higgsfield Soul ID — passing it here
+// is what keeps every render for that page the same character.
+export async function submitImage(prompt,{size=POST_SIZE,batch=1,customReferenceId,referenceStrength,key}={}){
+  const params={
     prompt:String(prompt||'').slice(0,2000),
     width_and_height:size,
     quality:SOUL_QUALITY,
     batch_size:batch,
-  }}});
+  };
+  if(customReferenceId){
+    params.custom_reference_id=String(customReferenceId).trim();
+    params.custom_reference_strength=Number.isFinite(referenceStrength)?referenceStrength:0.8;
+  }
+  const j=await hf('/v1/text2image/soul',{method:'POST',key,body:{params}});
   return j?.id||null;
 }
 export async function submitVideo(prompt,imageUrl,{key}={}){
