@@ -50,10 +50,11 @@
     "@babel/core": "^7.24.0"
   },
   "private": true,
+  "//tar": "MUST stay 6.2.1 (not 7.x). @expo/cli's template extraction does require('tar').default.extract, and tar 7 changed that export shape -> undefined -> EAS prebuild crashes ('Cannot read properties of undefined (reading extract)'). Replit's package firewall flags 6.2.1 as a CVE and keeps auto-bumping this to 7.x — revert it every time. See commit 43713d7.",
   "overrides": {
-    "tar": "7.5.22"
+    "tar": "6.2.1"
   },
   "resolutions": {
-    "tar": "7.5.22"
+    "tar": "6.2.1"
   }
 }
