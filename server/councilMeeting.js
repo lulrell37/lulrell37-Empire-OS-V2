@@ -18,7 +18,9 @@
 //      in that market right now — via Claude's web_search tool.
 //   3. A.R.A. opens the meeting; the council (everyone except Ghost, Talon, Rogue,
 //      Batman) discusses over N rounds, each persona seeing the prior replies.
-//   4. A.R.A. synthesises concrete next steps + owner decisions per business/idea.
+//   4. A.R.A. synthesises the council's read + recommendation + the decision
+//      for Mr. Burrus, per business/idea. It's advice for him to act on, not a
+//      to-do list the personas are working.
 //   5. Persists: a Note (full transcript), an app_settings digest `council_last`
 //      that A.R.A. surfaces on "how's the empire", a pinned A.R.A. memory, and a
 //      push notification.
@@ -278,6 +280,7 @@ async function gatherContext() {
       target: Number(t.target) || 0,
       weekGoal: Number(t.week_goal) || 0,
       rev: revByBiz[t.business] || 0,
+      notes: String(t.notes || '').trim(),
       order: Number(t.sort_order) || 0,
     }))
     .sort((a, b) => a.order - b.order);
@@ -327,9 +330,10 @@ function contextBlock(ctx) {
     L.push(brief);
     L.push('');
   }
-  L.push('BUSINESSES (from the HUD Business panel) — month-to-date revenue vs monthly target:');
+  L.push('BUSINESSES (from the HUD Business panel) — month-to-date revenue vs monthly target, and where Mr. Burrus says each one stands:');
   for (const b of ctx.businesses) {
     L.push(`  • ${b.name}: ${money(b.rev)}${b.target ? ` of ${money(b.target)} target` : ' (no target set)'}`);
+    if (b.notes) L.push(`      where it stands (his note): ${b.notes.replace(/\s+/g, ' ').slice(0, 600)}`);
   }
   if (ctx.ideas.length) {
     L.push('\nIDEAS the owner put on the agenda:');
@@ -390,7 +394,7 @@ async function runCouncilMeeting(opts = {}) {
   const opening = await chatPersona(
     'ara',
     personaSystem('ara'),
-    `You are opening the Empire's nightly strategy council. Present the state of play and hand it to the team.\n\n=== CURRENT STATE ===\n${ctxText}\n\n=== LIVE MARKET RESEARCH ===\n${researchText}\n\nGive a focused opening (250 words max): where we stand, the 2-3 things the research says we should pay attention to, and the specific questions you want the council to answer tonight.${brief ? " Mr. Burrus left an OWNER'S BRIEF above (from his Drive note). READ IT OUT to the council first — quote it or paraphrase it closely so everyone has heard it — then build his thinking into the questions you put to the room." : ''}`,
+    `You are opening the Empire's nightly strategy council. Present the state of play and hand it to the team.\n\n=== CURRENT STATE ===\n${ctxText}\n\n=== LIVE MARKET RESEARCH ===\n${researchText}\n\nGive a focused opening (250 words max): where we stand, the 2-3 things the research says we should pay attention to, and the real decisions in front of Mr. Burrus tonight — the questions where the Empire could genuinely go one way or the other and he has to pick. Put those decisions to the room.${brief ? " Mr. Burrus left an OWNER'S BRIEF above (from his Drive note). READ IT OUT to the council first — quote it or paraphrase it closely so everyone has heard it — then build his thinking into the decisions you put to the room." : ''}`,
     { maxTokens: 700 },
   );
 
@@ -408,7 +412,7 @@ async function runCouncilMeeting(opts = {}) {
       turnsDone += 1;
       const prior = transcript.map((t) => `${t.who}: ${t.text}`).join('\n\n');
       let sys = personaSystem(id);
-      let ask = `Round ${round} of the Empire's nightly strategy council.\n\n=== STATE ===\n${ctxText}\n\n=== LIVE MARKET RESEARCH ===\n${researchText}\n\n=== DISCUSSION SO FAR ===\n${prior}\n\nRespond as ${COUNCIL_ROSTER[id].name}. Stay in your lane, build on or push back on what others said, and be concrete: name the specific next step you'd take for a specific business or idea. 150 words max.`;
+      let ask = `Round ${round} of the Empire's nightly strategy council.\n\n=== STATE ===\n${ctxText}\n\n=== LIVE MARKET RESEARCH ===\n${researchText}\n\n=== DISCUSSION SO FAR ===\n${prior}\n\nRespond as ${COUNCIL_ROSTER[id].name}. Stay in your lane, build on or push back on what others said. Take a clear position on what the Empire should DO about a specific business or idea and say why — the direction, the trade-off, the risk. You are advising Mr. Burrus, so recommend the move; do not say you'll carry it out or that anything is already handled. 150 words max.`;
       if (searchesLeft > 0) {
         ask += `\n\nIf — and only if — you genuinely need a current fact you don't have, you may put ONE line "SEARCH: <query>" as the FIRST line of your reply and nothing else; you'll get results and can answer next.`;
       }
@@ -435,20 +439,25 @@ async function runCouncilMeeting(opts = {}) {
   const synthesis = await chatPersona(
     'ara',
     personaSystem('ara'),
-    `Close the council. Here is the full discussion:\n\n${fullDiscussion}\n\nProduce the outcome for Mr. Burrus. Format EXACTLY:\n\nHEADLINE: <one line, <=90 chars, the single most important takeaway>\n\nThen for each business or idea that got real attention:\n\n## <name>\n- <concrete next step>\n- <concrete next step>\nDECISION NEEDED: <the call only Mr. Burrus can make, or "none">\n\nKeep every bullet concrete and doable this week. Skip anything that didn't get meaningful discussion.`,
+    `Close the council. Here is the full discussion:\n\n${fullDiscussion}\n\nProduce the outcome for Mr. Burrus. This is advice for HIM to act on — the council's read and the calls he needs to make, not a to-do list anyone here is doing. Format EXACTLY:\n\nHEADLINE: <one line, <=90 chars — the single most important call in front of Mr. Burrus right now>\n\nThen for each business or idea that got real attention:\n\n## <name>\nREAD: <1-2 lines — where this stands and which way the room leaned>\nRECOMMENDATION: <the specific move the council thinks Mr. Burrus should make, with the one-line why>\nDECISION: <the fork only he can settle — the options on the table and the council's lean — or "none, this one's clear">\n\nSkip anything that didn't get meaningful discussion. No "we will" / "I'll" — everything is framed as a recommendation to him.`,
     { maxTokens: 1600 },
   );
 
-  const headline = (/(^|\n)\s*HEADLINE:\s*(.+)/i.exec(synthesis)?.[2] || 'The council set this week\'s next steps.').trim();
+  const headline = (/(^|\n)\s*HEADLINE:\s*(.+)/i.exec(synthesis)?.[2] || "The council set out this week's recommendations.").trim();
   const perItem = [];
   const secRe = /^##\s*(.+)$/gm;
   let sm;
+  const grab = (body, label) => (new RegExp(`^\\s*${label}:\\s*(.+)$`, 'im').exec(body)?.[1] || '').trim();
   while ((sm = secRe.exec(synthesis))) {
     const start = sm.index + sm[0].length;
     const nextIdx = synthesis.indexOf('\n## ', start);
     const body = synthesis.slice(start, nextIdx === -1 ? undefined : nextIdx);
-    const steps = [...body.matchAll(/^\s*[-*]\s+(.+)$/gm)].map((x) => x[1].trim()).filter(Boolean);
-    perItem.push({ name: sm[1].trim(), steps });
+    perItem.push({
+      name: sm[1].trim(),
+      read: grab(body, 'READ'),
+      recommendation: grab(body, 'RECOMMENDATION'),
+      decision: grab(body, 'DECISION'),
+    });
   }
 
   // 5) Persist everything into sync_rows.
@@ -460,7 +469,7 @@ async function runCouncilMeeting(opts = {}) {
     `=== OPENING (A.R.A.) ===\n${opening}\n\n` +
     `=== LIVE MARKET RESEARCH ===\n${researchText}\n\n` +
     `=== DISCUSSION ===\n${fullDiscussion}\n\n` +
-    `=== NEXT STEPS ===\n${synthesis}\n`;
+    `=== THE COUNCIL'S RECOMMENDATION + YOUR DECISIONS ===\n${synthesis}\n`;
   await upsertSyncRow('notes', `council_${stamp}`, {
     title: `Empire Council — ${date}${force ? ' (convened)' : ''}`,
     content: noteContent,
@@ -476,9 +485,9 @@ async function runCouncilMeeting(opts = {}) {
   // `council_last` digest in src/services/empireStatus.js, not a pin.
   await upsertSyncRow('persona_memory', crypto.randomBytes(16).toString('hex'), {
     persona: 'ara',
-    content: `[Empire Council ${date}] Business / revenue / empire strategy — next steps set tonight.\n${headline}\n${synthesis.slice(0, 3500)}`,
+    content: `[Empire Council ${date}] Business / revenue / empire strategy — the council's recommendations and the calls for Mr. Burrus.\n${headline}\n${synthesis.slice(0, 3500)}`,
     category: 'business',
-    keywords: JSON.stringify(['empire', 'revenue', 'business', 'council', 'strategy', 'next steps']),
+    keywords: JSON.stringify(['empire', 'revenue', 'business', 'council', 'strategy', 'recommendation', 'decision']),
     date,
     created_at: now,
   });
@@ -524,7 +533,7 @@ async function runCouncilMeeting(opts = {}) {
 // A short, in-character system prompt for a council persona.
 function personaSystem(id) {
   const p = COUNCIL_ROSTER[id];
-  return `You are ${p.name} — ${p.role}. ${p.blurb}\n\nYou serve Mr. Burrus and sit on the Empire's council alongside the other personas. This is an internal working meeting — no greetings, no sign-offs, no "great question". Speak plainly and specifically, like a senior operator who has to deliver. Everything you say is about moving the Empire's businesses forward.`;
+  return `You are ${p.name} — ${p.role}. ${p.blurb}\n\nYou sit on the Empire's advisory council alongside the other personas. This is an internal working meeting — no greetings, no sign-offs, no "great question". Speak plainly and specifically.\n\nYour job here is to COUNSEL Mr. Burrus on where the Empire should go — not to run operations. You do not execute tasks and you have no team taking orders from you. So: take a position on what the Empire should DO about a business or idea and argue it, push back where you disagree with the others, and name the trade-offs. Never say you "will" do something, that you're "launching" or "reaching out" or "setting up" anything, or that something is "done" — you are advising; Mr. Burrus is the one who decides and acts. If a move needs a decision from him, say so and say what the options are.`;
 }
 
 module.exports = { runCouncilMeeting, COUNCIL_ROSTER, getCouncilLive, endCouncilLive };

@@ -19,6 +19,11 @@ export async function empireStatusBlock(personaId){
     // through here), so A.R.A. always knows exactly which businesses exist —
     // not just the ones with revenue logged this month.
     if(biz.length)L.push(`BUSINESSES (${biz.length}) — ${biz.map(b=>b.target>0?`${b.name} (target ${money(b.target)}/mo)`:b.name).join(', ')}`);
+    // Mr. Burrus's own running note on where each business stands — written in
+    // the HUD Business panel, so the personas answer with real context.
+    const bizNotes=biz.filter(b=>b.notes&&b.notes.trim());
+    if(bizNotes.length)L.push('WHERE EACH BUSINESS STANDS (Mr. Burrus\'s own notes):\n'
+      +bizNotes.map(b=>`  ${b.name}: ${b.notes.trim().replace(/\s+/g,' ').slice(0,400)}`).join('\n'));
   }catch{}
 
   try{
@@ -54,8 +59,8 @@ export async function empireStatusBlock(personaId){
   }catch{}
 
   // Outcome of the last nightly Empire Council (runs server-side at 5am ET — the
-  // personas meet on their own, pull live market research, and set next steps).
-  // The full transcript is one [READ_NOTE: Empire Council] away.
+  // personas meet on their own, pull live market research, and advise Mr. Burrus
+  // on direction). The full transcript is one [READ_NOTE: Empire Council] away.
   try{
     const raw=await getSetting('council_last','');
     if(raw){
@@ -63,7 +68,11 @@ export async function empireStatusBlock(personaId){
       if(c&&c.headline){
         const lines=[`LATEST COUNCIL (${c.date}) — ${c.headline}`];
         (c.perItem||[]).slice(0,8).forEach(it=>{
-          if(it&&it.name)lines.push(` · ${it.name}: ${(it.steps&&it.steps[0])||'see the note'}`);
+          if(!it||!it.name)return;
+          // New shape: {read, recommendation, decision}. Old shape: {steps:[]}.
+          const rec=it.recommendation||(it.steps&&it.steps[0])||'see the note';
+          const dec=it.decision&&!/^none/i.test(it.decision)?` · DECISION: ${it.decision}`:'';
+          lines.push(` · ${it.name}: ${rec}${dec}`);
         });
         lines.push('Full transcript + reasoning: [READ_NOTE: Empire Council]');
         L.push(lines.join('\n'));
