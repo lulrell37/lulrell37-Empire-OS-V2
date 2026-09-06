@@ -10,7 +10,7 @@
 //   4. sends due follow-ups.
 // Daily caps (`auto_scout_daily_leads`, `auto_scout_daily_emails`) bound the
 // volume and the API/Gmail exposure. Mirrors services/autoTrader.js.
-import{getSetting,setSetting,saveMessage,addLead,leadExists,updateLead,appendLeadLog,getLeadsForOutreach,getLeadsDue,getTodayStr}from './database';
+import{getSetting,setSetting,saveMessage,addLead,leadExists,leadHasContact,updateLead,appendLeadLog,getLeadsForOutreach,getLeadsDue,getTodayStr}from './database';
 import{webSearch,callPersona}from './aiService';
 import{runInboundScan}from './inbound';
 import{gmailSend,googleConnected}from './googleClient';
@@ -86,15 +86,17 @@ async function prospectPass(stats,dailyLeads){
 `ICP: owner-operated, roughly 2-50 people, a clear repetitive bottleneck likely costing time or money, an owner who can say yes alone. `+
 `Do NOT add franchises, national chains, directories, marketplaces, aggregator listings or anything enterprise. `+
 `Do NOT add a business that is permanently closed, temporarily closed, or otherwise no longer operating — if the results flag a listing "permanently closed", "closed", "out of business" or similar, skip it; we need live, reachable leads. `+
-`Never invent an email or phone — leave contact blank if it isn't in the results. `+
+`Every lead MUST carry a real phone number or email address found in the results — put it in the contact field. Never invent one. If you don't have a phone or email for a business, SKIP it entirely. `+
 `Add at most ${room}; two well-qualified beats ten weak. Output ONLY the [LEAD_ADD:] lines.`}];
   let resp='';
   try{resp=await callPersona('scout',ask,null,null,{skipSave:true,maxTokens:1400});}
   catch(e){emitErr(`AUTO-SCOUT · can't reach Claude — ${e.message}`);return;}
 
-  let added=0;
+  let added=0,noContact=0;
   for(const c of parseLeadAdds(resp)){
     if(stats.added>=dailyLeads)break;
+    // Outbound prospects with no phone or email don't enter the pipeline.
+    if(!leadHasContact(c.contact)){noContact++;continue;}
     try{
       if(await leadExists(c.name,c.website))continue;
       await addLead({
@@ -105,7 +107,7 @@ async function prospectPass(stats,dailyLeads){
       stats.added++;added++;
     }catch{}
   }
-  if(added)emit(`AUTO-SCOUT · ${metro} / ${segment} — +${added} lead${added===1?'':'s'} (${stats.added}/${dailyLeads} today)`);
+  if(added||noContact)emit(`AUTO-SCOUT · ${metro} / ${segment} — +${added} lead${added===1?'':'s'} (${stats.added}/${dailyLeads} today)${noContact?` · skipped ${noContact} with no phone/email`:''}`);
 }
 
 // --- inbound signal sweep (priority — runs first, claims budget first) ---
@@ -131,6 +133,8 @@ async function inboundPass(stats,dailyLeads){
   let added=0;
   for(const c of parseLeadAdds(resp)){
     if(stats.added>=dailyLeads)break;
+    // Inbound social signals are exempt from the phone/email requirement — the
+    // reply channel is the platform the post is on, not a direct contact.
     try{
       if(await leadExists(c.name,c.website))continue;
       await addLead({name:c.name,business:c.business,website:c.website,contact:c.contact||'',bottleneck:c.bottleneck,

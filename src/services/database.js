@@ -571,6 +571,16 @@ export async function deleteNote(id){await db.runAsync('DELETE FROM notes WHERE 
 // and the follow-up nudges read it back. Synced like tasks/notes.
 export const LEAD_STAGES=['inbound','new','contacted','replied','qualifying','call_booked','won','lost','cold'];
 const LEAD_FIELDS=['name','business','website','contact','bottleneck','segment','value','stage','next_action','next_touch','last_touch','log','source','source_id'];
+// A lead is only worth keeping if there's a way to reach the prospect directly.
+// S.C.O.U.T.'s outbound prospecting and chat [LEAD_ADD]s are held to this;
+// inbound social signals (a Reddit/HN/X post, replied to on-platform) are not.
+const _EMAIL_IN=/[^\s@,;]+@[^\s@,;]+\.[a-z]{2,}/i;
+export function leadHasContact(contact){
+  const s=String(contact||'');
+  if(_EMAIL_IN.test(s))return true;
+  const digits=s.replace(/\D/g,'');
+  return digits.length>=7&&digits.length<=15;
+}
 export async function addLead(fields={}){
   const now=Date.now();
   const f={source:'scout',stage:'new',...fields};

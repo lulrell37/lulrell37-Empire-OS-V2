@@ -1367,6 +1367,7 @@ export default function CommandScreen({navigation,route}){
           onLeadChange:(e)=>{
             if(e.action==='add')pushSystemMsg(`— PIPELINE · added ${e.name} —`);
             else if(e.action==='miss')pushSystemMsg(`— PIPELINE · no lead matches "${e.ref}" —`);
+            else if(e.action==='nocontact')pushSystemMsg(`— PIPELINE · skipped ${e.name} — no phone or email —`);
             pushLeadsToSheet().catch(()=>{});
           },
           onMemoryPinned:(e)=>pushSystemMsg(`— pinned for ${e.days}d: ${e.text} —`),

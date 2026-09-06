@@ -1,4 +1,4 @@
-import{addTask,updateTask,completeTask,deleteTask,saveNote,getNote,addRevenue,getTasks,getHudState,updateHudState,setRoutineDone,addRoutineItem,removeRoutineItem,renameRoutineItem,setBatmanDay,getBusinessTargets,setBusinessTarget,setPanelLayout,addExpense,addImportantDate,addLead,updateLead,appendLeadLog,findLead,pinMemory,unpinMemory,getPinnedMemories,getSetting,setSetting}from './database';
+import{addTask,updateTask,completeTask,deleteTask,saveNote,getNote,addRevenue,getTasks,getHudState,updateHudState,setRoutineDone,addRoutineItem,removeRoutineItem,renameRoutineItem,setBatmanDay,getBusinessTargets,setBusinessTarget,setPanelLayout,addExpense,addImportantDate,addLead,updateLead,appendLeadLog,findLead,leadHasContact,pinMemory,unpinMemory,getPinnedMemories,getSetting,setSetting}from './database';
 import*as gtask from './googleClient';
 import{openApp,openWebpage}from './appLauncher';
 import useEmpireStore from '../store/useEmpireStore';
@@ -191,7 +191,16 @@ export async function handleCommands(response,personaId,callbacks={}){
     const parts=m[1].split('|').map(s=>s.trim());
     const name=parts[0];
     if(!name)continue;
-    const id=await addLead({name,business:parts[1]||'',website:parts[2]||'',contact:parts[3]||'',bottleneck:parts[4]||'',segment:parts[5]||''});
+    const contact=parts[3]||'',segment=parts[5]||'';
+    // Every lead needs a direct line — a phone or an email. The only exception
+    // is an inbound social signal (segment "inbound-signal"), where the reply
+    // happens on the platform the post is on.
+    const isInboundSignal=/inbound[\s-]?signal/i.test(segment);
+    if(!isInboundSignal&&!leadHasContact(contact)){
+      callbacks.onLeadChange?.({action:'nocontact',name});
+      continue;
+    }
+    const id=await addLead({name,business:parts[1]||'',website:parts[2]||'',contact,bottleneck:parts[4]||'',segment});
     callbacks.onLeadChange?.({action:'add',id,name});
   }
   for(const m of response.matchAll(/\[LEAD_UPDATE:\s*([^|\]]+)\|([^\]]+)\]/gi)){
