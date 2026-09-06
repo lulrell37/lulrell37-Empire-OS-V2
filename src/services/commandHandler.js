@@ -1,4 +1,12 @@
-import{addTask,updateTask,completeTask,deleteTask,saveNote,getNote,addRevenue,getTasks,getHudState,updateHudState,setRoutineDone,addRoutineItem,removeRoutineItem,renameRoutineItem,setBatmanDay,getBusinessTargets,setBusinessTarget,setPanelLayout,addExpense,addImportantDate,addLead,updateLead,appendLeadLog,findLead,leadHasContact,pinMemory,unpinMemory,getPinnedMemories,getSetting,setSetting}from './database';
+import{addTask,updateTask,completeTask,deleteTask,saveNote,getNote,addRevenue,getTasks,getHudState,updateHudState,setRoutineDone,addRoutineItem,removeRoutineItem,renameRoutineItem,setBatmanDay,getBusinessTargets,setBusinessTarget,setPanelLayout,addExpense,addImportantDate,addLead,updateLead,appendLeadLog,findLead,leadHasContact,pinMemory,unpinMemory,getPinnedMemories,getSetting,setSetting,addContentItem,updateContentItem,deleteContentItem,getContentItems}from './database';
+
+// Resolve a content-item reference — full id or an 8-char prefix from a listing.
+async function findContentByRef(ref){
+  const raw=String(ref||'').trim();
+  if(!raw)return null;
+  const all=await getContentItems({}).catch(()=>[]);
+  return all.find(x=>x.id===raw)||all.find(x=>x.id.startsWith(raw))||null;
+}
 import*as gtask from './googleClient';
 import{openApp,openWebpage}from './appLauncher';
 import useEmpireStore from '../store/useEmpireStore';
@@ -101,6 +109,32 @@ export async function handleCommands(response,personaId,callbacks={}){
   if(/\[COUNCIL_CONVENE\]/i.test(response)){
     callbacks.onCouncilConvene?.();
   }
+  // --- AI-influencer content pipeline ---------------------------------
+  // A page persona (muse1/2/3) queues an item for ITS page. F.O.R.G.E. compiles
+  // batches and H.E.R.A.L.D. publishes — those are handled in CommandScreen's
+  // tool-injection pass since they return a result. Nothing posts without the
+  // owner approving it in the Content screen.
+  if(/^muse[123]$/.test(personaId)){
+    for(const m of response.matchAll(/\[CONTENT_QUEUE:\s*([^|\]]*)\|([^|\]]*)\|([^|\]]*)\|([^|\]]*)(?:\|([^\]]*))?\]/gi)){
+      const kind=(m[1]||'reel').trim().toLowerCase();
+      const slot=(m[2]||'').trim();
+      const prompt=(m[3]||'').trim();
+      const caption=(m[4]||'').trim();
+      const hashtags=(m[5]||'').trim();
+      if(!prompt)continue;
+      const id=await addContentItem({page:personaId,kind:['reel','image','carousel'].includes(kind)?kind:'reel',slot,prompt,caption,hashtags,status:'queued'});
+      callbacks.onContentQueued?.({id,page:personaId,slot,kind});
+    }
+    for(const m of response.matchAll(/\[CONTENT_CAPTION:\s*([^|\]]+)\|([^\]]*)\]/gi)){
+      const item=await findContentByRef(m[1].trim());
+      if(item){await updateContentItem(item.id,{caption:m[2].trim()});callbacks.onContentEdited?.({id:item.id});}
+    }
+    for(const m of response.matchAll(/\[CONTENT_DROP:\s*([^\]]+)\]/gi)){
+      const item=await findContentByRef(m[1].trim());
+      if(item&&item.status!=='posted'){await deleteContentItem(item.id);callbacks.onContentDropped?.({id:item.id});}
+    }
+  }
+  if(/\[OPEN_CONTENT\]/i.test(response))callbacks.onOpenContent?.();
   // [OPEN_APP: name] launches the actual app (Spotify, Instagram, Maps, Uber,
   // etc.) by its Android package — never a webpage fallback. [OPEN_WEBPAGE:
   // url] is the separate, explicit escape hatch for when a webpage genuinely
@@ -327,6 +361,9 @@ export function stripCommands(text){
     .replace(/\[LEAD_ADD:[^\]]*\]/gi,'').replace(/\[LEAD_UPDATE:[^\]]*\]/gi,'').replace(/\[LEAD_LOG:[^\]]*\]/gi,'')
     .replace(/\[LEAD_EMAIL:[^\]]*\]/gi,'').replace(/\[LEAD_LIST(?::[^\]]*)?\]/gi,'').replace(/\[LEADS\]/gi,'')
     .replace(/\[SCAN_INBOUND(?::[^\]]*)?\]/gi,'')
+    .replace(/\[CONTENT_QUEUE:[^\]]*\]/gi,'').replace(/\[CONTENT_CAPTION:[^\]]*\]/gi,'').replace(/\[CONTENT_DROP:[^\]]*\]/gi,'')
+    .replace(/\[CONTENT_LIST(?::[^\]]*)?\]/gi,'').replace(/\[BATCH_COMPILE(?::[^\]]*)?\]/gi,'').replace(/\[BATCH_STATUS\]/gi,'')
+    .replace(/\[PUBLISH(_APPROVED)?(?::[^\]]*)?\]/gi,'').replace(/\[PUBLISH_STATUS\]/gi,'').replace(/\[OPEN_CONTENT\]/gi,'')
     .replace(/\[REMEMBER:[^\]]*\]/gi,'').replace(/\[UNPIN_MEMORY:[^\]]*\]/gi,'')
     .replace(/\[EDIT_CLIP:[^\]]*\]/gi,'')
     .replace(/\[SHOW_CHART:[^\]]*\]/gi,'')

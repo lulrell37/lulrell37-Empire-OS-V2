@@ -18,7 +18,8 @@ import{autoAtlasBusy}from '../services/autoAtlas';
 import{handleCommands,stripCommands}from '../services/commandHandler';
 import{googleReadInjections,googleWriteCommands}from '../services/googleCommands';
 import{driveUploadFile,googleConnected}from '../services/googleClient';
-import{getMessages,saveMessage,getAllPersonaPics,savePersonaMemory,getSetting,setSetting,getExpenseSummary,addBuildJob,updateBuildJob,getBuildJob,getBuildJobByIssue,getBuildJobs,buildJobRepo,DEFAULT_BUILD_REPO,getCustomPrompt,getAllLeads,addClipJob,getUnreadPersonas,getUnreadMessages,markPersonaRead}from '../services/database';
+import{getMessages,saveMessage,getAllPersonaPics,savePersonaMemory,getSetting,setSetting,getExpenseSummary,addBuildJob,updateBuildJob,getBuildJob,getBuildJobByIssue,getBuildJobs,buildJobRepo,DEFAULT_BUILD_REPO,getCustomPrompt,getAllLeads,addClipJob,getUnreadPersonas,getUnreadMessages,markPersonaRead,getContentItems,getContentTally,getContentPages,updateContentItem}from '../services/database';
+import{compileBatch,publishContent,contentStatusLine}from '../services/socialPublish';
 import{speak as speakOneShot}from '../services/voice';
 import{fileBuildRequest,replyToBuild,mergeBuild,cancelBuild,createProjectRepo,fileClipJob}from '../services/buildAgent';
 import{pollBuildJobs}from '../services/buildJobs';
@@ -1358,6 +1359,36 @@ export default function CommandScreen({navigation,route}){
             }
           }catch(e){injections.push('PIPELINE: failed — '+e.message);}
         }
+        // --- AI-influencer content pipeline (muse1/2/3, F.O.R.G.E., H.E.R.A.L.D.) ---
+        if(/\[(CONTENT_LIST|BATCH_STATUS|PUBLISH_STATUS|BATCH_COMPILE|PUBLISH(_APPROVED)?)\b/i.test(response)&&!myAbort.signal.aborted){
+          const isPage=/^muse[123]$/.test(pid);
+          const fmtItem=it=>`  #${it.id.slice(0,8)} [${String(it.status||'').toUpperCase()}] ${it.page} · ${it.kind} · ${it.slot||'—'}`
+            +`${it.caption?`\n     cap: ${String(it.caption).replace(/\s+/g,' ').slice(0,120)}`:''}`
+            +`${it.posted_url?`\n     ${it.posted_url}`:''}${it.error?`\n     ERR: ${it.error}`:''}`;
+          try{
+            if(/\[CONTENT_LIST(?::\s*([^\]]+))?\]/i.test(response)){
+              const st=(response.match(/\[CONTENT_LIST:\s*([^\]]+)\]/i)||[])[1]?.trim().toLowerCase();
+              const items=await getContentItems({page:isPage?pid:undefined,status:st||undefined});
+              injections.push(items.length
+                ?`CONTENT (${items.length})${isPage?` for ${pid}`:''}:\n`+items.slice(0,40).map(fmtItem).join('\n')
+                :`CONTENT: nothing${st?` at "${st}"`:isPage?` queued for ${pid} yet`:' in the pipeline yet'}.`);
+            }
+            if(/\[(BATCH_STATUS|PUBLISH_STATUS)\]/i.test(response)){
+              injections.push('CONTENT PIPELINE — '+(await contentStatusLine()));
+            }
+            const bc=response.match(/\[BATCH_COMPILE(?::\s*([^\]]+))?\]/i);
+            if(bc){
+              toolLabel='◇ compiling the batch…';
+              injections.push(await compileBatch(bc[1]?.trim()||null));
+            }
+            const pubOne=response.match(/\[PUBLISH:\s*([^\]]+)\]/i);
+            const pubAll=response.match(/\[PUBLISH_APPROVED(?::\s*([^\]]+))?\]/i);
+            if(pubOne||pubAll){
+              toolLabel='◇ publishing…';
+              injections.push(await publishContent(pubOne?{id:pubOne[1].trim()}:{page:pubAll[1]?.trim()||null}));
+            }
+          }catch(e){injections.push('CONTENT: failed — '+e.message);}
+        }
         const scanInb=response.match(/\[SCAN_INBOUND(?::\s*([^\]]+))?\]/i);
         if(scanInb&&!myAbort.signal.aborted){
           toolLabel='◇ scanning inbound channels…';
@@ -1434,6 +1465,10 @@ export default function CommandScreen({navigation,route}){
           onMemoryPinned:(e)=>pushSystemMsg(`— pinned for ${e.days}d: ${e.text} —`),
           onCouncilIdea:({text})=>pushSystemMsg(`— COUNCIL · on the agenda for the 5am meeting: ${text} —`),
           onCouncilNote:({text})=>pushSystemMsg(`— COUNCIL · brief noted for the next meeting: ${text} —`),
+          onContentQueued:({page,slot,kind})=>pushSystemMsg(`— CONTENT · ${page} queued a ${kind}${slot?` (${slot})`:''} — review it in the Content screen —`),
+          onContentEdited:()=>pushSystemMsg('— CONTENT · caption updated —'),
+          onContentDropped:()=>pushSystemMsg('— CONTENT · item removed —'),
+          onOpenContent:()=>navigation.navigate('Content'),
           onCouncilConvene:()=>{
             pushSystemMsg('— COUNCIL · convening now — runs a few minutes; the push lands when they\'re done —');
             convokeCouncil()

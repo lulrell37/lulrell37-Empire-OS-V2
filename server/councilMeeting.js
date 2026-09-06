@@ -16,8 +16,9 @@
 //      untouched, the chat quick-adds are cleared afterward.
 //   2. Pulls LIVE web research on each business + idea — what's actually working
 //      in that market right now — via Claude's web_search tool.
-//   3. A.R.A. opens the meeting; the council (everyone except Ghost, Talon, Rogue,
-//      Batman) discusses over N rounds, each persona seeing the prior replies.
+//   3. A.R.A. opens the meeting; the council (everyone except Ghost, Talon,
+//      Rogue, Batman, Abraham, and the AI-influencer ops personas) discusses
+//      over N rounds, each persona seeing the prior replies.
 //   4. A.R.A. synthesises the council's read + recommendation + the decision
 //      for Mr. Burrus, per business/idea. It's advice for him to act on, not a
 //      to-do list the personas are working.
@@ -89,8 +90,6 @@ const COUNCIL_ROSTER = {
     blurb: 'Contracts, business structure, IP, employment, risk. Flags what could bite later.' },
   haven: { name: 'H.A.V.E.N.', role: 'Doctor & Wellness', api: 'anthropic', model: CLAUDE_MODEL,
     blurb: "Guards the owner's body and energy — the Empire's most important asset. Watches for plans that burn him out." },
-  abraham: { name: 'ABRAHAM', role: 'Pastor & Spiritual Advisor', api: 'anthropic', model: CLAUDE_MODEL,
-    blurb: 'Aligns the Empire with purpose and covenant, grounded in scripture. Keeps the mission honest.' },
 };
 const SPEAKING_ORDER = Object.keys(COUNCIL_ROSTER);
 

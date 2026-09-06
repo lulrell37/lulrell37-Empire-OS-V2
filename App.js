@@ -16,6 +16,7 @@ import SplashScreenComponent from './src/screens/SplashScreen';
 import EmpireCityScreen from './src/screens/EmpireCityScreen';
 import CommandScreen from './src/screens/CommandScreen';
 import LeadOrbitScreen from './src/screens/LeadOrbitScreen';
+import ContentQueueScreen from './src/screens/ContentQueueScreen';
 import HUDScreen from './src/screens/HUDScreen';
 import LaboratoryScreen from './src/screens/LaboratoryScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
@@ -117,6 +118,7 @@ export default function App(){
             <Stack.Screen name="Map" component={EmpireCityScreen}/>
             <Stack.Screen name="Command" component={CommandScreen}/>
             <Stack.Screen name="Leads" component={LeadOrbitScreen}/>
+            <Stack.Screen name="Content" component={ContentQueueScreen}/>
             <Stack.Screen name="HUD" component={HUDScreen}/>
             <Stack.Screen name="Laboratory" component={LaboratoryScreen}/>
             <Stack.Screen name="Settings" component={SettingsScreen}/>

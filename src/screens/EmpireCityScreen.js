@@ -59,6 +59,7 @@ const HEROES=[
   {name:'HUD',       route:'HUD',       label:'EMPIRE STATE',     sub:'THE HUD',          tint:0xE8C98A, at:[12,12],  ly:8.5,  shape:'rotunda'},
   // The personas live in the galaxy now — you reach it by zooming all the way
   // out of the city, not through a landmark. (Old 'Council' towers removed.)
+  {name:'Content',   route:'Content',   label:'THE STUDIO',      sub:'CONTENT QUEUE',    tint:0xEC4899, at:[-12,12], ly:10.5, shape:'towers'},
   {name:'Laboratory',route:'Laboratory',label:'THE DIAGRAM',      sub:'THE LABORATORY',   tint:0x9AD3E0, at:[-12,-12],ly:10.5, shape:'observatory'},
   {name:'Settings',  route:'Settings',  label:'THE WORKSHOP',     sub:'SETTINGS',         tint:0x9AA0A6, at:[12,-12], ly:8.5,  shape:'ziggurat'},
   {name:'Leads',     route:'Leads',     label:'THE LEDGER',      sub:'S.C.O.U.T.',       tint:0x2E86FF, at:[0,-25], ly:9,    shape:'ledger'},

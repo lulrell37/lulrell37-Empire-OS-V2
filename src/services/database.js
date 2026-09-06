@@ -24,6 +24,7 @@ export async function initDatabase(){
     CREATE TABLE IF NOT EXISTS deep_research(id TEXT PRIMARY KEY,topic TEXT,persona TEXT,mode TEXT DEFAULT 'direct',model TEXT,status TEXT DEFAULT 'running',progress TEXT,result TEXT,error TEXT,started_at INTEGER,finished_at INTEGER,created_at INTEGER,updated_at INTEGER);
     CREATE TABLE IF NOT EXISTS leads(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT,business TEXT,website TEXT,contact TEXT,bottleneck TEXT,segment TEXT,value TEXT,stage TEXT DEFAULT 'new',next_action TEXT,next_touch TEXT,last_touch TEXT,log TEXT DEFAULT '',source TEXT DEFAULT 'scout',source_id TEXT,created_at INTEGER,updated_at INTEGER);
     CREATE TABLE IF NOT EXISTS clip_jobs(id TEXT PRIMARY KEY,issue_number INTEGER,media_url TEXT,instructions TEXT,status TEXT DEFAULT 'queued',result_url TEXT,share_url TEXT,note TEXT,last_comment_id INTEGER DEFAULT 0,created_at INTEGER,updated_at INTEGER);
+    CREATE TABLE IF NOT EXISTS content_items(id TEXT PRIMARY KEY,page TEXT,kind TEXT DEFAULT 'reel',slot TEXT,prompt TEXT,caption TEXT,hashtags TEXT,status TEXT DEFAULT 'queued',media_uri TEXT,media_type TEXT,thumb_uri TEXT,gen_job_id TEXT,scheduled_for TEXT,posted_id TEXT,posted_url TEXT,posted_at INTEGER,error TEXT,note TEXT,created_at INTEGER,updated_at INTEGER);
   `);
   await migrateHudColumns();
   await migratePersonaMemory();
@@ -60,6 +61,7 @@ const SYNC_TABLES={
   important_dates:'lower(hex(randomblob(16)))',
   build_jobs:'NEW.id',
   clip_jobs:'NEW.id',
+  content_items:'NEW.id',
   trades:'lower(hex(randomblob(16)))',
   leads:'lower(hex(randomblob(16)))',
   business_targets:'NEW.business',
@@ -106,7 +108,7 @@ async function initSync(){
     // build_jobs is keyed on a synthetic `id` (`owner/repo#issue`) that equals
     // its sync_id. Rows arriving from another device via sync insert without an
     // `id`; backfill it from sync_id so getBuildJob(id) keeps working.
-    if(t==='build_jobs'||t==='clip_jobs'){
+    if(t==='build_jobs'||t==='clip_jobs'||t==='content_items'){
       await db.execAsync(`
         DROP TRIGGER IF EXISTS ${t}_id_fill;
         CREATE TRIGGER ${t}_id_fill AFTER INSERT ON ${t}
@@ -657,6 +659,49 @@ export async function getLeadsForOutreach(limit=5){
        AND COALESCE(log,'') NOT LIKE '%mailed%'
      ORDER BY (stage='inbound') DESC, created_at ASC
      LIMIT ?`,[limit]);
+}
+
+// --- AI-influencer content pipeline -----------------------------------
+// The 3 page personas (muse1/2/3) queue items; F.O.R.G.E. compiles the batch
+// for generation; the owner reviews + approves in the Content screen; H.E.R.A.L.D.
+// publishes the approved ones. Status flow:
+//   queued -> awaiting_media -> needs_review -> approved -> posted
+//   (also: rejected, failed)
+const CONTENT_FIELDS=['page','kind','slot','prompt','caption','hashtags','status','media_uri','media_type','thumb_uri','gen_job_id','scheduled_for','posted_id','posted_url','posted_at','error','note'];
+export async function addContentItem(fields={}){
+  const id=Array.from({length:24},()=>Math.floor(Math.random()*16).toString(16)).join('');
+  const cols=CONTENT_FIELDS.filter(k=>fields[k]!==undefined&&fields[k]!==null);
+  const now=Date.now();
+  await db.runAsync(
+    `INSERT INTO content_items(id,${cols.join(',')},created_at,updated_at) VALUES(?,${cols.map(()=>'?').join(',')},?,?)`,
+    [id,...cols.map(c=>fields[c]),now,now],
+  );
+  return id;
+}
+export async function updateContentItem(id,patch={}){
+  const cols=Object.keys(patch).filter(k=>CONTENT_FIELDS.includes(k));
+  if(!cols.length)return;
+  await db.runAsync(`UPDATE content_items SET ${cols.map(c=>c+'=?').join(',')} WHERE id=?`,[...cols.map(c=>patch[c]),id]);
+}
+export async function deleteContentItem(id){await db.runAsync('DELETE FROM content_items WHERE id=?',[id]);}
+export async function getContentItem(id){return await db.getFirstAsync('SELECT * FROM content_items WHERE id=?',[id]);}
+export async function getContentItems({page,status}={}){
+  const where=[],args=[];
+  if(page){where.push('page=?');args.push(page);}
+  if(status){where.push(Array.isArray(status)?`status IN (${status.map(()=>'?').join(',')})`:'status=?');args.push(...(Array.isArray(status)?status:[status]));}
+  return await db.getAllAsync(
+    `SELECT * FROM content_items${where.length?` WHERE ${where.join(' AND ')}`:''} ORDER BY created_at DESC LIMIT 300`,args);
+}
+export async function getContentTally(){
+  const rows=await db.getAllAsync('SELECT page,status,COUNT(*) n FROM content_items GROUP BY page,status');
+  return rows;
+}
+// Page config lives in one app_settings JSON row: { muse1:{name,handle,ig_user_id,fb_page_id,active,look}, ... }
+export async function getContentPages(){
+  try{const r=await db.getFirstAsync("SELECT value FROM app_settings WHERE key='content_pages'");return r?.value?JSON.parse(r.value):{};}catch{return {};}
+}
+export async function setContentPages(obj){
+  await db.runAsync("INSERT INTO app_settings(key,value) VALUES('content_pages',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[JSON.stringify(obj||{})]);
 }
 
 // --- R.O.G.U.E. clip-edit jobs -----------------------------------------

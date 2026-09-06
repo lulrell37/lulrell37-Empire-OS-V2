@@ -29,18 +29,33 @@ for(let k=0;k<=480;k++){const v=-12*Math.PI+(24*Math.PI)*(k/480);SAMP.push(v);SI
 // gets a fixed front-row seat close to the camera — the only one you land on
 // — everyone else, Jarvis included, starts noticeably farther back (faint,
 // small) and only reads clearly once you've dollied in past her.
-// Atlas+Talon and Selene+Rogue each get their own fixed "department" hub —
-// close to their partner, but the two hubs sit apart from each other and from
-// the general cloud so each department reads as its own space. Everyone else
-// is seeded randomly through the remaining volume, seeded so that layout is
-// stable across a session; a light min-distance pass keeps them from
-// clumping (and from landing on top of the fixed seats/hubs). You yaw the
-// cloud and fly forward/back through it.
+// Each department head gets its own fixed "department" hub, with its reports
+// fanned out in a loose downward arc around it. The hubs sit well apart from
+// each other and from the general cloud so each department reads as its own
+// space. Everyone else is seeded randomly through the remaining volume, seeded
+// so that layout is stable across a session; a light min-distance pass keeps
+// them from clumping (and from landing on top of the fixed seats/hubs). You
+// yaw the cloud and fly forward/back through it.
 const FRONT_Z=-2.6;   // Ara's fixed front-seat depth — the only one you land on
 const SIZE_BOOST={ara:1.45};   // flat size bump on top of the depth-driven scale
-const FINANCE_HUB={x:2.6,y:-1.4,z:3.2};   // Atlas + Talon
-const CONTENT_HUB={x:-2.6,y:1.3,z:3.6};   // Selene + Rogue
-const REST_Z_MIN=1.8,REST_Z_MAX=5.2;      // everyone else's depth range — well behind the front pair
+const REST_Z_MIN=1.6,REST_Z_MAX=6.6;      // everyone else's depth range — well behind the front pair
+
+// Department hubs. Each head gets a fixed seat well clear of the others and of
+// the general scatter; its reports fan out in a wide downward arc around it.
+// Growing a department is just adding an id to `reports` here — both the seat
+// placement and the tether graph read from this one map.
+const DEPARTMENTS=[
+  {head:'atlas',  hub:{x:3.8,y:-2.1,z:3.0}, reports:['talon','muse2']},
+  {head:'selene', hub:{x:-4.0,y:1.4,z:3.8}, reports:['rogue','muse1','forge','herald']},
+  {head:'haven',  hub:{x:1.4,y:3.5,z:5.4},  reports:['muse3']},
+];
+const REPORT_ARC=1.6;   // how far a head's reports sit from its hub centre (was ~0.35 — packed tight)
+
+// head -> department head, for the tether graph and the "routes through A.R.A."
+// exclusion below.
+const SECONDARY_HEAD={};
+for(const d of DEPARTMENTS)for(const r of d.reports)SECONDARY_HEAD[r]=d.head;
+
 const SCATTER=(()=>{
   let a=0x9e3779b9;
   const rnd=()=>{a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};
@@ -54,15 +69,26 @@ const SCATTER=(()=>{
   const ID_INDEX_BUILD={};
   PERSONA_LIST.forEach((p,i)=>{ID_INDEX_BUILD[p.id]=i;});
   setFixed('ara',{x:0,y:0,z:FRONT_Z});
-  setFixed('atlas',{x:FINANCE_HUB.x+0.35,y:FINANCE_HUB.y-0.15,z:FINANCE_HUB.z});
-  setFixed('talon',{x:FINANCE_HUB.x-0.35,y:FINANCE_HUB.y+0.15,z:FINANCE_HUB.z+0.1});
-  setFixed('selene',{x:CONTENT_HUB.x+0.35,y:CONTENT_HUB.y+0.1,z:CONTENT_HUB.z});
-  setFixed('rogue',{x:CONTENT_HUB.x-0.35,y:CONTENT_HUB.y-0.15,z:CONTENT_HUB.z+0.15});
+  for(const d of DEPARTMENTS){
+    setFixed(d.head,{...d.hub});
+    const n=d.reports.length;
+    d.reports.forEach((r,k)=>{
+      // fan the reports across a wide downward arc under the head, staggered in
+      // depth so a crowded department doesn't collapse into one flat row
+      const t=n===1?0.5:k/(n-1);
+      const ang=Math.PI*(0.12+0.76*t);   // ~22° .. ~158°, measured down from +x
+      setFixed(r,{
+        x:d.hub.x+Math.cos(ang)*REPORT_ARC*1.4,
+        y:d.hub.y+Math.sin(ang)*REPORT_ARC,
+        z:d.hub.z+(k%2?0.4:-0.3),
+      });
+    });
+  }
   for(let i=0;i<PERSONA_LIST.length;i++){
     if(pts[i])continue;
     let best=null,bestD=-1;
-    for(let tries=0;tries<34;tries++){
-      const c={x:(rnd()*2-1)*6.0,y:(rnd()*2-1)*4.3,z:REST_Z_MIN+rnd()*(REST_Z_MAX-REST_Z_MIN)};
+    for(let tries=0;tries<48;tries++){
+      const c={x:(rnd()*2-1)*8.0,y:(rnd()*2-1)*5.6,z:REST_Z_MIN+rnd()*(REST_Z_MAX-REST_Z_MIN)};
       let d=99;
       for(const p of pts)if(p)d=Math.min(d,Math.hypot(p.x-c.x,p.y-c.y,p.z-c.z));
       for(const p of fixed)d=Math.min(d,Math.hypot(p.x-c.x,p.y-c.y,p.z-c.z));
@@ -72,15 +98,15 @@ const SCATTER=(()=>{
   }
   return pts;
 })();
-const Z_SPAN=5.2;     // half-depth of the cloud; dolly ranges ±(Z_SPAN+2)
+const Z_SPAN=6.6;     // half-depth of the cloud; dolly ranges ±(Z_SPAN+2)
 
-// Org-chart tethers drawn between orbs. Talon and Rogue report through their
-// department head (Atlas = finance, Selene = content) rather than straight to
-// A.R.A. — everyone else routes through A.R.A. directly. Nothing else is
-// tethered; the rest of the cloud just floats.
-const SECONDARY_HEAD={talon:'atlas',rogue:'selene'};
+// Org-chart tethers drawn between orbs. A report is tethered to its department
+// head (see DEPARTMENTS above) rather than straight to A.R.A.; every other
+// persona routes through A.R.A. directly. Nothing else is tethered; the rest
+// of the cloud just floats.
 const TETHERS=(()=>{
-  const pairs=[['atlas','talon'],['selene','rogue']];
+  const pairs=[];
+  for(const d of DEPARTMENTS)for(const r of d.reports)pairs.push([d.head,r]);
   for(const p of PERSONA_LIST){
     if(p.id==='ara'||SECONDARY_HEAD[p.id])continue;
     pairs.push(['ara',p.id]);

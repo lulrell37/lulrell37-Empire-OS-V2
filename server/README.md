@@ -36,7 +36,8 @@ per day. Needs `ANTHROPIC_API_KEY`; set `DAILY_BRIEFING=off` to disable.
 ## Nightly Empire Council
 
 `councilMeeting.js` runs at **05:00 ET** every day (`node-cron`, no boot run).
-A.R.A. + the council (everyone except Ghost, Talon, Rogue, Batman) hold a strategy
+A.R.A. + the council (everyone except Ghost, Talon, Rogue, Batman, Abraham, and
+the AI-influencer ops personas) hold a strategy
 meeting on their own: it reads the current businesses + month-to-date revenue +
 the owner's queued ideas (`app_settings` `council_ideas`) out of `sync_rows`,
 pulls **live web research** on each business/idea via Claude's `web_search` tool,
