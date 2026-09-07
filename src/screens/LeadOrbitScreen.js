@@ -13,8 +13,8 @@
 // Replaces the old "Leads" city landmark, which opened the Google Sheet.
 // Pure JS: a requestAnimationFrame field sim + react-native-svg. No native
 // module, so it ships as an OTA update.
-import React,{useCallback,useEffect,useRef,useState}from 'react';
-import{View,Text,StyleSheet,TouchableOpacity,Image}from 'react-native';
+import React,{useCallback,useEffect,useMemo,useRef,useState}from 'react';
+import{View,Text,StyleSheet,TouchableOpacity,Image,ScrollView}from 'react-native';
 import{SafeAreaView}from 'react-native-safe-area-context';
 import{useFocusEffect}from '@react-navigation/native';
 import Svg,{Circle,Line,G}from 'react-native-svg';
@@ -39,6 +39,15 @@ const STAGE_TEXT={
   inbound:'INBOUND',new:'NEW',cold:'COLD',contacted:'CONTACTED',replied:'REPLIED',
   qualifying:'QUALIFYING',call_booked:'CALL BOOKED',won:'WON',lost:'LOST',
 };
+// Where a lead came from — the `source` column set by S.C.O.U.T. / the inbound
+// scanner / the website form. Anything not listed falls back to the raw key.
+const SOURCE_LABEL={
+  scout:'Scout','scout-auto':'Auto-scan','inbound-form':'Website form',
+  reddit:'Reddit','reddit-local':'Reddit · local',bluesky:'Bluesky',forum:'Forum',
+  softwarerecs:'SoftwareRecs',hn:'Hacker News','hn-freelance':'HN · freelance',
+  gig:'Gig board',craigslist:'Craigslist',manual:'Added by hand',
+};
+const sourceLabel=v=>SOURCE_LABEL[v]||(v?String(v).replace(/[-_]/g,' '):'unknown');
 
 const tierOf=st=>TIER[st]??0;
 const lerp=(a,b,t)=>a+(b-a)*t;
@@ -70,8 +79,9 @@ function LeadOrbit({navigation}){
   const[,setTick]=useState(0);          // bumped ~30fps to re-render the SVG
   const[pic,setPic]=useState(null);
   const[auto,setAuto]=useState(false);
-  const[selected,setSelected]=useState(null);
+  const[selectedId,setSelectedId]=useState(null);
   const[counts,setCounts]=useState({0:0,1:0,2:0,total:0});
+  const[leadRows,setLeadRows]=useState([]);   // raw leads, newest activity first — feeds the list
 
   const dotsRef=useRef(new Map());      // id -> dot sim state
   const projRef=useRef([]);             // active tracers
@@ -154,7 +164,10 @@ function LeadOrbit({navigation}){
   const load=useCallback(async(alive)=>{
     try{
       const l=await getAllLeads();
-      if(alive())syncLeads((l||[]).slice(0,MAX_DOTS));
+      if(alive()){
+        syncLeads((l||[]).slice(0,MAX_DOTS));
+        setLeadRows((l||[]).slice().sort((a,b)=>(b.updated_at||b.created_at||0)-(a.updated_at||a.created_at||0)));
+      }
     }catch{}
     try{
       const a=(await getSetting('auto_scout','0'))==='1';
@@ -250,10 +263,7 @@ function LeadOrbit({navigation}){
       const dist=Math.hypot(x-locationX,y-locationY);
       if(dist<best){best=dist;hit=d;}
     }
-    setSelected(hit?{
-      id:hit.id,name:hit.name,business:hit.business,stage:hit.stage,
-      next_action:hit.next_action,contact:hit.contact,
-    }:null);
+    setSelectedId(hit?hit.id:null);
   },[geom,dotPos]);
 
   const nowMs=Date.now();
@@ -321,7 +331,7 @@ function LeadOrbit({navigation}){
                 const{x,y}=dotPos(d,geom,nowMs);
                 const r=Math.max(0.1,2.7*d.scale);
                 const col=rgbStr(d.color);
-                const isSel=selected&&selected.id===d.id;
+                const isSel=selectedId===d.id;
                 return(
                   <G key={d.id}>
                     {d.flash>0.04&&(
@@ -353,21 +363,68 @@ function LeadOrbit({navigation}){
         )}
       </View>
 
-      {selected&&(
-        <View style={s.card}>
-          <View style={s.cardTop}>
-            <Text style={s.cardStage}>{STAGE_TEXT[selected.stage]||String(selected.stage||'').toUpperCase()}</Text>
-            <TouchableOpacity onPress={()=>setSelected(null)} hitSlop={{top:10,bottom:10,left:10,right:10}}>
-              <Text style={s.cardX}>✕</Text>
-            </TouchableOpacity>
-          </View>
-          <Text style={s.cardName} numberOfLines={1}>{selected.name||'—'}</Text>
-          {!!selected.business&&<Text style={s.cardBiz} numberOfLines={1}>{selected.business}</Text>}
-          <Text style={s.cardMeta} numberOfLines={1}>{selected.contact||'needs contact'}</Text>
-          {!!selected.next_action&&<Text style={s.cardNext} numberOfLines={2}>→ {selected.next_action}</Text>}
-        </View>
-      )}
+      <LeadList rows={leadRows} selectedId={selectedId}
+        onPick={id=>setSelectedId(cur=>cur===id?null:id)}/>
     </SafeAreaView>
+  );
+}
+
+// The pipeline as a plain list under the field — every lead, newest activity
+// first, showing stage and where it came from. A source-count strip sits at the
+// top. Tapping a row (or a dot) expands it with contact + next step.
+function LeadList({rows,selectedId,onPick}){
+  const bySource=useMemo(()=>{
+    const m={};
+    for(const l of rows)m[l.source||'']=(m[l.source||'']||0)+1;
+    return Object.entries(m).sort((a,b)=>b[1]-a[1]);
+  },[rows]);
+
+  return(
+    <View style={s.list}>
+      <View style={s.listHdr}>
+        <Text style={s.listHdrT}>PIPELINE · {rows.length}</Text>
+        {bySource.length>0&&(
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.srcStrip}>
+            {bySource.map(([k,n])=>(
+              <Text key={k||'unknown'} style={s.srcChip}>{sourceLabel(k)} <Text style={s.srcN}>{n}</Text></Text>
+            ))}
+          </ScrollView>
+        )}
+      </View>
+      {rows.length===0
+        ?<Text style={s.listEmpty}>No leads yet.</Text>
+        :<ScrollView style={{flex:1}} contentContainerStyle={{paddingBottom:14}}>
+          {rows.map(l=>{
+            const tier=tierOf(l.stage||'new');
+            const sel=selectedId===l.id;
+            return(
+              <TouchableOpacity key={l.id} activeOpacity={0.7} onPress={()=>onPick(l.id)}
+                style={[s.row,sel&&s.rowSel]}>
+                <View style={s.rowMain}>
+                  <View style={[s.rowDot,{backgroundColor:rgbStr(TIER_RGB[tier])}]}/>
+                  <View style={{flex:1}}>
+                    <Text style={s.rowName} numberOfLines={1}>{l.name||l.business||'—'}</Text>
+                    {!!l.business&&!!l.name&&<Text style={s.rowBiz} numberOfLines={1}>{l.business}</Text>}
+                  </View>
+                  <View style={s.rowRight}>
+                    <Text style={s.rowStage}>{STAGE_TEXT[l.stage]||String(l.stage||'').toUpperCase()}</Text>
+                    <Text style={s.rowSrc} numberOfLines={1}>{sourceLabel(l.source)}</Text>
+                  </View>
+                </View>
+                {sel&&(
+                  <View style={s.rowExpand}>
+                    <Text style={s.rowLine} numberOfLines={1}>◦ {l.contact||'no contact on file'}</Text>
+                    {!!l.website&&<Text style={s.rowLine} numberOfLines={1}>◦ {l.website}</Text>}
+                    {!!l.bottleneck&&<Text style={s.rowLine} numberOfLines={2}>◦ {l.bottleneck}</Text>}
+                    {!!l.next_action&&<Text style={[s.rowLine,s.rowNext]} numberOfLines={2}>→ {l.next_action}</Text>}
+                    {!!l.source_id&&<Text style={s.rowFrom} numberOfLines={1}>from {sourceLabel(l.source)} · {l.source_id}</Text>}
+                  </View>
+                )}
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>}
+    </View>
   );
 }
 
@@ -388,17 +445,30 @@ const s=StyleSheet.create({
   legendItem:{flexDirection:'row',alignItems:'center',gap:5},
   legendDot:{width:7,height:7,borderRadius:4},
   legendText:{fontFamily:FONTS.mono,fontSize:8,color:'#8a8069',letterSpacing:1},
-  field:{flex:1,position:'relative'},
+  field:{flex:1.25,position:'relative'},
   face:{position:'absolute',width:38,height:38,borderRadius:19},
   emptyWrap:{...StyleSheet.absoluteFillObject,alignItems:'center',justifyContent:'center',gap:6},
   emptyText:{fontFamily:FONTS.mono,fontSize:11,color:'#5a5145',letterSpacing:3},
   emptySub:{fontFamily:FONTS.mono,fontSize:8,color:'#3f3a30',letterSpacing:1},
-  card:{position:'absolute',left:14,right:14,bottom:16,backgroundColor:'#0A0907',borderWidth:1,borderColor:'#1F1B14',borderRadius:8,padding:12,gap:3},
-  cardTop:{flexDirection:'row',justifyContent:'space-between',alignItems:'center'},
-  cardStage:{fontFamily:FONTS.mono,fontSize:8,color:'#7fa8c9',letterSpacing:2,fontWeight:'700'},
-  cardX:{fontFamily:FONTS.mono,fontSize:11,color:'#5a5145'},
-  cardName:{fontFamily:FONTS.mono,fontSize:12,color:'#C9BEA6'},
-  cardBiz:{fontFamily:FONTS.mono,fontSize:9,color:'#8a8069'},
-  cardMeta:{fontFamily:FONTS.mono,fontSize:8,color:'#6a6250',marginTop:1},
-  cardNext:{fontFamily:FONTS.mono,fontSize:9,color:'#7fa8c9',marginTop:3},
+
+  list:{flex:1,borderTopWidth:1,borderTopColor:'#17130d',backgroundColor:'#050403'},
+  listHdr:{paddingHorizontal:14,paddingTop:8,paddingBottom:6,gap:6,borderBottomWidth:1,borderBottomColor:'#141009'},
+  listHdrT:{fontFamily:FONTS.mono,fontSize:9,color:'#8a8069',letterSpacing:2},
+  srcStrip:{gap:12,paddingRight:14},
+  srcChip:{fontFamily:FONTS.mono,fontSize:8,color:'#6a6250',letterSpacing:0.5},
+  srcN:{color:'#7fa8c9',fontWeight:'700'},
+  listEmpty:{fontFamily:FONTS.mono,fontSize:9,color:'#4a4438',letterSpacing:1,padding:14},
+  row:{paddingHorizontal:14,paddingVertical:8,borderBottomWidth:1,borderBottomColor:'#100d08'},
+  rowSel:{backgroundColor:'#0c0a06'},
+  rowMain:{flexDirection:'row',alignItems:'center',gap:9},
+  rowDot:{width:7,height:7,borderRadius:4},
+  rowName:{fontFamily:FONTS.mono,fontSize:10,color:'#C9BEA6'},
+  rowBiz:{fontFamily:FONTS.mono,fontSize:8,color:'#7a715c',marginTop:1},
+  rowRight:{alignItems:'flex-end',gap:1,maxWidth:'42%'},
+  rowStage:{fontFamily:FONTS.mono,fontSize:7.5,color:'#7fa8c9',letterSpacing:1,fontWeight:'700'},
+  rowSrc:{fontFamily:FONTS.mono,fontSize:7.5,color:'#6a6250',letterSpacing:0.5},
+  rowExpand:{marginTop:6,marginLeft:16,gap:3},
+  rowLine:{fontFamily:FONTS.mono,fontSize:8.5,color:'#8a8069',lineHeight:12},
+  rowNext:{color:'#7fa8c9'},
+  rowFrom:{fontFamily:FONTS.mono,fontSize:7.5,color:'#4a4438',letterSpacing:0.5,marginTop:1},
 });
