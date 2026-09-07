@@ -873,9 +873,9 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,busyPersonas,onPick,on
                   holds still, but she still rides the cloud like everyone else. */}
               <Animated.View style={{opacity:sparkleOpacity,transform:[{translateX:bobX},{translateY:bobY},{scale:sparkleScale}]}}>
                 <View style={s.orbBox} {...orbResponders[p.id].panHandlers}>
-                  <OrbVisual p={p} selected={selected} head={HEADS.has(p.id)} pic={pics[p.id]} unread={unreadPersonas?.has?.(p.id)} busy={busyPersonas?.has?.(p.id)} glowPulse={glowPulse}/>
+                  <OrbVisual p={p} selected={selected} head={HEADS.has(p.id)} anchor={p.id==='ara'} pic={pics[p.id]} unread={unreadPersonas?.has?.(p.id)} busy={busyPersonas?.has?.(p.id)} glowPulse={glowPulse}/>
                 </View>
-                <Text style={[s.orbName,{color:p.color},(selected||HEADS.has(p.id))&&s.orbNameStrong]} numberOfLines={1}>{p.name.replace(/\./g,'')}</Text>
+                <Text style={[s.orbName,{color:p.id==='ara'?'#E8C98A':p.color},(selected||HEADS.has(p.id)||p.id==='ara')&&s.orbNameStrong]} numberOfLines={1}>{p.name.replace(/\./g,'')}</Text>
               </Animated.View>
             </Animated.View>
           );
@@ -892,9 +892,9 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,busyPersonas,onPick,on
             <View key={p.id} style={[s.orbWrap,{transform:[{translateX:pin.tx},{translateY:pin.ty}]}]}>
               <Animated.View style={{opacity:o.sparkleOpacity,transform:[{translateX:o.bobX},{translateY:o.bobY},{scale:o.sparkleScale}]}}>
                 <View style={s.orbBox} {...orbResponders[p.id].panHandlers}>
-                  <OrbVisual p={p} selected={selected} head={HEADS.has(p.id)} pic={pics[p.id]} unread={unreadPersonas?.has?.(p.id)} busy={busyPersonas?.has?.(p.id)} glowPulse={glowPulse}/>
+                  <OrbVisual p={p} selected={selected} head={HEADS.has(p.id)} anchor={p.id==='ara'} pic={pics[p.id]} unread={unreadPersonas?.has?.(p.id)} busy={busyPersonas?.has?.(p.id)} glowPulse={glowPulse}/>
                 </View>
-                <Text style={[s.orbName,{color:p.color},(selected||HEADS.has(p.id))&&s.orbNameStrong]} numberOfLines={1}>{p.name.replace(/\./g,'')}</Text>
+                <Text style={[s.orbName,{color:p.id==='ara'?'#E8C98A':p.color},(selected||HEADS.has(p.id)||p.id==='ara')&&s.orbNameStrong]} numberOfLines={1}>{p.name.replace(/\./g,'')}</Text>
               </Animated.View>
             </View>
           );
@@ -908,9 +908,20 @@ const PersonaSphere=forwardRef(PersonaSphereInner);
 // Shared visual for one orb — the glow ring (while held for a custom group),
 // the core/picture, and the unread dot. Used by both the depth-sorted cloud
 // and the manually-pinned pass so dragging an orb doesn't change how it looks.
-function OrbVisual({p,selected,pic,unread,busy,head,glowPulse}){
+function OrbVisual({p,selected,pic,unread,busy,head,anchor,glowPulse}){
   return(
     <>
+      {/* A.R.A. — the anchor. A warm double corona (her colour + the app gold)
+          that slowly breathes, so she reads as the sun the cloud turns around,
+          distinct from both a plain persona and a department head. */}
+      {anchor&&<>
+        <Animated.View pointerEvents="none" style={[s.orbAnchorHalo,{
+          backgroundColor:p.color+'10',borderColor:'#E8C98A55',
+          opacity:glowPulse.interpolate({inputRange:[0,1],outputRange:[0.55,1]}),
+          transform:[{scale:glowPulse.interpolate({inputRange:[0,1],outputRange:[1,1.08]})}],
+        }]}/>
+        <View pointerEvents="none" style={[s.orbAnchorHalo2,{borderColor:p.color+'AA'}]}/>
+      </>}
       {/* A persona working in the background — a soft gold aura that breathes.
           Rendered first so it sits behind the orb core. */}
       {busy&&<Animated.View pointerEvents="none" style={[s.orbAura,{
@@ -922,12 +933,13 @@ function OrbVisual({p,selected,pic,unread,busy,head,glowPulse}){
       {head&&<View pointerEvents="none" style={[s.orbHeadHalo,{backgroundColor:p.color+'12',borderColor:p.color+'55'}]}/>}
       {selected&&<Animated.View style={[s.orbSelRing,{borderColor:p.color,
         opacity:glowPulse.interpolate({inputRange:[0,1],outputRange:[0.45,1]})}]}/>}
-      <View style={[s.orbGlow,{backgroundColor:p.color+(selected?'40':head?'30':'20')}]}>
+      <View style={[s.orbGlow,{backgroundColor:p.color+(selected?'40':anchor?'3A':head?'30':'20')}]}>
         {pic
           ?<Image source={{uri:pic}} style={s.orbImg}/>
-          :<View style={[s.orbCore,head&&s.orbCoreHead,{backgroundColor:p.color,shadowColor:p.color}]}/>}
+          :<View style={[s.orbCore,(head||anchor)&&s.orbCoreHead,anchor&&{width:26,height:26,borderRadius:13},{backgroundColor:p.color,shadowColor:p.color}]}/>}
       </View>
       {head&&<View pointerEvents="none" style={[s.orbHeadRing,{borderColor:p.color}]}/>}
+      {anchor&&<View pointerEvents="none" style={[s.orbAnchorRing,{borderColor:'#E8C98A'}]}/>}
       {unread&&<View style={s.orbUnread}/>}
     </>
   );
@@ -974,6 +986,15 @@ const s=StyleSheet.create({
   // in front (sized between orbGlow and the group-select ring).
   orbHeadHalo:{position:'absolute',top:-12,left:-12,right:-12,bottom:-12,borderRadius:38,borderWidth:1},
   orbHeadRing:{position:'absolute',top:-4,left:-4,right:-4,bottom:-4,borderRadius:32,borderWidth:1.5},
-  orbName:{fontFamily:'monospace',fontSize:6,letterSpacing:1,marginTop:4,opacity:0.85},
+  // A.R.A. anchor treatment: a wide breathing gold halo, an inner colour ring,
+  // and a solid gold ring on the orb — deliberately bigger and warmer than a head.
+  orbAnchorHalo:{position:'absolute',top:-20,left:-20,right:-20,bottom:-20,borderRadius:48,borderWidth:1,
+    shadowColor:'#E8C98A',shadowOpacity:0.7,shadowRadius:16,shadowOffset:{width:0,height:0},elevation:8},
+  orbAnchorHalo2:{position:'absolute',top:-10,left:-10,right:-10,bottom:-10,borderRadius:36,borderWidth:1},
+  orbAnchorRing:{position:'absolute',top:-5,left:-5,right:-5,bottom:-5,borderRadius:33,borderWidth:2},
+  // Name label — absolutely positioned BELOW the 52px orb box, out of the flex
+  // flow, so the wrap sizes to the orb alone and the depth-scale transform
+  // pivots on the orb's true centre (which is where every tether endpoint aims).
+  orbName:{position:'absolute',top:53,left:-22,right:-22,textAlign:'center',fontFamily:'monospace',fontSize:6,letterSpacing:1,opacity:0.85},
   orbNameStrong:{fontSize:7,fontWeight:'700',letterSpacing:1.5,opacity:1},
 });
