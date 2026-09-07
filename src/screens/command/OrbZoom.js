@@ -778,6 +778,24 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,busyPersonas,onPick,on
     const map={};
     PERSONA_LIST.forEach(p=>{
       const st=dragRef.current[p.id]={moved:false,longTimer:null,longFired:false,grabX:0,grabY:0};
+      if(p.id==='ara'){
+        // A.R.A. sits at the centre and is the biggest orb, so a swipe to fly
+        // the camera almost always starts on top of her. She is never dragged
+        // and never long-press-selected — her orb only catches a clean tap
+        // (open her). Any movement is a camera gesture: yield it to the parent
+        // cloud pan immediately and unconditionally, so you can always fly past
+        // her. (This is what "can't go past ara" keeps meaning.)
+        map[p.id]=PanResponder.create({
+          onStartShouldSetPanResponder:()=>true,
+          onMoveShouldSetPanResponder:()=>false,
+          onPanResponderTerminationRequest:()=>true,
+          onPanResponderGrant:()=>{st.moved=false;},
+          onPanResponderMove:(e,g)=>{if(Math.abs(g.dx)>6||Math.abs(g.dy)>6)st.moved=true;},
+          onPanResponderRelease:()=>{if(!st.moved)onOrbPressRef.current('ara');},
+          onPanResponderTerminate:()=>{},
+        });
+        return;
+      }
       map[p.id]=PanResponder.create({
         onStartShouldSetPanResponder:()=>true,
         onMoveShouldSetPanResponder:()=>true,
