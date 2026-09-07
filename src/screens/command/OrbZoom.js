@@ -169,33 +169,37 @@ for(let k=0;k<=16;k++){
   const u=0.5-0.5*Math.cos(2*Math.PI*k/16);
   BOB_IN.push(k/16);BOB_X.push(-BOB_AMP_X+2*BOB_AMP_X*u);BOB_Y.push(-BOB_AMP_Y+2*BOB_AMP_Y*u);
 }
-function bobAt(i,now,mountAt){
+function bobAt(i,now,start){
   const b=BOB[i];
-  if(!b.period)return{bx:0,by:0};
-  const t=now-mountAt-b.delay;
+  if(!b.period||!start)return{bx:0,by:0};
+  const t=now-start-b.delay;
   if(t<=0)return{bx:BOB_X[0],by:BOB_Y[0]};
   const u=0.5-0.5*Math.cos(2*Math.PI*((t/b.period)%1));
   return{bx:-BOB_AMP_X+2*BOB_AMP_X*u,by:-BOB_AMP_Y+2*BOB_AMP_Y*u};
 }
 
-// The org-chart tethers, isolated in their own component with their own low
-// tick rate. Recomputing them re-renders only this small SVG — never the orb
+// The org-chart tethers, isolated in their own component driven off its own
+// rAF loop. Recomputing them re-renders only this small SVG — never the orb
 // cloud — so the cloud's float stays a pure native animation the entire time.
-function TetherLayer({yawRef,dollyRef,pinnedRef,sizeRef,mountAt,RX,RY}){
+// Every endpoint is computed with the EXACT projection + bob the orb renders
+// with (same cx/cy, same denom, same cosine off the same start clock), so the
+// line meets each orb dead centre, every frame.
+function TetherLayer({yawRef,dollyRef,pinnedRef,sizeRef,bobStartRef,RX,RY}){
   const[paths,setPaths]=useState([]);
   useEffect(()=>{
+    let raf=0;
     const project=(i,yv,dv)=>{
       const pt=SCATTER[i];
       const cyN=Math.cos(yv),syN=Math.sin(yv);
       const x1=cyN*pt.x+syN*pt.z;
       const depth=(-pt.x*syN+pt.z*cyN)-dv;
-      const denom=Math.max(0.4,1.0+depth*0.14);
-      const cx=sizeRef.current.w/2,cy=sizeRef.current.h*0.42;
+      const denom=Math.min(20,Math.max(0.4,1.0+depth*0.14));   // matches the orb's own denom clamp
+      const cx=sizeRef.current.w/2,cy=sizeRef.current.h*0.42;   // s.orbWrap is centred on this point
       return{x:cx+(x1*RX)/denom,y:cy+(pt.y*RY)/denom,depth};
     };
     const endpoint=(id,yv,dv,now)=>{
       const i=ID_INDEX[id];
-      const{bx,by}=bobAt(i,now,mountAt);
+      const{bx,by}=bobAt(i,now,bobStartRef.current);
       const pin=pinnedRef.current[id];
       if(pin){const cx=sizeRef.current.w/2,cy=sizeRef.current.h*0.42;return{x:cx+pin.tx+bx,y:cy+pin.ty+by,depth:2};}
       const p=project(i,yv,dv);
@@ -215,11 +219,11 @@ function TetherLayer({yawRef,dollyRef,pinnedRef,sizeRef,mountAt,RX,RY}){
         const o=vis?Math.min(depthOpacity(pa.depth),depthOpacity(pb.depth))*0.72*glow:0;
         return{key:a+'-'+b,d:`M${pa.x},${pa.y} Q${midX},${midY} ${pb.x},${pb.y}`,o};
       }));
+      raf=requestAnimationFrame(tick);
     };
-    tick();
-    const iv=setInterval(tick,40);
-    return()=>clearInterval(iv);
-  },[RX,RY,mountAt,pinnedRef,sizeRef,yawRef,dollyRef]);
+    raf=requestAnimationFrame(tick);
+    return()=>cancelAnimationFrame(raf);
+  },[RX,RY,bobStartRef,pinnedRef,sizeRef,yawRef,dollyRef]);
   return(
     <Svg style={StyleSheet.absoluteFill} pointerEvents="none">
       {paths.map(t=>t.o>0.02&&(
@@ -541,7 +545,7 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,busyPersonas,onPick,on
   const originRef=useRef({x:0,y:0});    // this view's on-screen origin, for turning a raw touch page-position into a local one
   const pinnedRef=useRef(pinned);
   useEffect(()=>{pinnedRef.current=pinned;},[pinned]);
-  const mountAt=useRef(Date.now()).current;   // clock origin for the deterministic idle bob (see BOB / bobAt)
+  const bobStart=useRef(0);   // wall-clock instant the idle-bob loops actually .start()ed — the tether layer reconstructs the bob from this (see BOB / bobAt)
   const yaw=useRef(new Animated.Value(0)).current;        // 0 = dead ahead, so the front pair sits exactly left/right of center
   const dolly=useRef(new Animated.Value(-3.6)).current;   // start outside, cloud ahead
   const yStart=useRef(0),dStart=useRef(-3.6);
@@ -581,7 +585,7 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,busyPersonas,onPick,on
   // Each orb's current bob offset, reconstructed from the clock (see bobAt) —
   // no per-frame listener on the native Animated values. Used by the drag
   // responders below for the grab offset; the tether layer does its own.
-  const bobOffsetFor=useCallback((i)=>bobAt(i,Date.now(),mountAt),[mountAt]);
+  const bobOffsetFor=useCallback((i)=>bobAt(i,Date.now(),bobStart.current),[]);
 
   // A pinned orb's endpoint for tether purposes: its fixed screen position,
   // reported at a mid-range depth so its lines fade the same as anything else
@@ -655,6 +659,7 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,busyPersonas,onPick,on
         Animated.loop(Animated.timing(v,{toValue:1,duration:b.period,easing:Easing.linear,useNativeDriver:true})),
       ]);
     }).filter(Boolean);
+    bobStart.current=Date.now();   // the tether layer reconstructs the bob from this exact instant
     loops.forEach(l=>l.start());
     return()=>loops.forEach(l=>l.stop());
   },[]);// eslint-disable-line react-hooks/exhaustive-deps
@@ -834,7 +839,7 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,busyPersonas,onPick,on
       }}>
       <View style={StyleSheet.absoluteFill} {...pan.panHandlers}>
         <TetherLayer yawRef={yawNow} dollyRef={dollyNow} pinnedRef={pinnedRef}
-          sizeRef={sizeRef} mountAt={mountAt} RX={RX} RY={RY}/>
+          sizeRef={sizeRef} bobStartRef={bobStart} RX={RX} RY={RY}/>
         {order.map(oi=>orbs[oi]).filter(({p})=>!pinned[p.id]).map(({p,translateX,translateY,scale,opacity,bobX,bobY,sparkleScale,sparkleOpacity})=>{
           const selected=group.includes(p.id);
           return(
@@ -919,7 +924,9 @@ const s=StyleSheet.create({
   undoT:{fontFamily:'monospace',fontSize:10,color:'#999',letterSpacing:1},
   undoAction:{fontFamily:'monospace',fontSize:10,color:'#E8C98A',fontWeight:'700',letterSpacing:2},
 
-  orbWrap:{position:'absolute',left:'50%',top:'42%',marginLeft:-34,marginTop:-34,width:68,alignItems:'center'},
+  // marginLeft centres the 68-wide wrap on left:50%; marginTop lands the 52-tall
+  // orbBox's CENTRE on top:42% (that's the point every tether endpoint targets).
+  orbWrap:{position:'absolute',left:'50%',top:'42%',marginLeft:-34,marginTop:-26,width:68,alignItems:'center'},
   orbBox:{width:52,height:52},
   // Pulsing ring around an orb held into a custom group (long-press toggles
   // it). Sized just outside orbGlow's own clip so it isn't cropped.
