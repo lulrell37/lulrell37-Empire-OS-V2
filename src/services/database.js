@@ -745,6 +745,7 @@ export async function getActiveClipJobs(){
 }
 export async function getClipJob(id){return await db.getFirstAsync('SELECT * FROM clip_jobs WHERE id=?',[id]);}
 export async function getClipJobByIssue(issueNumber){return await db.getFirstAsync('SELECT * FROM clip_jobs WHERE issue_number=? ORDER BY created_at DESC LIMIT 1',[issueNumber]);}
+export async function deleteClipJob(id){await db.runAsync('DELETE FROM clip_jobs WHERE id=?',[id]);}
 
 // --- Video-watch jobs -------------------------------------------------
 // Same pattern as clip_jobs: id is `owner/repo#issue`, the GitHub issue is the
@@ -772,6 +773,7 @@ export async function getActiveWatchJobs(){
 }
 export async function getWatchJob(id){return await db.getFirstAsync('SELECT * FROM watch_jobs WHERE id=?',[id]);}
 export async function getWatchJobByIssue(issueNumber){return await db.getFirstAsync('SELECT * FROM watch_jobs WHERE issue_number=? ORDER BY created_at DESC LIMIT 1',[issueNumber]);}
+export async function deleteWatchJob(id){await db.runAsync('DELETE FROM watch_jobs WHERE id=?',[id]);}
 
 // --- Trade journal (Atlas) -------------------------------------------------
 // One row per trade Mr. Burrus confirmed. Opened on confirm; reconciled against
@@ -850,6 +852,7 @@ export async function getActiveBuildJobs(){
   return await db.getAllAsync(`SELECT * FROM build_jobs WHERE state NOT IN (${q}) ORDER BY created_at DESC`,BUILD_TERMINAL);
 }
 export async function getBuildJob(id){return await db.getFirstAsync('SELECT * FROM build_jobs WHERE id=?',[id]);}
+export async function deleteBuildJob(id){await db.runAsync('DELETE FROM build_jobs WHERE id=?',[id]);}
 // Resolve an issue-number-only reference (from a persona's [BUILD_*:#n] command)
 // to a job row — preferring one in `preferRepo` ({owner,repo}), else newest.
 export async function getBuildJobByIssue(issueNumber,preferRepo=null){

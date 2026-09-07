@@ -5,10 +5,11 @@
 import React,{useState,useEffect,useRef,useCallback}from 'react';
 import{View,Text,StyleSheet,TouchableOpacity}from 'react-native';
 import*as WebBrowser from 'expo-web-browser';
-import{getWatchJobs,updateWatchJob}from '../../services/database';
+import{getWatchJobs,updateWatchJob,deleteWatchJob}from '../../services/database';
 import{cancelWatchJob}from '../../services/buildAgent';
 import{jobProgress}from '../../services/jobEta';
 import ProgressBar from './ProgressBar';
+import TaskRowActions from '../../components/TaskRowActions';
 
 const POLL_MS=5000;
 const ACCENT='#6E56CF';
@@ -70,11 +71,9 @@ export default function WatchPanel({active}){
           <View style={s.rowTop}>
             <Text style={[s.state,{color:COLOR[j.status]||'#888'}]}>{LABEL[j.status]||j.status?.toUpperCase()}</Text>
             <Text style={s.meta}>#{j.issue_number}{inFlight?` · ${elapsed(j.created_at)}`:''}</Text>
-            {(j.status==='queued'||j.status==='watching')&&(
-              <TouchableOpacity onPress={()=>{cancelWatchJob(j.issue_number);updateWatchJob(j.id,{status:'cancelled'}).then(load);}} hitSlop={{top:8,bottom:8,left:8,right:8}}>
-                <Text style={s.x}>✕</Text>
-              </TouchableOpacity>
-            )}
+            <TaskRowActions what="video watch" running={inFlight}
+              onStop={async()=>{try{await cancelWatchJob(j.issue_number);}catch{} await updateWatchJob(j.id,{status:'cancelled'}); load();}}
+              onDelete={async()=>{if(inFlight){try{await cancelWatchJob(j.issue_number);}catch{}} await deleteWatchJob(j.id); load();}}/>
           </View>
           {prog&&(
             <View style={s.progRow}>

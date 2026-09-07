@@ -3,9 +3,11 @@
 // and, filtered to the active client project, for A.R.A. Mirrors TradePanel.
 import React,{useState,useEffect,useRef,useCallback}from 'react';
 import{View,Text,StyleSheet,TouchableOpacity}from 'react-native';
-import{getActiveBuildJobs}from '../../services/database';
+import{getBuildJobs}from '../../services/database';
+import TaskRowActions from '../../components/TaskRowActions';
 
 const POLL_MS=5000;
+const TERMINAL=['pushed','failed','cancelled'];
 
 // Ordered phases for the stepper. `question` sits on top of `working`.
 const PHASES=[
@@ -18,11 +20,11 @@ const PHASE_INDEX={queued:0,working:1,question:1,pr_open:2,merging:2,pushed:3};
 
 const STATE_LABEL={
   queued:'QUEUED',working:'WORKING',question:'NEEDS YOU',
-  pr_open:'PR READY',merging:'MERGING…',pushed:'PUSHED',failed:'FAILED',
+  pr_open:'PR READY',merging:'MERGING…',pushed:'PUSHED',failed:'FAILED',cancelled:'CANCELLED',
 };
 const STATE_COLOR={
   queued:'#8A7A55',working:'#D9A441',question:'#C7614B',
-  pr_open:'#5FA779',merging:'#D9A441',pushed:'#5FA779',failed:'#C7614B',
+  pr_open:'#5FA779',merging:'#D9A441',pushed:'#5FA779',failed:'#C7614B',cancelled:'#666',
 };
 
 function elapsed(ms){
@@ -51,7 +53,7 @@ function Stepper({state,accent}){
   );
 }
 
-export default function BuildPanel({active,onMerge,onCancel,filter,title='BUILD',accent}){
+export default function BuildPanel({active,onMerge,onCancel,onDelete,filter,title='BUILD',accent}){
   const[jobs,setJobs]=useState([]);
   const[,setTick]=useState(0);
   const[collapsed,setCollapsed]=useState(false);
@@ -59,7 +61,11 @@ export default function BuildPanel({active,onMerge,onCancel,filter,title='BUILD'
 
   const load=useCallback(async()=>{
     try{
-      let j=await getActiveBuildJobs();
+      let j=await getBuildJobs(40);
+      // active ones, plus anything that finished/failed in the last hour so it
+      // can still be cleared by hand
+      const cutoff=Date.now()-3600000;
+      j=j.filter(x=>!TERMINAL.includes(x.state)||(x.updated_at||0)>cutoff);
       if(typeof filter==='function')j=j.filter(filter);
       if(alive.current)setJobs(j);
     }catch{}
@@ -77,21 +83,24 @@ export default function BuildPanel({active,onMerge,onCancel,filter,title='BUILD'
   },[active,load]);
 
   if(!jobs.length)return null;
+  const openN=jobs.filter(j=>!TERMINAL.includes(j.state)).length;
 
   return(
     <View style={[s.wrap,accent&&{borderColor:accent+'33'}]}>
       <TouchableOpacity style={s.hdr} activeOpacity={0.7} onPress={()=>setCollapsed(c=>!c)}>
-        <Text style={[s.hdrLabel,accent&&{color:accent}]}>◆ {title} · {jobs.length} OPEN</Text>
+        <Text style={[s.hdrLabel,accent&&{color:accent}]}>◆ {title} · {openN} OPEN</Text>
         <Text style={s.hdrChevron}>{collapsed?'▸':'▾'}</Text>
       </TouchableOpacity>
-      {!collapsed&&jobs.map(j=>(
+      {!collapsed&&jobs.map(j=>{
+        const running=!TERMINAL.includes(j.state);
+        return(
         <View key={j.id||j.issue_number} style={s.row}>
           <View style={s.rowTop}>
             <Text style={[s.state,{color:STATE_COLOR[j.state]||'#888'}]}>{STATE_LABEL[j.state]||j.state?.toUpperCase()}</Text>
             <Text style={s.issue}>#{j.issue_number}{j.pr_number?` · PR #${j.pr_number}`:''}{j.state&&j.state!=='pushed'?` · ${elapsed(j.created_at)}`:''}</Text>
-            <TouchableOpacity onPress={()=>onCancel?.(j.id||j.issue_number)} hitSlop={{top:8,bottom:8,left:8,right:8}}>
-              <Text style={s.x}>✕</Text>
-            </TouchableOpacity>
+            <TaskRowActions what="build" running={running}
+              onStop={()=>onCancel?.(j.id||j.issue_number)}
+              onDelete={()=>onDelete?.(j.id||j.issue_number)}/>
           </View>
           {j.repo_name&&j.repo_name!=='lulrell37-Empire-OS-V2'&&<Text style={s.repo}>{j.repo_owner}/{j.repo_name}</Text>}
           <Text style={s.title} numberOfLines={2}>{j.title||j.spec||''}</Text>
@@ -101,7 +110,8 @@ export default function BuildPanel({active,onMerge,onCancel,filter,title='BUILD'
             <Text style={[s.mergeT,accent&&{color:accent}]}>MERGE & SHIP</Text>
           </TouchableOpacity>}
         </View>
-      ))}
+        );
+      })}
     </View>
   );
 }

@@ -18,7 +18,7 @@ import{autoAtlasBusy}from '../services/autoAtlas';
 import{handleCommands,stripCommands}from '../services/commandHandler';
 import{googleReadInjections,googleWriteCommands}from '../services/googleCommands';
 import{driveUploadFile,googleConnected}from '../services/googleClient';
-import{getMessages,saveMessage,getAllPersonaPics,savePersonaMemory,getSetting,setSetting,getExpenseSummary,addBuildJob,updateBuildJob,getBuildJob,getBuildJobByIssue,getBuildJobs,buildJobRepo,DEFAULT_BUILD_REPO,getCustomPrompt,getAllLeads,addClipJob,addWatchJob,getActiveWatchJobs,getActiveClipJobs,getActiveBuildJobs,getClipJobs,getWatchJobs,getGeneratingContentItems,getUnreadPersonas,getUnreadMessages,markPersonaRead,getContentItems,getContentTally,getContentPages,updateContentItem}from '../services/database';
+import{getMessages,saveMessage,getAllPersonaPics,savePersonaMemory,getSetting,setSetting,getExpenseSummary,addBuildJob,updateBuildJob,getBuildJob,getBuildJobByIssue,getBuildJobs,deleteBuildJob,buildJobRepo,DEFAULT_BUILD_REPO,getCustomPrompt,getAllLeads,addClipJob,addWatchJob,getActiveWatchJobs,getActiveClipJobs,getActiveBuildJobs,getClipJobs,getWatchJobs,getGeneratingContentItems,getUnreadPersonas,getUnreadMessages,markPersonaRead,getContentItems,getContentTally,getContentPages,updateContentItem}from '../services/database';
 import{compileBatch,publishContent,contentStatusLine}from '../services/socialPublish';
 import{pollContentJobs}from '../services/contentJobs';
 import{speak as speakOneShot}from '../services/voice';
@@ -2028,6 +2028,27 @@ export default function CommandScreen({navigation,route}){
       ]);
     })();
   }
+  function confirmBuildDelete(jobId){
+    (async()=>{
+      const job=await getBuildJob(jobId);
+      if(!job){pushSystemMsg(`Couldn't find that build job.`);return;}
+      const repo=buildJobRepo(job);
+      const running=!['pushed','failed','cancelled'].includes(job.state);
+      Alert.alert('Delete this build?',
+        running
+          ? `Closes issue #${job.issue_number}${job.pr_number?` and PR #${job.pr_number}`:''} in ${repo.owner}/${repo.repo} and drops it from the list.`
+          : 'Removes it from the list for good.',
+        [
+          {text:'Cancel',style:'cancel'},
+          {text:'Delete',style:'destructive',onPress:async()=>{
+            if(running){try{await cancelBuild(job.issue_number,job.pr_number,repo);}catch{}}
+            await deleteBuildJob(job.id);
+            clearIssue('merge-'+job.id);clearIssue('build-fail-'+job.id);
+            pushSystemMsg(`— Build #${job.issue_number} removed —`);
+          }},
+        ]);
+    })();
+  }
   // A.R.A. speaks to a build event for her active project instead of a bare
   // system line — so she "comes back" on her own.
   async function araBuildReport(ev){
@@ -2277,7 +2298,7 @@ export default function CommandScreen({navigation,route}){
       {view==='text'&&mode==='direct'&&activePersona==='scout'&&<LeadsPanel active={isFocused}/>}
       {view==='text'&&mode==='direct'&&activePersona==='rogue'&&<ClipPanel active={isFocused}/>}
       {view==='text'&&mode==='direct'&&<WatchPanel active={isFocused}/>}
-      {view==='text'&&mode==='direct'&&activePersona==='jarvis'&&<BuildPanel active={isFocused} onMerge={confirmBuildMerge} onCancel={confirmBuildCancel} filter={jarvisBuildFilter}/>}
+      {view==='text'&&mode==='direct'&&activePersona==='jarvis'&&<BuildPanel active={isFocused} onMerge={confirmBuildMerge} onCancel={confirmBuildCancel} onDelete={confirmBuildDelete} filter={jarvisBuildFilter}/>}
 
       {view==='text'&&project&&mode==='direct'&&activePersona==='ara'&&(
         <View style={s.firmBar}>
@@ -2294,7 +2315,7 @@ export default function CommandScreen({navigation,route}){
           </TouchableOpacity>
         </View>
       )}
-      {view==='text'&&project&&mode==='direct'&&activePersona==='ara'&&<BuildPanel active={isFocused} title="FIRM BUILD" accent="#00CED1" onMerge={confirmBuildMerge} onCancel={confirmBuildCancel} filter={firmBuildFilter}/>}
+      {view==='text'&&project&&mode==='direct'&&activePersona==='ara'&&<BuildPanel active={isFocused} title="FIRM BUILD" accent="#00CED1" onMerge={confirmBuildMerge} onCancel={confirmBuildCancel} onDelete={confirmBuildDelete} filter={firmBuildFilter}/>}
 
       <DeepResearchBanner job={deepResearch} onDismiss={dismissDeepResearch}/>
 
