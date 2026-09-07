@@ -23,6 +23,7 @@ import{pushLeadsToSheet}from './leadsSheet';
 
 let timer=null,running=false,busy=false;
 let lastHeartbeat=0,lastError=0;
+let doneAnnouncedFor='';   // date-string the "done for the day" line was last said for
 const HEARTBEAT_MS=1800000;
 const ERROR_MS=3600000;
 const listeners=new Set();
@@ -220,6 +221,18 @@ async function runOnce(){
     const dailyLeads=Math.max(1,parseInt(await getSetting('auto_scout_daily_leads','20'),10)||20);
     const dailyEmails=Math.max(0,parseInt(await getSetting('auto_scout_daily_emails','20'),10)||20);
     const stats=await loadStats();
+
+    // Both daily caps hit → S.C.O.U.T. is done for the day. Stand fully down:
+    // no passes, no sheet push, no heartbeat. Say it once, then stay quiet until
+    // the date rolls over (loadStats resets stats on a new day, so this clears
+    // itself). The interval keeps ticking but each run is a cheap no-op.
+    if(stats.added>=dailyLeads&&stats.sent>=dailyEmails){
+      if(stats.date!==doneAnnouncedFor){
+        doneAnnouncedFor=stats.date;
+        emit(`AUTO-SCOUT · done for the day — ${stats.added} leads, ${stats.sent} emails. Back at it tomorrow.`);
+      }
+      return;
+    }
 
     // Inbound (X + Hacker News, then Reddit) is the priority — it goes first
     // and claims the lead budget, with outbound prospecting filling whatever
