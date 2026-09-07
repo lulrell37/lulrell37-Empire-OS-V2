@@ -22,7 +22,8 @@ import useEmpireStore from '../store/useEmpireStore';
 const TABS=['KEYS','GOOGLE','TRADING','OUTREACH','DEV','BACKEND','AI','PROFILES','PROMPTS','USAGE','DIAGNOSTICS'];
 export default function SettingsScreen({navigation}){
   const[tab,setTab]=useState('KEYS');
-  const[claude,setClaude]=useState('');const[grok,setGrok]=useState('');const[openai,setOpenai]=useState('');const[gemini,setGemini]=useState('');const[elevenlabs,setElevenlabs]=useState('');const[meshy,setMeshy]=useState('');
+  const[claude,setClaude]=useState('');const[grok,setGrok]=useState('');const[openai,setOpenai]=useState('');const[gemini,setGemini]=useState('');const[elevenlabs,setElevenlabs]=useState('');const[meshy,setMeshy]=useState('');const[mem0,setMem0]=useState('');
+  const[backfill,setBackfill]=useState(null); // {done,total} while importing memories into Mem0
   const[hfId,setHfId]=useState('');const[hfSecret,setHfSecret]=useState('');
   const[showKey,setShowKey]=useState({});
   const[promptPersona,setPromptPersona]=useState('jarvis');const[promptText,setPromptText]=useState('');
@@ -74,7 +75,7 @@ export default function SettingsScreen({navigation}){
     }
   },[response]);// eslint-disable-line react-hooks/exhaustive-deps
   async function loadAll(){
-    const k=await loadKeys();if(k){setClaude(k.claude||'');setGrok(k.grok||'');setOpenai(k.openai||'');setGemini(k.gemini||'');setElevenlabs(k.elevenlabs||'');setMeshy(k.meshy||'');setHfId(k.hfKeyId||'');setHfSecret(k.hfKeySecret||'');}
+    const k=await loadKeys();if(k){setClaude(k.claude||'');setGrok(k.grok||'');setOpenai(k.openai||'');setGemini(k.gemini||'');setElevenlabs(k.elevenlabs||'');setMeshy(k.meshy||'');setHfId(k.hfKeyId||'');setHfSecret(k.hfKeySecret||'');setMem0(k.mem0||'');}
     const u=await getApiUsage();setUsage(u);
     const p=await getAllPersonaPics();setPersonaPics(p);
     const g=await loadGoogleToken();setGoogleConnected(!!g?.accessToken);
@@ -286,8 +287,25 @@ export default function SettingsScreen({navigation}){
   }
   async function saveApiKeys(){
     if(!claude.trim()){Alert.alert('Required','Claude API key is required.');return;}
-    await saveKeys({claude:claude.trim(),grok:grok.trim(),openai:openai.trim(),gemini:gemini.trim(),elevenlabs:elevenlabs.trim(),meshy:meshy.trim(),hfKeyId:hfId.trim(),hfKeySecret:hfSecret.trim()});
+    await saveKeys({claude:claude.trim(),grok:grok.trim(),openai:openai.trim(),gemini:gemini.trim(),elevenlabs:elevenlabs.trim(),meshy:meshy.trim(),hfKeyId:hfId.trim(),hfKeySecret:hfSecret.trim(),mem0:mem0.trim()});
+    try{const{mem0ClearKeyCache}=await import('../services/mem0');mem0ClearKeyCache();}catch{}
     setSaved(true);setTimeout(()=>setSaved(false),2000);
+  }
+  async function runMem0Backfill(){
+    if(!mem0.trim()){Alert.alert('Mem0','Save a Mem0 key first.');return;}
+    Alert.alert('Import memories into Mem0?','Pushes every stored persona memory to Mem0 once so semantic recall has history to work with. Safe to run again — Mem0 dedupes. Takes a few minutes.',[
+      {text:'Cancel',style:'cancel'},
+      {text:'Import',onPress:async()=>{
+        setBackfill({done:0,total:0});
+        try{
+          const{mem0BackfillFromLocal}=await import('../services/mem0');
+          const{getDb}=await import('../services/database');
+          const r=await mem0BackfillFromLocal(getDb,(done,total)=>setBackfill({done,total}));
+          setBackfill(null);
+          Alert.alert('Done',`Imported ${r.pushed} of ${r.total} memories into Mem0.`);
+        }catch(e){setBackfill(null);Alert.alert('Import failed',String(e.message||e));}
+      }},
+    ]);
   }
   async function loadPrompt(personaId){
     setPromptPersona(personaId);
@@ -321,7 +339,8 @@ export default function SettingsScreen({navigation}){
               ['ELEVENLABS','Optional · Voice synthesis',elevenlabs,setElevenlabs,'...'],
               ['MESHY','Optional · 3D model generation for the HUD diagram card',meshy,setMeshy,'msy_...'],
               ['HIGGSFIELD KEY ID','Optional · F.O.R.G.E. auto-generates page content (reels + posts)',hfId,setHfId,'key id from higgsfield.ai'],
-              ['HIGGSFIELD KEY SECRET','Paired with the key ID above',hfSecret,setHfSecret,'key secret']
+              ['HIGGSFIELD KEY SECRET','Paired with the key ID above',hfSecret,setHfSecret,'key secret'],
+              ['MEM0','Optional · persona memory — semantic recall, smaller & cheaper prompts',mem0,setMem0,'m0-...']
             ].map(([label,sub,val,setter,ph])=>(
               <View key={label} style={s.keyField}>
                 <View style={s.keyHdr}>
@@ -335,6 +354,13 @@ export default function SettingsScreen({navigation}){
               </View>
             ))}
             <TouchableOpacity style={s.saveBtn} onPress={saveApiKeys}><Text style={s.saveBtnT}>{saved?'✓ SAVED':'SAVE KEYS'}</Text></TouchableOpacity>
+            {!!mem0.trim()&&(
+              <TouchableOpacity style={[s.saveBtn,{marginTop:10,backgroundColor:'#111',borderWidth:1,borderColor:'#333'}]} onPress={runMem0Backfill} disabled={!!backfill}>
+                <Text style={[s.saveBtnT,{color:'#9AD3E0'}]}>
+                  {backfill?`IMPORTING… ${backfill.done}${backfill.total?`/${backfill.total}`:''}`:'IMPORT EXISTING MEMORIES INTO MEM0'}
+                </Text>
+              </TouchableOpacity>
+            )}
           </View>}
           {tab==='GOOGLE'&&<View>
             <Text style={s.secTitle}>GOOGLE ACCOUNT</Text>

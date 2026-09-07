@@ -470,6 +470,9 @@ export async function savePersonaMemory(persona,content,opts={}){
   const{category,keywords}=classifyMemory(text);
   const pin=opts&&opts.pinnedUntil?opts.pinnedUntil:null;
   await db.runAsync('INSERT INTO persona_memory(persona,content,category,keywords,date,created_at,pinned_until) VALUES(?,?,?,?,?,?,?)',[persona,text,category,JSON.stringify(keywords),getTodayStr(),Date.now(),pin]);
+  // Also hand it to Mem0 (if a key is set) so semantic recall stays current.
+  // Local row above is the source of truth + offline fallback; this is additive.
+  try{const{mem0Remember}=await import('./mem0');mem0Remember(persona,text,pin?{pinned:true}:{});}catch{}
 }
 // A persona pins something time-sensitive Mr. Burrus flagged. Stored as its own
 // memory row, always loaded until `pinned_until` passes.

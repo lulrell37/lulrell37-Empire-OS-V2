@@ -159,14 +159,30 @@ Only when seeing or editing the thing is the point — not for a passing mention
     }catch{}
   }
   const lastUser=[...convo].reverse().find(m=>m?.role==='user'&&m?.content);
-  const mem=await getPersonaMemory(personaId,{query:lastUser?.content||'',charBudget:36000});
+  const memQuery=lastUser?.content||'';
+  // Semantic recall from Mem0 — a short list of the facts relevant to what
+  // Mr. Burrus just said (Mem0 extracts + dedupes server-side). When Mem0 has
+  // hits, the local table only needs to top up pinned notes + the last few
+  // exchanges on a small budget; when Mem0 is off/empty, the local table does
+  // the whole job (but still on a much smaller budget than the old 36k dump).
+  let mem0Facts=[];
+  try{const{mem0Search}=await import('./mem0');mem0Facts=await mem0Search(personaId,memQuery,{topK:18});}catch{}
+  const localBudget=mem0Facts.length?7000:16000;
+  const mem=await getPersonaMemory(personaId,{query:memQuery,charBudget:localBudget});
+  const now=Date.now();
+  const parts=[];
+  if(mem0Facts.length){
+    parts.push('WHAT YOU KNOW (most relevant first):\n'+mem0Facts.map(f=>`- ${String(f.memory||'').trim()}`).filter(s=>s.length>2).join('\n'));
+  }
   if(mem?.length){
-    const now=Date.now();
-    const body=mem.map(m=>{
+    const localBody=mem.map(m=>{
       const pin=(m.pinned_until&&m.pinned_until>now)?`📌 PINNED · ${Math.max(1,Math.ceil((m.pinned_until-now)/86400000))}d left `:'';
       return `[${pin}${m.date}${m.category?' · '+m.category:''}]\n${m.content}`;
     }).join('\n\n');
-    sys+=`\n\n[MEMORY — your history for the topic at hand, plus anything pinned and the last few exchanges. Reference naturally; never claim you don't remember:\n${body.substring(0,90000)}\n]`;
+    parts.push((mem0Facts.length?'RECENT & PINNED:\n':'')+localBody);
+  }
+  if(parts.length){
+    sys+=`\n\n[MEMORY — what you know about the topic at hand, plus anything pinned and the last few exchanges. Reference naturally; never claim you don't remember. If something specific isn't here, emit [MEMORY_QUERY: your precise question] before replying:\n${parts.join('\n\n').substring(0,40000)}\n]`;
   }
   // Keep this LAST so it's the most recent thing the model reads before replying.
   sys+=`\n\n[THE CURRENT MOMENT — right now it is ${timeStr} ${tz}, and Mr. Burrus is in Waldorf, MD. This is authoritative. The chat history and the memory above may be hours, days, or weeks old — do NOT assume it is still the same day or time of day as the last message. Every reply should be grounded in the date and time stated here. If more than a few hours have clearly passed since the last exchange, greet the new moment accordingly (a fresh morning, a new day) rather than continuing as if no time passed.]`;
@@ -409,7 +425,9 @@ export async function queryMemory(personaId,question,signal=null){
   let rows=[];
   try{rows=await getPersonaMemory(personaId,{query:question,charBudget:60000});}catch{}
   if(!rows.length){try{rows=(await getMemoriesByPersona(personaId)).slice(0,150);}catch{}}
-  const corpus=rows.map(r=>`[${r.date}${r.category?' · '+r.category:''}]\n${r.content}`).join('\n\n').slice(0,60000);
+  let m0='';
+  try{const{mem0Search}=await import('./mem0');const hits=await mem0Search(personaId,question,{topK:40});if(hits.length)m0=hits.map(h=>`- ${String(h.memory||'').trim()}`).join('\n');}catch{}
+  const corpus=(m0?`EXTRACTED FACTS (semantic match):\n${m0}\n\nRAW EXCHANGES:\n`:'')+rows.map(r=>`[${r.date}${r.category?' · '+r.category:''}]\n${r.content}`).join('\n\n').slice(0,55000);
   const sys=`You are the private memory index for ${persona.name}, the assistant to Mr. Burrus. Below are stored exchanges between Mr. Burrus and ${persona.name}, newest first. Answer the recall question using ONLY what is in these memories. Be specific — quote dates and details. If the memories do not cover it, say so in one sentence. No preamble.\n\n=== STORED MEMORIES ===\n${corpus||'(none)'}\n=== END ===`;
   const res=await fetch(base+'/v1/messages',{method:'POST',headers:{'Content-Type':'application/json',...auth},body:JSON.stringify({model:'claude-sonnet-5',max_tokens:700,system:sys,messages:[{role:'user',content:question}]}),signal});
   if(!res.ok){const e=await res.text();throw new Error(`memory recall: ${e.substring(0,80)}`);}
