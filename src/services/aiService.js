@@ -321,7 +321,7 @@ export async function callPersona(personaId,messages,signal=null,onDelta=null,op
     const{base,auth}=await aiRoute('openai',k?.openai,'OpenAI');
     const url=base+'/v1/chat/completions';
     const headers={'Content-Type':'application/json',...auth};
-    const oaModel=hasVision?'gpt-5':(opts.model||persona.model||'gpt-5');
+    const oaModel=hasVision?'gpt-4o':(opts.model||persona.model||'gpt-4o');
     // GPT-5 and the o-series reject `max_tokens` — they take `max_completion_tokens`.
     const tokKey=/^(gpt-5|o\d)/.test(oaModel)?'max_completion_tokens':'max_tokens';
     const body=JSON.stringify({model:oaModel,[tokKey]:maxTokens,messages:[{role:'system',content:sys},...hist],stream,...(stream?{stream_options:{include_usage:true}}:{})});

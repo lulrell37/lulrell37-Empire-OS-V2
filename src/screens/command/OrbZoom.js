@@ -44,7 +44,7 @@ const REST_Z_MIN=1.6,REST_Z_MAX=6.6;      // everyone else's depth range — wel
 // placement and the tether graph read from this one map.
 const DEPARTMENTS=[
   {head:'atlas',  hub:{x:3.8,y:-2.1,z:3.0}, reports:['talon','muse2']},
-  {head:'selene', hub:{x:-4.0,y:1.4,z:3.8}, reports:['rogue','muse1','forge','herald']},
+  {head:'selene', hub:{x:-4.0,y:1.4,z:3.8}, reports:['rogue','scribe','hook','muse1','forge','herald']},
   {head:'haven',  hub:{x:1.4,y:3.5,z:5.4},  reports:['muse3']},
 ];
 const REPORT_ARC=1.6;   // how far a head's reports sit from its hub centre (was ~0.35 — packed tight)

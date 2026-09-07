@@ -68,6 +68,25 @@ export async function handleCommands(response,personaId,callbacks={}){
     try{await gtask.driveSaveNote({title,content});}
     catch{await saveNote(title,content,personaId);}
   }
+  // S.C.R.I.B.E. and H.O.O.K. get dedicated create/edit verbs for their
+  // deliverables — a script, a hook set — so the work is a first-class artifact
+  // rather than a generic note. Both map to the same Drive create-or-edit path
+  // as [SAVE_NOTE] (local note is the fallback when Drive isn't connected),
+  // namespaced by a title prefix so each persona's library stays self-contained
+  // and listable. CREATE and EDIT behave identically (create-or-overwrite by
+  // title) — two verbs only so the intent reads clearly in the transcript. As
+  // with [SAVE_NOTE], no literal ] may appear inside the tag.
+  const ARTIFACT_NS={scribe:{verb:'SCRIPT',prefix:'Script'},hook:{verb:'HOOK',prefix:'Hook Set'}};
+  if(ARTIFACT_NS[personaId]){
+    const{verb,prefix}=ARTIFACT_NS[personaId];
+    for(const m of response.matchAll(new RegExp(`\\[${verb}_(?:CREATE|EDIT):\\s*([^|\\]]+)\\|([^\\]]+)\\]`,'gi'))){
+      const name=m[1]?.trim(),body=m[2]?.trim();
+      if(!name||!body)continue;
+      const title=`${prefix} — ${name}`;
+      try{await gtask.driveSaveNote({title,content:body});}
+      catch{await saveNote(title,body,personaId);}
+    }
+  }
   // [COUNCIL_IDEA: text] — the owner hands A.R.A. a strategy idea for the nightly
   // Empire Council to work through. Appended to the `council_ideas` app-setting
   // (a JSON list), which syncs to the backend where the 5am meeting reads it.
@@ -381,6 +400,7 @@ export function stripCommands(text){
     .replace(/\[READ_FILE_ID:[^\]]*\]/gi,'').replace(/\[CREATE_NOTE:[^\]]*\]/gi,'')
     .replace(/\[EDIT_NOTE:[^\]]*\]/gi,'').replace(/\[DELETE_FILE:[^\]]*\]/gi,'')
     .replace(/\[CREATE_SHEET:[^\]]*\]/gi,'').replace(/\[SEND_EMAIL:[^\]]*\]/gi,'')
+    .replace(/\[(?:SCRIPT|HOOK)_(?:CREATE|EDIT|OPEN):[^\]]*\]/gi,'').replace(/\[(?:SCRIPTS|HOOKS)\]/gi,'')
     .replace(/\[READ_TASKS\]/gi,'').replace(/\[CREATE_TASK:[^\]]*\]/gi,'')
     .replace(/\[SET_REMINDER:[^\]]*\]/gi,'').replace(/\[SYNC_AND_SAVE\]/gi,'')
     .replace(/\[READ_CALENDAR(?::[^\]]*)?\]/gi,'').replace(/\[LIST_NOTES\]/gi,'')

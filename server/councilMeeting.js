@@ -80,7 +80,7 @@ const COUNCIL_ROSTER = {
     blurb: 'Numbers are his language, sovereignty is the mission. Capital allocation, cash flow, unit economics, the big money calls.' },
   scout: { name: 'S.C.O.U.T.', role: 'Lead Scout & Outbound (Empire Digital)', api: 'anthropic', model: CLAUDE_MODEL,
     blurb: 'Prospecting and cold outreach operator. Knows where demand is and how to reach owners who have a bottleneck worth killing.' },
-  selene: { name: 'S.E.L.E.N.E.', role: 'Creative Director', api: 'openai', model: 'gpt-5-chat-latest',
+  selene: { name: 'S.E.L.E.N.E.', role: 'Creative Director', api: 'openai', model: 'gpt-4o',
     blurb: 'Dark luxury meets sharp strategy. Content strategy, visual direction, positioning, copy that converts.' },
   nova: { name: 'N.O.V.A.', role: 'Cross-Domain Analyst', api: 'google', model: 'gemini-2.5-pro',
     blurb: 'Sits above every domain. Connects signals the specialists miss and pressure-tests the plan.' },

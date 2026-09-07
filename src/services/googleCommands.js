@@ -64,6 +64,24 @@ export async function googleReadInjections(text){
     const {ref:fileId,page}=splitPageArg(m[1]);
     await push('DRIVE FILE',()=>g.driveRead({fileId,page}));
   }
+  // S.C.R.I.B.E. / H.O.O.K. pull one of their own artifacts back, or list them —
+  // same Drive-first, local-fallback path as [READ_NOTE], with the namespace
+  // prefix their [SCRIPT_CREATE] / [HOOK_CREATE] writes use.
+  for(const m of t.matchAll(/\[(SCRIPT|HOOK)_OPEN:\s*([^\]]+)\]/ig)){
+    const prefix=m[1].toUpperCase()==='SCRIPT'?'Script':'Hook Set';
+    const {ref,page}=splitPageArg(m[2]);
+    const name=`${prefix} — ${ref}`;
+    await push('NOTE',async()=>{
+      try{return await g.driveRead({name,page});}
+      catch(e){
+        const local=await getNote(name).catch(()=>null);
+        if(local)return g.sliceDoc(`Note "${local.title}" (local)`,local.content||'',page,name);
+        throw e;
+      }
+    });
+  }
+  if(/\[SCRIPTS\]/i.test(t))await push('SCRIPTS',()=>g.driveSearch('Script — '));
+  if(/\[HOOKS\]/i.test(t))await push('HOOK SETS',()=>g.driveSearch('Hook Set — '));
 
   if(/\[READ_TASKS\]/i.test(t)){
     await push('TASKS',async()=>{
