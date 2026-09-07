@@ -20,7 +20,15 @@ function scan(body){
   const res=b.match(/<!--\s*clip-result:\s*([\s\S]*?)-->/i);
   if(res){try{const j=JSON.parse(res[1].trim());if(j&&(j.download||j.share))return{kind:'done',download:j.download||'',share:j.share||''};}catch{}}
   const fail=b.match(/<!--\s*clip-failed:\s*([\s\S]*?)-->/i);
-  if(fail)return{kind:'failed',note:fail[1].trim().slice(0,300)};
+  if(fail){
+    const note=fail[1].trim().slice(0,300);
+    // A hosted-runner reclaim is transient — empire-clip-editor's clip-retry.yml
+    // re-dispatches the job automatically, a few times. Treat those markers as
+    // "still editing" so R.O.G.U.E. doesn't cry failure between attempts; only
+    // the terminal "gave up" marker is a real failure.
+    if(/reclaim|SIGTERM|hosted-runner|shutdown signal/i.test(note)&&!/gave up/i.test(note))return{kind:'editing'};
+    return{kind:'failed',note};
+  }
   if(/<!--\s*clip-status:\s*editing\s*-->/i.test(b))return{kind:'editing'};
   return null;
 }
