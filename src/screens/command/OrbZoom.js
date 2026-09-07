@@ -22,20 +22,30 @@ const WHEEL_MID=1200;// px of scroll slack each side of the wheel-catcher — bi
 const SAMP=[],SIN=[],COS=[];
 for(let k=0;k<=480;k++){const v=-12*Math.PI+(24*Math.PI)*(k/480);SAMP.push(v);SIN.push(Math.sin(v));COS.push(Math.cos(v));}
 
-// Personas scattered through a wide 3D volume (not a sphere shell). A.R.A.
-// gets a fixed front-row seat close to the camera — the only one you land on
-// — everyone else, Jarvis included, starts noticeably farther back (faint,
-// small) and only reads clearly once you've dollied in past her.
-// Each department head gets its own fixed "department" hub, with its reports
-// fanned out in a loose downward arc around it. The hubs sit well apart from
-// each other and from the general cloud so each department reads as its own
-// space. Everyone else is seeded randomly through the remaining volume, seeded
-// so that layout is stable across a session; a light min-distance pass keeps
-// them from clumping (and from landing on top of the fixed seats/hubs). You
-// yaw the cloud and fly forward/back through it.
-const FRONT_Z=-2.6;   // Ara's fixed front-seat depth — the only one you land on
+// Personas scattered through a wide 3D volume (not a sphere shell). A.R.A. gets
+// a front-row seat close to the camera and never bobs, so she reads as the
+// anchor — but she's a normal cloud orb: you yaw and fly right past her like
+// anyone else. Each department head gets its own fixed hub with its reports
+// ringed around it. The remaining free agents take explicit FILL seats spread
+// out to the edges of the frame so the whole view is used, not just a knot in
+// the middle distance; anyone past that is seeded randomly with a min-distance
+// pass. Seeded so the layout is stable across a session.
+const FRONT_Z=-2.6;   // A.R.A.'s front-seat depth
 const SIZE_BOOST={ara:1.45};   // flat size bump on top of the depth-driven scale
-const REST_Z_MIN=1.6,REST_Z_MAX=6.6;      // everyone else's depth range — well behind the front pair
+const REST_Z_MIN=0.4,REST_Z_MAX=5.6;      // random-fill depth range — pulled forward so they spread across the frame
+
+// Deliberate seats for the free agents (personas with no department), spread to
+// the corners/edges at close-to-mid depth so they fill the empty space instead
+// of clumping in the back. Assigned in PERSONA_LIST order to whoever isn't
+// already fixed; the random pass only covers anyone left over.
+const FILL=[
+  {x:-7.6,y:4.8,z:1.1},   // bottom-left, close
+  {x:7.4,y:-4.6,z:1.5},   // top-right
+  {x:-7.0,y:-4.4,z:2.3},  // top-left
+  {x:6.8,y:4.4,z:1.9},    // bottom-right
+  {x:0.4,y:-5.4,z:2.8},   // top-centre, mid
+  {x:-0.6,y:5.2,z:1.4},   // bottom-centre, close
+];
 
 // Department hubs. Each head gets a fixed seat well clear of the others and of
 // the general scatter; its reports fan out evenly around it, all the way round
@@ -86,11 +96,13 @@ const SCATTER=(()=>{
       });
     });
   }
+  let fillIdx=0;
   for(let i=0;i<PERSONA_LIST.length;i++){
     if(pts[i])continue;
+    if(fillIdx<FILL.length){pts[i]={...FILL[fillIdx++]};fixed.push(pts[i]);continue;}
     let best=null,bestD=-1;
     for(let tries=0;tries<48;tries++){
-      const c={x:(rnd()*2-1)*8.0,y:(rnd()*2-1)*5.6,z:REST_Z_MIN+rnd()*(REST_Z_MAX-REST_Z_MIN)};
+      const c={x:(rnd()*2-1)*9.0,y:(rnd()*2-1)*6.4,z:REST_Z_MIN+rnd()*(REST_Z_MAX-REST_Z_MIN)};
       let d=99;
       for(const p of pts)if(p)d=Math.min(d,Math.hypot(p.x-c.x,p.y-c.y,p.z-c.z));
       for(const p of fixed)d=Math.min(d,Math.hypot(p.x-c.x,p.y-c.y,p.z-c.z));
@@ -143,18 +155,19 @@ function touchDist(t){return Math.hypot(t[0].pageX-t[1].pageX,t[0].pageY-t[1].pa
 //      Date.now(), so it needs NO per-frame listener on those 26 Animated
 //      values (that bridge traffic was what kept the float from being smooth).
 // A.R.A. never bobs.
+const BOB_AMP_X=4, BOB_AMP_Y=9;   // half-amplitude of the idle drift, px (kept gentle)
 const BOB=PERSONA_LIST.map((p,i)=>{
   if(p.id==='ara')return{period:0,delay:0};
-  const period=3400+(i*617)%2600;              // ~3.4s .. 6.0s per cycle
-  const phase=(i*0.6180339887)%1;              // golden-ratio spread so neighbours differ
-  return{period,delay:Math.round(phase*1200)}; // small start stagger; periods differ enough to keep them desynced after
+  const period=4400+(i*617)%3000;             // ~4.4s .. 7.4s per cycle — slow
+  const phase=(i*0.6180339887)%1;             // golden-ratio spread so neighbours differ
+  return{period,delay:Math.round(phase*1200)};// small start stagger; periods differ enough to keep them desynced after
 });
 // cosine 0..1 across one cycle, sampled for Animated.interpolate — the native
 // side ramps 0->1 linearly, these points bend that into a smooth sine.
 const BOB_IN=[],BOB_X=[],BOB_Y=[];
 for(let k=0;k<=16;k++){
   const u=0.5-0.5*Math.cos(2*Math.PI*k/16);
-  BOB_IN.push(k/16);BOB_X.push(-7+14*u);BOB_Y.push(-16+32*u);
+  BOB_IN.push(k/16);BOB_X.push(-BOB_AMP_X+2*BOB_AMP_X*u);BOB_Y.push(-BOB_AMP_Y+2*BOB_AMP_Y*u);
 }
 function bobAt(i,now,mountAt){
   const b=BOB[i];
@@ -162,7 +175,7 @@ function bobAt(i,now,mountAt){
   const t=now-mountAt-b.delay;
   if(t<=0)return{bx:BOB_X[0],by:BOB_Y[0]};
   const u=0.5-0.5*Math.cos(2*Math.PI*((t/b.period)%1));
-  return{bx:-7+14*u,by:-16+32*u};
+  return{bx:-BOB_AMP_X+2*BOB_AMP_X*u,by:-BOB_AMP_Y+2*BOB_AMP_Y*u};
 }
 
 // The org-chart tethers, isolated in their own component with their own low
@@ -181,36 +194,36 @@ function TetherLayer({yawRef,dollyRef,pinnedRef,sizeRef,mountAt,RX,RY}){
       return{x:cx+(x1*RX)/denom,y:cy+(pt.y*RY)/denom,depth};
     };
     const endpoint=(id,yv,dv,now)=>{
-      const cx=sizeRef.current.w/2,cy=sizeRef.current.h*0.42;
-      if(id==='ara')return{x:cx,y:cy,depth:2};
       const i=ID_INDEX[id];
       const{bx,by}=bobAt(i,now,mountAt);
       const pin=pinnedRef.current[id];
-      if(pin)return{x:cx+pin.tx+bx,y:cy+pin.ty+by,depth:2};
+      if(pin){const cx=sizeRef.current.w/2,cy=sizeRef.current.h*0.42;return{x:cx+pin.tx+bx,y:cy+pin.ty+by,depth:2};}
       const p=project(i,yv,dv);
       return{x:p.x+bx,y:p.y+by,depth:p.depth};
     };
     const tick=()=>{
       const yv=yawRef.current,dv=dollyRef.current,now=Date.now();
-      const glow=0.4+0.6*(0.5-0.5*Math.cos(2*Math.PI*((now/3600)%1)));
+      const glow=0.6+0.4*(0.5-0.5*Math.cos(2*Math.PI*((now/4600)%1)));
       setPaths(TETHERS.map(([a,b])=>{
         const pa=endpoint(a,yv,dv,now),pb=endpoint(b,yv,dv,now);
         const vis=pa.depth>0.35&&pb.depth>0.35;
         const dist=Math.hypot(pb.x-pa.x,pb.y-pa.y);
-        const sag=Math.min(40,Math.max(6,dist*0.12));
+        // barely-there sag — the line should read as one piece with the orbs it
+        // joins, not a slack rope hanging off them
+        const sag=Math.min(12,Math.max(1,dist*0.04));
         const midX=(pa.x+pb.x)/2,midY=(pa.y+pb.y)/2+sag;
-        const o=vis?Math.min(depthOpacity(pa.depth),depthOpacity(pb.depth))*0.55*glow:0;
+        const o=vis?Math.min(depthOpacity(pa.depth),depthOpacity(pb.depth))*0.72*glow:0;
         return{key:a+'-'+b,d:`M${pa.x},${pa.y} Q${midX},${midY} ${pb.x},${pb.y}`,o};
       }));
     };
     tick();
-    const iv=setInterval(tick,70);
+    const iv=setInterval(tick,40);
     return()=>clearInterval(iv);
   },[RX,RY,mountAt,pinnedRef,sizeRef,yawRef,dollyRef]);
   return(
     <Svg style={StyleSheet.absoluteFill} pointerEvents="none">
       {paths.map(t=>t.o>0.02&&(
-        <Path key={t.key} d={t.d} stroke="#E8C98A" strokeWidth={1} fill="none" strokeOpacity={t.o}/>
+        <Path key={t.key} d={t.d} stroke="#E8C98A" strokeWidth={1.25} strokeLinecap="round" fill="none" strokeOpacity={t.o}/>
       ))}
     </Svg>
   );
@@ -576,9 +589,6 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,busyPersonas,onPick,on
   // still bob in place — see the pinned render pass — so the tether needs
   // that same bob folded in too).
   const endpointFor=useCallback((id,yv,dv)=>{
-    // A.R.A. is locked to the centre of the screen — every tether that meets
-    // her meets her there, no matter how the cloud is turned or flown.
-    if(id==='ara')return{x:sizeRef.current.w/2,y:sizeRef.current.h*0.42,depth:2};
     const i=ID_INDEX[id];
     const{bx,by}=bobOffsetFor(i);
     const pin=pinnedRef.current[id];
@@ -624,8 +634,8 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,busyPersonas,onPick,on
     // she reads as the fixed anchor the whole cloud drifts around.
     const loops=sparkles.map((v,i)=>PERSONA_LIST[i].id==='ara'?null:Animated.loop(Animated.sequence([
       Animated.delay(i*160),
-      Animated.timing(v,{toValue:1,duration:900+((i*137)%700),easing:Easing.inOut(Easing.sin),useNativeDriver:true}),
-      Animated.timing(v,{toValue:0,duration:900+((i*211)%700),easing:Easing.inOut(Easing.sin),useNativeDriver:true}),
+      Animated.timing(v,{toValue:1,duration:1500+((i*137)%900),easing:Easing.inOut(Easing.sin),useNativeDriver:true}),
+      Animated.timing(v,{toValue:0,duration:1500+((i*211)%900),easing:Easing.inOut(Easing.sin),useNativeDriver:true}),
     ]))).filter(Boolean);
     loops.forEach(l=>l.start());
     return()=>loops.forEach(l=>l.stop());
@@ -658,14 +668,6 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,busyPersonas,onPick,on
       const cx=sizeRef.current.w/2,cy=sizeRef.current.h*0.42;
       let best=PERSONA_LIST[0].id,score=-Infinity;
       for(let i=0;i<PERSONA_LIST.length;i++){
-        if(PERSONA_LIST[i].id==='ara'){
-          // A.R.A. is locked dead-centre and never moves with the camera —
-          // she's the default "straight ahead" pick and wins any tap near
-          // the middle of the screen.
-          const sc=x==null?0.2:-Math.hypot(cx-x,cy-y);
-          if(sc>score){score=sc;best='ara';}
-          continue;
-        }
         const pt=SCATTER[i];
         const x1=cyN*pt.x+syN*pt.z;
         const depth=(-pt.x*syN+pt.z*cyN)-dv;
@@ -720,14 +722,13 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,busyPersonas,onPick,on
         translateY:Animated.divide(Animated.multiply(pt.y,RY),denom),
         // Bob + twinkle both ride one native-driven transform layer (see the
         // render). Kept off the JS-driven position/scale below so they stay
-        // smooth no matter what the JS thread is doing.
-        // A.R.A. holds dead still on her front seat — no idle bob, no twinkle.
-        // Everyone behind her drifts noticeably (wider bob than the cloud used
-        // to have) so the galaxy reads as alive around her fixed point.
+        // smooth no matter what the JS thread is doing. Deliberately gentle —
+        // a slow settle, not a jitter. A.R.A. resolves to 0/1 so she holds
+        // still while still riding the cloud.
         bobX:p.id==='ara'?0:floats[i].interpolate({inputRange:BOB_IN,outputRange:BOB_X}),
         bobY:p.id==='ara'?0:floats[i].interpolate({inputRange:BOB_IN,outputRange:BOB_Y}),
-        sparkleScale:p.id==='ara'?1:sparkles[i].interpolate({inputRange:[0,1],outputRange:[0.92,1.1]}),
-        sparkleOpacity:p.id==='ara'?1:sparkles[i].interpolate({inputRange:[0,1],outputRange:[0.6,1]}),
+        sparkleScale:p.id==='ara'?1:sparkles[i].interpolate({inputRange:[0,1],outputRange:[0.97,1.04]}),
+        sparkleOpacity:p.id==='ara'?1:sparkles[i].interpolate({inputRange:[0,1],outputRange:[0.82,1]}),
         // Depth-driven scale/opacity — JS-driven (they track yaw/dolly) but
         // completely static while the camera is still.
         scale:Animated.multiply(
@@ -767,46 +768,13 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,busyPersonas,onPick,on
     const map={};
     PERSONA_LIST.forEach(p=>{
       const st=dragRef.current[p.id]={moved:false,longTimer:null,longFired:false,grabX:0,grabY:0};
-      if(p.id==='ara'){
-        // A.R.A. is locked dead-centre and is never dragged — she just holds
-        // still while the galaxy turns and flies around her. Her orb only needs
-        // to catch a tap (open her) and a long-press (hold her into a group);
-        // ANY movement belongs to the camera behind her, so this responder
-        // always yields a moving touch to the parent cloud pan. Without that
-        // yield, a press-then-drag that started on her big centre hit-target
-        // stuck the whole galaxy in place — you couldn't fly past her.
-        map[p.id]=PanResponder.create({
-          onStartShouldSetPanResponder:()=>true,
-          onMoveShouldSetPanResponder:()=>false,
-          onPanResponderTerminationRequest:()=>true,
-          onPanResponderGrant:()=>{
-            st.moved=false;
-            st.longTimer=setTimeout(()=>{if(!st.moved)toggle('ara');},280);
-          },
-          onPanResponderMove:(e,g)=>{
-            if(Math.abs(g.dx)>6||Math.abs(g.dy)>6){
-              st.moved=true;
-              if(st.longTimer){clearTimeout(st.longTimer);st.longTimer=null;}
-            }
-          },
-          onPanResponderRelease:()=>{
-            if(st.longTimer){clearTimeout(st.longTimer);st.longTimer=null;}
-            if(!st.moved)onOrbPressRef.current('ara');
-          },
-          onPanResponderTerminate:()=>{
-            if(st.longTimer){clearTimeout(st.longTimer);st.longTimer=null;}
-          },
-        });
-        return;
-      }
       map[p.id]=PanResponder.create({
         onStartShouldSetPanResponder:()=>true,
         onMoveShouldSetPanResponder:()=>true,
         // Yield to the parent (cloud yaw/dolly pan) for as long as we haven't
-        // actually committed to THIS orb — otherwise any swipe that happens
-        // to start on top of an orb (Ara sits dead-center, so this was
-        // constant) permanently hijacks the touch and the cloud can never be
-        // panned/dollied past it, no matter how far the touch moves.
+        // actually committed to THIS orb — otherwise any swipe that happens to
+        // start on top of an orb permanently hijacks the touch and the cloud
+        // can never be panned or flown past it, no matter how far it moves.
         onPanResponderTerminationRequest:()=>!st.longFired,
         onPanResponderGrant:(e,g)=>{
           st.moved=false;st.longFired=false;
@@ -825,7 +793,6 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,busyPersonas,onPick,on
           st.longTimer=setTimeout(()=>{if(!st.moved){st.longFired=true;toggle(p.id);}},280);
         },
         onPanResponderMove:(e,g)=>{
-          if(p.id==='ara')return;   // A.R.A. is locked centre — never draggable
           // Movement before the long-press has fired reads as a swipe meant
           // for the cloud, not a grab on this orb — bail out (the parent
           // steals the touch via onPanResponderTerminationRequest above)
@@ -868,13 +835,14 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,busyPersonas,onPick,on
       <View style={StyleSheet.absoluteFill} {...pan.panHandlers}>
         <TetherLayer yawRef={yawNow} dollyRef={dollyNow} pinnedRef={pinnedRef}
           sizeRef={sizeRef} mountAt={mountAt} RX={RX} RY={RY}/>
-        {order.map(oi=>orbs[oi]).filter(({p})=>!pinned[p.id]&&p.id!=='ara').map(({p,translateX,translateY,scale,opacity,bobX,bobY,sparkleScale,sparkleOpacity})=>{
+        {order.map(oi=>orbs[oi]).filter(({p})=>!pinned[p.id]).map(({p,translateX,translateY,scale,opacity,bobX,bobY,sparkleScale,sparkleOpacity})=>{
           const selected=group.includes(p.id);
           return(
             <Animated.View key={p.id} style={[s.orbWrap,{opacity,transform:[{translateX},{translateY},{scale}]}]}>
               {/* Idle bob + twinkle live on one native-driven transform layer,
                   separate from the JS-driven cloud position above — see the
-                  float loop for why. */}
+                  float loop for why. A.R.A.'s bob/twinkle resolve to 0/1 so she
+                  holds still, but she still rides the cloud like everyone else. */}
               <Animated.View style={{opacity:sparkleOpacity,transform:[{translateX:bobX},{translateY:bobY},{scale:sparkleScale}]}}>
                 <View style={s.orbBox} {...orbResponders[p.id].panHandlers}>
                   <OrbVisual p={p} selected={selected} pic={pics[p.id]} unread={unreadPersonas?.has?.(p.id)} busy={busyPersonas?.has?.(p.id)} glowPulse={glowPulse}/>
@@ -884,28 +852,11 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,busyPersonas,onPick,on
             </Animated.View>
           );
         })}
-        {/* A.R.A. is locked dead-centre — she never moves with the yaw/dolly of
-            the cloud, never bobs, never twinkles. The whole galaxy turns and
-            drifts around her fixed point. Rendered on top of the cloud. */}
-        {(()=>{
-          const p=getPersona('ara');
-          const selected=group.includes('ara');
-          return(
-            <View key="ara" style={s.orbWrap}>
-              <View style={{transform:[{scale:2.0}]}}>
-                <View style={s.orbBox} {...orbResponders.ara.panHandlers}>
-                  <OrbVisual p={p} selected={selected} pic={pics.ara} unread={unreadPersonas?.has?.('ara')} busy={busyPersonas?.has?.('ara')} glowPulse={glowPulse}/>
-                </View>
-                <Text style={[s.orbName,{color:p.color},selected&&{fontWeight:'700'}]} numberOfLines={1}>{p.name.replace(/\./g,'')}</Text>
-              </View>
-            </View>
-          );
-        })()}
         {/* Manually placed orbs render last so they're always on top, decoupled
             from the depth-sorted cloud's position/scale/opacity (dragging one
             fixes it to a screen spot instead of the camera) — but they keep
             the same idle bob as everyone else instead of going dead still. */}
-        {PERSONA_LIST.filter(p=>pinned[p.id]&&p.id!=='ara').map(p=>{
+        {PERSONA_LIST.filter(p=>pinned[p.id]).map(p=>{
           const pin=pinned[p.id];
           const selected=group.includes(p.id);
           const o=orbs[ID_INDEX[p.id]];
