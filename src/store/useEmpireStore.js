@@ -24,13 +24,14 @@ const useEmpireStore=create((set,get)=>({
   clearFirmIssue:(key)=>set(s=>{if(!(key in s.firmIssues))return{};const n={...s.firmIssues};delete n[key];return{firmIssues:n};}),
   // Everything a persona is actively doing in the background — surfaced as chips
   // in the same top banner (NudgeBar) and as the gold "working" aura on the
-  // galaxy orbs. An array of {key, persona, label}; CommandScreen recomputes it
-  // on a timer while it's focused. Not user-dismissable — each entry clears
-  // itself when the work finishes.
+  // galaxy orbs. An array of {key, persona, label, frac?}; CommandScreen
+  // recomputes it on a timer while it's focused. `frac` (0..1, quantized by the
+  // caller so it only moves in visible steps) drives a thin progress bar on the
+  // chip. Not user-dismissable — each entry clears itself when the work finishes.
   activity:[],
   setActivity:(list)=>set(s=>{
     const a=Array.isArray(list)?list:[];
-    if(a.length===s.activity.length&&a.every((x,i)=>x.key===s.activity[i]?.key&&x.label===s.activity[i]?.label))return s;
+    if(a.length===s.activity.length&&a.every((x,i)=>x.key===s.activity[i]?.key&&x.label===s.activity[i]?.label&&x.frac===s.activity[i]?.frac))return s;
     return{activity:a};
   }),
 }));

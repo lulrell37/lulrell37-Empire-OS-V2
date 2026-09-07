@@ -39,6 +39,8 @@ export async function initDatabase(){
   await migrateColumn('hud_layout','w','REAL DEFAULT 0');
   await migrateColumn('hud_layout','h','REAL DEFAULT 0');
   await migrateColumn('content_items','gen_phase','TEXT');
+  await migrateColumn('clip_jobs','started_at','INTEGER');
+  await migrateColumn('watch_jobs','started_at','INTEGER');
   await migrateTraderPersona();
   await ensureHudState();
   await ensureBusinessTargets();

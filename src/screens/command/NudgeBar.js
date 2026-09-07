@@ -52,6 +52,7 @@ export default function NudgeBar({active}){
   // problems (errors before warn/info), then proactive nudges.
   const activityChips=activity.map(a=>({
     key:'act:'+a.key,persona:a.persona,text:a.label,severity:'activity',activity:true,
+    frac:typeof a.frac==='number'?a.frac:null,
   }));
   const issueChips=Object.entries(firmIssues).map(([key,v])=>({
     key:'firm:'+key,rawKey:key,text:v.text,detail:v.detail,severity:v.severity||'error',issue:true,
@@ -100,6 +101,7 @@ export default function NudgeBar({active}){
           <Animated.View style={[s.actDot,{backgroundColor:col,opacity:pulse.interpolate({inputRange:[0,1],outputRange:[0.35,1]})}]}/>
           <Text style={[s.actName,{color:col}]}>{name}</Text>
           <Text style={s.actLabel}>{n.text}</Text>
+          {n.frac!=null&&<View style={[s.actProg,{width:`${Math.round(Math.max(0,Math.min(1,n.frac))*100)}%`,backgroundColor:col}]}/>}
         </View>
       );
     }
@@ -148,8 +150,9 @@ const s=StyleSheet.create({
   dot:{fontFamily:'monospace',fontSize:9,fontWeight:'700'},
   chipT:{fontFamily:'monospace',fontSize:8,letterSpacing:0.5},
   chipX:{fontFamily:'monospace',fontSize:10},
-  actChip:{gap:5,backgroundColor:'rgba(232,201,138,0.04)'},
+  actChip:{gap:5,backgroundColor:'rgba(232,201,138,0.04)',overflow:'hidden'},
   actDot:{width:5,height:5,borderRadius:2.5},
+  actProg:{position:'absolute',left:0,bottom:0,height:2,opacity:0.8},
   actName:{fontFamily:'monospace',fontSize:8,fontWeight:'700',letterSpacing:0.5},
   actLabel:{fontFamily:'monospace',fontSize:8,letterSpacing:0.3,color:'#8A8172'},
 });

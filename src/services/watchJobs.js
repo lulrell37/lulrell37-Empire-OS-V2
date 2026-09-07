@@ -8,6 +8,12 @@ import{getWatchActivity,WATCH_REPO}from './buildAgent';
 
 const REPO=WATCH_REPO;
 
+// Same guard as clipJobs.js: if a job sits in queued/watching long past the
+// Action's own timeout with no progress (updated_at only advances when this
+// poller moves the row), the run died without a watch-failed marker. Fail it
+// locally so it stops showing as in-flight.
+const STALE_MS=45*60*1000;
+
 function scan(body){
   const b=String(body||'');
   const res=b.match(/<!--\s*watch-result:\s*([\s\S]*?)-->/i);
@@ -34,6 +40,7 @@ export async function pollWatchJobs(){
         if(!s)continue;
         if(s.kind==='watching'&&job.status==='queued'){
           patch.status='watching';
+          patch.started_at=Date.now();   // anchor for the "time remaining" estimate
           events.push(`— WATCH · the agent is watching your video —`);
         }else if(s.kind==='done'){
           patch={status:'done',report_url:s.report,summary:s.summary};
@@ -47,6 +54,17 @@ export async function pollWatchJobs(){
       // Issue closed with no result marker → treat as cancelled.
       if(state==='closed'&&!patch.status&&job.status!=='done'&&job.status!=='failed'){
         patch.status='cancelled';
+      }
+      // No result and no progress for far longer than the agent's own timeout —
+      // the run stalled. Fail it so it stops showing as in-flight.
+      if(!patch.status&&(job.status==='queued'||job.status==='watching')){
+        const since=job.updated_at||job.created_at||0;
+        if(since&&Date.now()-since>STALE_MS){
+          const mins=Math.round((Date.now()-since)/60000);
+          patch.status='failed';
+          patch.note=`No word from the watch agent for ${mins} min — the run looks stalled. Send the video again to retry.`;
+          events.push(`— WATCH · the run stalled — the agent never came back. Re-send the video for another go. —`);
+        }
       }
       if(Object.keys(patch).length)await updateWatchJob(job.id,patch);
     }catch{/* transient GitHub error — try again next tick */}

@@ -18,7 +18,7 @@ import{autoAtlasBusy}from '../services/autoAtlas';
 import{handleCommands,stripCommands}from '../services/commandHandler';
 import{googleReadInjections,googleWriteCommands}from '../services/googleCommands';
 import{driveUploadFile,googleConnected}from '../services/googleClient';
-import{getMessages,saveMessage,getAllPersonaPics,savePersonaMemory,getSetting,setSetting,getExpenseSummary,addBuildJob,updateBuildJob,getBuildJob,getBuildJobByIssue,getBuildJobs,buildJobRepo,DEFAULT_BUILD_REPO,getCustomPrompt,getAllLeads,addClipJob,addWatchJob,getActiveWatchJobs,getActiveClipJobs,getActiveBuildJobs,getGeneratingContentItems,getUnreadPersonas,getUnreadMessages,markPersonaRead,getContentItems,getContentTally,getContentPages,updateContentItem}from '../services/database';
+import{getMessages,saveMessage,getAllPersonaPics,savePersonaMemory,getSetting,setSetting,getExpenseSummary,addBuildJob,updateBuildJob,getBuildJob,getBuildJobByIssue,getBuildJobs,buildJobRepo,DEFAULT_BUILD_REPO,getCustomPrompt,getAllLeads,addClipJob,addWatchJob,getActiveWatchJobs,getActiveClipJobs,getActiveBuildJobs,getClipJobs,getWatchJobs,getGeneratingContentItems,getUnreadPersonas,getUnreadMessages,markPersonaRead,getContentItems,getContentTally,getContentPages,updateContentItem}from '../services/database';
 import{compileBatch,publishContent,contentStatusLine}from '../services/socialPublish';
 import{pollContentJobs}from '../services/contentJobs';
 import{speak as speakOneShot}from '../services/voice';
@@ -26,6 +26,7 @@ import{fileBuildRequest,replyToBuild,mergeBuild,cancelBuild,createProjectRepo,fi
 import{pollBuildJobs}from '../services/buildJobs';
 import{pollClipJobs}from '../services/clipJobs';
 import{pollWatchJobs}from '../services/watchJobs';
+import{jobProgress}from '../services/jobEta';
 import ClipPanel from './command/ClipPanel';
 import WatchPanel from './command/WatchPanel';
 import{tlSnapshot,tlFormatSnapshot,tlPlaceOrder,tlClosePosition,tlModifyPosition,tlPositions,MAX_QTY,MAX_OPEN_POSITIONS}from '../services/tradeLocker';
@@ -252,20 +253,28 @@ export default function CommandScreen({navigation,route}){
     let alive=true;
     const pull=async()=>{
       try{
-        const[w,c,b,g]=await Promise.all([
+        const[w,c,b,g,clipHist,watchHist]=await Promise.all([
           getActiveWatchJobs().catch(()=>[]),
           getActiveClipJobs().catch(()=>[]),
           getActiveBuildJobs().catch(()=>[]),
           getGeneratingContentItems().catch(()=>[]),
+          getClipJobs(12).catch(()=>[]),
+          getWatchJobs(12).catch(()=>[]),
         ]);
         if(!alive)return;
         const out=[];
-        for(const j of w)out.push({key:'watch:'+j.id,persona:j.persona||'rogue',label:j.status==='watching'?'watching a video':'video queued to watch'});
-        for(const j of c)out.push({key:'clip:'+j.id,persona:'rogue',label:j.status==='editing'?'cutting a clip':'clip queued to edit'});
+        for(const j of w){
+          const p=jobProgress('watch',j,watchHist,0.05);
+          out.push({key:'watch:'+j.id,persona:j.persona||'rogue',label:j.status==='watching'?'watching a video':'video queued to watch',frac:p?.frac});
+        }
+        for(const j of c){
+          const p=jobProgress('clip',j,clipHist,0.05);
+          out.push({key:'clip:'+j.id,persona:'rogue',label:j.status==='editing'?'cutting a clip':'clip queued to edit',frac:p?.frac});
+        }
         for(const j of b)out.push({key:'build:'+j.id,persona:j.project_name?'ara':'jarvis',label:`building #${j.issue_number}`});
         if(g.length)out.push({key:'forge',persona:'forge',label:g.length>1?`generating ${g.length} pieces`:'generating media'});
         setBgJobs(prev=>{
-          if(prev.length===out.length&&out.every((x,i)=>x.key===prev[i]?.key&&x.label===prev[i]?.label))return prev;
+          if(prev.length===out.length&&out.every((x,i)=>x.key===prev[i]?.key&&x.label===prev[i]?.label&&x.frac===prev[i]?.frac))return prev;
           return out;
         });
       }catch{}

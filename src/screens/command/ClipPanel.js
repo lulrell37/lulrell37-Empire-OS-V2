@@ -6,6 +6,8 @@ import{View,Text,StyleSheet,TouchableOpacity}from 'react-native';
 import*as WebBrowser from 'expo-web-browser';
 import{getClipJobs,updateClipJob}from '../../services/database';
 import{cancelClipJob}from '../../services/buildAgent';
+import{jobProgress}from '../../services/jobEta';
+import ProgressBar from './ProgressBar';
 
 const POLL_MS=5000;
 const ACCENT='#4A9E7A';
@@ -25,6 +27,7 @@ const open=u=>{if(u)WebBrowser.openBrowserAsync(u).catch(()=>{});};
 
 export default function ClipPanel({active}){
   const[jobs,setJobs]=useState([]);
+  const[hist,setHist]=useState([]);   // full recent list — feeds the ETA estimate
   const[,setTick]=useState(0);
   const[collapsed,setCollapsed]=useState(false);
   const alive=useRef(true);
@@ -35,7 +38,7 @@ export default function ClipPanel({active}){
       // active ones, plus anything finished in the last hour
       const cutoff=Date.now()-3600000;
       const list=all.filter(j=>!['done','failed','cancelled'].includes(j.status)||(j.updated_at||0)>cutoff);
-      if(alive.current)setJobs(list);
+      if(alive.current){setJobs(list);setHist(all);}
     }catch{}
   },[]);
 
@@ -59,17 +62,26 @@ export default function ClipPanel({active}){
         <Text style={[s.hdrLabel,{color:ACCENT}]}>◆ CLIPS · {openN} IN FLIGHT</Text>
         <Text style={s.hdrChevron}>{collapsed?'▸':'▾'}</Text>
       </TouchableOpacity>
-      {!collapsed&&jobs.map(j=>(
+      {!collapsed&&jobs.map(j=>{
+        const inFlight=j.status==='queued'||j.status==='editing';
+        const prog=inFlight?jobProgress('clip',j,hist):null;
+        return(
         <View key={j.id} style={s.row}>
           <View style={s.rowTop}>
             <Text style={[s.state,{color:COLOR[j.status]||'#888'}]}>{LABEL[j.status]||j.status?.toUpperCase()}</Text>
-            <Text style={s.meta}>#{j.issue_number}{j.status==='queued'||j.status==='editing'?` · ${elapsed(j.created_at)}`:''}</Text>
+            <Text style={s.meta}>#{j.issue_number}{inFlight?` · ${elapsed(j.created_at)}`:''}</Text>
             {(j.status==='queued'||j.status==='editing')&&(
               <TouchableOpacity onPress={()=>{cancelClipJob(j.issue_number);updateClipJob(j.id,{status:'cancelled'}).then(load);}} hitSlop={{top:8,bottom:8,left:8,right:8}}>
                 <Text style={s.x}>✕</Text>
               </TouchableOpacity>
             )}
           </View>
+          {prog&&(
+            <View style={s.progRow}>
+              <View style={s.progBar}><ProgressBar frac={prog.frac} color={ACCENT}/></View>
+              {!!prog.caption&&<Text style={s.progCap}>{prog.caption}</Text>}
+            </View>
+          )}
           <Text style={s.brief} numberOfLines={2}>{j.instructions}</Text>
           {j.status==='failed'&&!!j.note&&<Text style={s.err} numberOfLines={3}>{j.note}</Text>}
           {j.status==='done'&&(
@@ -79,7 +91,8 @@ export default function ClipPanel({active}){
             </View>
           )}
         </View>
-      ))}
+        );
+      })}
     </View>
   );
 }
@@ -91,6 +104,9 @@ const s=StyleSheet.create({
   hdrChevron:{fontFamily:'monospace',fontSize:9,color:'#555'},
   row:{paddingHorizontal:12,paddingVertical:8,borderTopWidth:1,borderTopColor:'#141210',gap:4},
   rowTop:{flexDirection:'row',alignItems:'center',gap:8},
+  progRow:{flexDirection:'row',alignItems:'center',gap:8},
+  progBar:{flex:1},
+  progCap:{fontFamily:'monospace',fontSize:7,letterSpacing:0.5,color:'#6a6155',minWidth:56,textAlign:'right'},
   state:{fontFamily:'monospace',fontSize:8,fontWeight:'700',letterSpacing:1},
   meta:{fontFamily:'monospace',fontSize:8,color:'#666',flex:1},
   x:{fontFamily:'monospace',fontSize:10,color:'#5a5145'},
