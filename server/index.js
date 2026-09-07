@@ -71,9 +71,12 @@ function startDailyBriefingCron() {
 
 // The nightly Empire Council — A.R.A. + the council discuss the businesses (with
 // live web research) and set next steps. 05:00 ET, idempotent per day. No startup
-// run: it's ~20+ Claude calls, the daily cron is enough. Set COUNCIL=off to disable.
+// run: it's ~20+ Claude calls, the daily cron is enough.
+// OFF by default (it's the biggest recurring spend on the account, and it needs
+// the app synced to the backend to have anything to discuss). Set COUNCIL=on to
+// bring it back.
 function startCouncilCron() {
-  if (process.env.COUNCIL === 'off') return console.log('council cron disabled (COUNCIL=off)');
+  if (process.env.COUNCIL !== 'on') return console.log('council cron disabled (set COUNCIL=on to enable)');
   if (!process.env.ANTHROPIC_API_KEY) return console.log('council cron off (no ANTHROPIC_API_KEY)');
   cron.schedule('0 5 * * *', () => {
     runCouncilMeeting()
