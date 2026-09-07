@@ -19,9 +19,16 @@ const useEmpireStore=create((set,get)=>({
   diagramPrompt:'',setDiagramPrompt:(p)=>set({diagramPrompt:p||''}),
   // Live problems surfaced in the top notification bar (NudgeBar). Keyed so the
   // same issue can't stack; cleared when the matching thing succeeds.
-  firmIssues:{}, // {key:{text,detail,severity}}
-  flagFirmIssue:(key,text,detail=null,severity='error')=>set(s=>({firmIssues:{...s.firmIssues,[key]:{text,detail,severity}}})),
+  firmIssues:{}, // {key:{text,detail,severity,at,expiresAt}}
+  flagFirmIssue:(key,text,detail=null,severity='error',ttlMs=0)=>set(s=>({firmIssues:{...s.firmIssues,[key]:{text,detail,severity,at:Date.now(),expiresAt:ttlMs>0?Date.now()+ttlMs:0}}})),
   clearFirmIssue:(key)=>set(s=>{if(!(key in s.firmIssues))return{};const n={...s.firmIssues};delete n[key];return{firmIssues:n};}),
+  // Drop any issues whose TTL has passed. NudgeBar calls this on a timer.
+  sweepFirmIssues:()=>set(s=>{
+    const now=Date.now();
+    const live=Object.entries(s.firmIssues).filter(([,v])=>!v.expiresAt||v.expiresAt>now);
+    if(live.length===Object.keys(s.firmIssues).length)return s;
+    return{firmIssues:Object.fromEntries(live)};
+  }),
   // Everything a persona is actively doing in the background — surfaced as chips
   // in the same top banner (NudgeBar) and as the gold "working" aura on the
   // galaxy orbs. An array of {key, persona, label, frac?}; CommandScreen

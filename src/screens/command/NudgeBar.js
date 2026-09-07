@@ -22,7 +22,15 @@ export default function NudgeBar({active}){
   const[dismissed,setDismissed]=useState({});
   const firmIssues=useEmpireStore(s=>s.firmIssues);
   const clearFirmIssue=useEmpireStore(s=>s.clearFirmIssue);
+  const sweepFirmIssues=useEmpireStore(s=>s.sweepFirmIssues);
   const activity=useEmpireStore(s=>s.activity);
+
+  // Drop TTL'd error chips so transient failures fade instead of piling up.
+  useEffect(()=>{
+    sweepFirmIssues();
+    const id=setInterval(sweepFirmIssues,20000);
+    return()=>clearInterval(id);
+  },[sweepFirmIssues]);
 
   const scrollRef=useRef(null);
   const anim=useRef(new Animated.Value(0)).current;

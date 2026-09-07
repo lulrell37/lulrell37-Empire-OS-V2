@@ -188,10 +188,12 @@ export async function runSync(opts = {}) {
       const now = Date.now();
       await setMeta({ last_sync: now, last_error: null });
       set({ running: false, lastSync: now, error: null });
+      try { const { clearIssueKey } = require('./report'); clearIssueKey('sync'); } catch {}
     } catch (e) {
       const msg = String(e && e.message ? e.message : e);
       await setMeta({ last_error: msg }).catch(() => {});
       set({ running: false, error: msg });
+      try { const { reportIssue } = require('./report'); reportIssue('sync', 'Backend sync failed', e); } catch {}
     } finally {
       inFlight = null;
     }

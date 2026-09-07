@@ -37,7 +37,8 @@ async function runOnce(){
 `This is your own periodic money review — nobody asked, it fires on your schedule. Here is the live cross-domain status:\n${status}\n\n`+
 `Give Mr. Burrus a tight, unprompted read: what's actually working, what's slipping, and the ONE thing most worth his attention right now — a business lagging its target, cash sitting idle, momentum worth pressing, trading or outreach numbers that changed the picture. End on one concrete recommendation. A few sentences — this is a nudge, not a report. Be straight; don't manufacture urgency if nothing has actually moved.`}];
     let resp='';
-    try{resp=await callPersona('atlas',ask,null,null,{skipSave:true,maxTokens:500});}catch(e){return;}
+    try{resp=await callPersona('atlas',ask,null,null,{skipSave:true,maxTokens:500});}
+    catch(e){try{const{reportIssue}=require('./report');reportIssue('auto-atlas','Auto money review',e);}catch{}return;}
     await handleCommands(resp,'atlas',{}).catch(()=>{});
     const display=(stripCommands(resp)||resp).trim();
     if(!display)return;

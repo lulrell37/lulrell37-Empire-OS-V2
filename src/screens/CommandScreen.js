@@ -16,6 +16,7 @@ import{onAutoTrade,autoTraderBusy}from '../services/autoTrader';
 import{autoScoutBusy}from '../services/autoScout';
 import{autoAtlasBusy}from '../services/autoAtlas';
 import{handleCommands,stripCommands}from '../services/commandHandler';
+import{reportIssue,clearIssueKey}from '../services/report';
 import{googleReadInjections,googleWriteCommands}from '../services/googleCommands';
 import{driveUploadFile,googleConnected}from '../services/googleClient';
 import{getMessages,saveMessage,getAllPersonaPics,savePersonaMemory,getSetting,setSetting,getExpenseSummary,addBuildJob,updateBuildJob,getBuildJob,getBuildJobByIssue,getBuildJobs,deleteBuildJob,buildJobRepo,DEFAULT_BUILD_REPO,getCustomPrompt,getAllLeads,addClipJob,addWatchJob,getActiveWatchJobs,getActiveClipJobs,getActiveBuildJobs,getClipJobs,getWatchJobs,getGeneratingContentItems,getUnreadPersonas,getUnreadMessages,markPersonaRead,getContentItems,getContentTally,getContentPages,updateContentItem}from '../services/database';
@@ -1769,10 +1770,13 @@ export default function CommandScreen({navigation,route}){
       if(e.name!=='AbortError'){
         const err={id:Date.now().toString(),role:'system',content:`Error: ${e.message}`,persona:'system'};
         if(isGroup)setGroupMessages(prev=>[...prev,err]);else setMessages(prev=>[...prev,err]);
+        const who=isGroup?'the group':getPersona(activePersona).name;
+        reportIssue('ai:reply',`${who} couldn't reply`,e);
       }
       if(!streamSpeakActiveRef.current)clearSound();
       maybeAutoListen();
     }finally{
+      if(abortRef.current===myAbort&&!myAbort.signal.aborted)clearIssueKey('ai:reply');
       if(abortRef.current===myAbort)setLoading(false);
       // Freeze any bubble left mid-stream by an abort/error so its caret stops.
       const freeze=(m)=>m.streaming?{...m,streaming:false,revealed:(m.content||'').length}:m;

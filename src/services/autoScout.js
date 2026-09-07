@@ -38,7 +38,8 @@ function emit(text){
   for(const cb of listeners){try{cb(text);}catch{}}
 }
 // Throttled — a persistent failure (no key, Google down) shouldn't spam the chat.
-function emitErr(text){
+function emitErr(text,err){
+  try{const{reportIssue}=require('./report');reportIssue('auto-scout','Auto-scout',err||new Error(String(text||'').replace(/^AUTO-SCOUT[^—]*—\s*/,'')));}catch{}
   if(Date.now()-lastError<ERROR_MS)return;
   lastError=Date.now();
   emit(text);
@@ -80,7 +81,7 @@ async function prospectPass(stats,dailyLeads){
 
   let results='';
   try{results=await webSearch('scout',`${segment} businesses in ${metro} — small, owner-operated, currently open (not permanently closed)`);}
-  catch(e){emitErr(`AUTO-SCOUT · search failing — ${e.message}`);return;}
+  catch(e){emitErr(`AUTO-SCOUT · search failing — ${e.message}`,e);return;}
   if(!String(results||'').trim())return;
 
   const room=Math.min(6,Math.max(1,dailyLeads-stats.added));
@@ -95,7 +96,7 @@ async function prospectPass(stats,dailyLeads){
 `Add at most ${room}; two well-qualified beats ten weak. Output ONLY the [LEAD_ADD:] lines.`}];
   let resp='';
   try{resp=await callPersona('scout',ask,null,null,{skipSave:true,maxTokens:1400});}
-  catch(e){emitErr(`AUTO-SCOUT · can't reach Claude — ${e.message}`);return;}
+  catch(e){emitErr(`AUTO-SCOUT · can't reach Claude — ${e.message}`,e);return;}
 
   let added=0,noContact=0;
   for(const c of parseLeadAdds(resp)){
