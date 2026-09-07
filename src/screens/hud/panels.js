@@ -383,7 +383,7 @@ export function MarketPanel({active=true}){
       const[on,syms,every,rec,all]=await Promise.all([
         getSetting('auto_trade','0'),
         getSetting('auto_trade_symbols','XAUUSD, EURUSD, GBPJPY, BTCUSD'),
-        getSetting('auto_trade_interval_min','5'),
+        getSetting('auto_trade_interval_min','15'),
         tradeRecord({}).catch(()=>null),
         getAllTrades(TRADER_ID,60).catch(()=>[]),
       ]);
