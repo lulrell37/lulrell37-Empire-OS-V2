@@ -39,16 +39,18 @@ const SIZE_BOOST={ara:1.45};   // flat size bump on top of the depth-driven scal
 const REST_Z_MIN=1.6,REST_Z_MAX=6.6;      // everyone else's depth range — well behind the front pair
 
 // Department hubs. Each head gets a fixed seat well clear of the others and of
-// the general scatter; its reports fan out in a wide downward arc around it.
-// Growing a department is just adding an id to `reports` here — both the seat
-// placement and the tether graph read from this one map.
+// the general scatter; its reports fan out evenly around it, all the way round
+// the full circle (not a downward-only arc — that bunched a big department like
+// S.E.L.E.N.E.'s six reports into a knot at the bottom). Growing a department is
+// just adding an id to `reports` here — both the seat placement and the tether
+// graph read from this one map.
 const DEPARTMENTS=[
   {head:'atlas',  hub:{x:3.8,y:-2.1,z:3.0}, reports:['talon','muse2']},
   {head:'selene', hub:{x:-4.0,y:1.4,z:3.8}, reports:['rogue','scribe','hook','muse1','forge','herald']},
   {head:'haven',  hub:{x:1.4,y:3.5,z:5.4},  reports:['muse3']},
   {head:'andrew', hub:{x:-2.0,y:-3.4,z:4.8},reports:['scout','pulse']},
 ];
-const REPORT_ARC=1.6;   // how far a head's reports sit from its hub centre (was ~0.35 — packed tight)
+const REPORT_ARC=1.6;   // base ring radius for a head's reports around its hub (a crowded department widens it)
 
 // head -> department head, for the tether graph and the "routes through A.R.A."
 // exclusion below.
@@ -72,13 +74,15 @@ const SCATTER=(()=>{
     setFixed(d.head,{...d.hub});
     const n=d.reports.length;
     d.reports.forEach((r,k)=>{
-      // fan the reports across a wide downward arc under the head, staggered in
-      // depth so a crowded department doesn't collapse into one flat row
-      const t=n===1?0.5:k/(n-1);
-      const ang=Math.PI*(0.12+0.76*t);   // ~22° .. ~158°, measured down from +x
+      // space the reports evenly around the full circle of the hub, starting at
+      // the top and going round; stagger depth so a crowded ring doesn't
+      // collapse into one flat circle. A bigger department gets a slightly wider
+      // ring so the orbs (and their tethers) don't crowd each other.
+      const ang=-Math.PI/2+(2*Math.PI*k)/n;
+      const rad=REPORT_ARC*(n>4?1.25:1);
       setFixed(r,{
-        x:d.hub.x+Math.cos(ang)*REPORT_ARC*1.4,
-        y:d.hub.y+Math.sin(ang)*REPORT_ARC,
+        x:d.hub.x+Math.cos(ang)*rad*1.4,
+        y:d.hub.y+Math.sin(ang)*rad,
         z:d.hub.z+(k%2?0.4:-0.3),
       });
     });
@@ -729,6 +733,38 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,busyPersonas,onPick,on
     const map={};
     PERSONA_LIST.forEach(p=>{
       const st=dragRef.current[p.id]={moved:false,longTimer:null,longFired:false,grabX:0,grabY:0};
+      if(p.id==='ara'){
+        // A.R.A. is locked dead-centre and is never dragged — she just holds
+        // still while the galaxy turns and flies around her. Her orb only needs
+        // to catch a tap (open her) and a long-press (hold her into a group);
+        // ANY movement belongs to the camera behind her, so this responder
+        // always yields a moving touch to the parent cloud pan. Without that
+        // yield, a press-then-drag that started on her big centre hit-target
+        // stuck the whole galaxy in place — you couldn't fly past her.
+        map[p.id]=PanResponder.create({
+          onStartShouldSetPanResponder:()=>true,
+          onMoveShouldSetPanResponder:()=>false,
+          onPanResponderTerminationRequest:()=>true,
+          onPanResponderGrant:()=>{
+            st.moved=false;
+            st.longTimer=setTimeout(()=>{if(!st.moved)toggle('ara');},280);
+          },
+          onPanResponderMove:(e,g)=>{
+            if(Math.abs(g.dx)>6||Math.abs(g.dy)>6){
+              st.moved=true;
+              if(st.longTimer){clearTimeout(st.longTimer);st.longTimer=null;}
+            }
+          },
+          onPanResponderRelease:()=>{
+            if(st.longTimer){clearTimeout(st.longTimer);st.longTimer=null;}
+            if(!st.moved)onOrbPressRef.current('ara');
+          },
+          onPanResponderTerminate:()=>{
+            if(st.longTimer){clearTimeout(st.longTimer);st.longTimer=null;}
+          },
+        });
+        return;
+      }
       map[p.id]=PanResponder.create({
         onStartShouldSetPanResponder:()=>true,
         onMoveShouldSetPanResponder:()=>true,
