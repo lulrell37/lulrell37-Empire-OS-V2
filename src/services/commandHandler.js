@@ -241,12 +241,14 @@ export async function handleCommands(response,personaId,callbacks={}){
   }
   if(/\[SHOW_NOTES\]/i.test(response))callbacks.onShowArtifact?.({kind:'notes'});
   if(/\[SHOW_TASKS\]/i.test(response))callbacks.onShowArtifact?.({kind:'tasks'});
+  if(/\[SHOW_ANALYTICS\]/i.test(response))callbacks.onShowArtifact?.({kind:'analytics'});
+  if(/\[OPEN_ANALYTICS\]/i.test(response))callbacks.onOpenAnalytics?.();
   // Auto-surface: if the persona went to BROWSE the note collection or the task
   // list to answer, and didn't already emit an explicit SHOW_ tag, put that
   // surface on the canvas too. Deliberately narrow — a bare [READ_NOTE] (reading
   // one note for its own reasoning) does NOT surface anything; only [LIST_NOTES]
   // / [SEARCH_DRIVE] ("show me my notes") and [READ_TASKS] do.
-  if(!/\[SHOW_(?:CHART:|NOTE:|NOTES\]|TASKS\])/i.test(response)){
+  if(!/\[SHOW_(?:CHART:|NOTE:|NOTES\]|TASKS\]|ANALYTICS\])/i.test(response)){
     if(/\[LIST_NOTES(?::[^\]]*)?\]|\[SEARCH_DRIVE:/i.test(response))callbacks.onShowArtifact?.({kind:'notes'});
     else if(/\[READ_TASKS\]/i.test(response))callbacks.onShowArtifact?.({kind:'tasks'});
   }
@@ -410,6 +412,7 @@ export function stripCommands(text){
     .replace(/\[WATCH_VIDEO:[^\]]*\]/gi,'')
     .replace(/\[SHOW_CHART:[^\]]*\]/gi,'').replace(/\[SHOW_NOTE:[^\]]*\]/gi,'')
     .replace(/\[SHOW_NOTES\]/gi,'').replace(/\[SHOW_TASKS\]/gi,'')
+    .replace(/\[SHOW_ANALYTICS\]/gi,'').replace(/\[OPEN_ANALYTICS\]/gi,'')
     .replace(/\[BUILD_REQUEST:[^\]]*\]/gi,'').replace(/\[BUILD_REPLY:[^\]]*\]/gi,'')
     .replace(/\[BUILD_MERGE:[^\]]*\]/gi,'').replace(/\[BUILD_CANCEL:[^\]]*\]/gi,'').replace(/\[BUILD_STATUS\]/gi,'')
     .replace(/\[SEND_SMS:[^\]]*\]/gi,'')

@@ -19,6 +19,7 @@ import LeadOrbitScreen from './src/screens/LeadOrbitScreen';
 import ContentQueueScreen from './src/screens/ContentQueueScreen';
 import HUDScreen from './src/screens/HUDScreen';
 import LaboratoryScreen from './src/screens/LaboratoryScreen';
+import AnalyticsScreen from './src/screens/AnalyticsScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
 import{initDatabase}from './src/services/database';
 import{loadKeys}from './src/services/keyStore';
@@ -121,6 +122,7 @@ export default function App(){
             <Stack.Screen name="Content" component={ContentQueueScreen}/>
             <Stack.Screen name="HUD" component={HUDScreen}/>
             <Stack.Screen name="Laboratory" component={LaboratoryScreen}/>
+            <Stack.Screen name="Analytics" component={AnalyticsScreen}/>
             <Stack.Screen name="Settings" component={SettingsScreen}/>
           </Stack.Navigator>
           <HudFloatLayer navRef={navigationRef}/>

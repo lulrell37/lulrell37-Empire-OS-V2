@@ -1523,6 +1523,7 @@ export default function CommandScreen({navigation,route}){
             else{setCanvasChip({persona:pid,kind});}
           },
           onShowDiagram:()=>navigation.navigate('Laboratory'),
+          onOpenAnalytics:()=>navigation.navigate('Analytics'),
           onBuildRequest:({spec})=>confirmBuildRequest(spec),
           onBuildReply:({issueNumber,text})=>{getBuildJobByIssue(issueNumber,projectRef.current?.repo).then(j=>j?sendBuildReply(j.id,text):pushSystemMsg(`— No build job for #${issueNumber}. —`));},
           onBuildMerge:({issueNumber})=>{getBuildJobByIssue(issueNumber,projectRef.current?.repo).then(j=>j?confirmBuildMerge(j.id):pushSystemMsg(`— No build job for #${issueNumber}. —`));},

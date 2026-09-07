@@ -63,6 +63,7 @@ const HEROES=[
   {name:'Laboratory',route:'Laboratory',label:'THE DIAGRAM',      sub:'THE LABORATORY',   tint:0x9AD3E0, at:[-12,-12],ly:10.5, shape:'observatory'},
   {name:'Settings',  route:'Settings',  label:'THE WORKSHOP',     sub:'SETTINGS',         tint:0x9AA0A6, at:[12,-12], ly:8.5,  shape:'ziggurat'},
   {name:'Leads',     route:'Leads',     label:'THE LEDGER',      sub:'S.C.O.U.T.',       tint:0x2E86FF, at:[0,-25], ly:9,    shape:'ledger'},
+  {name:'Analytics', route:'Analytics', label:'THE ALMANAC',     sub:'P.U.L.S.E.',       tint:0x8FB7C9, at:[-25,0], ly:9,    shape:'ledger'},
   {name:'Web',       url:'https://tarellbempire.com', label:'TARELL B. EMPIRE', sub:'TARELLBEMPIRE.COM', tint:0xF3E3BE, at:[25,0], ly:11, shape:'monument', external:true},
 ];
 
