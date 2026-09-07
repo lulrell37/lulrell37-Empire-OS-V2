@@ -214,8 +214,15 @@ export async function handleCommands(response,personaId,callbacks={}){
   for(const m of response.matchAll(/\[TRADE_REVIEW:\s*#?(\d+)\s*\|\s*([^\]]+)\]/gi)){
     callbacks.onTradeReview?.({id:parseInt(m[1],10),note:m[2].trim()});
   }
-  for(const m of response.matchAll(/\[DEEP_RESEARCH:\s*([^\]]+)\]/gi)){
-    if(m[1]?.trim())callbacks.onDeepResearch?.(m[1].trim());
+  let drFired=false;
+  for(const m of response.matchAll(/\[DEEP[_ ]?RESEARCH\s*:\s*([^\]]+)\]/gi)){
+    if(m[1]?.trim()){callbacks.onDeepResearch?.(m[1].trim());drFired=true;}
+  }
+  // A model (esp. Grok) will sometimes SAY it's starting deep research without
+  // ever emitting the tag — nothing happens and Mr. Burrus is left waiting.
+  // Detect the empty claim and let the caller surface a nudge.
+  if(!drFired&&/\b(start|kick|run|begin|launch|initiat|commission|queue|fir(?:e|ing))\w*\b[^.?!\n]{0,50}\bdeep[\s-]?(?:research|dive)\b/i.test(response)){
+    callbacks.onDeepResearchClaimed?.();
   }
   // --- JARVIS build pipeline ---
   for(const m of response.matchAll(/\[BUILD_REQUEST:\s*([^\]]+)\]/gi)){

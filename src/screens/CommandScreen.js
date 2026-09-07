@@ -1546,6 +1546,7 @@ export default function CommandScreen({navigation,route}){
           onStrategyUpdate:(text)=>{setStrategy(text).then(()=>pushSystemMsg('— T.A.L.O.N. updated the playbook —')).catch(()=>{});},
           onTradeReview:({id,note})=>{setTradeReview(id,note).catch(()=>{});},
           onDeepResearch:(topic)=>startDeepResearch(topic,pid),
+          onDeepResearchClaimed:()=>{if(!deepResearch)pushSystemMsg('— nothing was filed: to actually start a deep-research job, say "run deep research on <topic>" and confirm the prompt. —');},
           onShowArtifact:({kind,open,raw})=>{
             if(isGroup)return;
             let art;
