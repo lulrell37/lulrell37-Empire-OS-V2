@@ -46,6 +46,7 @@ const DEPARTMENTS=[
   {head:'atlas',  hub:{x:3.8,y:-2.1,z:3.0}, reports:['talon','muse2']},
   {head:'selene', hub:{x:-4.0,y:1.4,z:3.8}, reports:['rogue','scribe','hook','muse1','forge','herald']},
   {head:'haven',  hub:{x:1.4,y:3.5,z:5.4},  reports:['muse3']},
+  {head:'andrew', hub:{x:-2.0,y:-3.4,z:4.8},reports:['scout','pulse']},
 ];
 const REPORT_ARC=1.6;   // how far a head's reports sit from its hub centre (was ~0.35 — packed tight)
 
@@ -500,6 +501,9 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,busyPersonas,onPick,on
   // still bob in place — see the pinned render pass — so the tether needs
   // that same bob folded in too).
   const endpointFor=useCallback((id,yv,dv)=>{
+    // A.R.A. is locked to the centre of the screen — every tether that meets
+    // her meets her there, no matter how the cloud is turned or flown.
+    if(id==='ara')return{x:sizeRef.current.w/2,y:sizeRef.current.h*0.42,depth:2};
     const i=ID_INDEX[id];
     const{bx,by}=bobOffsetFor(i);
     const pin=pinnedRef.current[id];
@@ -616,6 +620,14 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,busyPersonas,onPick,on
       const cx=sizeRef.current.w/2,cy=sizeRef.current.h*0.42;
       let best=PERSONA_LIST[0].id,score=-Infinity;
       for(let i=0;i<PERSONA_LIST.length;i++){
+        if(PERSONA_LIST[i].id==='ara'){
+          // A.R.A. is locked dead-centre and never moves with the camera —
+          // she's the default "straight ahead" pick and wins any tap near
+          // the middle of the screen.
+          const sc=x==null?0.2:-Math.hypot(cx-x,cy-y);
+          if(sc>score){score=sc;best='ara';}
+          continue;
+        }
         const pt=SCATTER[i];
         const x1=cyN*pt.x+syN*pt.z;
         const depth=(-pt.x*syN+pt.z*cyN)-dv;
@@ -743,6 +755,7 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,busyPersonas,onPick,on
           st.longTimer=setTimeout(()=>{if(!st.moved){st.longFired=true;toggle(p.id);}},280);
         },
         onPanResponderMove:(e,g)=>{
+          if(p.id==='ara')return;   // A.R.A. is locked centre — never draggable
           // Movement before the long-press has fired reads as a swipe meant
           // for the cloud, not a grab on this orb — bail out (the parent
           // steals the touch via onPanResponderTerminationRequest above)
@@ -789,7 +802,7 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,busyPersonas,onPick,on
               strokeOpacity={Animated.multiply(tetherGlow,t.opacity)}/>
           ))}
         </Svg>
-        {order.map(oi=>orbs[oi]).filter(({p})=>!pinned[p.id]).map(({p,translateX,translateY,scale,opacity,bobX,bobY,sparkleScale,sparkleOpacity})=>{
+        {order.map(oi=>orbs[oi]).filter(({p})=>!pinned[p.id]&&p.id!=='ara').map(({p,translateX,translateY,scale,opacity,bobX,bobY,sparkleScale,sparkleOpacity})=>{
           const selected=group.includes(p.id);
           return(
             <Animated.View key={p.id} style={[s.orbWrap,{opacity,transform:[{translateX},{translateY},{scale}]}]}>
@@ -805,11 +818,28 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,busyPersonas,onPick,on
             </Animated.View>
           );
         })}
+        {/* A.R.A. is locked dead-centre — she never moves with the yaw/dolly of
+            the cloud, never bobs, never twinkles. The whole galaxy turns and
+            drifts around her fixed point. Rendered on top of the cloud. */}
+        {(()=>{
+          const p=getPersona('ara');
+          const selected=group.includes('ara');
+          return(
+            <View key="ara" style={s.orbWrap}>
+              <View style={{transform:[{scale:2.0}]}}>
+                <View style={s.orbBox} {...orbResponders.ara.panHandlers}>
+                  <OrbVisual p={p} selected={selected} pic={pics.ara} unread={unreadPersonas?.has?.('ara')} busy={busyPersonas?.has?.('ara')} glowPulse={glowPulse}/>
+                </View>
+                <Text style={[s.orbName,{color:p.color},selected&&{fontWeight:'700'}]} numberOfLines={1}>{p.name.replace(/\./g,'')}</Text>
+              </View>
+            </View>
+          );
+        })()}
         {/* Manually placed orbs render last so they're always on top, decoupled
             from the depth-sorted cloud's position/scale/opacity (dragging one
             fixes it to a screen spot instead of the camera) — but they keep
             the same idle bob as everyone else instead of going dead still. */}
-        {PERSONA_LIST.filter(p=>pinned[p.id]).map(p=>{
+        {PERSONA_LIST.filter(p=>pinned[p.id]&&p.id!=='ara').map(p=>{
           const pin=pinned[p.id];
           const selected=group.includes(p.id);
           const o=orbs[ID_INDEX[p.id]];

@@ -16,7 +16,7 @@
 //      untouched, the chat quick-adds are cleared afterward.
 //   2. Pulls LIVE web research on each business + idea — what's actually working
 //      in that market right now — via Claude's web_search tool.
-//   3. A.R.A. opens the meeting; the council (everyone except Ghost, Talon,
+//   3. A.R.A. opens the meeting; the council (everyone except Andrew, Talon,
 //      Rogue, Batman, Abraham, and the AI-influencer ops personas) discusses
 //      over N rounds, each persona seeing the prior replies.
 //   4. A.R.A. synthesises the council's read + recommendation + the decision
