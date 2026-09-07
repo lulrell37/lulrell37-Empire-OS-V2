@@ -16,7 +16,6 @@ import Boundary from '../hud/Boundary';
 import{getMemoriesByPersona,deletePersonaMemory,deleteAllPersonaMemory}from '../../services/database';
 import{getPersona,PERSONA_LIST}from '../../personas/personas';
 
-const AnimatedPath=Animated.createAnimatedComponent(Path);
 const LEVELS=['group','orb','memory'];
 const WHEEL_MID=1200;// px of scroll slack each side of the wheel-catcher — big enough one fast notch can't reach an edge
 
@@ -134,6 +133,88 @@ function depthOpacity(depth){
 }
 
 function touchDist(t){return Math.hypot(t[0].pageX-t[1].pageX,t[0].pageY-t[1].pageY);}
+
+// --- Idle bob, as a clock ------------------------------------------------
+// Every orb's idle float is a slow cosine. The parameters are deterministic per
+// persona so two independent consumers stay in lock-step without talking:
+//   1. the orb itself — a native linear 0->1 loop, shaped into the cosine by an
+//      Animated.interpolate (runs entirely on the UI thread, never stutters).
+//   2. the tether layer — reconstructs each orb's current offset straight from
+//      Date.now(), so it needs NO per-frame listener on those 26 Animated
+//      values (that bridge traffic was what kept the float from being smooth).
+// A.R.A. never bobs.
+const BOB=PERSONA_LIST.map((p,i)=>{
+  if(p.id==='ara')return{period:0,delay:0};
+  const period=3400+(i*617)%2600;              // ~3.4s .. 6.0s per cycle
+  const phase=(i*0.6180339887)%1;              // golden-ratio spread so neighbours differ
+  return{period,delay:Math.round(phase*1200)}; // small start stagger; periods differ enough to keep them desynced after
+});
+// cosine 0..1 across one cycle, sampled for Animated.interpolate — the native
+// side ramps 0->1 linearly, these points bend that into a smooth sine.
+const BOB_IN=[],BOB_X=[],BOB_Y=[];
+for(let k=0;k<=16;k++){
+  const u=0.5-0.5*Math.cos(2*Math.PI*k/16);
+  BOB_IN.push(k/16);BOB_X.push(-7+14*u);BOB_Y.push(-16+32*u);
+}
+function bobAt(i,now,mountAt){
+  const b=BOB[i];
+  if(!b.period)return{bx:0,by:0};
+  const t=now-mountAt-b.delay;
+  if(t<=0)return{bx:BOB_X[0],by:BOB_Y[0]};
+  const u=0.5-0.5*Math.cos(2*Math.PI*((t/b.period)%1));
+  return{bx:-7+14*u,by:-16+32*u};
+}
+
+// The org-chart tethers, isolated in their own component with their own low
+// tick rate. Recomputing them re-renders only this small SVG — never the orb
+// cloud — so the cloud's float stays a pure native animation the entire time.
+function TetherLayer({yawRef,dollyRef,pinnedRef,sizeRef,mountAt,RX,RY}){
+  const[paths,setPaths]=useState([]);
+  useEffect(()=>{
+    const project=(i,yv,dv)=>{
+      const pt=SCATTER[i];
+      const cyN=Math.cos(yv),syN=Math.sin(yv);
+      const x1=cyN*pt.x+syN*pt.z;
+      const depth=(-pt.x*syN+pt.z*cyN)-dv;
+      const denom=Math.max(0.4,1.0+depth*0.14);
+      const cx=sizeRef.current.w/2,cy=sizeRef.current.h*0.42;
+      return{x:cx+(x1*RX)/denom,y:cy+(pt.y*RY)/denom,depth};
+    };
+    const endpoint=(id,yv,dv,now)=>{
+      const cx=sizeRef.current.w/2,cy=sizeRef.current.h*0.42;
+      if(id==='ara')return{x:cx,y:cy,depth:2};
+      const i=ID_INDEX[id];
+      const{bx,by}=bobAt(i,now,mountAt);
+      const pin=pinnedRef.current[id];
+      if(pin)return{x:cx+pin.tx+bx,y:cy+pin.ty+by,depth:2};
+      const p=project(i,yv,dv);
+      return{x:p.x+bx,y:p.y+by,depth:p.depth};
+    };
+    const tick=()=>{
+      const yv=yawRef.current,dv=dollyRef.current,now=Date.now();
+      const glow=0.4+0.6*(0.5-0.5*Math.cos(2*Math.PI*((now/3600)%1)));
+      setPaths(TETHERS.map(([a,b])=>{
+        const pa=endpoint(a,yv,dv,now),pb=endpoint(b,yv,dv,now);
+        const vis=pa.depth>0.35&&pb.depth>0.35;
+        const dist=Math.hypot(pb.x-pa.x,pb.y-pa.y);
+        const sag=Math.min(40,Math.max(6,dist*0.12));
+        const midX=(pa.x+pb.x)/2,midY=(pa.y+pb.y)/2+sag;
+        const o=vis?Math.min(depthOpacity(pa.depth),depthOpacity(pb.depth))*0.55*glow:0;
+        return{key:a+'-'+b,d:`M${pa.x},${pa.y} Q${midX},${midY} ${pb.x},${pb.y}`,o};
+      }));
+    };
+    tick();
+    const iv=setInterval(tick,70);
+    return()=>clearInterval(iv);
+  },[RX,RY,mountAt,pinnedRef,sizeRef,yawRef,dollyRef]);
+  return(
+    <Svg style={StyleSheet.absoluteFill} pointerEvents="none">
+      {paths.map(t=>t.o>0.02&&(
+        <Path key={t.key} d={t.d} stroke="#E8C98A" strokeWidth={1} fill="none" strokeOpacity={t.o}/>
+      ))}
+    </Svg>
+  );
+}
 
 function OrbZoom({personaId,color,active,vizRef,personaPics={},unreadPersonas,busyPersonas,onPickPersona,onLaunchGroup,level='group',onLevelChange},ref){
   const persona=getPersona(personaId);
@@ -443,22 +524,22 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,busyPersonas,onPick,on
   const[size,setSize]=useState({w:Dimensions.get('window').width,h:340});
   const[group,setGroup]=useState([]);
   const[order,setOrder]=useState(()=>PERSONA_LIST.map((_,i)=>i));
-  const[tethers,setTethers]=useState([]);
   const boxRef=useRef(null);
   const originRef=useRef({x:0,y:0});    // this view's on-screen origin, for turning a raw touch page-position into a local one
   const pinnedRef=useRef(pinned);
   useEffect(()=>{pinnedRef.current=pinned;},[pinned]);
+  const mountAt=useRef(Date.now()).current;   // clock origin for the deterministic idle bob (see BOB / bobAt)
   const yaw=useRef(new Animated.Value(0)).current;        // 0 = dead ahead, so the front pair sits exactly left/right of center
   const dolly=useRef(new Animated.Value(-3.6)).current;   // start outside, cloud ahead
   const yStart=useRef(0),dStart=useRef(-3.6);
   const yawNow=useRef(0),dollyNow=useRef(-3.6);
   const glowPulse=useRef(new Animated.Value(0)).current;
-  const tetherGlow=useRef(new Animated.Value(0.35)).current; // slow on/off glow on the tether lines
   const sizeRef=useRef(size);
   const sparkles=useRef(PERSONA_LIST.map(()=>new Animated.Value(Math.random()))).current;
-  // Idle drift — a slow, independent bob per orb so the cloud feels alive
-  // rather than a static snapshot. Phase/duration staggered per persona.
-  const floats=useRef(PERSONA_LIST.map(()=>new Animated.Value(Math.random()))).current;
+  // Idle drift — a slow cosine bob per orb (see BOB). Each value is a plain
+  // linear 0->1 native loop; the render shapes it into the cosine. Starts at 0
+  // so the tether layer's clock reconstruction lines up.
+  const floats=useRef(PERSONA_LIST.map(()=>new Animated.Value(0))).current;
 
   useEffect(()=>{sizeRef.current=size;},[size]);
 
@@ -484,20 +565,10 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,busyPersonas,onPick,on
     return{x:cx+(x1*RX)/denom,y:cy+(pt.y*RY)/denom,depth};
   },[RX,RY]);
 
-  // A plain-JS mirror of each orb's current idle-bob progress (0..1), kept in
-  // sync via addListener on the native-driven Animated.Value below — RN pushes
-  // the latest value back over the bridge for exactly this purpose (reading a
-  // natively-animated value from JS without fighting the native driver). This
-  // is what lets the tether math (below) include the same bob offset the orb
-  // itself is rendered with, instead of only ever knowing its un-bobbed
-  // position — which is what "the tether just floats near the orb instead of
-  // touching it" actually was: the tether had no idea the bob offset existed.
-  const floatsNow=useRef(PERSONA_LIST.map(()=>0)).current;
-  const bobOffsetFor=useCallback((i)=>{
-    if(PERSONA_LIST[i]?.id==='ara')return{bx:0,by:0}; // A.R.A. doesn't bob — keep her tethers static
-    const v=floatsNow[i]??0;
-    return{bx:-7+14*v,by:-16+32*v}; // mirrors floats[i].interpolate([0,1],[-7,7]/[-16,16]) in the orbs memo
-  },[floatsNow]);
+  // Each orb's current bob offset, reconstructed from the clock (see bobAt) —
+  // no per-frame listener on the native Animated values. Used by the drag
+  // responders below for the grab offset; the tether layer does its own.
+  const bobOffsetFor=useCallback((i)=>bobAt(i,Date.now(),mountAt),[mountAt]);
 
   // A pinned orb's endpoint for tether purposes: its fixed screen position,
   // reported at a mid-range depth so its lines fade the same as anything else
@@ -516,67 +587,28 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,busyPersonas,onPick,on
     return{x:p.x+bx,y:p.y+by,depth:p.depth};
   },[project,bobOffsetFor]);
 
-  const computeTethers=useCallback(()=>{
-    const yv=yawNow.current,dv=dollyNow.current;
-    setTethers(TETHERS.map(([a,b])=>{
-      const pa=endpointFor(a,yv,dv),pb=endpointFor(b,yv,dv);
-      const vis=pa.depth>0.35&&pb.depth>0.35;
-      // A slight downward sag at the midpoint, like a rope under its own
-      // weight, instead of a taut straight line — bigger for a longer span.
-      const dist=Math.hypot(pb.x-pa.x,pb.y-pa.y);
-      const sag=Math.min(40,Math.max(6,dist*0.12));
-      const midX=(pa.x+pb.x)/2,midY=(pa.y+pb.y)/2+sag;
-      return{key:a+'-'+b,d:`M${pa.x},${pa.y} Q${midX},${midY} ${pb.x},${pb.y}`,
-        opacity:vis?Math.min(depthOpacity(pa.depth),depthOpacity(pb.depth))*0.55:0};
-    }));
-  },[endpointFor]);
-
+  // Depth order (which orb draws on top) only needs to change when the camera
+  // moves. During idle nothing here fires, so PersonaSphereInner never
+  // re-renders and the orb float runs undisturbed on the native thread. The
+  // tethers live in their own <TetherLayer> with their own tick.
   useEffect(()=>{
     let last=0;
     const sortNow=()=>{
       const yv=yawNow.current,dv=dollyNow.current;
       setOrder(PERSONA_LIST.map((_,i)=>i).sort((a,b)=>depthOf(b,yv,dv)-depthOf(a,yv,dv))); // far first
-      computeTethers();
     };
     const recompute=()=>{const now=Date.now();if(now-last<120)return;last=now;sortNow();};
     sortNow();                                        // initial depth order
     const idY=yaw.addListener(e=>{yawNow.current=e.value;recompute();});
     const idD=dolly.addListener(e=>{dollyNow.current=e.value;recompute();});
-    // The idle bob keeps every orb (pinned ones included) drifting even when
-    // yaw/dolly never change, so tethers need their own standing refresh —
-    // otherwise they only ever move when you actually drag the cloud, and sit
-    // frozen (visibly detached from the drifting orbs) the rest of the time.
-    // Just the tethers here, not the full sortNow — depth order doesn't
-    // change from bob alone, no need to re-sort on every tick.
-    const bobTick=setInterval(computeTethers,120);
-    return()=>{yaw.removeListener(idY);dolly.removeListener(idD);clearInterval(bobTick);};
-  },[depthOf,computeTethers]);// eslint-disable-line react-hooks/exhaustive-deps
-
-  // Mirrors each floats[i] Animated.Value into the plain floatsNow array so
-  // the tether math above can read it synchronously (see bobOffsetFor).
-  useEffect(()=>{
-    const ids=floats.map((v,i)=>v.addListener(e=>{floatsNow[i]=e.value;}));
-    return()=>floats.forEach((v,i)=>v.removeListener(ids[i]));
-  },[]);// eslint-disable-line react-hooks/exhaustive-deps
+    return()=>{yaw.removeListener(idY);dolly.removeListener(idD);};
+  },[depthOf]);// eslint-disable-line react-hooks/exhaustive-deps
 
   // Slow pulse on the ring shown around an orb held into a custom group.
   useEffect(()=>{
     const loop=Animated.loop(Animated.sequence([
       Animated.timing(glowPulse,{toValue:1,duration:700,easing:Easing.inOut(Easing.sin),useNativeDriver:true}),
       Animated.timing(glowPulse,{toValue:0,duration:700,easing:Easing.inOut(Easing.sin),useNativeDriver:true}),
-    ]));
-    loop.start();
-    return()=>loop.stop();
-  },[]);// eslint-disable-line react-hooks/exhaustive-deps
-
-  // Slow on/off glow for the org-chart tethers. react-native-svg's native-
-  // driver support for props like strokeOpacity is inconsistent across
-  // versions, so this stays JS-driven (it's a slow ambient effect, not
-  // something that needs native-driver performance anyway).
-  useEffect(()=>{
-    const loop=Animated.loop(Animated.sequence([
-      Animated.timing(tetherGlow,{toValue:1,duration:1800,easing:Easing.inOut(Easing.sin),useNativeDriver:false}),
-      Animated.timing(tetherGlow,{toValue:0.35,duration:1800,easing:Easing.inOut(Easing.sin),useNativeDriver:false}),
     ]));
     loop.start();
     return()=>loop.stop();
@@ -600,17 +632,19 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,busyPersonas,onPick,on
   },[]);// eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(()=>{
-    // The bob itself now applies as its own transform on a nested view (see
-    // the render below) instead of being summed via Animated.add into the
-    // JS-driven yaw/dolly position math — that mixing is what forced it onto
-    // the JS thread before, which stuttered under any JS-thread load (drag,
-    // re-renders, GC). Decoupled like this it can run on the native/UI
-    // thread, which is what "idle drift" actually needs to stay smooth.
-    const loops=floats.map((v,i)=>PERSONA_LIST[i].id==='ara'?null:Animated.loop(Animated.sequence([
-      Animated.delay((i*233)%1100),
-      Animated.timing(v,{toValue:1,duration:1700+((i*173)%1300),easing:Easing.inOut(Easing.sin),useNativeDriver:true}),
-      Animated.timing(v,{toValue:0,duration:1700+((i*197)%1300),easing:Easing.inOut(Easing.sin),useNativeDriver:true}),
-    ]))).filter(Boolean);
+    // Idle bob: a plain linear 0->1 native loop per orb, period BOB[i].period,
+    // started BOB[i].delay in so its phase matches the tether layer's clock
+    // reconstruction (see BOB / bobAt). The render bends the linear ramp into a
+    // smooth cosine via Animated.interpolate. Fully native — nothing on the JS
+    // thread touches it once started, so it never drops a frame.
+    const loops=floats.map((v,i)=>{
+      const b=BOB[i];
+      if(!b.period)return null;   // A.R.A. holds still
+      return Animated.sequence([
+        Animated.delay(b.delay),
+        Animated.loop(Animated.timing(v,{toValue:1,duration:b.period,easing:Easing.linear,useNativeDriver:true})),
+      ]);
+    }).filter(Boolean);
     loops.forEach(l=>l.start());
     return()=>loops.forEach(l=>l.stop());
   },[]);// eslint-disable-line react-hooks/exhaustive-deps
@@ -690,8 +724,8 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,busyPersonas,onPick,on
         // A.R.A. holds dead still on her front seat — no idle bob, no twinkle.
         // Everyone behind her drifts noticeably (wider bob than the cloud used
         // to have) so the galaxy reads as alive around her fixed point.
-        bobX:p.id==='ara'?0:floats[i].interpolate({inputRange:[0,1],outputRange:[-7,7]}),
-        bobY:p.id==='ara'?0:floats[i].interpolate({inputRange:[0,1],outputRange:[-16,16]}),
+        bobX:p.id==='ara'?0:floats[i].interpolate({inputRange:BOB_IN,outputRange:BOB_X}),
+        bobY:p.id==='ara'?0:floats[i].interpolate({inputRange:BOB_IN,outputRange:BOB_Y}),
         sparkleScale:p.id==='ara'?1:sparkles[i].interpolate({inputRange:[0,1],outputRange:[0.92,1.1]}),
         sparkleOpacity:p.id==='ara'?1:sparkles[i].interpolate({inputRange:[0,1],outputRange:[0.6,1]}),
         // Depth-driven scale/opacity — JS-driven (they track yaw/dolly) but
@@ -813,7 +847,7 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,busyPersonas,onPick,on
           const lx=g.moveX-originRef.current.x-st.grabX;
           const ly=g.moveY-originRef.current.y-st.grabY;
           setPinned(prev=>({...prev,[p.id]:{tx:lx-sizeRef.current.w/2,ty:ly-sizeRef.current.h*0.42}}));
-          computeTethers();
+          // the tether layer follows the new pinned spot on its own next tick
         },
         onPanResponderRelease:()=>{
           if(st.longTimer){clearTimeout(st.longTimer);st.longTimer=null;}
@@ -832,12 +866,8 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,busyPersonas,onPick,on
         boxRef.current&&boxRef.current.measureInWindow&&boxRef.current.measureInWindow((x,y)=>{originRef.current={x:x||0,y:y||0};});
       }}>
       <View style={StyleSheet.absoluteFill} {...pan.panHandlers}>
-        <Svg style={StyleSheet.absoluteFill} pointerEvents="none">
-          {tethers.map(t=>t.opacity>0.02&&(
-            <AnimatedPath key={t.key} d={t.d} stroke="#E8C98A" strokeWidth={1} fill="none"
-              strokeOpacity={Animated.multiply(tetherGlow,t.opacity)}/>
-          ))}
-        </Svg>
+        <TetherLayer yawRef={yawNow} dollyRef={dollyNow} pinnedRef={pinnedRef}
+          sizeRef={sizeRef} mountAt={mountAt} RX={RX} RY={RY}/>
         {order.map(oi=>orbs[oi]).filter(({p})=>!pinned[p.id]&&p.id!=='ara').map(({p,translateX,translateY,scale,opacity,bobX,bobY,sparkleScale,sparkleOpacity})=>{
           const selected=group.includes(p.id);
           return(
