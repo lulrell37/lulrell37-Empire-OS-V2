@@ -32,7 +32,8 @@ async function aiRoute(provider,localKey,label){
 // the text turn gets, instead of the bare personality prompt.
 export async function personaSystemPrompt(personaId){
   const{getPersona}=await import('../personas/personas');
-  return buildSys(personaId,getPersona(personaId),[]);
+  const{sys}=await buildSys(personaId,getPersona(personaId),[]);
+  return sys;
 }
 
 // The current moment in Mr. Burrus's timezone, computed fresh every call.
@@ -66,6 +67,11 @@ Only when seeing or editing the thing is the point — not for a passing mention
   sys+=`\n\n[WEB: You can search the live web with [SEARCH_WEB: query] (max 1 per turn) — the result comes back before you reply. Use it only when the answer really turns on something current that you can't know: today's price, a recent event, a just-released product, a fast-moving number. For general knowledge, or in quick back-and-forth conversation, just answer directly — a search adds a noticeable delay before you can speak, so it must be worth it. Don't mention the mechanism; weave in what you find with source names.]`;
   sys+=`\n\n[DEEP RESEARCH: for a long, thorough, cited report on something in your lane — ONLY when Mr. Burrus explicitly asks you to "do deep research" / "a deep dive" / "the full research". Putting the literal tag [DEEP_RESEARCH: the question or topic] in your reply is the ONLY thing that starts a job — writing "I'll start deep research on that" without the tag does nothing and leaves him waiting, so when he asks, the tag goes in that same reply. It runs on Claude with live web search — around a dozen searches across angles, several minutes, one job at a time, keep the app open; the finished brief lands back in this chat and is saved as a Note. Not for quick facts — that's [SEARCH_WEB]. One [DEEP_RESEARCH] per turn.]`;
   sys+=`\n\n[WATCH A VIDEO: emit [WATCH_VIDEO: <url> | <what to look for>] to hand a video off to the watch agent — a YouTube / TikTok / Instagram / X / Facebook / Vimeo link, a Google Drive share link, or a direct file link. The second field is optional but nearly always worth giving: the specific question or angle — the hook, the structure, why it retains, how they'd do a competing version, a direct question. It runs async: the agent downloads the video, transcribes it, detects the cuts, and does a real vision pass over sampled frames, then brings back a written breakdown (hook, beat-by-beat structure, retention devices, strengths/weaknesses, what to steal, and a direct answer to the focus) plus a full report link. It does NOT come back instantly — a few minutes. Tell Mr. Burrus it's queued and that you'll bring him what it found. One [WATCH_VIDEO] per turn. This is a deeper read than the frames the app samples inline when he attaches a video to chat — use it when the video is worth actually studying.]`;
+  // Everything up to here — the persona identity + the fixed instruction blocks —
+  // is byte-identical on every call for this persona, so it's the prompt-cache
+  // prefix (see callPersona). Everything after (Google status, HUD, memory, the
+  // current moment) is per-call and must stay outside the cached span.
+  const cacheAt=sys.length;
   try{
     const gt=await loadGoogleToken();
     if(gt?.accessToken){
@@ -186,7 +192,7 @@ Only when seeing or editing the thing is the point — not for a passing mention
   }
   // Keep this LAST so it's the most recent thing the model reads before replying.
   sys+=`\n\n[THE CURRENT MOMENT — right now it is ${timeStr} ${tz}, and Mr. Burrus is in Waldorf, MD. This is authoritative. The chat history and the memory above may be hours, days, or weeks old — do NOT assume it is still the same day or time of day as the last message. Every reply should be grounded in the date and time stated here. If more than a few hours have clearly passed since the last exchange, greet the new moment accordingly (a fresh morning, a new day) rather than continuing as if no time passed.]`;
-  return sys;
+  return{sys,cacheAt};
 }
 // SSE over XHR — React Native's fetch can't expose a streaming response body,
 // but XMLHttpRequest fires `onprogress` with the partial `responseText`, so we
@@ -258,7 +264,7 @@ export async function callPersona(personaId,messages,signal=null,onDelta=null,op
   const k=await ensureKeys();
   const{getPersona}=await import('../personas/personas');
   const persona=getPersona(personaId);
-  const sys=await buildSys(personaId,persona,messages);
+  const{sys,cacheAt}=await buildSys(personaId,persona,messages);
   const hist=messages.slice(-20).map(m=>({role:m.role==='system'?'user':m.role,content:m.content}));
   // Stamp the current moment onto the newest user turn — the model weights the
   // last dated thing it saw, and undated stale history was making personas reply
@@ -311,12 +317,19 @@ export async function callPersona(personaId,messages,signal=null,onDelta=null,op
     const{base,auth}=await aiRoute('claude',k?.claude,'Claude');
     const url=base+'/v1/messages';
     const headers={'Content-Type':'application/json',...auth};
-    const body=JSON.stringify({model:hasVision?'claude-sonnet-5':(opts.model||persona.model||'claude-sonnet-5'),max_tokens:maxTokens,system:sys,messages:hist,stream});
+    // Cache the stable prefix (persona identity + fixed instruction blocks) so
+    // back-to-back calls to the same persona — a scout cycle's several passes, a
+    // multi-turn chat, repeated [RELAY_TO] — only pay full price for it once per
+    // 5-min window. Everything after cacheAt is per-call and stays uncached.
+    const claudeSystem=(cacheAt>0&&cacheAt<sys.length)
+      ?[{type:'text',text:sys.slice(0,cacheAt),cache_control:{type:'ephemeral'}},{type:'text',text:sys.slice(cacheAt)}]
+      :sys;
+    const body=JSON.stringify({model:hasVision?'claude-sonnet-5':(opts.model||persona.model||'claude-sonnet-5'),max_tokens:maxTokens,system:claudeSystem,messages:hist,stream});
     if(stream){
       let tin=0,tout=0;
       await xhrStream({url,headers,body,signal,onEvent:(e)=>{
         if(e.type==='content_block_delta'&&e.delta?.text)emit(e.delta.text);
-        else if(e.type==='message_start')tin=e.message?.usage?.input_tokens||0;
+        else if(e.type==='message_start'){const u=e.message?.usage||{};tin=(u.input_tokens||0)+(u.cache_read_input_tokens||0)+(u.cache_creation_input_tokens||0);}
         else if(e.type==='message_delta')tout=e.usage?.output_tokens||tout;
         else if(e.type==='error')throw new Error(e.error?.message||'Claude stream error');
       }});
@@ -326,7 +339,7 @@ export async function callPersona(personaId,messages,signal=null,onDelta=null,op
       if(!res.ok){const e=await res.text();throw new Error(`Claude error: ${e.substring(0,100)}`);}
       const d=await res.json();
       emit(d.content?.[0]?.text||'');
-      if(d.usage)await trackApiUsage('claude',d.usage.input_tokens||0,d.usage.output_tokens||0).catch(()=>{});
+      if(d.usage)await trackApiUsage('claude',(d.usage.input_tokens||0)+(d.usage.cache_read_input_tokens||0)+(d.usage.cache_creation_input_tokens||0),d.usage.output_tokens||0).catch(()=>{});
     }
   }else if(api==='grok'){
     const{base,auth}=await aiRoute('grok',k?.grok,'Grok');

@@ -211,7 +211,14 @@ async function migrateBuildJobs(){
   `);
 }
 
-export function getTodayStr(){return new Date().toISOString().split('T')[0];}
+// Mr. Burrus's local day (America/New_York, matching aiService.currentMoment) —
+// NOT UTC. toISOString() rolls the date at 7-8pm Eastern, which was resetting
+// the auto-scout daily lead/email caps in the evening and mis-dating revenue,
+// expense and lead-log rows written after that hour.
+export function getTodayStr(){
+  const[m,d,y]=new Date().toLocaleDateString('en-US',{timeZone:'America/New_York'}).split('/');
+  return `${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`;
+}
 export function getMonthStr(){const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');}
 // --- Editable HUD structures: morning routine + Batman protocol ---
 const DEFAULT_ROUTINE_LABELS=['Pray','Charge tech','Calendar','Weather','Analytics','Emails','News','Finances','Study','Empire Sheets','Bible','Meditation','Memory Training','Social media post'];
