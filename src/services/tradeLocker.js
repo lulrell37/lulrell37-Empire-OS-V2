@@ -25,6 +25,25 @@ function base(){return BASE[session.env]||BASE.demo;}
 
 const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));
 
+// RN's fetch has no default timeout, and every /trade/* call is serialized
+// through one chain (see `api`) — so a single socket that hangs (a dropped
+// connection, a Cloudflare challenge that never returns) wedges the whole chain
+// and every later read/order queues behind it forever. To the auto-trader that
+// looks exactly like "T.A.L.O.N. stopped trading and never said why": the loop
+// awaits its first snapshot, never returns, `busy` stays true, and every
+// subsequent cycle no-ops. Cap each request instead.
+const FETCH_TIMEOUT_MS=20000;
+async function fetchWithTimeout(url,opts={}){
+  const ctrl=new AbortController();
+  const timer=setTimeout(()=>ctrl.abort(),FETCH_TIMEOUT_MS);
+  try{return await fetch(url,{...opts,signal:ctrl.signal});}
+  catch(e){
+    if(e?.name==='AbortError')throw new Error(`TradeLocker request timed out after ${FETCH_TIMEOUT_MS/1000}s`);
+    throw e;
+  }
+  finally{clearTimeout(timer);}
+}
+
 // Short-TTL cache for market reads (quotes, candles). A full analysis scan asks
 // for the same context quotes over and over; without this a 4-symbol scan fires
 // 40+ requests in a couple of seconds and Cloudflare answers with 1015.
@@ -41,7 +60,7 @@ async function authenticate(){
   const creds=await loadTradeCreds();
   if(!creds?.email||!creds?.password||!creds?.server)throw new Error('TradeLocker not connected. Add your login in Settings.');
   session.env=creds.env==='live'?'live':'demo';
-  const res=await fetch(base()+'/auth/jwt/token',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:creds.email,password:creds.password,server:creds.server})});
+  const res=await fetchWithTimeout(base()+'/auth/jwt/token',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:creds.email,password:creds.password,server:creds.server})});
   if(!res.ok)throw new Error('TradeLocker login failed: '+(await res.text()).slice(0,120));
   const d=await res.json();
   session.token=d.accessToken;session.refresh=d.refreshToken;
@@ -50,7 +69,7 @@ async function authenticate(){
 
 async function refreshToken(){
   if(!session.refresh)return authenticate();
-  const res=await fetch(base()+'/auth/jwt/refresh',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({refreshToken:session.refresh})});
+  const res=await fetchWithTimeout(base()+'/auth/jwt/refresh',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({refreshToken:session.refresh})});
   if(!res.ok)return authenticate();
   const d=await res.json();
   session.token=d.accessToken;session.refresh=d.refreshToken||session.refresh;
@@ -85,7 +104,7 @@ async function rawApi(path,{method='GET',body,query}={}){
   const headers={'Authorization':'Bearer '+t,'Content-Type':'application/json'};
   if(session.accNum!=null)headers.accNum=String(session.accNum);
   for(let attempt=0;;attempt++){
-    const res=await fetch(base()+path+qs(query),{method,headers,body:body?JSON.stringify(body):undefined});
+    const res=await fetchWithTimeout(base()+path+qs(query),{method,headers,body:body?JSON.stringify(body):undefined});
     const text=await res.text();
     if(looksRateLimited(res.status,text)){
       session.rateLimitedUntil=Date.now()+10000;
@@ -117,7 +136,7 @@ function api(path,opts){
 
 export async function tlConnect(){
   await authenticate();
-  const res=await fetch(base()+'/auth/jwt/all-accounts',{headers:{'Authorization':'Bearer '+session.token,'Content-Type':'application/json'}});
+  const res=await fetchWithTimeout(base()+'/auth/jwt/all-accounts',{headers:{'Authorization':'Bearer '+session.token,'Content-Type':'application/json'}});
   if(!res.ok)throw new Error('TradeLocker: could not list accounts');
   const{accounts=[]}=await res.json();
   if(!accounts.length)throw new Error('TradeLocker: no accounts on this login');

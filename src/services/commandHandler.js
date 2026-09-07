@@ -20,6 +20,32 @@ function resolvePanel(s){
 }
 export async function handleCommands(response,personaId,callbacks={}){
   const hudChanged=()=>callbacks.onHudMutated?.();
+
+  // T.A.L.O.N.'s trade-execution tags run FIRST, in their own guard. The rest of
+  // this function is a long sequence of un-try/caught DB and Drive writes (tasks,
+  // notes, revenue, …); if T.A.L.O.N. emits one of those alongside a trade and it
+  // throws, every later handler — including the order — used to be skipped, so a
+  // proposed trade silently never fired. Placing the order can't depend on an
+  // unrelated bookkeeping write succeeding.
+  try{
+    for(const m of response.matchAll(/\[TRADE_PROPOSE:\s*(?:([A-Za-z0-9./]{3,12})\s*\|\s*)?(buy|sell|long|short)\s*\|([^|\]]+)\|([^|\]]+)\|([^|\]]+)\|([^|\]]+)\|([^\]]+)\]/gi)){
+      const num=s=>{const v=parseFloat(String(s).replace(/[^0-9.\-]/g,''));return isNaN(v)?null:v;};
+      const side=m[2].trim().toLowerCase();
+      callbacks.onTradePropose?.({
+        symbol:m[1]?m[1].trim().toUpperCase():'XAUUSD',
+        side:side==='long'?'buy':side==='short'?'sell':side,
+        entry:num(m[3]),stopLoss:num(m[4]),takeProfit:num(m[5]),
+        qty:num(m[6])||1,rationale:m[7].trim(),
+      });
+    }
+    for(const m of response.matchAll(/\[TRADE_CLOSE:\s*([^\]]+)\]/gi)){
+      callbacks.onTradeClose?.(m[1].trim());
+    }
+    for(const m of response.matchAll(/\[TRADE_BREAKEVEN:\s*([A-Za-z0-9]+)\s*(?:\|\s*([0-9.]+))?\]/gi)){
+      const off=m[2]?parseFloat(m[2]):0;
+      callbacks.onTradeBreakeven?.({id:m[1].trim(),offset:isNaN(off)?0:off});
+    }
+  }catch(e){try{require('./crashLog').logCrash('handleCommands:trade',String(e&&e.message||e));}catch{}}
   for(const m of response.matchAll(/\[ADD_TASK:\s*([^|\]]+?)(?:\|([^|\]]+))?(?:\|([^\]]+))?\]/gi)){
     const title=m[1]?.trim();if(!title)continue;
     const id=await addTask(title,m[2]?.trim()||'',m[3]?.trim()||null);
@@ -184,28 +210,8 @@ export async function handleCommands(response,personaId,callbacks={}){
     callbacks.onProjectStart?.({name,brief:parts[1]||'',target:(parts[2]||'').toLowerCase()});
   }
   if(/\[PROJECT_(?:DONE|CLOSE|COMPLETE|END)\]/i.test(response))callbacks.onProjectDone?.();
-  // [TRADE_PROPOSE: SYMBOL | side | entry | stopLoss | takeProfit | qty | rationale]
-  // SYMBOL is optional for backward compatibility; side must be buy/sell/long/short.
-  for(const m of response.matchAll(/\[TRADE_PROPOSE:\s*(?:([A-Za-z0-9./]{3,12})\s*\|\s*)?(buy|sell|long|short)\s*\|([^|\]]+)\|([^|\]]+)\|([^|\]]+)\|([^|\]]+)\|([^\]]+)\]/gi)){
-    const num=s=>{const v=parseFloat(String(s).replace(/[^0-9.\-]/g,''));return isNaN(v)?null:v;};
-    const side=m[2].trim().toLowerCase();
-    callbacks.onTradePropose?.({
-      symbol:m[1]?m[1].trim().toUpperCase():'XAUUSD',
-      side:side==='long'?'buy':side==='short'?'sell':side,
-      entry:num(m[3]),stopLoss:num(m[4]),takeProfit:num(m[5]),
-      qty:num(m[6])||1,rationale:m[7].trim(),
-    });
-  }
-  for(const m of response.matchAll(/\[TRADE_CLOSE:\s*([^\]]+)\]/gi)){
-    callbacks.onTradeClose?.(m[1].trim());
-  }
-  // [TRADE_BREAKEVEN: positionId] — move that position's stop to entry.
-  // Optional lock-in in price units: [TRADE_BREAKEVEN: id | 3.0] leaves the
-  // stop 3.0 in profit. [TRADE_BREAKEVEN: all] does every open position.
-  for(const m of response.matchAll(/\[TRADE_BREAKEVEN:\s*([A-Za-z0-9]+)\s*(?:\|\s*([0-9.]+))?\]/gi)){
-    const off=m[2]?parseFloat(m[2]):0;
-    callbacks.onTradeBreakeven?.({id:m[1].trim(),offset:isNaN(off)?0:off});
-  }
+  // [TRADE_PROPOSE], [TRADE_CLOSE] and [TRADE_BREAKEVEN] are handled at the top of
+  // this function (guarded) so an unrelated failing command can't skip an order.
   // [STRATEGY_UPDATE: full replacement text] — T.A.L.O.N. rewrites the trading playbook
   for(const m of response.matchAll(/\[STRATEGY_UPDATE:\s*([\s\S]+?)\]/gi)){
     if(m[1]?.trim())callbacks.onStrategyUpdate?.(m[1].trim());
