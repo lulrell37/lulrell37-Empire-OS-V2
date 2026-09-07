@@ -8,7 +8,7 @@
 // worklets, which is what hard-crashed the earlier 3D version.
 import React,{useState,useEffect,useMemo,useCallback,useRef,useImperativeHandle,forwardRef}from 'react';
 import{View,Text,StyleSheet,TouchableOpacity,ActivityIndicator,Dimensions,Platform,Animated,PanResponder,Image,Easing,ScrollView,Alert}from 'react-native';
-import Svg,{Path}from 'react-native-svg';
+import Svg,{Line}from 'react-native-svg';
 import PersonaOrb from './PersonaOrb';
 import MemorySpiral from './MemorySpiral';
 import MemoryPopup from './MemoryPopup';
@@ -135,20 +135,6 @@ const TETHERS=(()=>{
 const ID_INDEX={};
 PERSONA_LIST.forEach((p,i)=>{ID_INDEX[p.id]=i;});
 
-// Mirrors the orb opacity-by-depth curve used below, as a plain function —
-// needed to fade tether lines the same way without going through Animated.
-function depthOpacity(depth){
-  const pts=[[0.15,0],[1.0,1],[6,0.18],[11,0.06]];
-  if(depth<=pts[0][0])return pts[0][1];
-  for(let i=1;i<pts.length;i++){
-    if(depth<=pts[i][0]){
-      const[d0,o0]=pts[i-1],[d1,o1]=pts[i];
-      return o0+(o1-o0)*(depth-d0)/(d1-d0);
-    }
-  }
-  return pts[pts.length-1][1];
-}
-
 function touchDist(t){return Math.hypot(t[0].pageX-t[1].pageX,t[0].pageY-t[1].pageY);}
 
 // --- Idle bob, as a clock ------------------------------------------------
@@ -183,56 +169,46 @@ function bobAt(i,now,start){
   return{bx:-BOB_AMP_X+2*BOB_AMP_X*u,by:-BOB_AMP_Y+2*BOB_AMP_Y*u};
 }
 
-// The org-chart tethers, isolated in their own component driven off its own
-// rAF loop. Recomputing them re-renders only this small SVG — never the orb
-// cloud — so the cloud's float stays a pure native animation the entire time.
-// Every endpoint is computed with the EXACT projection + bob the orb renders
-// with (same cx/cy, same denom, same cosine off the same start clock), so the
-// line meets each orb dead centre, every frame.
-function TetherLayer({yawRef,dollyRef,pinnedRef,sizeRef,bobStartRef,RX,RY}){
-  const[paths,setPaths]=useState([]);
-  useEffect(()=>{
-    let raf=0;
-    const project=(i,yv,dv)=>{
-      const pt=SCATTER[i];
-      const cyN=Math.cos(yv),syN=Math.sin(yv);
-      const x1=cyN*pt.x+syN*pt.z;
-      const depth=(-pt.x*syN+pt.z*cyN)-dv;
-      const denom=Math.min(20,Math.max(0.4,1.0+depth*0.14));   // matches the orb's own denom clamp
-      const cx=sizeRef.current.w/2,cy=sizeRef.current.h*0.42;   // s.orbWrap is centred on this point
-      return{x:cx+(x1*RX)/denom,y:cy+(pt.y*RY)/denom,depth};
+const AnimatedLine=Animated.createAnimatedComponent(Line);
+
+// The org-chart tethers. Each endpoint is the SAME Animated node the orb it
+// connects to is rendered with — screen centre + the projection translate — so
+// a line and its orb move off one source, on the same tick, during any drag or
+// fly. It physically cannot lag or detach: no JS reconstruction, no timer, no
+// depth-scale pivot to get wrong. The idle bob (±4/±9 px, native, per-frame
+// only on the UI thread) is deliberately NOT folded in: the line connects to
+// the orb's rest anchor and the orb floats gently around it — a socket, which
+// reads as solidly attached and costs zero JS while the camera is still.
+// Re-renders only when the orb set / pinned map / size changes.
+function TetherLayer({orbs,pinned,size}){
+  const lines=useMemo(()=>{
+    const cx=size.w/2,cy=size.h*0.42;   // where s.orbWrap centres each orb
+    const endOf=(i)=>{
+      const o=orbs[i];
+      if(!o)return null;
+      const pin=pinned[PERSONA_LIST[i].id];
+      if(pin)return{x:cx+pin.tx,y:cy+pin.ty,fade:0.9};   // pinned: fixed screen spot, fixed mid-depth
+      return{
+        x:Animated.add(cx,o.translateX),
+        y:Animated.add(cy,o.translateY),
+        fade:o.depth.interpolate({inputRange:[0.2,1.2,6,11],outputRange:[0,1,0.2,0.05],extrapolate:'clamp'}),
+      };
     };
-    const endpoint=(id,yv,dv,now)=>{
-      const i=ID_INDEX[id];
-      const{bx,by}=bobAt(i,now,bobStartRef.current);
-      const pin=pinnedRef.current[id];
-      if(pin){const cx=sizeRef.current.w/2,cy=sizeRef.current.h*0.42;return{x:cx+pin.tx+bx,y:cy+pin.ty+by,depth:2};}
-      const p=project(i,yv,dv);
-      return{x:p.x+bx,y:p.y+by,depth:p.depth};
-    };
-    const tick=()=>{
-      const yv=yawRef.current,dv=dollyRef.current,now=Date.now();
-      const glow=0.6+0.4*(0.5-0.5*Math.cos(2*Math.PI*((now/4600)%1)));
-      setPaths(TETHERS.map(([a,b])=>{
-        const pa=endpoint(a,yv,dv,now),pb=endpoint(b,yv,dv,now);
-        const vis=pa.depth>0.35&&pb.depth>0.35;
-        const dist=Math.hypot(pb.x-pa.x,pb.y-pa.y);
-        // barely-there sag — the line should read as one piece with the orbs it
-        // joins, not a slack rope hanging off them
-        const sag=Math.min(12,Math.max(1,dist*0.04));
-        const midX=(pa.x+pb.x)/2,midY=(pa.y+pb.y)/2+sag;
-        const o=vis?Math.min(depthOpacity(pa.depth),depthOpacity(pb.depth))*0.72*glow:0;
-        return{key:a+'-'+b,d:`M${pa.x},${pa.y} Q${midX},${midY} ${pb.x},${pb.y}`,o};
-      }));
-      raf=requestAnimationFrame(tick);
-    };
-    raf=requestAnimationFrame(tick);
-    return()=>cancelAnimationFrame(raf);
-  },[RX,RY,bobStartRef,pinnedRef,sizeRef,yawRef,dollyRef]);
+    return TETHERS.map(([a,b])=>{
+      const ia=ID_INDEX[a],ib=ID_INDEX[b];
+      if(ia==null||ib==null)return null;
+      const pa=endOf(ia),pb=endOf(ib);
+      if(!pa||!pb)return null;
+      // opacity ≈ average of the two ends' depth fade, dimmed — (fa + fb) * 0.36
+      const op=Animated.multiply(Animated.add(pa.fade,pb.fade),0.36);
+      return{key:a+'-'+b,pa,pb,op};
+    }).filter(Boolean);
+  },[orbs,pinned,size.w,size.h]);
   return(
     <Svg style={StyleSheet.absoluteFill} pointerEvents="none">
-      {paths.map(t=>t.o>0.02&&(
-        <Path key={t.key} d={t.d} stroke="#E8C98A" strokeWidth={1.25} strokeLinecap="round" fill="none" strokeOpacity={t.o}/>
+      {lines.map(l=>(
+        <AnimatedLine key={l.key} x1={l.pa.x} y1={l.pa.y} x2={l.pb.x} y2={l.pb.y}
+          stroke="#E8C98A" strokeWidth={1.4} strokeLinecap="round" strokeOpacity={l.op}/>
       ))}
     </Svg>
   );
@@ -728,6 +704,7 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,busyPersonas,onPick,on
         .interpolate({inputRange:[0.4,20],outputRange:[0.4,20],extrapolate:'clamp'});
       return{
         p,
+        depth,   // Animated — the tether layer fades lines by this, same as the orb's own opacity
         translateX:Animated.divide(Animated.multiply(x1,RX),denom),
         translateY:Animated.divide(Animated.multiply(pt.y,RY),denom),
         // Bob + twinkle both ride one native-driven transform layer (see the
@@ -861,8 +838,7 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,busyPersonas,onPick,on
         boxRef.current&&boxRef.current.measureInWindow&&boxRef.current.measureInWindow((x,y)=>{originRef.current={x:x||0,y:y||0};});
       }}>
       <View style={StyleSheet.absoluteFill} {...pan.panHandlers}>
-        <TetherLayer yawRef={yawNow} dollyRef={dollyNow} pinnedRef={pinnedRef}
-          sizeRef={sizeRef} bobStartRef={bobStart} RX={RX} RY={RY}/>
+        <TetherLayer orbs={orbs} pinned={pinned} size={size}/>
         {order.map(oi=>orbs[oi]).filter(({p})=>!pinned[p.id]).map(({p,translateX,translateY,scale,opacity,bobX,bobY,sparkleScale,sparkleOpacity})=>{
           const selected=group.includes(p.id);
           return(

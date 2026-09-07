@@ -40,7 +40,6 @@ import Canvas from './command/Canvas';
 import TradePanel from './command/TradePanel';
 import TradeStatus from '../components/TradeStatus';
 import TradeRecordBar from './command/TradeRecordBar';
-import DeepResearchBanner from './command/DeepResearchBanner';
 import BuildPanel from './command/BuildPanel';
 import LeadsPanel from './command/LeadsPanel';
 import{convokeCouncil}from '../services/council';
@@ -1960,7 +1959,7 @@ export default function CommandScreen({navigation,route}){
       }else if(outcome==='cancelled'){
         pushSystemMsg('Deep research was cancelled.');
       }else{
-        pushSystemMsg('Deep research failed'+(row.error?`: ${row.error}`:'')+'.');
+        reportIssue('deep-research',`${name}'s deep research failed`,new Error(row.error||'unknown error'),{ttlMs:30*60000});
       }
     };
     const iv=setInterval(tick,DR_POLL_MS);tick();
@@ -1968,9 +1967,11 @@ export default function CommandScreen({navigation,route}){
   },[deepResearch?.id,deepResearch?.status,activePersona,mode]);// eslint-disable-line react-hooks/exhaustive-deps
   function dismissDeepResearch(){
     if(!deepResearch)return;
-    drDismiss(deepResearch.id);
-    setDeepResearch(null);
-    pushSystemMsg('Deep research dismissed — it keeps running on OpenAI but the app has stopped tracking it.');
+    const id=deepResearch.id;
+    Alert.alert('Stop this deep research?','The app stops tracking it. If it finishes before you close the app the brief still lands in chat.',[
+      {text:'Keep going',style:'cancel'},
+      {text:'Stop',style:'destructive',onPress:()=>{drDismiss(id);setDeepResearch(null);}},
+    ]);
   }
 
   // --- Build pipeline (J.A.R.V.I.S. for app changes, A.R.A. for client projects) ---
@@ -2210,8 +2211,11 @@ export default function CommandScreen({navigation,route}){
     const out=[...bgJobs];
     agentBusy.forEach(id=>out.push({key:'agent:'+id,persona:id,label:AGENT_LABEL[id]||'running a cycle'}));
     relayBusy.forEach(id=>out.push({key:'relay:'+id,persona:id,label:'pulled in on a relay'}));
-    if(deepResearch&&deepResearch.status==='running'&&deepResearch.persona)
-      out.push({key:'research',persona:deepResearch.persona,label:'running deep research'});
+    if(deepResearch&&deepResearch.status==='running'&&deepResearch.persona){
+      const pr=deepResearch.progressObj||{};
+      const bits=['deep research',pr.searches?`${pr.searches} search${pr.searches===1?'':'es'}`:null].filter(Boolean);
+      out.push({key:'research',persona:deepResearch.persona,label:bits.join(' · '),onPress:dismissDeepResearch});
+    }
     if(councilLive&&councilLive.active&&councilLive.speaking)
       out.push({key:'council',persona:councilLive.speaking,label:'speaking in council'});
     // de-dupe by key (same persona can't stack two identical rows)
@@ -2346,7 +2350,6 @@ export default function CommandScreen({navigation,route}){
       )}
       {view==='text'&&project&&mode==='direct'&&activePersona==='ara'&&<BuildPanel active={isFocused} title="FIRM BUILD" accent="#00CED1" onMerge={confirmBuildMerge} onCancel={confirmBuildCancel} onDelete={confirmBuildDelete} filter={firmBuildFilter}/>}
 
-      <DeepResearchBanner job={deepResearch} onDismiss={dismissDeepResearch}/>
 
       {view==='viz'?(
         <View style={{flex:1}}>

@@ -60,7 +60,7 @@ export default function NudgeBar({active}){
   // problems (errors before warn/info), then proactive nudges.
   const activityChips=activity.map(a=>({
     key:'act:'+a.key,persona:a.persona,text:a.label,severity:'activity',activity:true,
-    frac:typeof a.frac==='number'?a.frac:null,
+    frac:typeof a.frac==='number'?a.frac:null,onPress:typeof a.onPress==='function'?a.onPress:null,
   }));
   const issueChips=Object.entries(firmIssues).map(([key,v])=>({
     key:'firm:'+key,rawKey:key,text:v.text,detail:v.detail,severity:v.severity||'error',issue:true,
@@ -90,7 +90,7 @@ export default function NudgeBar({active}){
   if(!shown.length)return null;
 
   const onChipPress=(n)=>{
-    if(n.activity)return;
+    if(n.activity){n.onPress&&n.onPress();return;}
     if(n.issue&&n.detail){Alert.alert('What went wrong',n.detail);return;}
     dismissChip(n);
   };
@@ -104,13 +104,14 @@ export default function NudgeBar({active}){
     if(n.activity){
       const col=getPersona(n.persona)?.color||'#E8C98A';
       const name=(getPersona(n.persona)?.name||n.persona).replace(/\./g,'');
+      const Wrap=n.onPress?TouchableOpacity:View;
       return(
-        <View key={prefix+n.key} style={[s.chip,s.actChip,{borderColor:col+'55'}]}>
+        <Wrap key={prefix+n.key} activeOpacity={0.7} onPress={n.onPress?()=>onChipPress(n):undefined} style={[s.chip,s.actChip,{borderColor:col+'55'}]}>
           <Animated.View style={[s.actDot,{backgroundColor:col,opacity:pulse.interpolate({inputRange:[0,1],outputRange:[0.35,1]})}]}/>
           <Text style={[s.actName,{color:col}]}>{name}</Text>
-          <Text style={s.actLabel}>{n.text}</Text>
+          <Text style={s.actLabel}>{n.text}{n.onPress?'  ✕':''}</Text>
           {n.frac!=null&&<View style={[s.actProg,{width:`${Math.round(Math.max(0,Math.min(1,n.frac))*100)}%`,backgroundColor:col}]}/>}
-        </View>
+        </Wrap>
       );
     }
     const tone=TONE[n.severity]||(n.issue?TONE.error:TONE.warn);
