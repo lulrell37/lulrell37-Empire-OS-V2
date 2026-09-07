@@ -48,7 +48,7 @@ const DEPARTMENTS=[
   {head:'atlas',  hub:{x:3.8,y:-2.1,z:3.0}, reports:['talon','muse2']},
   {head:'selene', hub:{x:-4.0,y:1.4,z:3.8}, reports:['rogue','scribe','hook','muse1','forge','herald']},
   {head:'haven',  hub:{x:1.4,y:3.5,z:5.4},  reports:['muse3']},
-  {head:'andrew', hub:{x:-2.0,y:-3.4,z:4.8},reports:['scout','pulse']},
+  {head:'andrew', hub:{x:-2.0,y:-3.4,z:4.8},reports:['scout','pulse','pen']},
 ];
 const REPORT_ARC=1.6;   // base ring radius for a head's reports around its hub (a crowded department widens it)
 
