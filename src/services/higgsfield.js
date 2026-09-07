@@ -6,7 +6,8 @@
 // No training, no character IDs. Each page keeps a set of reference photos
 // (uploaded to Higgsfield's CDN, URLs stored on the page). Every generation
 // sends those reference photos + the MUSE's prompt straight to Higgsfield:
-//   image / carousel  ->  v2 /nano-banana-pro  with the WHOLE set as input_images
+//   image / carousel  ->  first enabled multi-image model (nano-banana-pro,
+//                          nano-banana, popcorn, reve/remix) with the whole set
 //   reel              ->  v1 /v1/image2video/dop  with the photos as input_images
 //
 // Two request styles on the same host (platform.higgsfield.ai):
@@ -116,31 +117,40 @@ export async function uploadToHiggsfield(localUri,contentType='image/jpeg',key){
 
 // --- submit ------------------------------------------------------------
 // Each returns the job-set id to poll with checkJobSet().
-// Stills / carousels go through Nano Banana on the v2 API: it takes the WHOLE
-// set of a page's reference photos (up to 8) as `input_images`, not just one, so
-// face + body + wardrobe shots all inform the render. Returns "nb:<request_id>"
-// — checkJobSet() routes that prefix to the v2 status endpoint.
-const NANO_MODELS=['/nano-banana-pro','/nano-banana'];
+// Stills / carousels: try Higgsfield's multi-image models in order and use the
+// first one this key is allowed to run — they all take the WHOLE set of a page's
+// reference photos (up to 8), so face + body + wardrobe shots all inform the
+// render. Returns "nb:<request_id>" (checkJobSet routes that prefix to the v2
+// status endpoint). A model the key can't run answers 404 model_not_found or
+// 503 model_disabled — we just move to the next.
+const IMAGE_MODELS=[
+  {slug:'/nano-banana-pro',           refs:'objects'},
+  {slug:'/nano-banana',               refs:'objects'},
+  {slug:'/higgsfield-ai/popcorn/auto',refs:'urls'},
+  {slug:'/reve/remix',                refs:'urls'},
+  {slug:'/reve/fast/remix',           refs:'urls'},
+];
+// Move to the next model on anything that looks like "this model won't take
+// this request" — not available (404/503) or didn't like the body (400/422).
+const MODEL_UNAVAILABLE=/\b(400|404|422|503)\b|model_not_found|model_disabled/i;
 export async function submitImage(prompt,{batch=1,referenceUrl,referenceUrls,aspectRatio='3:4',key}={}){
   const urls=(referenceUrls&&referenceUrls.length?referenceUrls:(referenceUrl?[referenceUrl]:[]))
     .filter(Boolean).slice(0,8);
-  const body={
-    prompt:clip(prompt),
-    num_images:Math.min(4,Math.max(1,parseInt(batch,10)||1)),
-    aspect_ratio:aspectRatio,
-    input_images:urls.map(u=>({type:'image_url',image_url:u})),
-  };
+  const num=Math.min(4,Math.max(1,parseInt(batch,10)||1));
   let lastErr;
-  for(const model of NANO_MODELS){
+  for(const m of IMAGE_MODELS){
+    const body={prompt:clip(prompt),num_images:num,aspect_ratio:aspectRatio};
+    if(m.refs==='objects')body.input_images=urls.map(u=>({type:'image_url',image_url:u}));
+    else body.image_urls=urls;
     try{
-      const j=await hf2(model,{method:'POST',key,body});
+      const j=await hf2(m.slug,{method:'POST',key,body});
       return j?.request_id?`nb:${j.request_id}`:null;
     }catch(e){
       lastErr=e;
-      if(!/404|model_not_found/i.test(String(e?.message||'')))throw e; // real error — stop
+      if(!MODEL_UNAVAILABLE.test(String(e?.message||'')))throw e; // a real failure — surface it
     }
   }
-  throw lastErr||new Error('Nano Banana: no model endpoint accepted the request');
+  throw new Error(`No Higgsfield image model is enabled for this key (last: ${String(lastErr?.message||'').replace(/^Higgsfield\s*/,'')}). Ask support@higgsfield.ai to enable one.`);
 }
 export async function submitVideo(prompt,referenceUrls,{key}={}){
   const imgs=(referenceUrls||[]).filter(Boolean).slice(0,4).map(u=>({type:'image_url',image_url:u}));
