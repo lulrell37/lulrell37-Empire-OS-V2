@@ -320,6 +320,32 @@ export async function driveSyncNotesFolder(){
     +`In Obsidian, open a vault on that Drive folder (turn on "Detect all file extensions" if a note doesn't show).`;
 }
 
+// Structured variants of driveList / driveRead for the Canvas UI — the string
+// versions above are shaped for LLM injection. driveListRaw returns note files
+// newest-first as objects; driveReadRaw returns one note's raw text.
+export async function driveListRaw(max=80){
+  const data=await gapi('/drive/v3/files',{query:{
+    q:"trashed=false and (mimeType='text/plain' or mimeType='text/markdown' or mimeType='application/vnd.google-apps.document')",
+    orderBy:'modifiedTime desc',pageSize:max,fields:'files(id,name,mimeType,modifiedTime)',
+  }});
+  return (data.files||[]).map(f=>({
+    id:f.id,
+    title:baseName(f.name),
+    modified:f.modifiedTime?Date.parse(f.modifiedTime):0,
+    isDoc:f.mimeType==='application/vnd.google-apps.document',
+  }));
+}
+export async function driveReadRaw({fileId}){
+  if(!fileId)throw new Error('need a file id');
+  const file=await gapi(`/drive/v3/files/${fileId}`,{query:{fields:'id,name,mimeType'}});
+  let text;
+  if(file.mimeType==='application/vnd.google-apps.document')
+    text=await gapi(`/drive/v3/files/${file.id}/export`,{query:{mimeType:'text/plain'},raw:true});
+  else
+    text=await gapi(`/drive/v3/files/${file.id}`,{query:{alt:'media'},raw:true});
+  return{id:file.id,title:baseName(file.name),content:text||''};
+}
+
 export async function driveSearch(kw){
   if(!kw)throw new Error('no search term');
   const esc=kw.replace(/'/g,"\\'");

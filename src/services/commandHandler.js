@@ -230,8 +230,25 @@ export async function handleCommands(response,personaId,callbacks={}){
   for(const m of response.matchAll(/\[BUILD_CANCEL:\s*#?(\d+)\]/gi)){
     callbacks.onBuildCancel?.({issueNumber:parseInt(m[1],10)});
   }
+  // --- The Canvas — a persona turns the orb screen into an interactive surface.
+  // [SHOW_CHART], [SHOW_NOTES]/[SHOW_NOTE: title], [SHOW_TASKS]. All route to one
+  // callback; CommandScreen animates it in (viz view) or drops a chip (chat).
   for(const m of response.matchAll(/\[SHOW_CHART:\s*([^\]]+)\]/gi)){
-    if(m[1]?.trim())callbacks.onShowChart?.(m[1].trim());
+    if(m[1]?.trim())callbacks.onShowArtifact?.({kind:'chart',raw:m[1].trim()});
+  }
+  for(const m of response.matchAll(/\[SHOW_NOTE:\s*([^\]]+)\]/gi)){
+    if(m[1]?.trim())callbacks.onShowArtifact?.({kind:'notes',open:m[1].trim()});
+  }
+  if(/\[SHOW_NOTES\]/i.test(response))callbacks.onShowArtifact?.({kind:'notes'});
+  if(/\[SHOW_TASKS\]/i.test(response))callbacks.onShowArtifact?.({kind:'tasks'});
+  // Auto-surface: if the persona went to BROWSE the note collection or the task
+  // list to answer, and didn't already emit an explicit SHOW_ tag, put that
+  // surface on the canvas too. Deliberately narrow — a bare [READ_NOTE] (reading
+  // one note for its own reasoning) does NOT surface anything; only [LIST_NOTES]
+  // / [SEARCH_DRIVE] ("show me my notes") and [READ_TASKS] do.
+  if(!/\[SHOW_(?:CHART:|NOTE:|NOTES\]|TASKS\])/i.test(response)){
+    if(/\[LIST_NOTES(?::[^\]]*)?\]|\[SEARCH_DRIVE:/i.test(response))callbacks.onShowArtifact?.({kind:'notes'});
+    else if(/\[READ_TASKS\]/i.test(response))callbacks.onShowArtifact?.({kind:'tasks'});
   }
   for(const m of response.matchAll(/\[ADD_EXPENSE:\s*([^|\]]+)(?:\|([^|\]]+))?(?:\|([^\]]+))?\]/gi)){
     await addExpense(m[1],m[2]?.trim()||'general',m[3]?.trim()||'');
@@ -391,7 +408,8 @@ export function stripCommands(text){
     .replace(/\[REMEMBER:[^\]]*\]/gi,'').replace(/\[UNPIN_MEMORY:[^\]]*\]/gi,'')
     .replace(/\[EDIT_CLIP:[^\]]*\]/gi,'')
     .replace(/\[WATCH_VIDEO:[^\]]*\]/gi,'')
-    .replace(/\[SHOW_CHART:[^\]]*\]/gi,'')
+    .replace(/\[SHOW_CHART:[^\]]*\]/gi,'').replace(/\[SHOW_NOTE:[^\]]*\]/gi,'')
+    .replace(/\[SHOW_NOTES\]/gi,'').replace(/\[SHOW_TASKS\]/gi,'')
     .replace(/\[BUILD_REQUEST:[^\]]*\]/gi,'').replace(/\[BUILD_REPLY:[^\]]*\]/gi,'')
     .replace(/\[BUILD_MERGE:[^\]]*\]/gi,'').replace(/\[BUILD_CANCEL:[^\]]*\]/gi,'').replace(/\[BUILD_STATUS\]/gi,'')
     .replace(/\[SEND_SMS:[^\]]*\]/gi,'')

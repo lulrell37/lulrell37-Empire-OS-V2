@@ -34,7 +34,7 @@ import{loadKeys,loadGitHubToken}from '../services/keyStore';
 import useEmpireStore from '../store/useEmpireStore';
 import{useIsFocused,useFocusEffect}from '@react-navigation/native';
 import OrbZoom from './command/OrbZoom';
-import ChartOverlay from './command/ChartOverlay';
+import Canvas from './command/Canvas';
 import TradePanel from './command/TradePanel';
 import TradeStatus from '../components/TradeStatus';
 import TradeRecordBar from './command/TradeRecordBar';
@@ -120,7 +120,13 @@ export default function CommandScreen({navigation,route}){
   const orbZoomRef=useRef(null);
   const[tradeBusy,setTradeBusy]=useState(false); // guards against two proposals landing at once
   const[deepResearch,setDeepResearch]=useState(null); // deep_research row + progressObj; null when idle. Persisted — see services/deepResearch.js
-  const[chartOverlay,setChartOverlay]=useState(null); // parsed chart spec shown over the orb
+  // THE CANVAS — a persona has turned the viz panel into an interactive surface
+  // ({kind:'chart'|'notes'|'tasks', ...}); null = the orb. `canvasChip` is the
+  // non-intrusive "tap to view" prompt shown when it's surfaced from chat view.
+  const[artifact,setArtifact]=useState(null);
+  const[canvasChip,setCanvasChip]=useState(null);
+  const canvasRef=useRef(null);
+  const viewRef=useRef('viz');
   const[project,setProject]=useState(null); // THE FIRM: active client project A.R.A. is coordinating — {name,brief,target,repo,contributions[],startedAt}
   const projectRef=useRef(null);
   const activePersonaRef=useRef('jarvis');
@@ -212,6 +218,10 @@ export default function CommandScreen({navigation,route}){
   useEffect(()=>{modeRef.current=mode;},[mode]);
   useEffect(()=>{orbLevelRef.current=orbLevel;},[orbLevel]);
   useEffect(()=>{isFocusedRef.current=isFocused;},[isFocused]);
+  useEffect(()=>{viewRef.current=view;},[view]);
+  // A surfaced canvas belongs to the persona that raised it — drop it when the
+  // conversation moves to a different persona or into group mode.
+  useEffect(()=>{setArtifact(null);setCanvasChip(null);},[activePersona,mode]);
   // Load which personas already have a reply waiting from a previous session
   // (the screen fully remounts on a return from the city, so this can't live
   // in component state alone).
@@ -1276,7 +1286,10 @@ export default function CommandScreen({navigation,route}){
   // in from the edges toward it: chart overlay -> chat -> deeper viz levels ->
   // the galaxy; once there, returns false so the OS handles it (exits the app).
   function handleBack(){
-    if(chartOverlay){setChartOverlay(null);return true;}
+    if(view==='viz'&&artifact){
+      if(canvasRef.current&&canvasRef.current.back&&canvasRef.current.back())return true;
+      setArtifact(null);return true;
+    }
     if(view==='text'){
       setHandsFree(false);handsFreeRef.current=false;clearSilenceTimer();
       if(recordingRef.current)stopRecording();
@@ -1290,7 +1303,7 @@ export default function CommandScreen({navigation,route}){
   useFocusEffect(useCallback(()=>{
     const sub=BackHandler.addEventListener('hardwareBackPress',()=>handleBack());
     return()=>sub.remove();
-  },[view,chartOverlay]));// eslint-disable-line react-hooks/exhaustive-deps
+  },[view,artifact]));// eslint-disable-line react-hooks/exhaustive-deps
 
   async function send(){
     // The input is uncontrolled (no `value` prop) so Android never drops the last
@@ -1500,7 +1513,15 @@ export default function CommandScreen({navigation,route}){
           onStrategyUpdate:(text)=>{setStrategy(text).then(()=>pushSystemMsg('— T.A.L.O.N. updated the playbook —')).catch(()=>{});},
           onTradeReview:({id,note})=>{setTradeReview(id,note).catch(()=>{});},
           onDeepResearch:(topic)=>startDeepResearch(topic,pid),
-          onShowChart:(raw)=>{const spec=parseChartSpec(raw);if(spec.valid){setChartOverlay(spec);setView('viz');}},
+          onShowArtifact:({kind,open,raw})=>{
+            if(isGroup)return;
+            let art;
+            if(kind==='chart'){const spec=parseChartSpec(raw||'');if(!spec.valid)return;art={kind:'chart',spec,persona:pid};}
+            else art={kind,open,persona:pid};
+            setArtifact(art);
+            if(viewRef.current==='viz'){setCanvasChip(null);}
+            else{setCanvasChip({persona:pid,kind});}
+          },
           onShowDiagram:()=>navigation.navigate('Laboratory'),
           onBuildRequest:({spec})=>confirmBuildRequest(spec),
           onBuildReply:({issueNumber,text})=>{getBuildJobByIssue(issueNumber,projectRef.current?.repo).then(j=>j?sendBuildReply(j.id,text):pushSystemMsg(`— No build job for #${issueNumber}. —`));},
@@ -2207,6 +2228,17 @@ export default function CommandScreen({navigation,route}){
 
       <NudgeBar active={isFocused}/>
 
+      {canvasChip&&view==='text'&&artifact&&(
+        <TouchableOpacity style={s.canvasChip} activeOpacity={0.8}
+          onPress={()=>{setView('viz');setCanvasChip(null);}}>
+          <View style={[s.canvasChipDot,{backgroundColor:getPersona(canvasChip.persona).color}]}/>
+          <Text style={s.canvasChipT} numberOfLines={1}>
+            {getPersona(canvasChip.persona).name} put {canvasChip.kind==='tasks'?'your tasks':canvasChip.kind==='chart'?'a chart':'your notes'} on the canvas — tap to view
+          </Text>
+          <Text style={s.canvasChipGo}>◉</Text>
+        </TouchableOpacity>
+      )}
+
       {view==='text'&&<View style={s.teamPanel}>
         <Image source={TEAM_PHOTO} style={s.teamPhoto} resizeMode="cover"/>
       </View>}
@@ -2257,14 +2289,12 @@ export default function CommandScreen({navigation,route}){
       <DeepResearchBanner job={deepResearch} onDismiss={dismissDeepResearch}/>
 
       {view==='viz'?(
-        chartOverlay?(
-          <ChartOverlay spec={chartOverlay} accent={cp.color} onClose={()=>setChartOverlay(null)}/>
-        ):(
+        <View style={{flex:1}}>
         <OrbZoom
           ref={orbZoomRef}
           personaId={activePersona}
           color={cp.color}
-          active={isFocused}
+          active={isFocused&&!artifact}
           vizRef={vizRef}
           personaPics={personaPics}
           level={orbLevel}
@@ -2274,7 +2304,8 @@ export default function CommandScreen({navigation,route}){
           onPickPersona={pickPersonaFromOrb}
           onLaunchGroup={launchGroupFromOrb}
         />
-        )
+        {artifact&&<Canvas ref={canvasRef} artifact={artifact} accent={cp.color} onClose={()=>setArtifact(null)}/>}
+        </View>
       ):(
         <FlatList ref={flatRef} data={displayMessages} keyExtractor={i=>i.id} renderItem={renderMsg} contentContainerStyle={s.msgList} style={{flex:1}}
           scrollEventThrottle={16}
@@ -2414,6 +2445,10 @@ const s=StyleSheet.create({
   viewTabT:{fontFamily:'monospace',fontSize:11,color:'#444'},
   onlineDot:{width:6,height:6,borderRadius:3,backgroundColor:'#4CAF50'},
   onlineText:{fontFamily:'monospace',fontSize:8,color:'#4CAF50',letterSpacing:2},
+  canvasChip:{flexDirection:'row',alignItems:'center',gap:8,marginHorizontal:14,marginTop:6,borderWidth:1,borderColor:'#2a2620',borderRadius:6,paddingHorizontal:10,paddingVertical:8,backgroundColor:'#0A0907'},
+  canvasChipDot:{width:7,height:7,borderRadius:4},
+  canvasChipT:{flex:1,fontFamily:'monospace',fontSize:8.5,color:'#A99E88',letterSpacing:0.5},
+  canvasChipGo:{fontFamily:'monospace',fontSize:11,color:'#E8C98A'},
   teamPanel:{marginHorizontal:14,marginTop:6,marginBottom:4,borderWidth:1,borderColor:'#1A1A1A',borderRadius:6,overflow:'hidden'},
   teamLabels:{flexDirection:'row',justifyContent:'space-between',paddingHorizontal:10,paddingVertical:6},
   teamLabel:{fontFamily:'monospace',fontSize:7,color:'#555',letterSpacing:3},
