@@ -66,6 +66,11 @@ const REPORT_ARC=1.6;   // base ring radius for a head's reports around its hub 
 const SECONDARY_HEAD={};
 for(const d of DEPARTMENTS)for(const r of d.reports)SECONDARY_HEAD[r]=d.head;
 
+// Department heads read differently from the rest of the cloud: a bit larger, a
+// standing ring + colour halo, a bolder name (see OrbVisual).
+const HEADS=new Set(DEPARTMENTS.map(d=>d.head));
+for(const h of HEADS)SIZE_BOOST[h]=1.22;
+
 const SCATTER=(()=>{
   let a=0x9e3779b9;
   const rnd=()=>{a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};
@@ -850,9 +855,9 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,busyPersonas,onPick,on
                   holds still, but she still rides the cloud like everyone else. */}
               <Animated.View style={{opacity:sparkleOpacity,transform:[{translateX:bobX},{translateY:bobY},{scale:sparkleScale}]}}>
                 <View style={s.orbBox} {...orbResponders[p.id].panHandlers}>
-                  <OrbVisual p={p} selected={selected} pic={pics[p.id]} unread={unreadPersonas?.has?.(p.id)} busy={busyPersonas?.has?.(p.id)} glowPulse={glowPulse}/>
+                  <OrbVisual p={p} selected={selected} head={HEADS.has(p.id)} pic={pics[p.id]} unread={unreadPersonas?.has?.(p.id)} busy={busyPersonas?.has?.(p.id)} glowPulse={glowPulse}/>
                 </View>
-                <Text style={[s.orbName,{color:p.color},selected&&{fontWeight:'700'}]} numberOfLines={1}>{p.name.replace(/\./g,'')}</Text>
+                <Text style={[s.orbName,{color:p.color},(selected||HEADS.has(p.id))&&s.orbNameStrong]} numberOfLines={1}>{p.name.replace(/\./g,'')}</Text>
               </Animated.View>
             </Animated.View>
           );
@@ -869,9 +874,9 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,busyPersonas,onPick,on
             <View key={p.id} style={[s.orbWrap,{transform:[{translateX:pin.tx},{translateY:pin.ty}]}]}>
               <Animated.View style={{opacity:o.sparkleOpacity,transform:[{translateX:o.bobX},{translateY:o.bobY},{scale:o.sparkleScale}]}}>
                 <View style={s.orbBox} {...orbResponders[p.id].panHandlers}>
-                  <OrbVisual p={p} selected={selected} pic={pics[p.id]} unread={unreadPersonas?.has?.(p.id)} busy={busyPersonas?.has?.(p.id)} glowPulse={glowPulse}/>
+                  <OrbVisual p={p} selected={selected} head={HEADS.has(p.id)} pic={pics[p.id]} unread={unreadPersonas?.has?.(p.id)} busy={busyPersonas?.has?.(p.id)} glowPulse={glowPulse}/>
                 </View>
-                <Text style={[s.orbName,{color:p.color},selected&&{fontWeight:'700'}]} numberOfLines={1}>{p.name.replace(/\./g,'')}</Text>
+                <Text style={[s.orbName,{color:p.color},(selected||HEADS.has(p.id))&&s.orbNameStrong]} numberOfLines={1}>{p.name.replace(/\./g,'')}</Text>
               </Animated.View>
             </View>
           );
@@ -885,7 +890,7 @@ const PersonaSphere=forwardRef(PersonaSphereInner);
 // Shared visual for one orb — the glow ring (while held for a custom group),
 // the core/picture, and the unread dot. Used by both the depth-sorted cloud
 // and the manually-pinned pass so dragging an orb doesn't change how it looks.
-function OrbVisual({p,selected,pic,unread,busy,glowPulse}){
+function OrbVisual({p,selected,pic,unread,busy,head,glowPulse}){
   return(
     <>
       {/* A persona working in the background — a soft gold aura that breathes.
@@ -894,13 +899,17 @@ function OrbVisual({p,selected,pic,unread,busy,glowPulse}){
         opacity:glowPulse.interpolate({inputRange:[0,1],outputRange:[0.2,0.6]}),
         transform:[{scale:glowPulse.interpolate({inputRange:[0,1],outputRange:[1,1.16]})}],
       }]}/>}
+      {/* Department head: a faint colour halo behind, and a standing ring in
+          front — always on, so a head reads as a hub even at a glance. */}
+      {head&&<View pointerEvents="none" style={[s.orbHeadHalo,{backgroundColor:p.color+'12',borderColor:p.color+'55'}]}/>}
       {selected&&<Animated.View style={[s.orbSelRing,{borderColor:p.color,
         opacity:glowPulse.interpolate({inputRange:[0,1],outputRange:[0.45,1]})}]}/>}
-      <View style={[s.orbGlow,{backgroundColor:p.color+(selected?'40':'20')}]}>
+      <View style={[s.orbGlow,{backgroundColor:p.color+(selected?'40':head?'30':'20')}]}>
         {pic
           ?<Image source={{uri:pic}} style={s.orbImg}/>
-          :<View style={[s.orbCore,{backgroundColor:p.color,shadowColor:p.color}]}/>}
+          :<View style={[s.orbCore,head&&s.orbCoreHead,{backgroundColor:p.color,shadowColor:p.color}]}/>}
       </View>
+      {head&&<View pointerEvents="none" style={[s.orbHeadRing,{borderColor:p.color}]}/>}
       {unread&&<View style={s.orbUnread}/>}
     </>
   );
@@ -942,5 +951,11 @@ const s=StyleSheet.create({
   orbUnread:{position:'absolute',top:-1,right:8,width:12,height:12,borderRadius:6,backgroundColor:'#E05555',borderWidth:2,borderColor:'#000'},
   orbImg:{width:'100%',height:'100%',borderRadius:26},
   orbCore:{width:18,height:18,borderRadius:9,shadowOpacity:0.9,shadowRadius:8,shadowOffset:{width:0,height:0},elevation:6},
+  orbCoreHead:{width:23,height:23,borderRadius:11.5},
+  // Department-head treatment: a colour halo behind the orb and a standing ring
+  // in front (sized between orbGlow and the group-select ring).
+  orbHeadHalo:{position:'absolute',top:-12,left:-12,right:-12,bottom:-12,borderRadius:38,borderWidth:1},
+  orbHeadRing:{position:'absolute',top:-4,left:-4,right:-4,bottom:-4,borderRadius:32,borderWidth:1.5},
   orbName:{fontFamily:'monospace',fontSize:6,letterSpacing:1,marginTop:4,opacity:0.85},
+  orbNameStrong:{fontSize:7,fontWeight:'700',letterSpacing:1.5,opacity:1},
 });
