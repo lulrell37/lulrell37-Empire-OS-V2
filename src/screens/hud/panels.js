@@ -10,7 +10,7 @@ import{colors,space,radius,type,FONTS}from '../../theme';
 import{tlStatus,tlQuote,tlPositions,tlClosePosition,tlInstrumentsById}from '../../services/tradeLocker';
 import{getBuildJobs,getSetting,getAllTrades,getTasks}from '../../services/database';
 import{tradeRecord,TRADER_ID}from '../../services/tradeJournal';
-import{autoTraderRunning}from '../../services/autoTrader';
+import{autoTraderRunning,autoTraderLastCycleAt}from '../../services/autoTrader';
 import{refreshDailyBriefing}from '../../services/dailyBriefing';
 import{googleConnected,calendarEvents,gmailUnreadList,tasksListRaw}from '../../services/googleClient';
 import{getWeather}from '../../services/weather';
@@ -389,7 +389,7 @@ export function MarketPanel({active=true}){
       ]);
       if(!alive.current)return;
       setAuto({
-        on:on==='1',live:autoTraderRunning(),syms,every,rec,
+        on:on==='1',live:autoTraderRunning(),lastCycleAt:autoTraderLastCycleAt(),syms,every,rec,
         recent:(all||[]).filter(t=>t.auto).slice(0,3),
       });
     }catch{}
@@ -430,6 +430,11 @@ export function MarketPanel({active=true}){
             </Text>
           </View>
           {auto.on&&<Text style={ps.autoMeta}>{auto.syms} · every {auto.every}m</Text>}
+          {auto.on&&auto.live&&(
+            <Text style={[ps.autoMeta,{color:auto.lastCycleAt&&Date.now()-auto.lastCycleAt<(Number(auto.every)||15)*60000*2.5?colors.textFaint:colors.danger}]}>
+              {auto.lastCycleAt?`last scan ${Math.round((Date.now()-auto.lastCycleAt)/60000)}m ago`:'no scan completed yet'}
+            </Text>
+          )}
           {rec&&(rec.count>0||rec.openCount>0)&&(
             <Text style={ps.autoRec}>
               {rec.wins}W–{rec.losses}L{rec.be?`–${rec.be}BE`:''}
