@@ -200,6 +200,7 @@ export default function CommandScreen({navigation,route}){
   const voicedCountRef=useRef(0);   // metering polls that crossed the voice threshold
   const emptyTakeRef=useRef(false); // hands-free take that never heard a voice — discard, don't transcribe
   const recBusyRef=useRef(false); // true while a recorder is preparing OR being torn down
+  const recFailStreakRef=useRef(0); // consecutive "recorder wedged" failures — stop retrying after a few
   const recPollRef=useRef(null);  // interval polling the recorder's metering
   const recStartRef=useRef(0);
   const manualRef=useRef(false); // true while the current take was started by the SPEAK button
@@ -1045,11 +1046,12 @@ export default function CommandScreen({navigation,route}){
     // drop any pending "keep going" so it doesn't fire after he's done talking.
     if(opts.manual){interimContinueRef.current=null;interimStreakRef.current=0;}
     recBusyRef.current=true;
+    let rec=null;
     try{
       const{status}=await Audio.requestPermissionsAsync();
       if(status!=='granted'){Alert.alert('Permission','Microphone access required.');recBusyRef.current=false;return;}
       await audioModeForRecording();
-      const rec=new Audio.Recording();
+      rec=new Audio.Recording();
       hasVoicedRef.current=false;
       voicedCountRef.current=0;
       emptyTakeRef.current=false;
@@ -1059,8 +1061,8 @@ export default function CommandScreen({navigation,route}){
       await rec.startAsync();
       recordingRef.current=rec;
       recStartRef.current=Date.now();
-      hasVoicedRef.current=false;
       manualRef.current=!!opts.manual;
+      recFailStreakRef.current=0;
       setRecording(true);
       recBusyRef.current=false;
       // Poll the recorder ourselves — setOnRecordingStatusUpdate is unreliable
@@ -1071,14 +1073,27 @@ export default function CommandScreen({navigation,route}){
         try{onRecordingStatus(await recordingRef.current.getStatusAsync());}catch{}
       },250);
     }catch(e){
+      // ALWAYS tear down a half-created recorder. A prepared-but-not-started (or
+      // failed) Audio.Recording keeps the native recorder allocated, and then
+      // every later attempt throws "Only one Recording object can be prepared
+      // at a given time" until the app is force-killed — which is exactly the
+      // "voice stops working, have to close the app" bug.
+      if(rec){try{await rec.stopAndUnloadAsync();}catch{}}
+      recordingRef.current=null;
       recBusyRef.current=false;
       try{await Audio.setAudioModeAsync({allowsRecordingIOS:false,playsInSilentModeIOS:true});}catch{}
-      // "Only one Recording object can be prepared at a given time" — a previous
-      // recorder hasn't finished unloading. Stay quiet and let the loop retry.
-      if(!/only one recording|prepared/i.test(String(e&&e.message))){
+      const wedged=/only one recording object|already prepared|prepared at a given time/i.test(String(e&&e.message));
+      if(!wedged){
+        recFailStreakRef.current=0;
         Alert.alert('Error','Could not start recording: '+e.message);
-      }else if(handsFreeRef.current){
-        setTimeout(()=>maybeAutoListen(),700);
+      }else{
+        recFailStreakRef.current+=1;
+        if(recFailStreakRef.current>=3){
+          recFailStreakRef.current=0;
+          pushSystemMsg('— voice input stalled — turn hands-free off and on again, or reopen the app —');
+        }else if(handsFreeRef.current){
+          setTimeout(()=>maybeAutoListen(),900);
+        }
       }
     }
   }
@@ -1100,8 +1115,17 @@ export default function CommandScreen({navigation,route}){
       // Tail so the last word isn't clipped. Hands-free already recorded
       // HANDS_FREE_SILENCE_MS of trailing audio; a manual take has none.
       await sleep(wasManual?800:400);
-      await Promise.race([rec.stopAndUnloadAsync().catch(()=>{}),sleep(6000)]);
-      uri=rec.getURI();
+      try{uri=rec.getURI();}catch{}
+      const unloaded=await Promise.race([
+        rec.stopAndUnloadAsync().then(()=>true).catch(()=>true),
+        sleep(6000).then(()=>false),
+      ]);
+      // If the unload hung, keep retrying it in the background — a recorder that
+      // never releases wedges the mic for the rest of the session.
+      if(!unloaded){
+        (async()=>{for(let i=0;i<5;i++){await sleep(2000);try{await rec.stopAndUnloadAsync();return;}catch{}}})();
+      }
+      if(!uri){try{uri=rec.getURI();}catch{}}
     }catch(e){/* recorder already gone */}
     await sleep(120); // let iOS settle the audio session category before playback
     recBusyRef.current=false;
