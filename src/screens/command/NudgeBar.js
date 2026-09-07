@@ -91,7 +91,7 @@ export default function NudgeBar({active}){
 
   const onChipPress=(n)=>{
     if(n.activity){n.onPress&&n.onPress();return;}
-    if(n.issue&&n.detail){Alert.alert('What went wrong',n.detail);return;}
+    if(n.issue&&n.detail&&n.severity!=='info'){Alert.alert('Details',n.detail);return;}
     dismissChip(n);
   };
   const dismissChip=(n)=>{

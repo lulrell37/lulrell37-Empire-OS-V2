@@ -25,7 +25,7 @@ export function autoTraderRunning(){return running;}
 export function autoTraderBusy(){return busy;}
 
 function emit(text){
-  saveMessage(TRADER_ID,'system',text,'direct').catch(()=>{});
+  try{const{notify}=require('./report');notify(text);}catch{}
   for(const cb of listeners){try{cb(text);}catch{}}
 }
 

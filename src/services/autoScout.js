@@ -34,7 +34,7 @@ export function autoScoutRunning(){return running;}
 export function autoScoutBusy(){return busy;}
 
 function emit(text){
-  saveMessage('scout','system',text,'direct').catch(()=>{});
+  try{const{notify}=require('./report');notify(text);}catch{}
   for(const cb of listeners){try{cb(text);}catch{}}
 }
 // Throttled — a persistent failure (no key, Google down) shouldn't spam the chat.

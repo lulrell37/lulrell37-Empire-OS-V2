@@ -12,11 +12,11 @@ import{PERSONA_LIST,getPersona,resolveSpecialist}from '../personas/personas';
 import{callPersona,textToSpeech,transcribeAudio,queryMemory,webSearch,getLastTtsFailReason}from '../services/aiService';
 import{reportError}from '../../ErrorBanner';
 import{drStart,drGetActive,drTick,drDismiss,drDeliverPending,DR_POLL_MS}from '../services/deepResearch';
-import{onAutoTrade,autoTraderBusy}from '../services/autoTrader';
+import{autoTraderBusy}from '../services/autoTrader';
 import{autoScoutBusy}from '../services/autoScout';
 import{autoAtlasBusy}from '../services/autoAtlas';
 import{handleCommands,stripCommands}from '../services/commandHandler';
-import{reportIssue,clearIssueKey}from '../services/report';
+import{reportIssue,clearIssueKey,notify}from '../services/report';
 import{googleReadInjections,googleWriteCommands}from '../services/googleCommands';
 import{driveUploadFile,googleConnected}from '../services/googleClient';
 import{getMessages,saveMessage,getAllPersonaPics,savePersonaMemory,getSetting,setSetting,getExpenseSummary,addBuildJob,updateBuildJob,getBuildJob,getBuildJobByIssue,getBuildJobs,deleteBuildJob,buildJobRepo,DEFAULT_BUILD_REPO,getCustomPrompt,getAllLeads,addClipJob,addWatchJob,getActiveWatchJobs,getActiveClipJobs,getActiveBuildJobs,getClipJobs,getWatchJobs,getGeneratingContentItems,getUnreadPersonas,getUnreadMessages,markPersonaRead,getContentItems,getContentTally,getContentPages,updateContentItem}from '../services/database';
@@ -1049,7 +1049,7 @@ export default function CommandScreen({navigation,route}){
     let rec=null;
     try{
       const{status}=await Audio.requestPermissionsAsync();
-      if(status!=='granted'){Alert.alert('Permission','Microphone access required.');recBusyRef.current=false;return;}
+      if(status!=='granted'){notify('Microphone access needed — grant it in Settings',{severity:'error'});recBusyRef.current=false;return;}
       await audioModeForRecording();
       rec=new Audio.Recording();
       hasVoicedRef.current=false;
@@ -1085,7 +1085,7 @@ export default function CommandScreen({navigation,route}){
       const wedged=/only one recording object|already prepared|prepared at a given time/i.test(String(e&&e.message));
       if(!wedged){
         recFailStreakRef.current=0;
-        Alert.alert('Error','Could not start recording: '+e.message);
+        notify('Could not start recording: '+e.message,{severity:'error'});
       }else{
         recFailStreakRef.current+=1;
         if(recFailStreakRef.current>=3){
@@ -1145,7 +1145,7 @@ export default function CommandScreen({navigation,route}){
         setLoading(false);
         maybeAutoListen();
       }
-    }catch(e){Alert.alert('Voice Error',e.message);setLoading(false);maybeAutoListen();}
+    }catch(e){notify('Voice error: '+e.message,{severity:'error'});setLoading(false);maybeAutoListen();}
   }
 
   // Whisper invents stock phrases from silence or noise ("thank you", "you",
@@ -1167,7 +1167,7 @@ export default function CommandScreen({navigation,route}){
   async function pickImage(){
     try{
       const{status}=await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if(status!=='granted'){Alert.alert('Permission','Photo library access required.');return;}
+      if(status!=='granted'){notify('Photo library access needed — grant it in Settings',{severity:'error'});return;}
       const result=await ImagePicker.launchImageLibraryAsync({mediaTypes:ImagePicker.MediaTypeOptions.Images,quality:0.8});
       if(!result.canceled&&result.assets[0]){
         const asset=result.assets[0];
@@ -1179,7 +1179,7 @@ export default function CommandScreen({navigation,route}){
         else{setMessages(prev=>[...prev,userMsg]);await saveMessage(activePersona,'user',msg,'direct');}
         await runRound(msg,isGroup,[{type:'image',uri:asset.uri,mime:asset.mimeType||'image/jpeg'}]);
       }
-    }catch(e){Alert.alert('Error',e.message);}
+    }catch(e){notify('Error: '+e.message,{severity:'error'});}
   }
 
   async function pickDocument(){
@@ -1195,7 +1195,7 @@ export default function CommandScreen({navigation,route}){
         else{setMessages(prev=>[...prev,userMsg]);await saveMessage(activePersona,'user',msg,'direct');}
         await runRound(msg,isGroup);
       }
-    }catch(e){Alert.alert('Error',e.message);}
+    }catch(e){notify('Error: '+e.message,{severity:'error'});}
   }
 
   // Pick a video and sample evenly-spaced frames — the personas "watch" it by
@@ -1204,7 +1204,7 @@ export default function CommandScreen({navigation,route}){
   async function pickVideo(){
     try{
       const{status}=await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if(status!=='granted'){Alert.alert('Permission','Photo library access required.');return;}
+      if(status!=='granted'){notify('Photo library access needed — grant it in Settings',{severity:'error'});return;}
       const result=await ImagePicker.launchImageLibraryAsync({mediaTypes:ImagePicker.MediaTypeOptions.Videos,quality:0.8});
       if(result.canceled||!result.assets?.[0])return;
       const asset=result.assets[0];
@@ -1221,7 +1221,7 @@ export default function CommandScreen({navigation,route}){
           frames.push({type:'image',uri,mime:'image/jpeg'});
         }catch{/* past the end / unreadable — skip */}
       }
-      if(!frames.length){Alert.alert('Video','Could not read frames from that video.');return;}
+      if(!frames.length){notify('Could not read frames from that video',{severity:'error'});return;}
       const msg=`[Video attached — ${frames.length} frames sampled${dur?` over ${(dur/1000).toFixed(0)}s`:''}]\n${(inputRef.current||input).trim()||'What happens in this video?'}`;
       setInput('');inputRef.current='';try{textInputRef.current?.clear();}catch{}
       const userMsg={id:Date.now().toString(),role:'user',content:msg,persona:'user',image:frames[0].uri};
@@ -1229,7 +1229,7 @@ export default function CommandScreen({navigation,route}){
       if(isGroup)setGroupMessages(prev=>[...prev,userMsg]);
       else{setMessages(prev=>[...prev,userMsg]);await saveMessage(activePersona,'user',msg,'direct');}
       await runRound(msg,isGroup,frames);
-    }catch(e){Alert.alert('Error',e.message);}
+    }catch(e){notify('Error: '+e.message,{severity:'error'});}
   }
 
   // R.O.G.U.E. clip flow: pick a phone video, upload it to Drive for a shareable
@@ -1238,11 +1238,11 @@ export default function CommandScreen({navigation,route}){
   async function pickClipForRogue(){
     try{
       if(!(await googleConnected().catch(()=>false))){
-        Alert.alert('Connect Google','R.O.G.U.E. uploads the raw clip to your Google Drive so the editor can reach it. Connect Google in Settings → GOOGLE first.');
+        notify('Connect Google in Settings first — R.O.G.U.E. uploads the clip to your Drive',{severity:'error'});
         return;
       }
       const{status}=await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if(status!=='granted'){Alert.alert('Permission','Photo library access required.');return;}
+      if(status!=='granted'){notify('Photo library access needed — grant it in Settings',{severity:'error'});return;}
       const result=await ImagePicker.launchImageLibraryAsync({mediaTypes:ImagePicker.MediaTypeOptions.Videos,quality:1});
       if(result.canceled||!result.assets?.[0])return;
       const asset=result.assets[0];
@@ -1261,7 +1261,7 @@ export default function CommandScreen({navigation,route}){
           {fileUri:asset.uri,name:asset.fileName||`clip-${Date.now()}.mp4`,mimeType:asset.mimeType||'video/mp4'},
           p=>setClipUp(Math.max(0,Math.min(0.99,p))),
         );
-      }catch(e){setClipUp(null);Alert.alert('Upload failed',e.message);return;}
+      }catch(e){setClipUp(null);notify('Upload failed: '+e.message,{severity:'error'});return;}
       setClipUp(null);
       const note=(inputRef.current||input).trim()||'Edit this into a short.';
       const msg=`[Raw clip uploaded for editing — ${frames.length} frames sampled${dur?` over ${(dur/1000).toFixed(0)}s`:''}\nClip URL (use this in EDIT_CLIP): ${up.downloadLink}\nDrive file: ${up.viewLink}]\n${note}`;
@@ -1270,12 +1270,12 @@ export default function CommandScreen({navigation,route}){
       setMessages(prev=>[...prev,userMsg]);
       await saveMessage('rogue','user',msg,'direct');
       await runRound(msg,false,frames);
-    }catch(e){setClipUp(null);Alert.alert('Error',e.message);}
+    }catch(e){setClipUp(null);notify('Error: '+e.message,{severity:'error'});}
   }
 
   async function openCamera(){
     const{status}=await Camera.requestCameraPermissionsAsync();
-    if(status!=='granted'){Alert.alert('Permission','Camera access required.');return;}
+    if(status!=='granted'){notify('Camera access needed — grant it in Settings',{severity:'error'});return;}
     setShowCamera(true);
   }
 
@@ -1291,7 +1291,7 @@ export default function CommandScreen({navigation,route}){
       if(isGroup)setGroupMessages(prev=>[...prev,userMsg]);
       else{setMessages(prev=>[...prev,userMsg]);await saveMessage(activePersona,'user',msg,'direct');}
       await runRound(msg,isGroup,[{type:'image',uri:photo.uri,mime:'image/jpeg'}]);
-    }catch(e){Alert.alert('Error',e.message);}
+    }catch(e){notify('Error: '+e.message,{severity:'error'});}
   }
 
   function getTargets(){
@@ -1767,8 +1767,6 @@ export default function CommandScreen({navigation,route}){
       }
     }catch(e){
       if(e.name!=='AbortError'){
-        const err={id:Date.now().toString(),role:'system',content:`Error: ${e.message}`,persona:'system'};
-        if(isGroup)setGroupMessages(prev=>[...prev,err]);else setMessages(prev=>[...prev,err]);
         const who=isGroup?'the group':getPersona(activePersona).name;
         reportIssue('ai:reply',`${who} couldn't reply`,e);
       }
@@ -1786,10 +1784,9 @@ export default function CommandScreen({navigation,route}){
     if(contRef.current&&abortRef.current===myAbort&&!myAbort.signal.aborted)setTimeout(()=>{if(contRef.current)runRound('[Continue. Be brief.]',true);},1200);
   }
 
-  function pushSystemMsg(content){
-    const msg={id:Date.now().toString()+Math.random().toString(36).slice(2,5),role:'system',content,persona:'system'};
-    if(mode==='direct')setMessages(prev=>[...prev,msg]);else setGroupMessages(prev=>[...prev,msg]);
-  }
+  // System status ("— CLIP · queued —", "— DEEP RESEARCH STARTED —", …) goes to
+  // the top banner as a transient flash, not into the chat thread.
+  function pushSystemMsg(content){ notify(content); }
   // Surface a problem in the top notification strip (NudgeBar). Keyed so it
   // can't stack; cleared by clearFirmIssue(key) on the matching success.
   const flagIssue=(key,text,detail,severity='error')=>flagFirmIssue(key,text,detail||null,severity);
@@ -1920,12 +1917,7 @@ export default function CommandScreen({navigation,route}){
       }else go();
     });
   }
-  // Live feed of T.A.L.O.N. auto-trade actions while you're on its screen.
-  useEffect(()=>{
-    return onAutoTrade((text)=>{
-      if(mode==='direct'&&activePersona===TRADER_ID)pushSystemMsg(`— ${text} —`);
-    });
-  },[activePersona,mode]);// eslint-disable-line react-hooks/exhaustive-deps
+  // (T.A.L.O.N. auto-trade actions surface through the banner via emit→notify.)
   // Resume a job that was still running when the app was last closed, and
   // back-deliver any finished job that never reached the persona's memory.
   useEffect(()=>{

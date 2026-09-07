@@ -42,3 +42,20 @@ export function reportIssue(key,label,err,opts={}){
 export function clearIssueKey(key){
   try{useEmpireStore.getState().clearFirmIssue(key);}catch{}
 }
+
+// A transient status flash in the banner — the replacement for inline chat
+// "— TAG · status —" lines and one-off info Alerts. Keyed by its own text so a
+// repeated status refreshes rather than stacks; fades after ~18s. `severity`
+// drives the chip colour (info / warn / error).
+export function notify(text,opts={}){
+  try{
+    const raw=String(text||'').trim();
+    if(!raw)return;
+    const clean=raw.replace(/^[—–\-\s⚠️]+|[—–\-\s]+$/g,'').trim();
+    if(!clean)return;
+    const sev=opts.severity||(/(fail|error|couldn'?t|can'?t|⚠️|denied|rejected|no .* found)/i.test(raw)?'error':'info');
+    const key='flash:'+clean.toLowerCase().replace(/\W+/g,'_').slice(0,48);
+    const detail=clean.length>96?clean:null;
+    useEmpireStore.getState().flagFirmIssue(key,clean,detail,sev==='error'?'warn':'info',opts.ttlMs||18000);
+  }catch{}
+}
