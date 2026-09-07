@@ -17,6 +17,11 @@ export const REPO=DEFAULT_REPO; // back-compat
 // (ffmpeg + Whisper + one Claude planning call) works the `rogue-clip` issue
 // queue there and reports back with the same clip-* comment markers.
 export const CLIP_REPO={owner:'lulrell37',repo:'empire-clip-editor'};
+// Any persona can hand off a video to be *watched* — a GitHub Actions agent
+// (yt-dlp + Whisper + ffmpeg scene-detect + one Claude vision pass) works the
+// `video-watch` issue queue there and reports the analysis back with watch-*
+// comment markers.
+export const WATCH_REPO={owner:'lulrell37',repo:'empire-video-watch'};
 export const TEMPLATE_REPO={owner:'lulrell37',repo:'client-project-template'};
 const API='https://api.github.com';
 const rp=(repo)=>`/repos/${repo.owner}/${repo.repo}`;
@@ -170,6 +175,39 @@ export async function getClipActivity(issueNumber,sinceCommentId=0,repo=CLIP_REP
   };
 }
 export async function cancelClipJob(issueNumber,repo=CLIP_REPO){
+  try{await gh(`${rp(repo)}/issues/${issueNumber}`,{method:'PATCH',body:{state:'closed'}});}catch{}
+}
+
+// --- Video-watch queue --------------------------------------------------
+// Same shape as the clip queue: a labelled issue is the job, the empire-video-
+// watch Action watches the video and comments a written analysis back carrying
+// watch-* HTML-comment markers. Available to every persona (see the [WATCH]
+// block in aiService).
+const WATCH_LABEL='video-watch';
+export async function fileWatchJob({mediaUrl,focus},repo=WATCH_REPO){
+  const url=String(mediaUrl||'').trim();
+  const want=String(focus||'').trim();
+  if(!url)throw new Error('No video link to watch.');
+  try{await gh(`${rp(repo)}/labels`,{method:'POST',body:{name:WATCH_LABEL,color:'6E56CF',description:'Empire video-watch queue'}});}catch{}
+  const firstLine=(want||'full breakdown').split('\n')[0].slice(0,80);
+  const title=`WATCH: ${firstLine}`;
+  const body=`A persona wants this video watched.\n\n**Source:** ${url}\n\n**Focus:**\n${want||'(none given — full general breakdown)'}\n\n`+
+    `<!-- watch-job: ${JSON.stringify({media_url:url,focus:want})} -->\n`+
+    `<!-- filed by Empire OS -->`;
+  const issue=await gh(`${rp(repo)}/issues`,{method:'POST',body:{title,body,labels:[WATCH_LABEL]}});
+  return{issueNumber:issue.number,url:issue.html_url,id:`${repo.owner}/${repo.repo}#${issue.number}`};
+}
+export async function getWatchActivity(issueNumber,sinceCommentId=0,repo=WATCH_REPO){
+  const[issue,comments]=await Promise.all([
+    gh(`${rp(repo)}/issues/${issueNumber}`),
+    gh(`${rp(repo)}/issues/${issueNumber}/comments?per_page=100`),
+  ]);
+  return{
+    state:issue.state,
+    comments:comments.filter(c=>c.id>(sinceCommentId||0)).map(c=>({id:c.id,body:c.body||''})),
+  };
+}
+export async function cancelWatchJob(issueNumber,repo=WATCH_REPO){
   try{await gh(`${rp(repo)}/issues/${issueNumber}`,{method:'PATCH',body:{state:'closed'}});}catch{}
 }
 

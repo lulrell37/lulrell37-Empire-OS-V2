@@ -263,6 +263,11 @@ export async function handleCommands(response,personaId,callbacks={}){
     const mediaUrl=m[1].trim();const instructions=m[2].trim();
     if(mediaUrl&&instructions)callbacks.onClipEdit?.({mediaUrl,instructions});
   }
+  // --- Video watching (any persona) — focus is optional ---
+  for(const m of response.matchAll(/\[WATCH_VIDEO:\s*(\S+)(?:\s*\|\s*([\s\S]+?))?\]/gi)){
+    const mediaUrl=m[1].trim();const focus=(m[2]||'').trim();
+    if(mediaUrl)callbacks.onWatchVideo?.({mediaUrl,focus});
+  }
   // --- Pinned memory (any persona) ---
   for(const m of response.matchAll(/\[REMEMBER:\s*([^|\]]+?)(?:\s*\|\s*(\d+))?\]/gi)){
     const txt=m[1]?.trim();if(!txt)continue;
@@ -366,6 +371,7 @@ export function stripCommands(text){
     .replace(/\[PUBLISH(_APPROVED)?(?::[^\]]*)?\]/gi,'').replace(/\[PUBLISH_STATUS\]/gi,'').replace(/\[OPEN_CONTENT\]/gi,'')
     .replace(/\[REMEMBER:[^\]]*\]/gi,'').replace(/\[UNPIN_MEMORY:[^\]]*\]/gi,'')
     .replace(/\[EDIT_CLIP:[^\]]*\]/gi,'')
+    .replace(/\[WATCH_VIDEO:[^\]]*\]/gi,'')
     .replace(/\[SHOW_CHART:[^\]]*\]/gi,'')
     .replace(/\[BUILD_REQUEST:[^\]]*\]/gi,'').replace(/\[BUILD_REPLY:[^\]]*\]/gi,'')
     .replace(/\[BUILD_MERGE:[^\]]*\]/gi,'').replace(/\[BUILD_CANCEL:[^\]]*\]/gi,'').replace(/\[BUILD_STATUS\]/gi,'')

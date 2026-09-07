@@ -18,14 +18,16 @@ import{autoAtlasBusy}from '../services/autoAtlas';
 import{handleCommands,stripCommands}from '../services/commandHandler';
 import{googleReadInjections,googleWriteCommands}from '../services/googleCommands';
 import{driveUploadFile,googleConnected}from '../services/googleClient';
-import{getMessages,saveMessage,getAllPersonaPics,savePersonaMemory,getSetting,setSetting,getExpenseSummary,addBuildJob,updateBuildJob,getBuildJob,getBuildJobByIssue,getBuildJobs,buildJobRepo,DEFAULT_BUILD_REPO,getCustomPrompt,getAllLeads,addClipJob,getUnreadPersonas,getUnreadMessages,markPersonaRead,getContentItems,getContentTally,getContentPages,updateContentItem}from '../services/database';
+import{getMessages,saveMessage,getAllPersonaPics,savePersonaMemory,getSetting,setSetting,getExpenseSummary,addBuildJob,updateBuildJob,getBuildJob,getBuildJobByIssue,getBuildJobs,buildJobRepo,DEFAULT_BUILD_REPO,getCustomPrompt,getAllLeads,addClipJob,addWatchJob,getUnreadPersonas,getUnreadMessages,markPersonaRead,getContentItems,getContentTally,getContentPages,updateContentItem}from '../services/database';
 import{compileBatch,publishContent,contentStatusLine}from '../services/socialPublish';
 import{pollContentJobs}from '../services/contentJobs';
 import{speak as speakOneShot}from '../services/voice';
-import{fileBuildRequest,replyToBuild,mergeBuild,cancelBuild,createProjectRepo,fileClipJob}from '../services/buildAgent';
+import{fileBuildRequest,replyToBuild,mergeBuild,cancelBuild,createProjectRepo,fileClipJob,fileWatchJob,setRepoSecret,WATCH_REPO}from '../services/buildAgent';
 import{pollBuildJobs}from '../services/buildJobs';
 import{pollClipJobs}from '../services/clipJobs';
+import{pollWatchJobs}from '../services/watchJobs';
 import ClipPanel from './command/ClipPanel';
+import WatchPanel from './command/WatchPanel';
 import{tlSnapshot,tlFormatSnapshot,tlPlaceOrder,tlClosePosition,tlModifyPosition,tlPositions,MAX_QTY,MAX_OPEN_POSITIONS}from '../services/tradeLocker';
 import{recordTradeOpen,reconcileOpenTrades,traderJournalBlock,setStrategy,setTradeReview,TRADER_ID}from '../services/tradeJournal';
 import{loadKeys,loadGitHubToken}from '../services/keyStore';
@@ -75,6 +77,19 @@ function isInterimReply(text){
   if(!t||t.length>220)return false;
   return INTERIM_REPLY_PATTERNS.some(re=>re.test(t));
 }
+// Provision the watch repo's ANTHROPIC_API_KEY once per session, best-effort —
+// mirrors how createProjectRepo wires client repos. If it's already set (or the
+// token can't), the job still files; the agent just needs the key to exist.
+let watchSecretTried=false;
+async function ensureWatchSecret(){
+  if(watchSecretTried)return;
+  watchSecretTried=true;
+  try{
+    const k=await loadKeys().catch(()=>null);
+    if(k?.claude)await setRepoSecret(WATCH_REPO,'ANTHROPIC_API_KEY',k.claude);
+  }catch{/* likely already set, or no permission — surfaced by the job itself */}
+}
+
 const INTERIM_CONTINUE_MAX=4;         // consecutive stalls before giving the mic back to Mr. Burrus anyway
 const INTERIM_CONTINUE_PROMPT='[Keep going — give the real answer now, out loud. Do not just say you need more time again.]';
 
@@ -1490,6 +1505,16 @@ export default function CommandScreen({navigation,route}){
               pushSystemMsg(e?.noToken?'— CLIP · connect GitHub in Settings › Dev first —':`— CLIP · couldn't queue it: ${e.message} —`);
             }
           },
+          onWatchVideo:async({mediaUrl,focus})=>{
+            try{
+              ensureWatchSecret();
+              const r=await fileWatchJob({mediaUrl,focus});
+              await addWatchJob({id:r.id,issueNumber:r.issueNumber,mediaUrl,focus,persona:pid});
+              pushSystemMsg(`— WATCH · queued (#${r.issueNumber}) — the agent is watching; the breakdown lands in a few minutes —`);
+            }catch(e){
+              pushSystemMsg(e?.noToken?'— WATCH · connect GitHub in Settings › Dev first —':`— WATCH · couldn't queue it: ${e.message} —`);
+            }
+          },
         };
 
         // --- THE FIRM — A.R.A. delegates to specialists, then synthesizes ---
@@ -1974,6 +1999,10 @@ export default function CommandScreen({navigation,route}){
           if(!stop)for(const line of clipEvents)pushSystemMsg(line);
         }catch{/* keep polling */}
         try{
+          const watchEvents=await pollWatchJobs();
+          if(!stop)for(const line of watchEvents)pushSystemMsg(line);
+        }catch{/* keep polling */}
+        try{
           const contentEvents=await pollContentJobs();
           if(!stop)for(const line of contentEvents)pushSystemMsg(line);
         }catch{/* keep polling */}
@@ -2149,6 +2178,7 @@ export default function CommandScreen({navigation,route}){
       {view==='text'&&mode==='direct'&&activePersona===TRADER_ID&&<TradePanel active={isFocused} onEvent={pushSystemMsg}/>}
       {view==='text'&&mode==='direct'&&activePersona==='scout'&&<LeadsPanel active={isFocused}/>}
       {view==='text'&&mode==='direct'&&activePersona==='rogue'&&<ClipPanel active={isFocused}/>}
+      {view==='text'&&mode==='direct'&&<WatchPanel active={isFocused}/>}
       {view==='text'&&mode==='direct'&&activePersona==='jarvis'&&<BuildPanel active={isFocused} onMerge={confirmBuildMerge} onCancel={confirmBuildCancel} filter={jarvisBuildFilter}/>}
 
       {view==='text'&&project&&mode==='direct'&&activePersona==='ara'&&(

@@ -24,6 +24,7 @@ export async function initDatabase(){
     CREATE TABLE IF NOT EXISTS deep_research(id TEXT PRIMARY KEY,topic TEXT,persona TEXT,mode TEXT DEFAULT 'direct',model TEXT,status TEXT DEFAULT 'running',progress TEXT,result TEXT,error TEXT,started_at INTEGER,finished_at INTEGER,created_at INTEGER,updated_at INTEGER);
     CREATE TABLE IF NOT EXISTS leads(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT,business TEXT,website TEXT,contact TEXT,bottleneck TEXT,segment TEXT,value TEXT,stage TEXT DEFAULT 'new',next_action TEXT,next_touch TEXT,last_touch TEXT,log TEXT DEFAULT '',source TEXT DEFAULT 'scout',source_id TEXT,created_at INTEGER,updated_at INTEGER);
     CREATE TABLE IF NOT EXISTS clip_jobs(id TEXT PRIMARY KEY,issue_number INTEGER,media_url TEXT,instructions TEXT,status TEXT DEFAULT 'queued',result_url TEXT,share_url TEXT,note TEXT,last_comment_id INTEGER DEFAULT 0,created_at INTEGER,updated_at INTEGER);
+    CREATE TABLE IF NOT EXISTS watch_jobs(id TEXT PRIMARY KEY,issue_number INTEGER,media_url TEXT,focus TEXT,persona TEXT,status TEXT DEFAULT 'queued',report_url TEXT,summary TEXT,note TEXT,last_comment_id INTEGER DEFAULT 0,created_at INTEGER,updated_at INTEGER);
     CREATE TABLE IF NOT EXISTS content_items(id TEXT PRIMARY KEY,page TEXT,kind TEXT DEFAULT 'reel',slot TEXT,prompt TEXT,caption TEXT,hashtags TEXT,status TEXT DEFAULT 'queued',media_uri TEXT,media_type TEXT,thumb_uri TEXT,gen_job_id TEXT,gen_phase TEXT,scheduled_for TEXT,posted_id TEXT,posted_url TEXT,posted_at INTEGER,error TEXT,note TEXT,created_at INTEGER,updated_at INTEGER);
   `);
   await migrateHudColumns();
@@ -62,6 +63,7 @@ const SYNC_TABLES={
   important_dates:'lower(hex(randomblob(16)))',
   build_jobs:'NEW.id',
   clip_jobs:'NEW.id',
+  watch_jobs:'NEW.id',
   content_items:'NEW.id',
   trades:'lower(hex(randomblob(16)))',
   leads:'lower(hex(randomblob(16)))',
@@ -109,7 +111,7 @@ async function initSync(){
     // build_jobs is keyed on a synthetic `id` (`owner/repo#issue`) that equals
     // its sync_id. Rows arriving from another device via sync insert without an
     // `id`; backfill it from sync_id so getBuildJob(id) keeps working.
-    if(t==='build_jobs'||t==='clip_jobs'||t==='content_items'){
+    if(t==='build_jobs'||t==='clip_jobs'||t==='watch_jobs'||t==='content_items'){
       await db.execAsync(`
         DROP TRIGGER IF EXISTS ${t}_id_fill;
         CREATE TRIGGER ${t}_id_fill AFTER INSERT ON ${t}
@@ -741,6 +743,33 @@ export async function getActiveClipJobs(){
 }
 export async function getClipJob(id){return await db.getFirstAsync('SELECT * FROM clip_jobs WHERE id=?',[id]);}
 export async function getClipJobByIssue(issueNumber){return await db.getFirstAsync('SELECT * FROM clip_jobs WHERE issue_number=? ORDER BY created_at DESC LIMIT 1',[issueNumber]);}
+
+// --- Video-watch jobs -------------------------------------------------
+// Same pattern as clip_jobs: id is `owner/repo#issue`, the GitHub issue is the
+// queue, the empire-video-watch Action works it and comments the analysis back.
+// status: queued | watching | done | failed | cancelled
+const WATCH_TERMINAL=['done','failed','cancelled'];
+export async function addWatchJob({id,issueNumber,mediaUrl,focus,persona}){
+  const now=Date.now();
+  await db.runAsync(
+    `INSERT INTO watch_jobs(id,issue_number,media_url,focus,persona,status,last_comment_id,created_at,updated_at)
+     VALUES(?,?,?,?,?,'queued',0,?,?)
+     ON CONFLICT(id) DO UPDATE SET media_url=excluded.media_url,focus=excluded.focus,updated_at=excluded.updated_at`,
+    [id,issueNumber,mediaUrl||'',focus||'',persona||'',now,now]);
+  return id;
+}
+export async function updateWatchJob(id,patch){
+  const keys=Object.keys(patch);
+  if(!keys.length)return;
+  await db.runAsync(`UPDATE watch_jobs SET ${keys.map(k=>k+'=?').join(',')},updated_at=? WHERE id=?`,[...keys.map(k=>patch[k]),Date.now(),id]);
+}
+export async function getWatchJobs(limit=40){return await db.getAllAsync('SELECT * FROM watch_jobs ORDER BY created_at DESC LIMIT ?',[limit]);}
+export async function getActiveWatchJobs(){
+  const q=WATCH_TERMINAL.map(()=>'?').join(',');
+  return await db.getAllAsync(`SELECT * FROM watch_jobs WHERE status NOT IN (${q}) ORDER BY created_at DESC`,WATCH_TERMINAL);
+}
+export async function getWatchJob(id){return await db.getFirstAsync('SELECT * FROM watch_jobs WHERE id=?',[id]);}
+export async function getWatchJobByIssue(issueNumber){return await db.getFirstAsync('SELECT * FROM watch_jobs WHERE issue_number=? ORDER BY created_at DESC LIMIT 1',[issueNumber]);}
 
 // --- Trade journal (Atlas) -------------------------------------------------
 // One row per trade Mr. Burrus confirmed. Opened on confirm; reconciled against
