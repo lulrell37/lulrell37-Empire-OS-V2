@@ -8,7 +8,7 @@
 // worklets, which is what hard-crashed the earlier 3D version.
 import React,{useState,useEffect,useMemo,useCallback,useRef,useImperativeHandle,forwardRef}from 'react';
 import{View,Text,StyleSheet,TouchableOpacity,ActivityIndicator,Dimensions,Platform,Animated,PanResponder,Image,Easing,ScrollView,Alert}from 'react-native';
-import Svg,{Path}from 'react-native-svg';
+import Svg,{Line}from 'react-native-svg';
 import PersonaOrb from './PersonaOrb';
 import MemorySpiral from './MemorySpiral';
 import MemoryPopup from './MemoryPopup';
@@ -169,65 +169,46 @@ function bobAt(i,now,start){
   return{bx:-BOB_AMP_X+2*BOB_AMP_X*u,by:-BOB_AMP_Y+2*BOB_AMP_Y*u};
 }
 
-// Depth -> line opacity, the same curve the orbs' own fade uses, as a plain
-// function so the rAF tether loop can evaluate it without an Animated node.
-// Knots: (0.2 -> 0)(1.2 -> 1)(6 -> 0.2)(11 -> 0.05).
-function tetherFade(d){
-  if(d<=0.2)return 0;
-  if(d<1.2)return(d-0.2)/1.0;
-  if(d<6)return 1-0.8*(d-1.2)/4.8;
-  if(d<11)return 0.2-0.15*(d-6)/5;
-  return 0.05;
-}
+const AnimatedLine=Animated.createAnimatedComponent(Line);
 
-// The org-chart tethers, drawn as sagging ropes between the two orbs each one
-// connects. Endpoints are recomputed every frame from `endpointFor` — the exact
-// same projection (yaw + dolly + idle bob, and the pinned override) that places
-// the orb itself — so a rope stays welded to the CENTRE of both orbs through any
-// drag, fly, or idle float. Nothing is bound to an Animated node here: SVG
-// geometry props don't reliably follow a deep JS Animated tree, and the idle bob
-// runs on the native thread where a JS Animated listener never sees it. So the
-// layer runs its own requestAnimationFrame loop and pushes each rope's `d` (and
-// depth-faded opacity) straight onto the Path with setNativeProps — no React
-// re-render, ~1 setNativeProps per tether per frame.
-//
-// The sag: a quadratic bezier whose control point sits at the horizontal midpoint
-// and 2*sag below it (a quad curve's own midpoint is only half way to the control
-// point, so 2*sag there drops the visible middle of the rope by `sag`). `sag`
-// scales with the span so a short link barely dips and a long one hangs.
-function TetherLayer({endpointForRef,yawNow,dollyNow}){
-  const specs=useMemo(()=>TETHERS.map(([a,b])=>{
-    if(ID_INDEX[a]==null||ID_INDEX[b]==null)return null;
-    return{key:a+'-'+b,a,b};
-  }).filter(Boolean),[]);
-  const pathRefs=useRef([]);
-  useEffect(()=>{
-    let raf;
-    const tick=()=>{
-      const yv=yawNow.current,dv=dollyNow.current,ef=endpointForRef.current;
-      for(let k=0;k<specs.length;k++){
-        const node=pathRefs.current[k];
-        if(!node)continue;
-        const pa=ef(specs[k].a,yv,dv),pb=ef(specs[k].b,yv,dv);
-        const dx=pb.x-pa.x,dy=pb.y-pa.y;
-        const len=Math.hypot(dx,dy);
-        const sag=Math.max(8,Math.min(56,len*0.16));
-        const mx=(pa.x+pb.x)/2,my=(pa.y+pb.y)/2+2*sag;
-        const d=`M${pa.x.toFixed(1)} ${pa.y.toFixed(1)} Q${mx.toFixed(1)} ${my.toFixed(1)} ${pb.x.toFixed(1)} ${pb.y.toFixed(1)}`;
-        const op=Math.min(0.7,(tetherFade(pa.depth)+tetherFade(pb.depth))*0.36);
-        node.setNativeProps({d,strokeOpacity:op});
-      }
-      raf=requestAnimationFrame(tick);
+// The org-chart tethers. Each endpoint is the SAME Animated node the orb it
+// connects to is rendered with — screen centre + the projection translate — so
+// a line and its orb move off one source, on the same tick, during any drag or
+// fly. It physically cannot lag or detach: no JS reconstruction, no timer, no
+// depth-scale pivot to get wrong. The idle bob (±4/±9 px, native, per-frame
+// only on the UI thread) is deliberately NOT folded in: the line connects to
+// the orb's rest anchor and the orb floats gently around it — a socket, which
+// reads as solidly attached and costs zero JS while the camera is still.
+// Re-renders only when the orb set / pinned map / size changes.
+function TetherLayer({orbs,pinned,size}){
+  const lines=useMemo(()=>{
+    const cx=size.w/2,cy=size.h*0.42;   // where s.orbWrap centres each orb
+    const endOf=(i)=>{
+      const o=orbs[i];
+      if(!o)return null;
+      const pin=pinned[PERSONA_LIST[i].id];
+      if(pin)return{x:cx+pin.tx,y:cy+pin.ty,fade:0.9};   // pinned: fixed screen spot, fixed mid-depth
+      return{
+        x:Animated.add(cx,o.translateX),
+        y:Animated.add(cy,o.translateY),
+        fade:o.depth.interpolate({inputRange:[0.2,1.2,6,11],outputRange:[0,1,0.2,0.05],extrapolate:'clamp'}),
+      };
     };
-    raf=requestAnimationFrame(tick);
-    return()=>cancelAnimationFrame(raf);
-  },[specs]);// eslint-disable-line react-hooks/exhaustive-deps
+    return TETHERS.map(([a,b])=>{
+      const ia=ID_INDEX[a],ib=ID_INDEX[b];
+      if(ia==null||ib==null)return null;
+      const pa=endOf(ia),pb=endOf(ib);
+      if(!pa||!pb)return null;
+      // opacity ≈ average of the two ends' depth fade, dimmed — (fa + fb) * 0.36
+      const op=Animated.multiply(Animated.add(pa.fade,pb.fade),0.36);
+      return{key:a+'-'+b,pa,pb,op};
+    }).filter(Boolean);
+  },[orbs,pinned,size.w,size.h]);
   return(
     <Svg style={StyleSheet.absoluteFill} pointerEvents="none">
-      {specs.map((sp,k)=>(
-        <Path key={sp.key} ref={el=>{pathRefs.current[k]=el;}}
-          d="M0 0" fill="none" stroke="#E8C98A" strokeWidth={1.5}
-          strokeLinecap="round" strokeOpacity={0}/>
+      {lines.map(l=>(
+        <AnimatedLine key={l.key} x1={l.pa.x} y1={l.pa.y} x2={l.pb.x} y2={l.pb.y}
+          stroke="#E8C98A" strokeWidth={1.4} strokeLinecap="round" strokeOpacity={l.op}/>
       ))}
     </Svg>
   );
@@ -857,7 +838,7 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,busyPersonas,onPick,on
         boxRef.current&&boxRef.current.measureInWindow&&boxRef.current.measureInWindow((x,y)=>{originRef.current={x:x||0,y:y||0};});
       }}>
       <View style={StyleSheet.absoluteFill} {...pan.panHandlers}>
-        <TetherLayer endpointForRef={endpointForRef} yawNow={yawNow} dollyNow={dollyNow}/>
+        <TetherLayer orbs={orbs} pinned={pinned} size={size}/>
         {order.map(oi=>orbs[oi]).filter(({p})=>!pinned[p.id]).map(({p,translateX,translateY,scale,opacity,bobX,bobY,sparkleScale,sparkleOpacity})=>{
           const selected=group.includes(p.id);
           return(
