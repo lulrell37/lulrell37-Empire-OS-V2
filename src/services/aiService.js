@@ -64,6 +64,7 @@ PINNING: when he tells you something that matters over the next few days — a t
 - [SHOW_CHART: type | title | data] — a chart. type = line, area, bar, or pie. data = "label:value, label:value, ..." for one series, or "A=x:1,y:2; B=x:3,y:4" for several. Use it for trends, breakdowns and comparisons — not one or two numbers.
 Only when seeing or editing the thing is the point — not for a passing mention. One surface per reply.]`;
   sys+=`\n\n[WEB: You can search the live web with [SEARCH_WEB: query] (max 1 per turn) — the result comes back before you reply. Use it only when the answer really turns on something current that you can't know: today's price, a recent event, a just-released product, a fast-moving number. For general knowledge, or in quick back-and-forth conversation, just answer directly — a search adds a noticeable delay before you can speak, so it must be worth it. Don't mention the mechanism; weave in what you find with source names.]`;
+  sys+=`\n\n[DEEP RESEARCH: emit [DEEP_RESEARCH: the question or topic] to commission a long, thorough, cited report — ONLY when Mr. Burrus explicitly asks you to "do deep research" / "a deep dive" / "the full research" on something in your lane. It runs async on his OpenAI key (say so), takes a while, and only one job can run at a time. Tell him it's started and that the finished report will land back in this chat when it's done — it's also saved as a Note any persona can [READ_NOTE]. Not for quick facts (that's [SEARCH_WEB]). One [DEEP_RESEARCH] per turn.]`;
   sys+=`\n\n[WATCH A VIDEO: emit [WATCH_VIDEO: <url> | <what to look for>] to hand a video off to the watch agent — a YouTube / TikTok / Instagram / X / Facebook / Vimeo link, a Google Drive share link, or a direct file link. The second field is optional but nearly always worth giving: the specific question or angle — the hook, the structure, why it retains, how they'd do a competing version, a direct question. It runs async: the agent downloads the video, transcribes it, detects the cuts, and does a real vision pass over sampled frames, then brings back a written breakdown (hook, beat-by-beat structure, retention devices, strengths/weaknesses, what to steal, and a direct answer to the focus) plus a full report link. It does NOT come back instantly — a few minutes. Tell Mr. Burrus it's queued and that you'll bring him what it found. One [WATCH_VIDEO] per turn. This is a deeper read than the frames the app samples inline when he attaches a video to chat — use it when the video is worth actually studying.]`;
   try{
     const gt=await loadGoogleToken();
@@ -81,7 +82,13 @@ Only when seeing or editing the thing is the point — not for a passing mention
       sys+=`\n\n[GOOGLE: not connected. If Mr. Burrus asks about email, calendar, Drive or Google tasks, tell him to link his account in Settings → GOOGLE.]`;
     }
   }catch{}
-  const hud=await getHudState();const tasks=await getTasks();
+  const hud=await getHudState();
+  // The HUD's task list is Google Tasks (when connected) merged with local-only
+  // tasks — the same list the on-screen HUD shows. Use that, not getTasks()
+  // (local table only), so a persona sees exactly what Mr. Burrus sees.
+  let tasks=[];
+  try{const{loadHudTasks}=await import('./hudTasks');tasks=await loadHudTasks();}
+  catch{try{tasks=await getTasks();}catch{}}
   if(hud){
     let routineDone={};try{routineDone=JSON.parse(hud.morning_routine_done||'{}');}catch{}
     let routine=[];try{routine=JSON.parse(hud.morning_routine||'[]');}catch{}
@@ -91,7 +98,7 @@ Only when seeing or editing the thing is the point — not for a passing mention
     let bt=[];try{bt=JSON.parse(hud.batman_template||'[]');}catch{}
     const dow=new Date().getDay();
     const todayBat=Array.isArray(bt)&&bt.length===7?bt[dow===0?6:dow-1]:null;
-    const openTasks=tasks.map(t=>t.title).slice(0,15).join(', ');
+    const openTasks=tasks.slice(0,20).map(t=>t.due?`${t.title} (due ${t.due})`:t.title).join(', ');
     let upcoming='';
     try{
       const d=await getUpcomingDates(21);
