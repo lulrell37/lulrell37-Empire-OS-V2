@@ -18,7 +18,7 @@ import{autoAtlasBusy}from '../services/autoAtlas';
 import{handleCommands,stripCommands}from '../services/commandHandler';
 import{googleReadInjections,googleWriteCommands}from '../services/googleCommands';
 import{driveUploadFile,googleConnected}from '../services/googleClient';
-import{getMessages,saveMessage,getAllPersonaPics,savePersonaMemory,getSetting,setSetting,getExpenseSummary,addBuildJob,updateBuildJob,getBuildJob,getBuildJobByIssue,getBuildJobs,buildJobRepo,DEFAULT_BUILD_REPO,getCustomPrompt,getAllLeads,addClipJob,addWatchJob,getUnreadPersonas,getUnreadMessages,markPersonaRead,getContentItems,getContentTally,getContentPages,updateContentItem}from '../services/database';
+import{getMessages,saveMessage,getAllPersonaPics,savePersonaMemory,getSetting,setSetting,getExpenseSummary,addBuildJob,updateBuildJob,getBuildJob,getBuildJobByIssue,getBuildJobs,buildJobRepo,DEFAULT_BUILD_REPO,getCustomPrompt,getAllLeads,addClipJob,addWatchJob,getActiveWatchJobs,getActiveClipJobs,getActiveBuildJobs,getGeneratingContentItems,getUnreadPersonas,getUnreadMessages,markPersonaRead,getContentItems,getContentTally,getContentPages,updateContentItem}from '../services/database';
 import{compileBatch,publishContent,contentStatusLine}from '../services/socialPublish';
 import{pollContentJobs}from '../services/contentJobs';
 import{speak as speakOneShot}from '../services/voice';
@@ -80,6 +80,8 @@ function isInterimReply(text){
 // Provision the watch repo's ANTHROPIC_API_KEY once per session, best-effort —
 // mirrors how createProjectRepo wires client repos. If it's already set (or the
 // token can't), the job still files; the agent just needs the key to exist.
+// Short verb phrases for the banner / orb-aura when an auto-agent is mid-cycle.
+const AGENT_LABEL={scout:'scanning for leads',atlas:'working the desk',talon:'watching the markets'};
 let watchSecretTried=false;
 async function ensureWatchSecret(){
   if(watchSecretTried)return;
@@ -135,6 +137,10 @@ export default function CommandScreen({navigation,route}){
   // S.C.O.U.T. / A.T.L.A.S. / T.A.L.O.N. running an auto-cycle right now — polled
   // while the galaxy is open so their orb gets the same working aura.
   const[agentBusy,setAgentBusy]=useState(()=>new Set());
+  // Background queue work in flight — video watches, clip edits, builds, FORGE
+  // media generation. Polled while this screen is focused; feeds both the banner
+  // chips and the galaxy "working" aura so Mr. Burrus never has to guess.
+  const[bgJobs,setBgJobs]=useState([]);
   // Live status of a running Empire Council meeting (backend-driven) — feeds the
   // notification strip and the gold "speaking now" glow on the galaxy orbs.
   const[councilLive,setCouncilLive]=useState(null);
@@ -192,7 +198,7 @@ export default function CommandScreen({navigation,route}){
   const manualRef=useRef(false); // true while the current take was started by the SPEAK button
   const interimContinueRef=useRef(null); // {isGroup} set when the last voiced reply was a stall — consumed by the auto-listen effect to keep the persona going instead of reopening the mic
   const interimStreakRef=useRef(0);      // consecutive stalls this turn — capped by INTERIM_CONTINUE_MAX
-  const{flagFirmIssue,clearFirmIssue}=useEmpireStore();
+  const{flagFirmIssue,clearFirmIssue,setActivity}=useEmpireStore();
   const isFocused=useIsFocused();
 
   useEffect(()=>{contRef.current=continuous;},[continuous]);
@@ -228,6 +234,36 @@ export default function CommandScreen({navigation,route}){
     const iv=setInterval(tick,600);
     return()=>clearInterval(iv);
   },[isFocused,view,orbLevel]);
+  // Background queue work (watch / clip / build / FORGE) -> the banner + orb aura.
+  // Runs whenever this screen is focused regardless of view, so the chips are
+  // there in chat too.
+  useEffect(()=>{
+    if(!isFocused){setBgJobs(j=>j.length?[]:j);return;}
+    let alive=true;
+    const pull=async()=>{
+      try{
+        const[w,c,b,g]=await Promise.all([
+          getActiveWatchJobs().catch(()=>[]),
+          getActiveClipJobs().catch(()=>[]),
+          getActiveBuildJobs().catch(()=>[]),
+          getGeneratingContentItems().catch(()=>[]),
+        ]);
+        if(!alive)return;
+        const out=[];
+        for(const j of w)out.push({key:'watch:'+j.id,persona:j.persona||'rogue',label:j.status==='watching'?'watching a video':'video queued to watch'});
+        for(const j of c)out.push({key:'clip:'+j.id,persona:'rogue',label:j.status==='editing'?'cutting a clip':'clip queued to edit'});
+        for(const j of b)out.push({key:'build:'+j.id,persona:j.project_name?'ara':'jarvis',label:`building #${j.issue_number}`});
+        if(g.length)out.push({key:'forge',persona:'forge',label:g.length>1?`generating ${g.length} pieces`:'generating media'});
+        setBgJobs(prev=>{
+          if(prev.length===out.length&&out.every((x,i)=>x.key===prev[i]?.key&&x.label===prev[i]?.label))return prev;
+          return out;
+        });
+      }catch{}
+    };
+    pull();
+    const iv=setInterval(pull,5000);
+    return()=>{alive=false;clearInterval(iv);};
+  },[isFocused]);
   // Poll the backend for a running council meeting while this screen is focused:
   // fast (5s) once one is live so the banner + speaking-orb glow track it turn
   // by turn, slow (every ~4th tick = 20s) the rest of the time.
@@ -2085,18 +2121,34 @@ export default function CommandScreen({navigation,route}){
   const cp=getPersona(activePersona);
   const displayMessages=mode==='direct'?messages:groupMessages;
 
-  // Personas the galaxy sphere should show a pulsing gold "working" aura on:
-  // one running a deep-research job, one mid-relay for another persona, or the
-  // persona whose reply is still streaming while Mr. Burrus has zoomed out.
+  // One list of everything a persona is doing right now — background queue work,
+  // auto-agent cycles, relays, deep research, a live council. It drives the
+  // banner chips (via the store) and the gold "working" aura on the galaxy orbs,
+  // so what's happening is never a guess.
+  const activityItems=useMemo(()=>{
+    const out=[...bgJobs];
+    agentBusy.forEach(id=>out.push({key:'agent:'+id,persona:id,label:AGENT_LABEL[id]||'running a cycle'}));
+    relayBusy.forEach(id=>out.push({key:'relay:'+id,persona:id,label:'pulled in on a relay'}));
+    if(deepResearch&&deepResearch.status==='running'&&deepResearch.persona)
+      out.push({key:'research',persona:deepResearch.persona,label:'running deep research'});
+    if(councilLive&&councilLive.active&&councilLive.speaking)
+      out.push({key:'council',persona:councilLive.speaking,label:'speaking in council'});
+    // de-dupe by key (same persona can't stack two identical rows)
+    const seen=new Set();
+    return out.filter(a=>a&&a.persona&&!seen.has(a.key)&&seen.add(a.key));
+  },[bgJobs,agentBusy,relayBusy,deepResearch,councilLive]);// eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(()=>{setActivity(activityItems);},[activityItems,setActivity]);
+  useEffect(()=>()=>setActivity([]),[setActivity]); // clear on unmount (leaving for the map)
+
+  // Personas the galaxy sphere shows a pulsing gold "working" aura on — every
+  // active-activity persona, plus the one whose reply is still streaming while
+  // Mr. Burrus has zoomed out.
   const busyPersonas=useMemo(()=>{
-    const set=new Set(relayBusy);
-    agentBusy.forEach(id=>set.add(id));
-    if(deepResearch&&deepResearch.status==='running'&&deepResearch.persona)set.add(deepResearch.persona);
+    const set=new Set(activityItems.map(a=>a.persona));
     if(loading&&activePersona&&orbLevel==='group')set.add(activePersona);
-    // The persona holding the floor in a live council meeting glows gold too.
-    if(councilLive&&councilLive.active&&councilLive.speaking)set.add(councilLive.speaking);
     return set;
-  },[relayBusy,agentBusy,deepResearch,loading,activePersona,orbLevel,councilLive]);
+  },[activityItems,loading,activePersona,orbLevel]);
 
   if(showCamera){
     return(
@@ -2132,8 +2184,12 @@ export default function CommandScreen({navigation,route}){
             <Text style={s.empireOS}>‹ BACK</Text>
           </TouchableOpacity>
         ):(
-          // The galaxy is home — brand mark only, no back affordance.
-          <Text style={s.empireOS}>♔ EMPIRE OS</Text>
+          // The galaxy is home. The brand mark is the way to the city map —
+          // for now, the only way (the Earth that used to sit on the galaxy
+          // floor is gone).
+          <TouchableOpacity onPress={goToCity} hitSlop={{top:12,bottom:12,left:12,right:16}}>
+            <Text style={s.empireOS}>♔ EMPIRE OS<Text style={s.empireOSmap}>  ⌖ MAP</Text></Text>
+          </TouchableOpacity>
         )}
         <View style={s.headerRight}>
           {chromeVisible&&(
@@ -2217,7 +2273,6 @@ export default function CommandScreen({navigation,route}){
           busyPersonas={busyPersonas}
           onPickPersona={pickPersonaFromOrb}
           onLaunchGroup={launchGroupFromOrb}
-          onEarth={goToCity}
         />
         )
       ):(
@@ -2351,6 +2406,7 @@ const s=StyleSheet.create({
   container:{flex:1,backgroundColor:'#000'},
   header:{flexDirection:'row',justifyContent:'space-between',alignItems:'center',paddingHorizontal:16,paddingVertical:8,borderBottomWidth:1,borderBottomColor:'#111'},
   empireOS:{fontFamily:'monospace',fontSize:14,fontWeight:'700',color:'#E8C98A',letterSpacing:2},
+  empireOSmap:{fontFamily:'monospace',fontSize:9,fontWeight:'700',color:'#6b5a30',letterSpacing:2},
   onlinePill:{flexDirection:'row',alignItems:'center',gap:5,borderWidth:1,borderColor:'#4CAF5055',borderRadius:12,paddingHorizontal:8,paddingVertical:3},
   headerRight:{flexDirection:'row',alignItems:'center',gap:8},
   viewToggle:{flexDirection:'row',gap:4},

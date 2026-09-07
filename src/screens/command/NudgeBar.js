@@ -8,6 +8,7 @@ import React,{useState,useEffect,useRef}from 'react';
 import{View,Text,StyleSheet,ScrollView,TouchableOpacity,Animated,Easing,Alert}from 'react-native';
 import{computeNudges}from '../../services/nudges';
 import useEmpireStore from '../../store/useEmpireStore';
+import{getPersona}from '../../personas/personas';
 
 const TONE={
   error:{border:'#7A2E2E',fg:'#E8938C',x:'#8a4a4a'},
@@ -21,9 +22,11 @@ export default function NudgeBar({active}){
   const[dismissed,setDismissed]=useState({});
   const firmIssues=useEmpireStore(s=>s.firmIssues);
   const clearFirmIssue=useEmpireStore(s=>s.clearFirmIssue);
+  const activity=useEmpireStore(s=>s.activity);
 
   const scrollRef=useRef(null);
   const anim=useRef(new Animated.Value(0)).current;
+  const pulse=useRef(new Animated.Value(0)).current;   // slow breathe on the live-activity dots
   const[cw,setCw]=useState(0);      // visible width
   const[oneW,setOneW]=useState(0);  // width of one copy of the row
 
@@ -33,12 +36,28 @@ export default function NudgeBar({active}){
     return()=>{alive=false;};
   },[active,firmIssues]);
 
-  // Merge: live problems first (errors, then warn/info), then proactive nudges.
+  // Slow breathe loop for the live-activity dots — runs only while something is
+  // actually working, so an idle banner has nothing animating.
+  useEffect(()=>{
+    if(!activity.length){pulse.stopAnimation();pulse.setValue(0);return;}
+    const loop=Animated.loop(Animated.sequence([
+      Animated.timing(pulse,{toValue:1,duration:900,easing:Easing.inOut(Easing.sin),useNativeDriver:true}),
+      Animated.timing(pulse,{toValue:0,duration:900,easing:Easing.inOut(Easing.sin),useNativeDriver:true}),
+    ]));
+    loop.start();
+    return()=>loop.stop();
+  },[activity.length]);// eslint-disable-line react-hooks/exhaustive-deps
+
+  // Merge: live activity first (what personas are doing right now), then live
+  // problems (errors before warn/info), then proactive nudges.
+  const activityChips=activity.map(a=>({
+    key:'act:'+a.key,persona:a.persona,text:a.label,severity:'activity',activity:true,
+  }));
   const issueChips=Object.entries(firmIssues).map(([key,v])=>({
     key:'firm:'+key,rawKey:key,text:v.text,detail:v.detail,severity:v.severity||'error',issue:true,
   })).sort((a,b)=>(a.severity==='error'?0:1)-(b.severity==='error'?0:1));
   const nudgeChips=nudges.map(n=>({...n,severity:n.severity||'warn'}));
-  const shown=[...issueChips,...nudgeChips].filter(n=>!dismissed[n.key]);
+  const shown=[...activityChips,...issueChips,...nudgeChips].filter(n=>!dismissed[n.key]);
 
   const belt=active&&oneW>0&&cw>0&&oneW>cw+8&&shown.length>1;
 
@@ -62,15 +81,28 @@ export default function NudgeBar({active}){
   if(!shown.length)return null;
 
   const onChipPress=(n)=>{
+    if(n.activity)return;
     if(n.issue&&n.detail){Alert.alert('What went wrong',n.detail);return;}
     dismissChip(n);
   };
   const dismissChip=(n)=>{
+    if(n.activity)return; // activity clears itself when the work ends
     setDismissed(d=>({...d,[n.key]:true}));
     if(n.issue)clearFirmIssue(n.rawKey);
   };
 
   const renderChip=(n,prefix='')=>{
+    if(n.activity){
+      const col=getPersona(n.persona)?.color||'#E8C98A';
+      const name=(getPersona(n.persona)?.name||n.persona).replace(/\./g,'');
+      return(
+        <View key={prefix+n.key} style={[s.chip,s.actChip,{borderColor:col+'55'}]}>
+          <Animated.View style={[s.actDot,{backgroundColor:col,opacity:pulse.interpolate({inputRange:[0,1],outputRange:[0.35,1]})}]}/>
+          <Text style={[s.actName,{color:col}]}>{name}</Text>
+          <Text style={s.actLabel}>{n.text}</Text>
+        </View>
+      );
+    }
     const tone=TONE[n.severity]||(n.issue?TONE.error:TONE.warn);
     const showDot=n.issue||n.severity==='error'||n.severity==='info';
     return(
@@ -116,4 +148,8 @@ const s=StyleSheet.create({
   dot:{fontFamily:'monospace',fontSize:9,fontWeight:'700'},
   chipT:{fontFamily:'monospace',fontSize:8,letterSpacing:0.5},
   chipX:{fontFamily:'monospace',fontSize:10},
+  actChip:{gap:5,backgroundColor:'rgba(232,201,138,0.04)'},
+  actDot:{width:5,height:5,borderRadius:2.5},
+  actName:{fontFamily:'monospace',fontSize:8,fontWeight:'700',letterSpacing:0.5},
+  actLabel:{fontFamily:'monospace',fontSize:8,letterSpacing:0.3,color:'#8A8172'},
 });

@@ -10,8 +10,6 @@ import React,{useState,useEffect,useMemo,useCallback,useRef,useImperativeHandle,
 import{View,Text,StyleSheet,TouchableOpacity,ActivityIndicator,Dimensions,Platform,Animated,PanResponder,Image,Easing,ScrollView,Alert}from 'react-native';
 import Svg,{Path}from 'react-native-svg';
 import PersonaOrb from './PersonaOrb';
-import SphereBackdrop from './SphereBackdrop';
-import EarthHorizon from './EarthHorizon';
 import MemorySpiral from './MemorySpiral';
 import MemoryPopup from './MemoryPopup';
 import Boundary from '../hud/Boundary';
@@ -132,7 +130,7 @@ function depthOpacity(depth){
 
 function touchDist(t){return Math.hypot(t[0].pageX-t[1].pageX,t[0].pageY-t[1].pageY);}
 
-function OrbZoom({personaId,color,active,vizRef,personaPics={},unreadPersonas,busyPersonas,onPickPersona,onLaunchGroup,onEarth,level='group',onLevelChange},ref){
+function OrbZoom({personaId,color,active,vizRef,personaPics={},unreadPersonas,busyPersonas,onPickPersona,onLaunchGroup,level='group',onLevelChange},ref){
   const persona=getPersona(personaId);
   // Manually dragged orb positions — lifted up here (rather than living inside
   // PersonaSphereInner) so they survive zooming into a persona and back out,
@@ -215,8 +213,8 @@ function OrbZoom({personaId,color,active,vizRef,personaPics={},unreadPersonas,bu
       setLvl('orb',-1);return;
     }
     if(cur==='orb'){setLvl('group',-1);return;}
-    // group is the galaxy root — the only way down to the city is the Earth
-    // along the bottom edge; zooming out past the sphere does nothing.
+    // group is the galaxy root — the way to the city map is the EMPIRE OS title
+    // in the header; zooming out past the sphere does nothing.
   },[setLvl]);
 
   // Step back one zoom level (memory -> orb -> the persona sphere). Returns true
@@ -290,6 +288,13 @@ function OrbZoom({personaId,color,active,vizRef,personaPics={},unreadPersonas,bu
     if(!node||!node.addEventListener)return;
     const onWheel=(e)=>{
       if(e.preventDefault)e.preventDefault();
+      // At the galaxy level the mouse wheel flies the camera through the cloud —
+      // forward toward the back personas, back out to where A.R.A. sits. It
+      // never changes zoom level; click an orb (or pinch) to enter a persona.
+      if(levelRef.current==='group'){
+        sphereRef.current&&sphereRef.current.nudgeDolly&&sphereRef.current.nudgeDolly(e.deltaY*0.006);
+        return;
+      }
       wheelAcc.current+=e.deltaY;
       if(wheelAcc.current<-140){wheelAcc.current=0;deeper();}
       else if(wheelAcc.current>140){wheelAcc.current=0;shallower();}
@@ -313,6 +318,13 @@ function OrbZoom({personaId,color,active,vizRef,personaPics={},unreadPersonas,bu
     const dy=y-wheelY.current;
     wheelY.current=y;
     if(!dy)return;
+    // Galaxy level: wheel flies the camera through the cloud (see the web
+    // handler above), no level change.
+    if(levelRef.current==='group'){
+      sphereRef.current&&sphereRef.current.nudgeDolly&&sphereRef.current.nudgeDolly(dy*0.01);
+      if(Math.abs(y-WHEEL_MID)>500)recenterWheel();
+      return;
+    }
     wheelAcc.current+=dy;
     if(wheelAcc.current<-90){deeper();recenterWheel();}
     else if(wheelAcc.current>90){shallower();recenterWheel();}
@@ -366,15 +378,12 @@ function OrbZoom({personaId,color,active,vizRef,personaPics={},unreadPersonas,bu
           contentOffset={{x:0,y:WHEEL_MID}} onScroll={onWheelScroll}
           onContentSizeChange={()=>{wheelY.current=WHEEL_MID;wheelScrollRef.current&&wheelScrollRef.current.scrollTo({y:WHEEL_MID,animated:false});}}/>
       )}
-      {level==='group'&&<SphereBackdrop/>}
-      {/* Earth curving up along the bottom edge — pure backdrop art, behind the
-          cloud and never touch-interactive. The "descend" button below is the
-          way down to the city map. */}
-      {level==='group'&&<EarthHorizon/>}
+      {/* The galaxy sits on bare black now — no nebula backdrop, no Earth. The
+          way to the city map is the EMPIRE OS title in the header. */}
       <Animated.View style={{flex:1,opacity:morph.opacity,transform:[{translateX:pinchTX},{translateY:pinchTY},{scale:contentScale}]}}>
         {level==='group'&&(
           <Boundary label="The persona sphere">
-            <PersonaSphere ref={sphereRef} activeId={personaId} pics={personaPics} unreadPersonas={unreadPersonas} busyPersonas={busyPersonas} onPick={pick} onLaunch={launch} onEarth={onEarth} pinned={pinned} setPinned={setPinned}/>
+            <PersonaSphere ref={sphereRef} activeId={personaId} pics={personaPics} unreadPersonas={unreadPersonas} busyPersonas={busyPersonas} onPick={pick} onLaunch={launch} pinned={pinned} setPinned={setPinned}/>
           </Boundary>
         )}
         {level==='orb'&&(
@@ -425,7 +434,7 @@ function OrbZoom({personaId,color,active,vizRef,personaPics={},unreadPersonas,bu
 // spread + depth fade sell the movement; nearest-in-front is what a tap or a
 // pinch-in selects.
 
-function PersonaSphereInner({activeId,pics,unreadPersonas,busyPersonas,onPick,onLaunch,onEarth,pinned,setPinned},ref){
+function PersonaSphereInner({activeId,pics,unreadPersonas,busyPersonas,onPick,onLaunch,pinned,setPinned},ref){
   const[size,setSize]=useState({w:Dimensions.get('window').width,h:340});
   const[group,setGroup]=useState([]);
   const[order,setOrder]=useState(()=>PERSONA_LIST.map((_,i)=>i));
@@ -616,19 +625,16 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,busyPersonas,onPick,on
       }
       return best;
     },
+    // Mouse wheel on the galaxy: fly the camera through the cloud. +dz dollies
+    // forward toward the personas seeded in the back; -dz backs out to A.R.A.'s
+    // front seat. Clamped just outside her on the near side and to the far edge
+    // of the scatter on the other.
+    nudgeDolly(dz){
+      const nv=Math.max(-4.2,Math.min(Z_SPAN+2,dollyNow.current+dz));
+      dollyNow.current=nv;
+      Animated.spring(dolly,{toValue:nv,useNativeDriver:false,speed:16,bounciness:0}).start();
+    },
   }),[RX,RY]);
-
-  // Earth fills the bottom strip of the galaxy — a tap there descends to the
-  // city map. It claims the touch on start (so a tap registers) but yields on
-  // any real drag, so panning/dollying the cloud from the bottom still works.
-  const onEarthRef=useRef(onEarth);
-  useEffect(()=>{onEarthRef.current=onEarth;},[onEarth]);
-  const earthTap=useMemo(()=>PanResponder.create({
-    onStartShouldSetPanResponder:()=>true,
-    onMoveShouldSetPanResponder:()=>false,
-    onPanResponderTerminationRequest:()=>true,
-    onPanResponderRelease:(_,g)=>{if(Math.hypot(g.dx,g.dy)<8)onEarthRef.current&&onEarthRef.current();},
-  }),[]);
 
   const pan=useMemo(()=>PanResponder.create({
     onStartShouldSetPanResponder:()=>false,
@@ -773,7 +779,6 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,busyPersonas,onPick,on
         boxRef.current&&boxRef.current.measureInWindow&&boxRef.current.measureInWindow((x,y)=>{originRef.current={x:x||0,y:y||0};});
       }}>
       <View style={StyleSheet.absoluteFill} {...pan.panHandlers}>
-        {onEarth&&<View style={s.earthTap} {...earthTap.panHandlers}/>}
         <Svg style={StyleSheet.absoluteFill} pointerEvents="none">
           {tethers.map(t=>t.opacity>0.02&&(
             <AnimatedPath key={t.key} d={t.d} stroke="#E8C98A" strokeWidth={1} fill="none"
@@ -853,7 +858,6 @@ const s=StyleSheet.create({
   railLabel:{fontFamily:'monospace',fontSize:10,fontWeight:'700',letterSpacing:3},
   dots:{flexDirection:'row',gap:5,marginTop:6},
   dot:{width:5,height:5,borderRadius:2.5,backgroundColor:'#222'},
-  earthTap:{position:'absolute',left:0,right:0,bottom:0,height:'14%'},
   zoomCtl:{position:'absolute',right:12,bottom:16,gap:8},
   zBtn:{width:34,height:34,borderRadius:6,borderWidth:1,borderColor:'#222',backgroundColor:'rgba(0,0,0,0.5)',alignItems:'center',justifyContent:'center'},
   zT:{color:'#999',fontSize:18,fontFamily:'monospace'},
