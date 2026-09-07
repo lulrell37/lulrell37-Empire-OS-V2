@@ -1,11 +1,12 @@
 // Reconciles local clip_jobs against their GitHub issues — the same pattern as
-// buildJobs.js. The scheduled Descript agent leaves HTML-comment markers on the
-// issue; this reads them and moves the local row along. Called on a timer while
-// the Command screen is focused; returns events for the caller to surface.
-import{getActiveClipJobs,updateClipJob,DEFAULT_BUILD_REPO}from './database';
-import{getClipActivity}from './buildAgent';
+// buildJobs.js. The clip-editor agent (GitHub Actions, in CLIP_REPO) leaves
+// HTML-comment markers on the issue; this reads them and moves the local row
+// along. Called on a timer while the Command screen is focused; returns events
+// for the caller to surface.
+import{getActiveClipJobs,updateClipJob}from './database';
+import{getClipActivity,CLIP_REPO}from './buildAgent';
 
-const REPO={owner:DEFAULT_BUILD_REPO.owner,repo:DEFAULT_BUILD_REPO.repo};
+const REPO=CLIP_REPO;
 
 function scan(body){
   const b=String(body||'');
@@ -33,7 +34,7 @@ export async function pollClipJobs(){
         if(!s)continue;
         if(s.kind==='editing'&&job.status==='queued'){
           patch.status='editing';
-          events.push(`— R.O.G.U.E. · Descript is cutting your clip —`);
+          events.push(`— R.O.G.U.E. · the editor is cutting your clip —`);
         }else if(s.kind==='done'){
           patch={status:'done',result_url:s.download,share_url:s.share};
           events.push(`— R.O.G.U.E. · clip ready ✂️  ${s.download||s.share} —`);

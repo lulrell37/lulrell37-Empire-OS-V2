@@ -13,6 +13,10 @@ import{encryptSecret}from './githubSecrets';
 
 export const DEFAULT_REPO={owner:'lulrell37',repo:'lulrell37-Empire-OS-V2'};
 export const REPO=DEFAULT_REPO; // back-compat
+// R.O.G.U.E.'s clip edits run in their own repo — a GitHub Actions agent
+// (ffmpeg + Whisper + one Claude planning call) works the `rogue-clip` issue
+// queue there and reports back with the same clip-* comment markers.
+export const CLIP_REPO={owner:'lulrell37',repo:'empire-clip-editor'};
 export const TEMPLATE_REPO={owner:'lulrell37',repo:'client-project-template'};
 const API='https://api.github.com';
 const rp=(repo)=>`/repos/${repo.owner}/${repo.repo}`;
@@ -142,7 +146,7 @@ export async function fileBuildRequest(spec,repo=DEFAULT_REPO){
 // `rogue-clip` issues, edits the clip, and reports back via issue comments
 // carrying HTML-comment markers. Reuses the same PAT + gh() wrapper.
 const CLIP_LABEL='rogue-clip';
-export async function fileClipJob({mediaUrl,instructions},repo=DEFAULT_REPO){
+export async function fileClipJob({mediaUrl,instructions},repo=CLIP_REPO){
   const url=String(mediaUrl||'').trim();
   const brief=String(instructions||'').trim();
   if(!url)throw new Error('No media link for the clip.');
@@ -155,7 +159,7 @@ export async function fileClipJob({mediaUrl,instructions},repo=DEFAULT_REPO){
   const issue=await gh(`${rp(repo)}/issues`,{method:'POST',body:{title,body,labels:[CLIP_LABEL]}});
   return{issueNumber:issue.number,url:issue.html_url,id:`${repo.owner}/${repo.repo}#${issue.number}`};
 }
-export async function getClipActivity(issueNumber,sinceCommentId=0,repo=DEFAULT_REPO){
+export async function getClipActivity(issueNumber,sinceCommentId=0,repo=CLIP_REPO){
   const[issue,comments]=await Promise.all([
     gh(`${rp(repo)}/issues/${issueNumber}`),
     gh(`${rp(repo)}/issues/${issueNumber}/comments?per_page=100`),
@@ -165,7 +169,7 @@ export async function getClipActivity(issueNumber,sinceCommentId=0,repo=DEFAULT_
     comments:comments.filter(c=>c.id>(sinceCommentId||0)).map(c=>({id:c.id,body:c.body||''})),
   };
 }
-export async function cancelClipJob(issueNumber,repo=DEFAULT_REPO){
+export async function cancelClipJob(issueNumber,repo=CLIP_REPO){
   try{await gh(`${rp(repo)}/issues/${issueNumber}`,{method:'PATCH',body:{state:'closed'}});}catch{}
 }
 
