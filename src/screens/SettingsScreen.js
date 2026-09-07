@@ -33,7 +33,6 @@ export default function SettingsScreen({navigation}){
   const[googleConnecting,setGoogleConnecting]=useState(false);
   const[memoryRecall,setMemoryRecall]=useState(true);
   const[deepConfirm,setDeepConfirm]=useState(true);
-  const[deepModel,setDeepModel]=useState('auto');
   const[tl,setTl]=useState({email:'',password:'',server:'',env:'demo'});
   const[tlBusy,setTlBusy]=useState(false);
   const[tlAccount,setTlAccount]=useState(null);
@@ -81,7 +80,6 @@ export default function SettingsScreen({navigation}){
     const g=await loadGoogleToken();setGoogleConnected(!!g?.accessToken);
     setMemoryRecall((await getSetting('memory_recall','1'))==='1');
     setDeepConfirm((await getSetting('deep_research_confirm','1'))==='1');
-    setDeepModel(await getSetting('deep_research_model','auto'));
     const tc=await loadTradeCreds();if(tc)setTl({email:tc.email||'',password:tc.password||'',server:tc.server||'',env:tc.env||'demo'});
     setAutoTrade((await getSetting('auto_trade','0'))==='1');
     setAutoSyms(await getSetting('auto_trade_symbols','XAUUSD, EURUSD, GBPUSD, USDJPY, GBPJPY, AUDUSD, XAGUSD, BTCUSD'));
@@ -231,11 +229,6 @@ export default function SettingsScreen({navigation}){
   }
   async function toggleMemoryRecall(){const nv=!memoryRecall;setMemoryRecall(nv);await setSetting('memory_recall',nv?'1':'0');}
   async function toggleDeepConfirm(){const nv=!deepConfirm;setDeepConfirm(nv);await setSetting('deep_research_confirm',nv?'1':'0');}
-  async function cycleDeepModel(){
-    const order=['auto','o3-deep-research','o4-mini-deep-research'];
-    const nv=order[(order.indexOf(deepModel)+1)%order.length];
-    setDeepModel(nv);await setSetting('deep_research_model',nv);
-  }
   async function pickPersonaPic(id){
     try{
       const perm=await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -562,16 +555,9 @@ export default function SettingsScreen({navigation}){
             <TouchableOpacity style={s.toggleRow} onPress={toggleDeepConfirm} activeOpacity={0.7}>
               <View style={{flex:1,paddingRight:12}}>
                 <Text style={s.toggleLabel}>CONFIRM DEEP RESEARCH</Text>
-                <Text style={s.toggleSub}>Ask before every Deep Research run (OpenAI, minutes long, dollars per run).</Text>
+                <Text style={s.toggleSub}>Ask before every Deep Research run — Claude with ~20 live web searches, a few minutes, keep the app open.</Text>
               </View>
               <View style={[s.switch,deepConfirm&&s.switchOn]}><View style={[s.knob,deepConfirm&&s.knobOn]}/></View>
-            </TouchableOpacity>
-            <TouchableOpacity style={s.toggleRow} onPress={cycleDeepModel} activeOpacity={0.7}>
-              <View style={{flex:1,paddingRight:12}}>
-                <Text style={s.toggleLabel}>DEEP RESEARCH MODEL</Text>
-                <Text style={s.toggleSub}>{deepModel==='auto'?'Auto — try o3-deep-research, fall back to o4-mini if your account lacks access.':deepModel==='o3-deep-research'?'o3-deep-research — most thorough, needs OpenAI org verification.':'o4-mini-deep-research — faster and cheaper.'}</Text>
-              </View>
-              <Text style={[s.toggleLabel,{color:'#5B8DEF'}]}>{deepModel==='auto'?'AUTO':deepModel==='o3-deep-research'?'O3':'O4-MINI'}</Text>
             </TouchableOpacity>
             <View style={s.infoRow}>
               <Text style={s.toggleLabel}>MEMORY</Text>

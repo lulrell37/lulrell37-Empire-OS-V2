@@ -8,7 +8,7 @@
 //
 // Everything still runs only while the app is open; there is no server. A job
 // that never finishes is failed out after DR_TIMEOUT_MS.
-import{drInsert,drUpdate,drGet,drActive,drRecent,getSetting,saveMessage,savePersonaMemory,saveNote}from './database';
+import{drInsert,drUpdate,drGet,drActive,drRecent,saveMessage,savePersonaMemory,saveNote}from './database';
 import{deepResearchStart,deepResearchPoll}from './aiService';
 import{driveSaveNote}from './googleClient';
 import{getPersona}from '../personas/personas';
@@ -41,12 +41,11 @@ function parseProgress(row){
   try{return JSON.parse(row.progress);}catch{return{searches:0,step:''};}
 }
 
-// Start a job. Throws with a readable message if OpenAI rejects it.
+// Start a job. Throws with a readable message if the key is missing.
 export async function drStart({topic,persona,mode}){
   const existing=await drGetActive();
   if(existing)throw new Error('A deep research job is already running — one at a time.');
-  const pref=await getSetting('deep_research_model','auto').catch(()=>'auto');
-  const{id,model}=await deepResearchStart(topic,pref);
+  const{id,model}=await deepResearchStart(topic);
   const row={id,topic,persona:persona||'ara',mode:mode||'direct',model,status:'running',started_at:Date.now()};
   await drInsert(row).catch(()=>{});
   return row;

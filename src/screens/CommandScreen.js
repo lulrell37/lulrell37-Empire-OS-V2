@@ -1914,7 +1914,7 @@ export default function CommandScreen({navigation,route}){
     };
     getSetting('deep_research_confirm','1').then(v=>{
       if(v==='1'){
-        Alert.alert('Deep Research',`Run deep research on:\n\n"${topic}"\n\nThis takes several minutes and bills to your OpenAI key.`,[
+        Alert.alert('Deep Research',`Run deep research on:\n\n"${topic}"\n\nClaude runs ~20 live web searches and writes a cited brief — a few minutes. Keep the app open.`,[
           {text:'Cancel',style:'cancel'},
           {text:'Run',onPress:go},
         ]);

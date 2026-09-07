@@ -64,7 +64,7 @@ PINNING: when he tells you something that matters over the next few days — a t
 - [SHOW_CHART: type | title | data] — a chart. type = line, area, bar, or pie. data = "label:value, label:value, ..." for one series, or "A=x:1,y:2; B=x:3,y:4" for several. Use it for trends, breakdowns and comparisons — not one or two numbers.
 Only when seeing or editing the thing is the point — not for a passing mention. One surface per reply.]`;
   sys+=`\n\n[WEB: You can search the live web with [SEARCH_WEB: query] (max 1 per turn) — the result comes back before you reply. Use it only when the answer really turns on something current that you can't know: today's price, a recent event, a just-released product, a fast-moving number. For general knowledge, or in quick back-and-forth conversation, just answer directly — a search adds a noticeable delay before you can speak, so it must be worth it. Don't mention the mechanism; weave in what you find with source names.]`;
-  sys+=`\n\n[DEEP RESEARCH: for a long, thorough, cited report on something in your lane — ONLY when Mr. Burrus explicitly asks you to "do deep research" / "a deep dive" / "the full research". Putting the literal tag [DEEP_RESEARCH: the question or topic] in your reply is the ONLY thing that starts a job — writing "I'll start deep research on that" without the tag does nothing and leaves him waiting, so when he asks, the tag goes in that same reply. It runs async on his OpenAI key (say so), takes several minutes, one job at a time; the finished report lands back in this chat and is saved as a Note. Not for quick facts — that's [SEARCH_WEB]. One [DEEP_RESEARCH] per turn.]`;
+  sys+=`\n\n[DEEP RESEARCH: for a long, thorough, cited report on something in your lane — ONLY when Mr. Burrus explicitly asks you to "do deep research" / "a deep dive" / "the full research". Putting the literal tag [DEEP_RESEARCH: the question or topic] in your reply is the ONLY thing that starts a job — writing "I'll start deep research on that" without the tag does nothing and leaves him waiting, so when he asks, the tag goes in that same reply. It runs on Claude with live web search — ~20 searches across angles, several minutes, one job at a time, keep the app open; the finished brief lands back in this chat and is saved as a Note. Not for quick facts — that's [SEARCH_WEB]. One [DEEP_RESEARCH] per turn.]`;
   sys+=`\n\n[WATCH A VIDEO: emit [WATCH_VIDEO: <url> | <what to look for>] to hand a video off to the watch agent — a YouTube / TikTok / Instagram / X / Facebook / Vimeo link, a Google Drive share link, or a direct file link. The second field is optional but nearly always worth giving: the specific question or angle — the hook, the structure, why it retains, how they'd do a competing version, a direct question. It runs async: the agent downloads the video, transcribes it, detects the cuts, and does a real vision pass over sampled frames, then brings back a written breakdown (hook, beat-by-beat structure, retention devices, strengths/weaknesses, what to steal, and a direct answer to the focus) plus a full report link. It does NOT come back instantly — a few minutes. Tell Mr. Burrus it's queued and that you'll bring him what it found. One [WATCH_VIDEO] per turn. This is a deeper read than the frames the app samples inline when he attaches a video to chat — use it when the video is worth actually studying.]`;
   try{
     const gt=await loadGoogleToken();
@@ -570,69 +570,72 @@ export async function webSearch(personaId,query,signal=null){
   throw new Error(`web search failed — ${errs.join(' | ').slice(0,240)}`);
 }
 
-// Long-form autonomous research via OpenAI Deep Research. Runs for minutes —
-// started in the background, caller polls deepResearchPoll(id). Orchestration,
-// persistence and delivery live in services/deepResearch.js.
-const DR_MODEL_CHAINS={
-  auto:['o3-deep-research','o4-mini-deep-research'],
-  'o3-deep-research':['o3-deep-research'],
-  'o4-mini-deep-research':['o4-mini-deep-research'],
-};
 function apiErrorMessage(raw){
   try{const j=JSON.parse(raw);return j.error?.message||j.message||raw;}catch{return raw;}
 }
-// true when the failure is "this account can't use this model" — worth trying the next one
-function isModelAccessError(msg){
-  return /model.*(not found|does not exist|not available)|not found.*model|must be verified|verify your organization|verification|do not have access|unsupported model/i.test(msg||'');
-}
 
-export async function deepResearchStart(topic,pref='auto'){
+// Long-form research via Claude + the web_search tool: one long agentic call
+// where Claude runs ~20 searches across angles and writes a cited brief. Runs
+// detached (module-level DR_JOBS map); caller polls deepResearchPoll(id).
+// Orchestration/persistence/delivery live in services/deepResearch.js.
+//
+// Unlike the old OpenAI background job, this doesn't survive an app restart —
+// the in-flight request is lost and the job is failed on the next poll. The
+// common case (app stays open ~3-8 min) is fine.
+const DR_JOBS=new Map();   // id -> {status:'running'|'completed'|'failed', text?, error?, progress, startedAt}
+const DR_SYSTEM=`You are a research analyst. Produce a thorough, well-structured brief on the topic the user gives you.
+- Use web_search aggressively: pursue several distinct angles, follow leads past the first page, and verify any load-bearing figure or claim against a second source.
+- Structure the brief as: a 2-4 sentence executive summary; then findings grouped by theme, with the specific numbers, dates, names and quotes that matter; then a short "what this means / what to do" section.
+- Cite sources inline by outlet/author. End with a numbered Sources list.
+- Be concrete and current. Where the evidence is thin, dated, or conflicting, say so plainly rather than papering over it.
+- No preamble about the process — just the brief.`;
+
+async function runClaudeDeepResearch(id,topic){
   const k=await ensureKeys();
-  const{base,auth}=await aiRoute('openai',k?.openai,'OpenAI');
-  const chain=DR_MODEL_CHAINS[pref]||DR_MODEL_CHAINS.auto;
-  let lastErr='unknown error';
-  for(const model of chain){
-    const res=await fetch(base+'/v1/responses',{method:'POST',headers:{'Content-Type':'application/json',...auth},body:JSON.stringify({
-      model,
-      input:`Research this thoroughly and return a structured brief with findings, key figures, and cited sources:\n\n${topic}`,
-      background:true,
-      tools:[{type:'web_search_preview'}],
-    })});
-    if(res.ok){const d=await res.json();return{id:d.id,model};}
-    lastErr=apiErrorMessage(await res.text());
-    if(!isModelAccessError(lastErr))break; // a real error, not a model-availability one — stop
-  }
-  if(/verif/i.test(lastErr))
-    throw new Error(`Deep research needs OpenAI organization verification. Verify at platform.openai.com/settings/organization/general, then try again. (${lastErr.slice(0,120)})`);
-  if(isModelAccessError(lastErr))
-    throw new Error(`Your OpenAI account can't access the deep-research models (${chain.join(' or ')}). ${lastErr.slice(0,140)}`);
-  throw new Error(`Deep research failed to start: ${lastErr.slice(0,160)}`);
+  const{base,auth}=await aiRoute('claude',k?.claude,'Claude');
+  const ctrl=new AbortController();
+  const to=setTimeout(()=>ctrl.abort(),12*60000);
+  try{
+    const res=await fetch(base+'/v1/messages',{
+      method:'POST',
+      headers:{'Content-Type':'application/json',...auth},
+      body:JSON.stringify({
+        model:'claude-sonnet-5',
+        max_tokens:16000,
+        system:DR_SYSTEM,
+        messages:[{role:'user',content:`Research this thoroughly:\n\n${topic}`}],
+        tools:[{type:'web_search_20250305',name:'web_search',max_uses:20}],
+      }),
+      signal:ctrl.signal,
+    });
+    if(!res.ok)throw new Error(apiErrorMessage(await res.text()).slice(0,180));
+    const d=await res.json();
+    if(d.usage)await trackApiUsage('claude',d.usage.input_tokens||0,d.usage.output_tokens||0).catch(()=>{});
+    const blocks=Array.isArray(d.content)?d.content:[];
+    const searches=blocks.filter(b=>b.type==='server_tool_use'&&b.name==='web_search').length;
+    const text=blocks.filter(b=>b.type==='text').map(b=>b.text).join('\n').trim();
+    DR_JOBS.set(id,{status:'completed',text:text||'(no brief was returned)',progress:{searches,step:'done'}});
+  }finally{clearTimeout(to);}
 }
 
-// Returns {status, text?, error?, progress:{searches,step}}.
+export async function deepResearchStart(topic){
+  const k=await ensureKeys();
+  await aiRoute('claude',k?.claude,'Claude');   // fail fast if the key is missing
+  const id='dr_'+Date.now().toString(36)+Math.random().toString(36).slice(2,7);
+  DR_JOBS.set(id,{status:'running',progress:{searches:0,step:'searching…'},startedAt:Date.now()});
+  runClaudeDeepResearch(id,String(topic||'').slice(0,4000)).catch(e=>{
+    DR_JOBS.set(id,{status:'failed',error:String(e?.name==='AbortError'?'timed out after 12 min':(e?.message||e)).slice(0,200),progress:{searches:0,step:''}});
+  });
+  return{id,model:'claude-web-search'};
+}
+
+// Returns {status:'running'|'completed'|'failed', text?, error?, progress:{searches,step}}.
 export async function deepResearchPoll(id){
-  const k=await ensureKeys();
-  const{base,auth}=await aiRoute('openai',k?.openai,'OpenAI');
-  const res=await fetch(base+'/v1/responses/'+id,{headers:{...auth}});
-  if(!res.ok)throw new Error(`Deep Research poll: ${apiErrorMessage(await res.text()).slice(0,120)}`);
-  const d=await res.json();
-  const out=Array.isArray(d.output)?d.output:[];
-  const searches=out.filter(o=>o.type==='web_search_call').length;
-  const lastReason=[...out].reverse().find(o=>o.type==='reasoning');
-  let step=lastReason?.summary;
-  if(Array.isArray(step))step=step.map(x=>x?.text||x).join(' ');
-  const progress={searches,step:typeof step==='string'?step.slice(0,140):''};
-
-  if(d.status==='completed'){
-    if(d.usage)await trackApiUsage('openai',d.usage.input_tokens||0,d.usage.output_tokens||0).catch(()=>{});
-    const text=d.output_text||out.flatMap(o=>(o.content||[]).filter(c=>c.type==='output_text').map(c=>c.text)).join('\n');
-    return{status:'completed',text:text||'(Deep Research returned no text)',progress};
-  }
-  if(d.status==='failed'||d.status==='cancelled'||d.status==='incomplete'){
-    return{status:d.status==='cancelled'?'cancelled':'failed',
-      error:d.error?.message||d.incomplete_details?.reason||d.status,progress};
-  }
-  return{status:d.status||'running',progress};
+  const j=DR_JOBS.get(id);
+  if(!j)return{status:'failed',error:'Deep research was interrupted (the app restarted before it finished). Run it again.',progress:{searches:0,step:''}};
+  if(j.status==='completed'){DR_JOBS.delete(id);return{status:'completed',text:j.text,progress:j.progress};}
+  if(j.status==='failed'){DR_JOBS.delete(id);return{status:'failed',error:j.error,progress:j.progress};}
+  return{status:'running',progress:j.progress};
 }
 // Synthesize `text` in a persona's ElevenLabs voice -> local .mp3 URI (or null).
 // opts: { signal, previousText, nextText } — previous/next give the flash model
