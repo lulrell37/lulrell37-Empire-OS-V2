@@ -491,7 +491,7 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,busyPersonas,onPick,on
   const bobOffsetFor=useCallback((i)=>{
     if(PERSONA_LIST[i]?.id==='ara')return{bx:0,by:0}; // A.R.A. doesn't bob — keep her tethers static
     const v=floatsNow[i]??0;
-    return{bx:-3+6*v,by:-7+14*v}; // mirrors floats[i].interpolate([0,1],[-3,3]/[-7,7]) in the orbs memo
+    return{bx:-7+14*v,by:-16+32*v}; // mirrors floats[i].interpolate([0,1],[-7,7]/[-16,16]) in the orbs memo
   },[floatsNow]);
 
   // A pinned orb's endpoint for tether purposes: its fixed screen position,
@@ -580,11 +580,13 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,busyPersonas,onPick,on
     // any JS-thread animation running while the camera sits still — which is
     // what made the bob look janky on some orbs before (13 JS sine loops +
     // the 120ms tether refresh were fighting for the JS thread).
-    const loops=sparkles.map((v,i)=>Animated.loop(Animated.sequence([
+    // A.R.A. holds completely still on her front seat — no twinkle either, so
+    // she reads as the fixed anchor the whole cloud drifts around.
+    const loops=sparkles.map((v,i)=>PERSONA_LIST[i].id==='ara'?null:Animated.loop(Animated.sequence([
       Animated.delay(i*160),
       Animated.timing(v,{toValue:1,duration:900+((i*137)%700),easing:Easing.inOut(Easing.sin),useNativeDriver:true}),
       Animated.timing(v,{toValue:0,duration:900+((i*211)%700),easing:Easing.inOut(Easing.sin),useNativeDriver:true}),
-    ])));
+    ]))).filter(Boolean);
     loops.forEach(l=>l.start());
     return()=>loops.forEach(l=>l.stop());
   },[]);// eslint-disable-line react-hooks/exhaustive-deps
@@ -598,8 +600,8 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,busyPersonas,onPick,on
     // thread, which is what "idle drift" actually needs to stay smooth.
     const loops=floats.map((v,i)=>PERSONA_LIST[i].id==='ara'?null:Animated.loop(Animated.sequence([
       Animated.delay((i*233)%1100),
-      Animated.timing(v,{toValue:1,duration:2400+((i*173)%1600),easing:Easing.inOut(Easing.sin),useNativeDriver:true}),
-      Animated.timing(v,{toValue:0,duration:2400+((i*197)%1600),easing:Easing.inOut(Easing.sin),useNativeDriver:true}),
+      Animated.timing(v,{toValue:1,duration:1700+((i*173)%1300),easing:Easing.inOut(Easing.sin),useNativeDriver:true}),
+      Animated.timing(v,{toValue:0,duration:1700+((i*197)%1300),easing:Easing.inOut(Easing.sin),useNativeDriver:true}),
     ]))).filter(Boolean);
     loops.forEach(l=>l.start());
     return()=>loops.forEach(l=>l.stop());
@@ -669,11 +671,13 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,busyPersonas,onPick,on
         // Bob + twinkle both ride one native-driven transform layer (see the
         // render). Kept off the JS-driven position/scale below so they stay
         // smooth no matter what the JS thread is doing.
-        // A.R.A. holds dead still on her front seat — no idle bob.
-        bobX:p.id==='ara'?0:floats[i].interpolate({inputRange:[0,1],outputRange:[-3,3]}),
-        bobY:p.id==='ara'?0:floats[i].interpolate({inputRange:[0,1],outputRange:[-7,7]}),
-        sparkleScale:sparkles[i].interpolate({inputRange:[0,1],outputRange:[0.92,1.1]}),
-        sparkleOpacity:sparkles[i].interpolate({inputRange:[0,1],outputRange:[0.6,1]}),
+        // A.R.A. holds dead still on her front seat — no idle bob, no twinkle.
+        // Everyone behind her drifts noticeably (wider bob than the cloud used
+        // to have) so the galaxy reads as alive around her fixed point.
+        bobX:p.id==='ara'?0:floats[i].interpolate({inputRange:[0,1],outputRange:[-7,7]}),
+        bobY:p.id==='ara'?0:floats[i].interpolate({inputRange:[0,1],outputRange:[-16,16]}),
+        sparkleScale:p.id==='ara'?1:sparkles[i].interpolate({inputRange:[0,1],outputRange:[0.92,1.1]}),
+        sparkleOpacity:p.id==='ara'?1:sparkles[i].interpolate({inputRange:[0,1],outputRange:[0.6,1]}),
         // Depth-driven scale/opacity — JS-driven (they track yaw/dolly) but
         // completely static while the camera is still.
         scale:Animated.multiply(
