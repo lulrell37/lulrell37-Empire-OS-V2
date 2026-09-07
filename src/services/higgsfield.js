@@ -6,18 +6,23 @@
 // No training, no character IDs. Each page keeps a set of reference photos
 // (uploaded to Higgsfield's CDN, URLs stored on the page). Every generation
 // sends those reference photos + the MUSE's prompt straight to Higgsfield:
-//   image / carousel  ->  /v1/text2image/soul  with image_reference
-//   reel              ->  /v1/image2video/dop  with the photos as input_images
+//   image / carousel  ->  v2 /nano-banana  with the WHOLE set as input_images
+//   reel              ->  v1 /v1/image2video/dop  with the photos as input_images
 //
-// v1 API (https://platform.higgsfield.ai): POST a job to a model endpoint, get
-// back a job-set { id, jobs:[{status,results}] }, then GET /v1/job-sets/{id}
-// until every job is completed (or one is failed / nsfw / canceled). Auth is a
-// key id + secret pair sent as `hf-api-key` / `hf-secret` headers. Output URLs
-// stay live ~7 days.
+// Two API surfaces, one key pair:
+//  - v1 (https://platform.higgsfield.ai): POST a job, get a job-set
+//    { id, jobs:[{status,results}] }, poll GET /v1/job-sets/{id}. Used for reels
+//    and for the reference-photo upload. hf-api-key / hf-secret headers.
+//  - v2 (https://api.higgsfield.ai): POST a generation, get { request_id, status },
+//    poll GET /requests/{request_id}/status. Used for Nano Banana stills, which
+//    accept up to 8 reference images at once. `Authorization: Key <id>:<secret>`.
+// checkJobSet() takes either id — a "nb:" prefix routes to v2. Output URLs stay
+// live ~7 days.
 import*as FileSystem from 'expo-file-system';
 import{loadKeys}from './keyStore';
 
-const BASE='https://platform.higgsfield.ai';
+const BASE='https://platform.higgsfield.ai';   // v1 — reels (DoP image->video)
+const BASE_V2='https://api.higgsfield.ai';     // v2 — stills (Nano Banana, multi-reference)
 
 // Instagram-shaped output. Soul has no true 4:5 — 1536x2048 (3:4) is the
 // closest portrait; H.E.R.A.L.D. crops to 4:5 at publish. Reels follow the
@@ -52,6 +57,41 @@ async function hf(path,{method='GET',body,key}={}){
   return json;
 }
 
+// v2 API (api.higgsfield.ai). Same key pair, sent the v2 way as
+// `Authorization: Key <id>:<secret>` (the legacy hf-* headers are kept alongside
+// since v2 still accepts them). A generation POST returns a { request_id, status }
+// straight away; poll GET /requests/{id}/status until status is completed.
+async function hf2(path,{method='GET',body,key}={}){
+  const cred=key||await higgsfieldKey();
+  if(!cred)throw new Error('No Higgsfield key — add the key ID + secret in Settings → KEYS.');
+  const res=await fetch(BASE_V2+path,{
+    method,
+    headers:{
+      'Authorization':`Key ${cred.id}:${cred.secret}`,
+      'hf-api-key':cred.id,'hf-secret':cred.secret,
+      'Content-Type':'application/json',
+    },
+    body:body?JSON.stringify(body):undefined,
+  });
+  const text=await res.text().catch(()=>'');
+  let json=null;try{json=text?JSON.parse(text):null;}catch{}
+  if(!res.ok){
+    const detail=json?.detail||json?.message||text||`HTTP ${res.status}`;
+    throw new Error(`Higgsfield ${res.status}: ${String(detail).slice(0,180)}`);
+  }
+  return json;
+}
+
+// Map a v2 RequestStatus.status onto our shared job vocabulary.
+function v2Status(s){
+  return s==='completed'?'completed'
+    :s==='failed'?'failed'
+    :s==='nsfw'?'nsfw'
+    :s==='canceled'?'canceled'
+    :s==='in_progress'?'in_progress'
+    :'queued';
+}
+
 // --- reference media upload ---------------------------------------------
 // Push a local image or video to Higgsfield's CDN; returns its public URL.
 export async function uploadToHiggsfield(localUri,contentType='image/jpeg',key){
@@ -77,11 +117,21 @@ export async function uploadToHiggsfield(localUri,contentType='image/jpeg',key){
 
 // --- submit ------------------------------------------------------------
 // Each returns the job-set id to poll with checkJobSet().
-export async function submitImage(prompt,{size=POST_SIZE,batch=1,referenceUrl,key}={}){
-  const params={prompt:clip(prompt),width_and_height:size,quality:SOUL_QUALITY,batch_size:batch};
-  if(referenceUrl)params.image_reference={type:'image_url',image_url:referenceUrl};
-  const j=await hf('/v1/text2image/soul',{method:'POST',key,body:{params}});
-  return j?.id||null;
+// Stills / carousels go through Nano Banana on the v2 API: it takes the WHOLE
+// set of a page's reference photos (up to 8) as `input_images`, not just one, so
+// face + body + wardrobe shots all inform the render. Returns "nb:<request_id>"
+// — checkJobSet() routes that prefix to the v2 status endpoint.
+export async function submitImage(prompt,{batch=1,referenceUrl,referenceUrls,aspectRatio='3:4',key}={}){
+  const urls=(referenceUrls&&referenceUrls.length?referenceUrls:(referenceUrl?[referenceUrl]:[]))
+    .filter(Boolean).slice(0,8);
+  const j=await hf2('/nano-banana',{method:'POST',key,body:{
+    prompt:clip(prompt),
+    num_images:Math.min(4,Math.max(1,parseInt(batch,10)||1)),
+    aspect_ratio:aspectRatio,
+    input_images:urls.map(u=>({type:'image_url',image_url:u})),
+    output_format:'jpeg',
+  }});
+  return j?.request_id?`nb:${j.request_id}`:null;
 }
 export async function submitVideo(prompt,referenceUrls,{key}={}){
   const imgs=(referenceUrls||[]).filter(Boolean).slice(0,4).map(u=>({type:'image_url',image_url:u}));
@@ -96,6 +146,14 @@ export async function submitVideo(prompt,referenceUrls,{key}={}){
 // Returns { status, media:[{url,type}] }.
 // status: queued | in_progress | completed | failed | nsfw | canceled
 export async function checkJobSet(jobSetId,key){
+  // Nano Banana stills (v2) — "nb:<request_id>".
+  if(String(jobSetId||'').startsWith('nb:')){
+    const j=await hf2(`/requests/${String(jobSetId).slice(3)}/status`,{key});
+    const media=[];
+    for(const im of (Array.isArray(j?.images)?j.images:[])) if(im?.url)media.push({url:im.url,type:'image'});
+    if(j?.video?.url)media.push({url:j.video.url,type:'video'});
+    return{status:v2Status(j?.status),media};
+  }
   const j=await hf(`/v1/job-sets/${jobSetId}`,{key});
   const jobs=Array.isArray(j?.jobs)?j.jobs:[];
   const any=s=>jobs.some(x=>x.status===s);

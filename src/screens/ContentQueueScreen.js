@@ -112,6 +112,19 @@ function ContentQueue({navigation}){
     await setContentPages(merged).catch(()=>{});
     setPages(merged);
   };
+  // Tap a reference photo to cycle its role. F.O.R.G.E. uses these to tell Nano
+  // Banana which shot is her face vs. her body vs. her wardrobe. No label = a
+  // generic "same person" reference.
+  const REF_ROLES=['','face','body','outfit'];
+  const cycleRefRole=async(p,idx)=>{
+    const cur=(pf[p]?.refs)||[];
+    if(cur[idx]?.type==='video')return;
+    const nextRefs=cur.map((r,i)=>i!==idx?r:{...r,role:REF_ROLES[(REF_ROLES.indexOf(r.role||'')+1)%REF_ROLES.length]});
+    setPf(f=>({...f,[p]:{...(f[p]||{}),refs:nextRefs}}));
+    const merged={...pages,[p]:{...(pages[p]||{}),...(pf[p]||{}),refs:nextRefs}};
+    await setContentPages(merged).catch(()=>{});
+    setPages(merged);
+  };
 
   const savePages=async()=>{
     try{
@@ -196,7 +209,7 @@ function ContentQueue({navigation}){
 
       {tab==='pages'&&(
         <ScrollView contentContainerStyle={s.list} keyboardShouldPersistTaps="handled">
-          <Text style={s.pgIntro}>One influencer per page. Add reference photos of her (and clips if you want) — F.O.R.G.E. sends those plus the MUSE's prompt to Higgsfield on every render, so each page looks like herself. 5–15 clear shots, varied angles. Needs a Higgsfield key in Settings → KEYS.</Text>
+          <Text style={s.pgIntro}>One influencer per page. Add reference photos of her (and clips if you want) — F.O.R.G.E. sends those plus the MUSE's prompt to Higgsfield on every render, so each page looks like herself. 5–15 clear shots, varied angles. Tap a photo to label it FACE / BODY / OUTFIT — F.O.R.G.E. tells the generator which is which. Needs a Higgsfield key in Settings → KEYS.</Text>
           {PAGES.map(p=>{
             const v=pf[p]||{};
             const refs=v.refs||[];
@@ -212,7 +225,10 @@ function ContentQueue({navigation}){
                       <View key={r.url+i} style={s.refThumb}>
                         {r.type==='video'
                           ?<View style={[s.refImg,s.refVid]}><Text style={s.refVidT}>▶ CLIP</Text></View>
-                          :<Image source={{uri:r.url}} style={s.refImg}/>}
+                          :<TouchableOpacity activeOpacity={0.8} style={s.refImg} onPress={()=>cycleRefRole(p,i)}>
+                            <Image source={{uri:r.url}} style={s.refImg}/>
+                            {!!r.role&&<View style={s.refBadge} pointerEvents="none"><Text style={s.refBadgeT}>{r.role.toUpperCase()}</Text></View>}
+                          </TouchableOpacity>}
                         <TouchableOpacity style={s.refX} onPress={()=>removeRef(p,i)} hitSlop={{top:8,bottom:8,left:8,right:8}}>
                           <Text style={s.refXT}>×</Text>
                         </TouchableOpacity>
@@ -374,6 +390,8 @@ const s=StyleSheet.create({
   refVidT:{fontFamily:FONTS.mono,fontSize:7,color:'#8a8069',letterSpacing:1},
   refX:{position:'absolute',top:2,right:2,width:16,height:16,borderRadius:8,backgroundColor:'#000A',alignItems:'center',justifyContent:'center'},
   refXT:{color:'#E8938C',fontSize:12,lineHeight:14,fontWeight:'700'},
+  refBadge:{position:'absolute',left:0,right:0,bottom:0,backgroundColor:'#000C',paddingVertical:2,alignItems:'center'},
+  refBadgeT:{fontFamily:FONTS.mono,fontSize:7,letterSpacing:1,color:'#E8C98A'},
   fieldL:{fontFamily:FONTS.mono,fontSize:7,color:'#7a715d',letterSpacing:1.5},
   fieldI:{fontFamily:FONTS.mono,fontSize:11,color:'#C9BEA6',borderWidth:1,borderColor:'#1F1B14',borderRadius:6,paddingHorizontal:8,paddingVertical:7,backgroundColor:'#050403'},
   saveBtn:{borderWidth:1,borderColor:'#5FA779',borderRadius:8,paddingVertical:13,alignItems:'center',marginTop:8},

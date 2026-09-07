@@ -11,13 +11,40 @@
 //                  (needs the Meta app + per-page tokens) — until that's set up
 //                  this reports what it would post without sending anything.
 import{getContentItems,getContentItem,updateContentItem,getContentTally,getContentPages}from './database';
-import{higgsfieldKey,submitImage,submitVideo,POST_SIZE}from './higgsfield';
+import{higgsfieldKey,submitImage,submitVideo}from './higgsfield';
 
-// Reference photo URLs stored on a page (videos are kept but not sent — the
-// generation models take images).
+// Reference photos stored on a page (videos are kept but not sent — the
+// generation models take images). Ordered face -> body -> outfit -> unlabelled
+// so the prompt's "[1] / [2]" references line up.
+const ROLE_RANK={face:0,body:1,outfit:2};
 function pagePhotoRefs(cfg){
   const refs=Array.isArray(cfg?.refs)?cfg.refs:[];
-  return refs.filter(r=>r&&r.url&&r.type!=='video').map(r=>r.url);
+  return refs
+    .filter(r=>r&&r.url&&r.type!=='video')
+    .map(r=>({url:r.url,role:String(r.role||'').toLowerCase()}))
+    .sort((a,b)=>(ROLE_RANK[a.role]??9)-(ROLE_RANK[b.role]??9));
+}
+
+// Front-matter for a Nano Banana prompt that tells it which reference image is
+// which. If nothing is labelled, a generic "same person" line; if some are,
+// a numbered map plus explicit "match her face to [n]" instructions.
+const ROLE_DESC={face:'her face',body:'her body and build',outfit:'her wardrobe / styling'};
+function withRefMap(prompt,photoRefs){
+  if(!photoRefs.length)return prompt;
+  const labelled=photoRefs.some(r=>r.role);
+  let line;
+  if(labelled){
+    const list=photoRefs.map((r,i)=>`[${i+1}] ${ROLE_DESC[r.role]||'general reference'}`).join(', ');
+    const face=photoRefs.findIndex(r=>r.role==='face');
+    const body=photoRefs.findIndex(r=>r.role==='body');
+    const keep=[];
+    if(face>=0)keep.push(`match her face to [${face+1}]`);
+    if(body>=0)keep.push(`match her body type to [${body+1}]`);
+    line=`Reference images, in order: ${list}. ${keep.length?keep.join(' and ')+'. ':''}All of them show the same woman — keep her identity consistent.`;
+  }else{
+    line='The reference images all show the same woman — keep her face and body type consistent with them.';
+  }
+  return `${line}\n\n${prompt}`;
 }
 
 const short=id=>String(id||'').slice(0,8);
@@ -51,23 +78,23 @@ export async function compileBatch(page){
   }
 
   // Send each item's prompt + its page's reference photos to Higgsfield.
-  // image / carousel -> Soul text2image (one photo as image_reference);
+  // image / carousel -> Nano Banana (the whole labelled reference set);
   // reel -> DoP image->video (the photos as input_images).
   const pages=await getContentPages().catch(()=>({}));
   let ok=0;const fails=[];const noRef=new Set();
   for(const it of items){
     try{
       const cfg=pages[it.page]||{};
-      const photos=pagePhotoRefs(cfg);
+      const photoRefs=pagePhotoRefs(cfg);      // [{url,role}], ordered
+      const photos=photoRefs.map(r=>r.url);
       if(!photos.length)noRef.add(it.page);
       let jobId;
       if(it.kind==='reel'){
         jobId=await submitVideo(it.prompt,photos,{key});
       }else{
-        jobId=await submitImage(it.prompt,{
-          size:POST_SIZE,
+        jobId=await submitImage(withRefMap(it.prompt,photoRefs),{
           batch:it.kind==='carousel'?4:1,
-          referenceUrl:photos[0]||undefined,
+          referenceUrls:photos,      // Nano Banana takes the whole reference set, not just one
           key,
         });
       }
