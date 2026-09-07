@@ -16,7 +16,9 @@ import{higgsfieldKey,submitImage,submitVideo}from './higgsfield';
 // Reference photos stored on a page (videos are kept but not sent — the
 // generation models take images). Ordered face -> body -> outfit -> unlabelled
 // so the prompt's "[1] / [2]" references line up.
-const ROLE_RANK={face:0,body:1,outfit:2};
+// Identity labels rank first, then styling, then the shot-direction labels
+// (pose, context), then anything unlabelled.
+const ROLE_RANK={face:0,body:1,outfit:2,pose:3,context:4};
 function pagePhotoRefs(cfg){
   const refs=Array.isArray(cfg?.refs)?cfg.refs:[];
   return refs
@@ -27,20 +29,28 @@ function pagePhotoRefs(cfg){
 
 // Front-matter for a Nano Banana prompt that tells it which reference image is
 // which. If nothing is labelled, a generic "same person" line; if some are,
-// a numbered map plus explicit "match her face to [n]" instructions.
-const ROLE_DESC={face:'her face',body:'her body and build',outfit:'her wardrobe / styling'};
+// a numbered map plus explicit instructions per label.
+const ROLE_DESC={
+  face:'her face', body:'her body and build', outfit:'her wardrobe / styling',
+  pose:'a pose reference', context:'a scene / framing / lighting reference',
+};
+const ROLE_INSTRUCTION={
+  face:i=>`match her face to [${i}]`,
+  body:i=>`match her body type to [${i}]`,
+  outfit:i=>`take the wardrobe from [${i}]`,
+  pose:i=>`put her in the pose from [${i}]`,
+  context:i=>`use the setting, framing and lighting from [${i}]`,
+};
 function withRefMap(prompt,photoRefs){
   if(!photoRefs.length)return prompt;
   const labelled=photoRefs.some(r=>r.role);
   let line;
   if(labelled){
     const list=photoRefs.map((r,i)=>`[${i+1}] ${ROLE_DESC[r.role]||'general reference'}`).join(', ');
-    const face=photoRefs.findIndex(r=>r.role==='face');
-    const body=photoRefs.findIndex(r=>r.role==='body');
-    const keep=[];
-    if(face>=0)keep.push(`match her face to [${face+1}]`);
-    if(body>=0)keep.push(`match her body type to [${body+1}]`);
-    line=`Reference images, in order: ${list}. ${keep.length?keep.join(' and ')+'. ':''}All of them show the same woman — keep her identity consistent.`;
+    const instr=photoRefs
+      .map((r,i)=>ROLE_INSTRUCTION[r.role]&&ROLE_INSTRUCTION[r.role](i+1))
+      .filter(Boolean);
+    line=`Reference images, in order: ${list}. ${instr.length?instr.join('; ')+'. ':''}The face/body references show the same woman — keep her identity consistent.`;
   }else{
     line='The reference images all show the same woman — keep her face and body type consistent with them.';
   }

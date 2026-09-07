@@ -115,7 +115,7 @@ function ContentQueue({navigation}){
   // Tap a reference photo to cycle its role. F.O.R.G.E. uses these to tell Nano
   // Banana which shot is her face vs. her body vs. her wardrobe. No label = a
   // generic "same person" reference.
-  const REF_ROLES=['','face','body','outfit'];
+  const REF_ROLES=['','face','body','outfit','pose','context'];
   const cycleRefRole=async(p,idx)=>{
     const cur=(pf[p]?.refs)||[];
     if(cur[idx]?.type==='video')return;
@@ -209,7 +209,7 @@ function ContentQueue({navigation}){
 
       {tab==='pages'&&(
         <ScrollView contentContainerStyle={s.list} keyboardShouldPersistTaps="handled">
-          <Text style={s.pgIntro}>One influencer per page. Add reference photos of her (and clips if you want) — F.O.R.G.E. sends those plus the MUSE's prompt to Higgsfield on every render, so each page looks like herself. 5–15 clear shots, varied angles. Tap a photo to label it FACE / BODY / OUTFIT — F.O.R.G.E. tells the generator which is which. Needs a Higgsfield key in Settings → KEYS.</Text>
+          <Text style={s.pgIntro}>One influencer per page. Add reference photos of her (and clips if you want) — F.O.R.G.E. sends those plus the MUSE's prompt to Higgsfield on every render, so each page looks like herself. 5–15 clear shots, varied angles. Tap a photo to label it FACE / BODY / OUTFIT / POSE / CONTEXT — F.O.R.G.E. tells the generator which is which. Needs a Higgsfield key in Settings → KEYS.</Text>
           {PAGES.map(p=>{
             const v=pf[p]||{};
             const refs=v.refs||[];

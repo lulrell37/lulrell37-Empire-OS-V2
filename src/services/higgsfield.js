@@ -6,23 +6,24 @@
 // No training, no character IDs. Each page keeps a set of reference photos
 // (uploaded to Higgsfield's CDN, URLs stored on the page). Every generation
 // sends those reference photos + the MUSE's prompt straight to Higgsfield:
-//   image / carousel  ->  v2 /nano-banana  with the WHOLE set as input_images
+//   image / carousel  ->  v2 /nano-banana-pro  with the WHOLE set as input_images
 //   reel              ->  v1 /v1/image2video/dop  with the photos as input_images
 //
-// Two API surfaces, one key pair:
-//  - v1 (https://platform.higgsfield.ai): POST a job, get a job-set
+// Two request styles on the same host (platform.higgsfield.ai):
+//  - v1 endpoints (/v1/...): body is { params: {...} }, response is a job-set
 //    { id, jobs:[{status,results}] }, poll GET /v1/job-sets/{id}. Used for reels
-//    and for the reference-photo upload. hf-api-key / hf-secret headers.
-//  - v2 (https://api.higgsfield.ai): POST a generation, get { request_id, status },
-//    poll GET /requests/{request_id}/status. Used for Nano Banana stills, which
-//    accept up to 8 reference images at once. `Authorization: Key <id>:<secret>`.
-// checkJobSet() takes either id — a "nb:" prefix routes to v2. Output URLs stay
-// live ~7 days.
+//    and the reference-photo upload.
+//  - v2 endpoints (bare model slug, e.g. /nano-banana-pro): body is the input
+//    object sent directly, response is { request_id, status, images:[{url}],
+//    video:{url} }, poll GET /requests/{request_id}/status. Nano Banana takes up
+//    to 8 reference images at once.
+// Both accept `Authorization: Key <id>:<secret>` (v1 also takes hf-api-key /
+// hf-secret). checkJobSet() takes either id — a "nb:" prefix routes to v2.
+// Output URLs stay live ~7 days.
 import*as FileSystem from 'expo-file-system';
 import{loadKeys}from './keyStore';
 
-const BASE='https://platform.higgsfield.ai';   // v1 — reels (DoP image->video)
-const BASE_V2='https://api.higgsfield.ai';     // v2 — stills (Nano Banana, multi-reference)
+const BASE='https://platform.higgsfield.ai';   // one host for both API versions
 
 // Instagram-shaped output. Soul has no true 4:5 — 1536x2048 (3:4) is the
 // closest portrait; H.E.R.A.L.D. crops to 4:5 at publish. Reels follow the
@@ -57,14 +58,12 @@ async function hf(path,{method='GET',body,key}={}){
   return json;
 }
 
-// v2 API (api.higgsfield.ai). Same key pair, sent the v2 way as
-// `Authorization: Key <id>:<secret>` (the legacy hf-* headers are kept alongside
-// since v2 still accepts them). A generation POST returns a { request_id, status }
-// straight away; poll GET /requests/{id}/status until status is completed.
+// v2-style call: input object posted directly (no { params } wrapper),
+// `Authorization: Key <id>:<secret>` the way Higgsfield's own SDK sends it.
 async function hf2(path,{method='GET',body,key}={}){
   const cred=key||await higgsfieldKey();
   if(!cred)throw new Error('No Higgsfield key — add the key ID + secret in Settings → KEYS.');
-  const res=await fetch(BASE_V2+path,{
+  const res=await fetch(BASE+path,{
     method,
     headers:{
       'Authorization':`Key ${cred.id}:${cred.secret}`,
@@ -121,17 +120,27 @@ export async function uploadToHiggsfield(localUri,contentType='image/jpeg',key){
 // set of a page's reference photos (up to 8) as `input_images`, not just one, so
 // face + body + wardrobe shots all inform the render. Returns "nb:<request_id>"
 // — checkJobSet() routes that prefix to the v2 status endpoint.
+const NANO_MODELS=['/nano-banana-pro','/nano-banana'];
 export async function submitImage(prompt,{batch=1,referenceUrl,referenceUrls,aspectRatio='3:4',key}={}){
   const urls=(referenceUrls&&referenceUrls.length?referenceUrls:(referenceUrl?[referenceUrl]:[]))
     .filter(Boolean).slice(0,8);
-  const j=await hf2('/nano-banana',{method:'POST',key,body:{
+  const body={
     prompt:clip(prompt),
     num_images:Math.min(4,Math.max(1,parseInt(batch,10)||1)),
     aspect_ratio:aspectRatio,
     input_images:urls.map(u=>({type:'image_url',image_url:u})),
-    output_format:'jpeg',
-  }});
-  return j?.request_id?`nb:${j.request_id}`:null;
+  };
+  let lastErr;
+  for(const model of NANO_MODELS){
+    try{
+      const j=await hf2(model,{method:'POST',key,body});
+      return j?.request_id?`nb:${j.request_id}`:null;
+    }catch(e){
+      lastErr=e;
+      if(!/404|model_not_found/i.test(String(e?.message||'')))throw e; // real error — stop
+    }
+  }
+  throw lastErr||new Error('Nano Banana: no model endpoint accepted the request');
 }
 export async function submitVideo(prompt,referenceUrls,{key}={}){
   const imgs=(referenceUrls||[]).filter(Boolean).slice(0,4).map(u=>({type:'image_url',image_url:u}));
