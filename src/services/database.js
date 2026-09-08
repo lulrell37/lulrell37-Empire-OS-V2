@@ -824,6 +824,27 @@ export async function drUpdate(id,patch){
 export async function drGet(id){return await db.getFirstAsync('SELECT * FROM deep_research WHERE id=?',[id]);}
 export async function drActive(){return await db.getFirstAsync("SELECT * FROM deep_research WHERE status='running' ORDER BY started_at DESC LIMIT 1");}
 export async function drRecent(n=10){return await db.getAllAsync('SELECT * FROM deep_research ORDER BY started_at DESC LIMIT ?',[n]);}
+
+// One recent-work feed for a single persona — powers the ◈ activity tab on the
+// orb screen. Unions the persona-tagged tables (deep research, watch jobs,
+// saved notes) into a flat list of {kind,label,detail,status,at}, newest first.
+// Per-persona boards that already have their own panel (trades, clips, builds,
+// leads) are NOT folded in here — those render as their own component.
+export async function getPersonaActivity(persona,{sinceMs=0,limit=20}={}){
+  if(!persona)return[];
+  const cut=sinceMs?Date.now()-sinceMs:0;
+  const[dr,watch,note]=await Promise.all([
+    db.getAllAsync('SELECT id,topic,status,started_at,finished_at FROM deep_research WHERE persona=? AND COALESCE(finished_at,started_at,0)>=? ORDER BY COALESCE(finished_at,started_at) DESC LIMIT ?',[persona,cut,limit]),
+    db.getAllAsync('SELECT id,focus,media_url,status,created_at,updated_at FROM watch_jobs WHERE persona=? AND COALESCE(updated_at,created_at,0)>=? ORDER BY COALESCE(updated_at,created_at) DESC LIMIT ?',[persona,cut,limit]),
+    db.getAllAsync('SELECT id,title,updated_at,created_at FROM notes WHERE persona=? AND COALESCE(updated_at,created_at,0)>=? ORDER BY COALESCE(updated_at,created_at) DESC LIMIT ?',[persona,cut,limit]),
+  ]);
+  const rows=[
+    ...dr.map(r=>({kind:'research',label:r.topic||'deep research',detail:'deep research',status:r.status,at:r.finished_at||r.started_at||0})),
+    ...watch.map(r=>({kind:'watch',label:r.focus||r.media_url||'video',detail:'watched a video',status:r.status,at:r.updated_at||r.created_at||0})),
+    ...note.map(r=>({kind:'note',label:r.title||'note',detail:'saved a note',status:null,at:r.updated_at||r.created_at||0})),
+  ];
+  return rows.sort((a,b)=>b.at-a.at).slice(0,limit);
+}
 export async function savePersonaPic(persona,picData){await db.runAsync('INSERT INTO persona_pics(persona,pic_data) VALUES(?,?) ON CONFLICT(persona) DO UPDATE SET pic_data=excluded.pic_data',[persona,picData]);}
 export async function getPersonaPic(persona){const r=await db.getFirstAsync('SELECT pic_data FROM persona_pics WHERE persona=?',[persona]);return r?.pic_data||null;}
 export async function getAllPersonaPics(){const rows=await db.getAllAsync('SELECT * FROM persona_pics');const map={};rows.forEach(r=>{map[r.persona]=r.pic_data;});return map;}
