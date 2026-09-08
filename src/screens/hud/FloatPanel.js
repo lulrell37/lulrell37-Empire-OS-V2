@@ -6,7 +6,7 @@ import React,{useState,useEffect,useCallback,useRef}from 'react';
 import{View,Text,TextInput,TouchableOpacity,StyleSheet}from 'react-native';
 import{getHudState,updateHudState,getBusinessesWithRevenue,getMorningRoutine,saveMorningRoutine,getBatmanTemplate,saveBatmanTemplate,updateEmpireScore,ensureHudState,DEFAULT_BATMAN}from '../../services/database';
 import{loadHudTasks,addHudTask,setHudTaskDone}from '../../services/hudTasks';
-import{BriefingPanel,AgendaPanel,BusinessPanel,TasksPanel,RoutinePanel,BatmanPanel,DailyPanel,MarketPanel,BuildBoardPanel}from './panels';
+import{BriefingPanel,AgendaPanel,BusinessPanel,TasksPanel,RoutinePanel,BatmanPanel,DailyPanel,NewsPanel,MarketPanel,BuildBoardPanel}from './panels';
 import{colors,FONTS,space}from '../../theme';
 
 export default function FloatPanel({kind,active=true,onOpenHud}){
@@ -127,6 +127,8 @@ function FloatDataPanel({kind,active,onOpenHud}){
         onSaveTemplate={async(t)=>{try{await saveBatmanTemplate(t);}catch{}load();}}/>;
     case 'daily':
       return <DailyPanel hud={hud} onRefreshed={load}/>;
+    case 'news':
+      return <NewsPanel hud={hud} onRefreshed={load}/>;
     default:
       return <Text style={fs.dash}>—</Text>;
   }

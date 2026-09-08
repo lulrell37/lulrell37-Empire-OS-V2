@@ -17,8 +17,9 @@ import ChartOverlay from './ChartOverlay';
 import NotesCanvas from './canvas/NotesCanvas';
 import TasksCanvas from './canvas/TasksCanvas';
 import AnalyticsBoard from './canvas/AnalyticsBoard';
+import NewsCanvas from './canvas/NewsCanvas';
 
-const DEFAULT_TITLE={notes:'NOTES',tasks:'TASKS & ROUTINE',chart:'CHART',analytics:'THE ALMANAC'};
+const DEFAULT_TITLE={notes:'NOTES',tasks:'TASKS & ROUTINE',chart:'CHART',analytics:'THE ALMANAC',news:'NEWS'};
 
 export default forwardRef(function Canvas({artifact,accent=colors.gold,onClose},ref){
   const childRef=useRef(null);
@@ -64,6 +65,7 @@ export default forwardRef(function Canvas({artifact,accent=colors.gold,onClose},
         {kind==='notes'&&<NotesCanvas ref={childRef} accent={accent} open={artifact.open} onTitle={setTitle}/>}
         {kind==='tasks'&&<TasksCanvas ref={childRef} accent={accent}/>}
         {kind==='analytics'&&<AnalyticsBoard accent={accent}/>}
+        {kind==='news'&&<NewsCanvas accent={accent}/>}
       </View>
     </Animated.View>
   );

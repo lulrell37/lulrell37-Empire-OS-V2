@@ -6,7 +6,7 @@ import{Feather}from '@expo/vector-icons';
 import{getHudState,updateHudState,getTasks,getBusinessesWithRevenue,setBusinessTarget,setBusinessNote,addBusiness,deleteBusiness,addRevenue,updateEmpireScore,getMorningRoutine,saveMorningRoutine,getBatmanTemplate,saveBatmanTemplate,ensureHudState,getHudLayout,setPanelLayout,DEFAULT_BATMAN}from '../services/database';
 import{loadHudTasks,addHudTask,setHudTaskDone,renameHudTask,deleteHudTask}from '../services/hudTasks';
 import{colors,space,radius,FONTS}from '../theme';
-import{PANEL_META,BriefingPanel,AgendaPanel,BusinessPanel,TasksPanel,RoutinePanel,BatmanPanel,DailyPanel,MarketPanel,BuildBoardPanel}from './hud/panels';
+import{PANEL_META,BriefingPanel,AgendaPanel,BusinessPanel,TasksPanel,RoutinePanel,BatmanPanel,DailyPanel,NewsPanel,MarketPanel,BuildBoardPanel}from './hud/panels';
 import Boundary from './hud/Boundary';
 import{HudFrame,ScoreBar,TelemetryLine,HudModule,HudDivider,useHudPulse}from './hud/HudChrome';
 
@@ -19,6 +19,7 @@ const MODULES=[
   ['routine','MORNING ROUTINE'],
   ['batman','BATMAN PROTOCOL'],
   ['daily','DAILY'],
+  ['news','NEWS'],
   ['market','MARKET'],
   ['build','BUILD PIPELINE'],
 ];
@@ -209,6 +210,7 @@ export default function HUDScreen({navigation}){
       case 'routine':return <RoutinePanel items={routineItems} done={routine} onToggle={toggleRoutine} onSave={handleSaveRoutine} onEditingChange={setPanelEditing}/>;
       case 'batman':return <BatmanPanel template={batmanTemplate} done={batman} today={todayBatman} onToggleDay={toggleBatman} onSaveTemplate={handleSaveBatman} onEditingChange={setPanelEditing}/>;
       case 'daily':return <DailyPanel hud={hud} onRefreshed={load}/>;
+      case 'news':return <Boundary label="The news panel"><NewsPanel hud={hud} onRefreshed={load}/></Boundary>;
       case 'market':return <Boundary label="The market panel"><MarketPanel/></Boundary>;
       case 'build':return <Boundary label="The build panel"><BuildBoardPanel/></Boundary>;
       default:return null;

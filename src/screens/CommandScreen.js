@@ -27,6 +27,7 @@ import{fileBuildRequest,replyToBuild,mergeBuild,cancelBuild,createProjectRepo,fi
 import{pollBuildJobs}from '../services/buildJobs';
 import{pollClipJobs}from '../services/clipJobs';
 import{pollWatchJobs}from '../services/watchJobs';
+import{refreshNewsBrief}from '../services/newsWire';
 import{jobProgress}from '../services/jobEta';
 import{tlSnapshot,tlFormatSnapshot,tlPlaceOrder,tlClosePosition,tlModifyPosition,tlPositions,MAX_QTY,MAX_OPEN_POSITIONS}from '../services/tradeLocker';
 import{recordTradeOpen,reconcileOpenTrades,traderJournalBlock,setStrategy,setTradeReview,TRADER_ID}from '../services/tradeJournal';
@@ -1601,6 +1602,13 @@ export default function CommandScreen({navigation,route}){
             }catch(e){
               pushSystemMsg(e?.noToken?'— WATCH · connect GitHub in Settings › Dev first —':`— WATCH · couldn't queue it: ${e.message} —`);
             }
+          },
+          onNewsBrief:async()=>{
+            pushSystemMsg('— W.I.R.E. · pulling a full read now — the brief lands in a few minutes —');
+            try{
+              const r=await refreshNewsBrief({force:true,trigger:'manual'});
+              if(r?.error)pushSystemMsg(`— W.I.R.E. · couldn't file the brief: ${r.error} —`);
+            }catch(e){pushSystemMsg(`— W.I.R.E. · brief failed: ${e.message} —`);}
           },
         };
 

@@ -12,6 +12,7 @@ import{getBuildJobs,getSetting,getAllTrades,getTasks}from '../../services/databa
 import{tradeRecord,TRADER_ID}from '../../services/tradeJournal';
 import{autoTraderRunning,autoTraderLastCycleAt}from '../../services/autoTrader';
 import{refreshDailyBriefing}from '../../services/dailyBriefing';
+import{refreshNewsBrief}from '../../services/newsWire';
 import{googleConnected,calendarEvents,gmailUnreadList,tasksListRaw}from '../../services/googleClient';
 import{getWeather}from '../../services/weather';
 import{pollBuildJobs}from '../../services/buildJobs';
@@ -25,6 +26,7 @@ export const PANEL_META={
   routine:{title:'MORNING ROUTINE'},
   batman:{title:'BATMAN PROTOCOL'},
   daily:{title:'DAILY'},
+  news:{title:'NEWS'},
   market:{title:'MARKET'},
   build:{title:'BUILD PIPELINE'},
 };
@@ -538,6 +540,88 @@ const bs=StyleSheet.create({
   issue:{fontFamily:FONTS.mono,fontSize:8,color:colors.textDim},
   title:{fontFamily:FONTS.mono,fontSize:11,color:colors.text,lineHeight:15},
   q:{fontFamily:FONTS.mono,fontSize:9,color:colors.danger,lineHeight:13},
+});
+
+// W.I.R.E.'s latest news brief — the engine (services/newsWire.js) keeps
+// hud.news_* current. Headline list up top, full brief behind a toggle.
+const NEWS_ACCENT='#C75B4A';
+const SLOT_LABEL={manual:'on-demand',break:'developing story'};
+function newsAgo(ms){
+  if(!ms)return'';
+  const m=Math.max(0,Math.round((Date.now()-ms)/60000));
+  if(m<1)return'just now';
+  if(m<60)return`${m} min ago`;
+  const h=Math.floor(m/60);
+  return h<24?`${h}h ago`:`${Math.floor(h/24)}d ago`;
+}
+export function NewsPanel({hud,onRefreshed}){
+  const[busy,setBusy]=useState(false);
+  const[err,setErr]=useState('');
+  const[full,setFull]=useState(false);
+  let headlines=[];
+  try{headlines=JSON.parse(hud?.news_headlines||'[]');}catch{}
+  const brief=hud?.news_brief||'';
+
+  async function refresh(){
+    if(busy)return;
+    setBusy(true);setErr('');
+    try{
+      const r=await refreshNewsBrief({force:true,trigger:'manual'});
+      if(r?.error)setErr(r.error);
+      onRefreshed&&onRefreshed();
+    }catch(e){setErr(String(e?.message||e));}
+    finally{setBusy(false);}
+  }
+
+  return(
+    <>
+      <View style={ns.head}>
+        <View style={{flex:1}}>
+          <Text style={ns.label}>W.I.R.E. · NEWS DESK</Text>
+          <Text style={ns.meta}>
+            {hud?.news_updated_at?`updated ${newsAgo(hud.news_updated_at)}`:'no brief yet'}
+            {hud?.news_slot?`  ·  ${SLOT_LABEL[hud.news_slot]||hud.news_slot}`:''}
+          </Text>
+        </View>
+        <TouchableOpacity onPress={refresh} disabled={busy} hitSlop={{top:10,bottom:10,left:10,right:10}}>
+          {busy?<ActivityIndicator size="small" color={colors.textFaint}/>:<Feather name="refresh-cw" size={12} color={colors.textFaint}/>}
+        </TouchableOpacity>
+      </View>
+      {!!err&&<Text style={ns.err}>⚠ {err}</Text>}
+      {!brief&&!busy&&<Text style={ps.emptyText}>W.I.R.E. hasn't filed a brief yet — she checks the wires hourly. Tap ↻ for one now.</Text>}
+      {headlines.length>0&&(
+        <View style={ns.list}>
+          {headlines.map((h,i)=>(
+            <View key={i} style={ns.row}>
+              <Text style={[ns.tag,{color:h.tag==='DMV'?colors.textDim:h.tag==='MONEY'?colors.goldBright:NEWS_ACCENT}]}>{h.tag}</Text>
+              <Text style={ns.rowT}>{h.text}</Text>
+            </View>
+          ))}
+        </View>
+      )}
+      {!!brief&&(
+        <>
+          <TouchableOpacity style={ns.toggle} onPress={()=>setFull(f=>!f)} activeOpacity={0.7}>
+            <Text style={ns.toggleT}>{full?'▾ HIDE FULL BRIEF':'▸ FULL BRIEF'}</Text>
+          </TouchableOpacity>
+          {full&&<Text style={ns.brief}>{brief}</Text>}
+        </>
+      )}
+    </>
+  );
+}
+const ns=StyleSheet.create({
+  head:{flexDirection:'row',alignItems:'flex-start',gap:space.md,paddingBottom:space.md,borderBottomWidth:1,borderBottomColor:colors.hairline},
+  label:{fontFamily:FONTS.mono,fontSize:8,letterSpacing:2.5,color:NEWS_ACCENT},
+  meta:{fontFamily:FONTS.mono,fontSize:8.5,color:colors.textDim,letterSpacing:0.3,marginTop:3},
+  err:{fontFamily:FONTS.mono,fontSize:9,color:colors.danger,lineHeight:14,marginTop:space.md},
+  list:{paddingTop:space.md,gap:space.md},
+  row:{flexDirection:'row',alignItems:'flex-start',gap:space.sm},
+  tag:{fontFamily:FONTS.monoMed,fontSize:7.5,letterSpacing:1,width:42,paddingTop:2},
+  rowT:{fontFamily:FONTS.mono,fontSize:11,color:colors.textMuted,lineHeight:16,flex:1,letterSpacing:0.2},
+  toggle:{paddingVertical:space.md,marginTop:space.sm,borderTopWidth:1,borderTopColor:colors.hairline},
+  toggleT:{fontFamily:FONTS.mono,fontSize:8.5,letterSpacing:1.5,color:colors.textDim},
+  brief:{fontFamily:FONTS.mono,fontSize:11,color:colors.textMuted,lineHeight:18,letterSpacing:0.2},
 });
 
 export const ps=StyleSheet.create({

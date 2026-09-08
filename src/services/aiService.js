@@ -67,6 +67,9 @@ Only when seeing or editing the thing is the point — not for a passing mention
   sys+=`\n\n[WEB: You can search the live web with [SEARCH_WEB: query] (max 1 per turn) — the result comes back before you reply. Use it only when the answer really turns on something current that you can't know: today's price, a recent event, a just-released product, a fast-moving number. For general knowledge, or in quick back-and-forth conversation, just answer directly — a search adds a noticeable delay before you can speak, so it must be worth it. Don't mention the mechanism; weave in what you find with source names.]`;
   sys+=`\n\n[DEEP RESEARCH: for a long, thorough, cited report on something in your lane — ONLY when Mr. Burrus explicitly asks you to "do deep research" / "a deep dive" / "the full research". Putting the literal tag [DEEP_RESEARCH: the question or topic] in your reply is the ONLY thing that starts a job — writing "I'll start deep research on that" without the tag does nothing and leaves him waiting, so when he asks, the tag goes in that same reply. It runs on Claude with live web search — around a dozen searches across angles, several minutes, one job at a time, keep the app open; the finished brief lands back in this chat and is saved as a Note. Not for quick facts — that's [SEARCH_WEB]. One [DEEP_RESEARCH] per turn.]`;
   sys+=`\n\n[WATCH A VIDEO: emit [WATCH_VIDEO: <url> | <what to look for>] to hand a video off to the watch agent — a YouTube / TikTok / Instagram / X / Facebook / Vimeo link, a Google Drive share link, or a direct file link. The second field is optional but nearly always worth giving: the specific question or angle — the hook, the structure, why it retains, how they'd do a competing version, a direct question. It runs async: the agent downloads the video, transcribes it, detects the cuts, and does a real vision pass over sampled frames, then brings back a written breakdown (hook, beat-by-beat structure, retention devices, strengths/weaknesses, what to steal, and a direct answer to the focus) plus a full report link. It does NOT come back instantly — a few minutes. Tell Mr. Burrus it's queued and that you'll bring him what it found. One [WATCH_VIDEO] per turn. This is a deeper read than the frames the app samples inline when he attaches a video to chat — use it when the video is worth actually studying.]`;
+  if(personaId==='wire'){
+    sys+=`\n\n[NEWS DESK: the app scans the wires for you every couple of hours through the day (nothing overnight) and lands a full brief automatically when a story actually breaks — you don't have to be asked, and there are no fixed-time briefs. [NEWS_BRIEF] in your reply forces a fresh full read right now (a few minutes; it posts itself to the HUD NEWS panel and to this chat). [SHOW_NEWS] turns the orb screen into the news board for Mr. Burrus. Read every story for market impact: when a story is moving — or clearly about to move — an instrument the account trades, hand it straight to the desk with [RELAY_TO: talon | the story in one line, the instrument, the direction and why, the time horizon]. T.A.L.O.N. acts on a high-conviction hand-off from you, so only send it when you mean it.]`;
+  }
   // Everything up to here — the persona identity + the fixed instruction blocks —
   // is byte-identical on every call for this persona, so it's the prompt-cache
   // prefix (see callPersona). Everything after (Google status, HUD, memory, the
@@ -111,6 +114,13 @@ Only when seeing or editing the thing is the point — not for a passing mention
       if(d.length)upcoming=`\nUpcoming Dates: ${d.map(x=>`${x.label} (${x.daysOut===0?'today':x.daysOut===1?'tomorrow':`in ${x.daysOut}d`})`).join(', ')}`;
     }catch{}
     sys+=`\n\n[LIVE HUD DATA:\nEmpire Score: ${hud.empire_score}%\nStreak: ${hud.streak} days\nWord of Day: ${hud.word_of_day||'Not set'}\nVerse of Day: ${hud.verse_of_day||'Not set'}\nFact of Day: ${hud.fact_of_day||'Not set'}\nMorning Routine (${routineCount}/${routineItems.length}): ${routineList}\nBatman Protocol Today: ${todayBat?`${todayBat.label} — ${todayBat.desc}`:'Not set'}\nOpen Tasks (${tasks.length}): ${openTasks||'none'}${upcoming}\n]`;
+    // W.I.R.E.'s latest news brief — she works off it, and A.R.A./N.O.V.A. read
+    // it so they're never behind the news without waiting for a relay.
+    if((personaId==='wire'||personaId==='ara'||personaId==='nova')&&hud.news_brief){
+      const ago=hud.news_updated_at?Math.max(0,Math.round((Date.now()-hud.news_updated_at)/60000)):null;
+      const when=ago==null?'':ago<60?`${ago} min ago`:`${Math.round(ago/60)}h ago`;
+      sys+=`\n\n[LATEST NEWS BRIEF — W.I.R.E.${when?`, ${when}`:''}${hud.news_slot?` (${hud.news_slot})`:''}:\n${String(hud.news_brief).slice(0,personaId==='wire'?4000:800)}\n]`;
+    }
   }
   try{
     const{computeNudges}=await import('./nudges');
@@ -502,6 +512,29 @@ Use "enter" to open one position, "close" to close open positions by id, "none" 
   const m=raw.match(/\{[\s\S]*\}/);
   if(!m)return{action:'none'};
   try{return JSON.parse(m[0]);}catch{return{action:'none'};}
+}
+
+// News-driven trade: W.I.R.E. has already made the call to be in the market on
+// `symbol` in `side` off a news catalyst. T.A.L.O.N. is NOT asked whether to
+// trade — only to place the entry, stop and target off the chart. Used by the
+// newsWire hand-off (demo account only).
+export async function newsTradeLevels({symbol,side,snapshot,thesis}){
+  const k=await ensureKeys();
+  const{base,auth}=await aiRoute('claude',k?.claude,'Claude');
+  const sys=`You are T.A.L.O.N., the Empire's trading desk, running UNATTENDED on a DEMO account. W.I.R.E. (the news desk) has handed you a high-conviction news catalyst and already decided the direction. Your job is NOT to second-guess whether to trade — it is to place a clean ${side.toUpperCase()} on ${symbol} NOW: a market entry, a stop just beyond the invalidation swing (tight, off structure — not wide), and a sensible first target. Every order is 0.01 lot.
+Reply with ONLY a JSON object, no prose, no code fence:
+{"entry":<price or null for market>,"stopLoss":<price>,"takeProfit":<price>,"note":"<=120 chars on where you put the stop and why"}`;
+  const user=`NEWS CATALYST (from W.I.R.E.): ${thesis}\n\nDIRECTION: ${side}\n\nMARKET SNAPSHOT ${symbol}:\n${snapshot}`;
+  const res=await fetch(base+'/v1/messages',{method:'POST',headers:{'Content-Type':'application/json',...auth},body:JSON.stringify({
+    model:'claude-sonnet-5',max_tokens:400,system:sys,messages:[{role:'user',content:user}],
+  })});
+  if(!res.ok)throw new Error(`news trade levels: ${apiErrorMessage(await res.text()).slice(0,100)}`);
+  const d=await res.json();
+  if(d.usage)await trackApiUsage('claude',d.usage.input_tokens||0,d.usage.output_tokens||0).catch(()=>{});
+  const raw=d.content?.[0]?.text?.trim()||'';
+  const m=raw.match(/\{[\s\S]*\}/);
+  if(!m)return null;
+  try{const j=JSON.parse(m[0]);return(j&&j.stopLoss!=null&&j.takeProfit!=null)?j:null;}catch{return null;}
 }
 
 // Quick web search — a tight factual briefing, not deep research. Tries xAI Live

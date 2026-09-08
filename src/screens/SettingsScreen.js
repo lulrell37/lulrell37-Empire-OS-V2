@@ -10,6 +10,7 @@ import{tlConnect,tlReset}from '../services/tradeLocker';
 import{refreshAutoTrader}from '../services/autoTrader';
 import{refreshAutoScout}from '../services/autoScout';
 import{refreshAutoAtlas}from '../services/autoAtlas';
+import{refreshNewsWire}from '../services/newsWire';
 import{createLeadsSheet,unlinkLeadsSheet,leadsSheetUrl}from '../services/leadsSheet';
 import{resetWeather}from '../services/weather';
 import{ghVerify}from '../services/buildAgent';
@@ -19,7 +20,7 @@ import{PERSONA_LIST,getPersona}from '../personas/personas';
 import{useGoogleAuth,exchangeGoogleCode,revokeGoogle}from '../services/googleAuth';
 import{syncGoogleTokenToBackend,clearGoogleTokenOnBackend,resetNotesFolderCache}from '../services/googleClient';
 import useEmpireStore from '../store/useEmpireStore';
-const TABS=['KEYS','GOOGLE','TRADING','OUTREACH','DEV','BACKEND','AI','PROFILES','PROMPTS','USAGE','DIAGNOSTICS'];
+const TABS=['KEYS','GOOGLE','TRADING','OUTREACH','NEWS','DEV','BACKEND','AI','PROFILES','PROMPTS','USAGE','DIAGNOSTICS'];
 export default function SettingsScreen({navigation}){
   const[tab,setTab]=useState('KEYS');
   const[claude,setClaude]=useState('');const[grok,setGrok]=useState('');const[openai,setOpenai]=useState('');const[gemini,setGemini]=useState('');const[elevenlabs,setElevenlabs]=useState('');const[meshy,setMeshy]=useState('');const[mem0,setMem0]=useState('');
@@ -48,6 +49,8 @@ export default function SettingsScreen({navigation}){
   const[scoutEmails,setScoutEmails]=useState('20');
   const[autoAtlas,setAutoAtlas]=useState(false);
   const[atlasEvery,setAtlasEvery]=useState('24');
+  const[newsWire,setNewsWire]=useState(true);
+  const[newsTrades,setNewsTrades]=useState(true);
   const[leadsSheetId,setLeadsSheetId]=useState('');
   const[sheetBusy,setSheetBusy]=useState(false);
   const[ghToken,setGhToken]=useState('');
@@ -93,6 +96,8 @@ export default function SettingsScreen({navigation}){
     setScoutEmails(await getSetting('auto_scout_daily_emails','20'));
     setAutoAtlas((await getSetting('auto_atlas','0'))==='1');
     setAtlasEvery(await getSetting('auto_atlas_interval_hours','24'));
+    setNewsWire((await getSetting('news_wire','1'))==='1');
+    setNewsTrades((await getSetting('news_wire_trades','1'))==='1');
     setLeadsSheetId(await getSetting('leads_sheet_id',''));
     const gt=await loadGitHubToken();if(gt){setGhToken(gt);ghVerify().then(setGhStatus);}
     const be=await loadBackend();if(be){setBeUrl(be.url);setBeToken(be.token);setBeConfigured(true);}
@@ -190,6 +195,17 @@ export default function SettingsScreen({navigation}){
   async function saveAtlasEvery(){
     const n=Math.max(1,parseInt(atlasEvery,10)||24);
     setAtlasEvery(String(n));await setSetting('auto_atlas_interval_hours',String(n));await refreshAutoAtlas().catch(()=>{});
+  }
+  async function toggleNewsWire(){
+    const nv=!newsWire;
+    setNewsWire(nv);
+    await setSetting('news_wire',nv?'1':'0');
+    await refreshNewsWire().catch(()=>{});
+  }
+  async function toggleNewsTrades(){
+    const nv=!newsTrades;
+    setNewsTrades(nv);
+    await setSetting('news_wire_trades',nv?'1':'0');
   }
   async function makeLeadsSheet(){
     setSheetBusy(true);
@@ -493,6 +509,27 @@ export default function SettingsScreen({navigation}){
               <Text style={s.keyLabel}>REVIEW EVERY (HOURS)</Text>
               <TextInput style={s.keyInput} value={String(atlasEvery)} onChangeText={setAtlasEvery} onBlur={saveAtlasEvery} placeholder="24" placeholderTextColor="#1A1A1A" keyboardType="number-pad"/>
             </View>
+          </View>}
+          {tab==='NEWS'&&<View>
+            <Text style={s.secTitle}>W.I.R.E. NEWS DESK</Text>
+            <Text style={s.secSub}>W.I.R.E. scans the wires — AP, Ground News (U.S. + world) and Fox 5 DC (DMV) — every 2 hours through the day, nothing overnight (6am–11pm ET). Most scans are a cheap headline check; she only writes a full brief when a real story actually breaks. Every brief lands in the HUD NEWS panel and goes to A.R.A. Runs only while the app is open; every scan bills your Claude key (roughly $1 a day). Needs a Claude key.</Text>
+            <TouchableOpacity style={s.toggleRow} onPress={toggleNewsWire} activeOpacity={0.7}>
+              <View style={{flex:1,paddingRight:12}}>
+                <Text style={s.toggleLabel}>NEWS DESK</Text>
+                <Text style={s.toggleSub}>{newsWire?'On — a headline scan every 2 hours (daytime only); a full brief only when something breaks.':'Off — W.I.R.E. only reads the news when you ask her.'}</Text>
+              </View>
+              <View style={[s.switch,newsWire&&s.switchOn]}><View style={[s.knob,newsWire&&s.knobOn]}/></View>
+            </TouchableOpacity>
+
+            <Text style={[s.secTitle,{marginTop:28}]}>NEWS-DRIVEN TRADES</Text>
+            <Text style={s.secSub}>When W.I.R.E. is highly confident a story is moving — or about to move — an instrument the desk trades, she hands it to T.A.L.O.N. and he places it. 0.01 lot, one position per pair, bounded only by his open-position limit. DEMO ACCOUNT ONLY — the same hard rule as auto-trade; it never touches a live account. This switch is independent of Autonomous Trading.</Text>
+            <TouchableOpacity style={s.toggleRow} onPress={toggleNewsTrades} activeOpacity={0.7}>
+              <View style={{flex:1,paddingRight:12}}>
+                <Text style={s.toggleLabel}>HAND MARKET-MOVERS TO T.A.L.O.N.</Text>
+                <Text style={s.toggleSub}>{newsTrades?'On — a high-confidence market-mover is traded automatically (demo).':'Off — W.I.R.E. only flags the setup; nothing is placed.'}</Text>
+              </View>
+              <View style={[s.switch,newsTrades&&s.switchOn]}><View style={[s.knob,newsTrades&&s.knobOn]}/></View>
+            </TouchableOpacity>
           </View>}
           {tab==='DEV'&&<View>
             <Text style={s.secTitle}>BUILD PIPELINE</Text>

@@ -29,6 +29,7 @@ import{tlInit}from './src/services/tradeLocker';
 import{startAutoTrader,stopAutoTrader}from './src/services/autoTrader';
 import{startAutoScout,stopAutoScout}from './src/services/autoScout';
 import{startAutoAtlas,stopAutoAtlas}from './src/services/autoAtlas';
+import{startNewsWire,stopNewsWire}from './src/services/newsWire';
 import{refreshDailyBriefing}from './src/services/dailyBriefing';
 import{importInboundForm}from './src/services/inbound';
 import{pushLeadsToSheet}from './src/services/leadsSheet';
@@ -96,11 +97,13 @@ export default function App(){
     startAutoScout().catch(()=>{});
     // A.T.L.A.S. auto-review — only runs when enabled in Settings › OUTREACH.
     startAutoAtlas().catch(()=>{});
+    // W.I.R.E. news desk — hourly poll + 6am/8pm briefs. On by default; toggle in Settings › NEWS.
+    startNewsWire().catch(()=>{});
     const sub=AppState.addEventListener('change',(st)=>{
-      if(st==='active'){startAutoTrader().catch(()=>{});startAutoScout().catch(()=>{});startAutoAtlas().catch(()=>{});}
-      else{stopAutoTrader();stopAutoScout();stopAutoAtlas();}
+      if(st==='active'){startAutoTrader().catch(()=>{});startAutoScout().catch(()=>{});startAutoAtlas().catch(()=>{});startNewsWire().catch(()=>{});}
+      else{stopAutoTrader();stopAutoScout();stopAutoAtlas();stopNewsWire();}
     });
-    return()=>{sub.remove();stopAutoTrader();stopAutoScout();stopAutoAtlas();};
+    return()=>{sub.remove();stopAutoTrader();stopAutoScout();stopAutoAtlas();stopNewsWire();};
   },[]);
   if(!isReady||!navReady)return null;
   return(

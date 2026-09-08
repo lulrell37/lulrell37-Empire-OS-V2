@@ -255,6 +255,8 @@ export async function handleCommands(response,personaId,callbacks={}){
   if(/\[SHOW_NOTES\]/i.test(response))callbacks.onShowArtifact?.({kind:'notes'});
   if(/\[SHOW_TASKS\]/i.test(response))callbacks.onShowArtifact?.({kind:'tasks'});
   if(/\[SHOW_ANALYTICS\]/i.test(response))callbacks.onShowArtifact?.({kind:'analytics'});
+  if(/\[SHOW_NEWS\]/i.test(response))callbacks.onShowArtifact?.({kind:'news'});
+  if(/\[NEWS_BRIEF\]/i.test(response))callbacks.onNewsBrief?.();
   if(/\[OPEN_ANALYTICS\]/i.test(response))callbacks.onOpenAnalytics?.();
   // Auto-surface: if the persona went to BROWSE the note collection or the task
   // list to answer, and didn't already emit an explicit SHOW_ tag, put that
@@ -426,6 +428,7 @@ export function stripCommands(text){
     .replace(/\[SHOW_CHART:[^\]]*\]/gi,'').replace(/\[SHOW_NOTE:[^\]]*\]/gi,'')
     .replace(/\[SHOW_NOTES\]/gi,'').replace(/\[SHOW_TASKS\]/gi,'')
     .replace(/\[SHOW_ANALYTICS\]/gi,'').replace(/\[OPEN_ANALYTICS\]/gi,'')
+    .replace(/\[SHOW_NEWS\]/gi,'').replace(/\[NEWS_BRIEF\]/gi,'')
     .replace(/\[BUILD_REQUEST:[^\]]*\]/gi,'').replace(/\[BUILD_REPLY:[^\]]*\]/gi,'')
     .replace(/\[BUILD_MERGE:[^\]]*\]/gi,'').replace(/\[BUILD_CANCEL:[^\]]*\]/gi,'').replace(/\[BUILD_STATUS\]/gi,'')
     .replace(/\[SEND_SMS:[^\]]*\]/gi,'')
