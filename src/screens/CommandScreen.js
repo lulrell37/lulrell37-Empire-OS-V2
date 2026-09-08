@@ -28,8 +28,6 @@ import{pollBuildJobs}from '../services/buildJobs';
 import{pollClipJobs}from '../services/clipJobs';
 import{pollWatchJobs}from '../services/watchJobs';
 import{jobProgress}from '../services/jobEta';
-import ClipPanel from './command/ClipPanel';
-import WatchPanel from './command/WatchPanel';
 import{tlSnapshot,tlFormatSnapshot,tlPlaceOrder,tlClosePosition,tlModifyPosition,tlPositions,MAX_QTY,MAX_OPEN_POSITIONS}from '../services/tradeLocker';
 import{recordTradeOpen,reconcileOpenTrades,traderJournalBlock,setStrategy,setTradeReview,TRADER_ID}from '../services/tradeJournal';
 import{loadKeys,loadGitHubToken}from '../services/keyStore';
@@ -37,11 +35,7 @@ import useEmpireStore from '../store/useEmpireStore';
 import{useIsFocused,useFocusEffect}from '@react-navigation/native';
 import OrbZoom from './command/OrbZoom';
 import Canvas from './command/Canvas';
-import TradePanel from './command/TradePanel';
-import TradeStatus from '../components/TradeStatus';
-import TradeRecordBar from './command/TradeRecordBar';
-import BuildPanel from './command/BuildPanel';
-import LeadsPanel from './command/LeadsPanel';
+import ActivityPane from './command/ActivityPane';
 import{convokeCouncil}from '../services/council';
 import{fetchCouncilLive,COUNCIL_PHASE_LABEL}from '../services/councilLive';
 import{runInboundScan,importInboundForm}from '../services/inbound';
@@ -1329,6 +1323,7 @@ export default function CommandScreen({navigation,route}){
       stopAudio();
       setView('viz');return true;
     }
+    if(view==='activity'){setView('viz');return true;}
     if(view==='viz'&&orbZoomRef.current&&orbZoomRef.current.back())return true;
     return false;
   }
@@ -2227,6 +2222,10 @@ export default function CommandScreen({navigation,route}){
     return set;
   },[activityItems,loading,activePersona,orbLevel]);
 
+  // The ◈ activity tab is a direct-mode thing — a group session has no single
+  // persona to show a board for. Drop back to the viz if the mode changes out.
+  useEffect(()=>{if(view==='activity'&&mode!=='direct')setView('viz');},[view,mode]);
+
   if(showCamera){
     return(
       <View style={{flex:1,backgroundColor:'#000'}}>
@@ -2250,7 +2249,7 @@ export default function CommandScreen({navigation,route}){
   // view toggle, no composer. Step into a persona's orb and the chrome comes
   // back: the ◉/≣ toggle and the back arrow at any non-group level, the chat
   // composer specifically at the orb level (talk to that persona) and in chat.
-  const chromeVisible=view==='text'||(view==='viz'&&orbLevel!=='group');
+  const chromeVisible=view!=='viz'||orbLevel!=='group';
   const composerVisible=view==='text'||(view==='viz'&&orbLevel==='orb');
 
   return(
@@ -2271,7 +2270,7 @@ export default function CommandScreen({navigation,route}){
         <View style={s.headerRight}>
           {chromeVisible&&(
             <View style={s.viewToggle}>
-              {[['viz','◉'],['text','≣']].map(([v,ic])=>(
+              {[['viz','◉'],['text','≣'],...(mode==='direct'?[['activity','◈']]:[])].map(([v,ic])=>(
                 <TouchableOpacity key={v} style={[s.viewTab,view===v&&{backgroundColor:cp.color+'22',borderColor:cp.color}]} onPress={()=>setView(v)}>
                   <Text style={[s.viewTabT,view===v&&{color:cp.color}]}>{ic}</Text>
                 </TouchableOpacity>
@@ -2314,18 +2313,10 @@ export default function CommandScreen({navigation,route}){
         </View>
       )}
 
-      {/* These are chat-view panels, not orb-screen popups — they no longer render
-          over view==='viz' (the orb), so picking a persona's orb doesn't pop one
-          open on its own; switch to the text view (≣) to see it. */}
-      {view==='text'&&mode==='direct'&&activePersona===TRADER_ID&&<TradeStatus active={isFocused} style={{marginHorizontal:10,marginTop:6}}/>}
-      {view==='text'&&mode==='direct'&&activePersona===TRADER_ID&&<TradeRecordBar active={isFocused} style={{marginHorizontal:10,marginTop:6}}/>}
-      {view==='text'&&mode==='direct'&&activePersona===TRADER_ID&&<TradePanel active={isFocused} onEvent={pushSystemMsg}/>}
-      {view==='text'&&mode==='direct'&&activePersona==='scout'&&<LeadsPanel active={isFocused}/>}
-      {view==='text'&&mode==='direct'&&activePersona==='rogue'&&<ClipPanel active={isFocused}/>}
-      {view==='text'&&mode==='direct'&&<WatchPanel active={isFocused}/>}
-      {view==='text'&&mode==='direct'&&activePersona==='jarvis'&&<BuildPanel active={isFocused} onMerge={confirmBuildMerge} onCancel={confirmBuildCancel} onDelete={confirmBuildDelete} filter={jarvisBuildFilter}/>}
-
-      {view==='text'&&project&&mode==='direct'&&activePersona==='ara'&&(
+      {/* The persona's live-work boards (trades, pipeline, clips, builds, watch
+          jobs) live in the ◈ activity tab now — see ActivityPane — not stacked
+          over the chat or the orb. */}
+      {view!=='viz'&&project&&mode==='direct'&&activePersona==='ara'&&(
         <View style={s.firmBar}>
           <Text style={s.firmDot}>◆</Text>
           <View style={{flex:1}}>
@@ -2340,7 +2331,6 @@ export default function CommandScreen({navigation,route}){
           </TouchableOpacity>
         </View>
       )}
-      {view==='text'&&project&&mode==='direct'&&activePersona==='ara'&&<BuildPanel active={isFocused} title="FIRM BUILD" accent="#00CED1" onMerge={confirmBuildMerge} onCancel={confirmBuildCancel} onDelete={confirmBuildDelete} filter={firmBuildFilter}/>}
 
 
       {view==='viz'?(
@@ -2361,6 +2351,18 @@ export default function CommandScreen({navigation,route}){
         />
         {artifact&&<Canvas ref={canvasRef} artifact={artifact} accent={cp.color} onClose={()=>setArtifact(null)}/>}
         </View>
+      ):view==='activity'?(
+        <ActivityPane
+          persona={cp}
+          activity={activityItems}
+          active={isFocused}
+          project={project}
+          build={{
+            onTradeEvent:pushSystemMsg,
+            onMerge:confirmBuildMerge,onCancel:confirmBuildCancel,onDelete:confirmBuildDelete,
+            jarvisFilter:jarvisBuildFilter,firmFilter:firmBuildFilter,
+          }}
+        />
       ):(
         <FlatList ref={flatRef} data={displayMessages} keyExtractor={i=>i.id} renderItem={renderMsg} contentContainerStyle={s.msgList} style={{flex:1}}
           scrollEventThrottle={16}
