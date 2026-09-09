@@ -30,6 +30,7 @@ Key pinned native-module versions for SDK 51:
 | expo-av | ~14.0.7 |
 | expo-notifications | ~0.28.19 |
 | expo-device | ~6.0.2 |
+| expo-image-manipulator | ~12.0.5 |
 
 ## Backend (`server/`)
 
@@ -39,16 +40,27 @@ to; the server reads/writes app tables (`tasks`, `notes`, …) as JSON blobs
 without knowing their shape. AI keys live here; the app's `/ai/<provider>` proxy
 forwards with them. See `DEPLOY_BACKEND.md` (gitignored — holds the real token).
 
-**Telegram bot** — `server/telegram.js` + `server/araRuntime.js` + `routes/telegram.js`
-are a headless front door to the **A.R.A.** persona (`@EmpireOS_Ara_bot`). It's a
-server-side re-implementation of just A.R.A.'s turn: context from `sync_rows`,
-history in `tg_messages`, a subset of the app's command tags (notes, tasks,
-expenses, dates, web/deep research, memory, council convene, `[RELAY_TO]` to any
-persona via `server/personas.js`). App-only tags (open-app, 3D Lab, HUD panels,
-trades, build requests) are deferred back to the app. Locked to `TELEGRAM_OWNER_ID`.
-Voice notes work both ways (`server/araVoice.js`): Whisper in (`OPENAI_API_KEY`),
-xAI `grok-voice-latest` / voice "ara" out (`XAI_API_KEY`), OGG/Opus via the
-bundled `ffmpeg-static`.
+**Telegram bots** — `server/telegram.js` + `server/personaRuntime.js` +
+`routes/telegram.js` run **one bot per persona** (A.R.A., S.T.E.P.H.A.N.I.E.,
+H.A.V.E.N., J.A.R.V.I.S., S.E.L.E.N.E.), each a headless front door to that
+persona. Server-side re-implementation of a persona's turn: context from
+`sync_rows`, per-persona history in `tg_messages.persona`, a subset of the app's
+command tags (notes, web/deep research, memory, `[RELAY_TO]`, `[READ_HUD]`,
+`[BUILD_STATUS]`; A.R.A. also has tasks/expenses/dates/council). App-only tags
+(3D Lab, HUD edits, trades, build requests) are deferred back to the app. Each
+bot's token is `TELEGRAM_BOT_TOKEN[_PERSONA]`; all locked to `TELEGRAM_OWNER_ID`;
+webhook at `/telegram/webhook/:persona/:secret`. Voice notes both ways: Whisper
+in (`OPENAI_API_KEY`); out is xAI `grok-voice` for A.R.A. (`server/araVoice.js`,
+`XAI_API_KEY`) and ElevenLabs for the rest (`server/personaVoice.js`,
+`ELEVENLABS_API_KEY`), OGG/Opus via bundled `ffmpeg-static`. See `server/README.md`.
+
+**S.C.O.U.T. signals** — `server/autoScout.js` + `server/scoutSignals.js` are an
+always-on cron (`SCOUT_CRON=on`) that walks the metro×segment grid
+(`server/scoutTargets.js`), pulls free buying-intent signals (job postings via
+Adzuna, review velocity via Yelp), qualifies against Empire Digital's ICP with
+one Claude call, scores each `leads.heat` 0-100, and writes warm leads into
+`sync_rows`. Discovery only — the app-side `src/services/autoScout.js` still owns
+outreach and now works highest-heat leads first.
 
 ## Builds
 

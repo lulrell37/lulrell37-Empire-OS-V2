@@ -43,20 +43,32 @@ CREATE TABLE IF NOT EXISTS google_tokens (
   updated_at    bigint
 );
 
--- Telegram <-> A.R.A. conversation. The bot is a headless front door to the
--- A.R.A. persona (server/araRuntime.js); this is her chat history with the owner
--- there, independent of the in-app persona chat. One row per message.
+-- Telegram <-> persona conversation. Each persona runs its own bot
+-- (server/personaRuntime.js); this is its chat history with the owner there,
+-- independent of the in-app persona chat and of the other bots. One row per
+-- message, tagged with the persona whose bot it belongs to.
 CREATE TABLE IF NOT EXISTS tg_messages (
   id      bigserial PRIMARY KEY,
+  persona text   NOT NULL DEFAULT 'ara',
   role    text   NOT NULL,          -- 'user' | 'assistant'
   content text   NOT NULL,
   ts      bigint NOT NULL
 );
-CREATE INDEX IF NOT EXISTS tg_messages_ts_idx ON tg_messages (id DESC);
+ALTER TABLE tg_messages ADD COLUMN IF NOT EXISTS persona text NOT NULL DEFAULT 'ara';
+DROP INDEX IF EXISTS tg_messages_ts_idx;
+CREATE INDEX IF NOT EXISTS tg_messages_persona_idx ON tg_messages (persona, id DESC);
 
 -- De-dupe for Telegram webhook retries — Telegram re-delivers an update until it
--- gets a 200, and a slow A.R.A. turn can outlast that. One row per handled update.
+-- gets a 200, and a slow persona turn can outlast that. update_ids are per-bot,
+-- so the key is '<persona>:<update_id>'. Recreate the table if it still has the
+-- old single-column primary key.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'tg_seen' AND column_name = 'update_id') THEN
+    DROP TABLE tg_seen;
+  END IF;
+END $$;
 CREATE TABLE IF NOT EXISTS tg_seen (
-  update_id bigint PRIMARY KEY,
-  seen_at   bigint NOT NULL
+  seen_key text   PRIMARY KEY,      -- '<persona>:<update_id>'
+  seen_at  bigint NOT NULL
 );

@@ -1,4 +1,4 @@
-// Server-side model calls, shared by araRuntime.js (and available to anything
+// Server-side model calls, shared by personaRuntime.js (and available to anything
 // else that needs a one-shot completion off the server-held keys). Mirrors the
 // provider handling in councilMeeting.js: each persona speaks on its own
 // provider when that provider's key is set, and falls back to Claude on any miss.

@@ -44,6 +44,7 @@ import{pushLeadsToSheet}from '../services/leadsSheet';
 import NudgeBar from './command/NudgeBar';
 import{parseChartSpec}from '../services/chartSpec';
 import{extractUrls,fetchLinkContext,linkContextToBlock}from '../services/mediaContext';
+import{prepareImage}from '../services/imagePrep';
 
 const TEAM_PHOTO=require('../../assets/teamphoto.png');
 const HANDS_FREE_SILENCE_MS=3000;   // quiet for this long AFTER real speech -> stop (allow mid-sentence pauses)
@@ -1360,7 +1361,7 @@ export default function CommandScreen({navigation,route}){
     const replies=[];
     // Attachments → image blocks the model sees + link context it can read.
     const atts=Array.isArray(attachments)?attachments:[];
-    const images=atts.filter(a=>a&&a.type==='image').map(a=>({uri:a.uri,data:a.data,mime:a.mime}));
+    let images=atts.filter(a=>a&&a.type==='image').map(a=>({uri:a.uri,data:a.data,mime:a.mime}));
     const linkAtts=atts.filter(a=>a&&a.type==='link');
     let linkText='';
     if(linkAtts.length){
@@ -1376,6 +1377,29 @@ export default function CommandScreen({navigation,route}){
       }
     }
     const modelText=text+(linkText?`\n\n${linkText}`:'');
+    // Downscale + re-encode every image to JPEG before it reaches a vision model.
+    // Raw library assets are often HEIC or over the 5 MB payload cap, which 400s
+    // the request; without this the reply just never came and the failure only
+    // ever flashed in the banner. If every image fails to prepare, say so in the
+    // thread rather than sending a text-only turn that looks like it ignored the
+    // picture.
+    const hadImages=images.length>0;
+    if(hadImages){
+      const prepped=[];
+      for(const im of images){
+        try{prepped.push(await prepareImage(im));}
+        catch(e){/* unreadable asset — dropped */}
+      }
+      images=prepped;
+    }
+    // Track the reply bubble in flight so the catch below can put the failure
+    // *in the thread* — an empty frozen bubble (what a vision-turn 400 used to
+    // leave behind) reads as the persona ignoring the message.
+    // Every image dropped in prep (HEIC the manipulator can't read, a corrupt
+    // asset) — fail loudly in the thread, not with a text-only turn that reads
+    // as the persona ignoring the picture.
+    const imagesLost=hadImages&&!images.length;
+    let inFlight=null;
     try{
       for(const pid of targets){
         if(myAbort.signal.aborted)break;
@@ -1388,6 +1412,8 @@ export default function CommandScreen({navigation,route}){
         const setMsgs=isGroup?setGroupMessages:setMessages;
         const patch=(fn)=>setMsgs(prev=>prev.map(m=>m.id===msgId?fn(m):m));
         setMsgs(prev=>[...prev,{id:msgId,role:'assistant',content:'',persona:pid,revealed:0,streaming:true}]);
+        inFlight={setMsgs,msgId,name:p.name,hadImages};
+        if(imagesLost)throw new Error("that image is in a format I can't open — send a screenshot or a JPEG");
         vizRef.personaId=pid;vizRef.color=p.color;vizRef.speaking=true; // orb lights up the moment tokens start
         // When not voicing, type the reply into the bubble live as tokens arrive.
         // When voicing, hold the text hidden and let speakWithReveal sync it to speech.
@@ -1444,11 +1470,11 @@ export default function CommandScreen({navigation,route}){
             else{
               const tally={};ls.forEach(l=>{tally[l.stage]=(tally[l.stage]||0)+1;});
               const head=Object.entries(tally).map(([k,v])=>`${v} ${k}`).join(' · ');
-              injections.push(`PIPELINE (${ls.length} lead${ls.length===1?'':'s'}) — ${head}:\n`+ls.map(l=>{
+              injections.push(`PIPELINE (${ls.length} lead${ls.length===1?'':'s'}, hottest first) — ${head}:\n`+ls.map(l=>{
                 const top=(l.log||'').split('\n')[0];
-                return `  #${l.id} ${l.name}${l.business?` · ${l.business}`:''} · ${String(l.stage||'new').toUpperCase()}`
+                return `  #${l.id} ${l.name}${l.business?` · ${l.business}`:''} · ${String(l.stage||'new').toUpperCase()}${l.heat?` · heat ${l.heat}`:''}`
                   +`${l.next_touch?` · next ${l.next_touch}`:''}${l.next_action?` · ${l.next_action}`:''}`
-                  +` · ${l.contact||'needs contact'}${top?`\n     last: ${top}`:''}`;
+                  +` · ${l.contact||'needs contact'}${l.signal?`\n     signal: ${l.signal}`:''}${top?`\n     last: ${top}`:''}`;
               }).join('\n'));
             }
           }catch(e){injections.push('PIPELINE: failed — '+e.message);}
@@ -1772,6 +1798,15 @@ export default function CommandScreen({navigation,route}){
       if(e.name!=='AbortError'){
         const who=isGroup?'the group':getPersona(activePersona).name;
         reportIssue('ai:reply',`${who} couldn't reply`,e);
+        // Put it in the failed bubble too, if that bubble is still empty — the
+        // banner alone fades in 18s and left "she said nothing" for image turns.
+        if(inFlight){
+          const msg=inFlight.hadImages
+            ?`Couldn't read that image — ${String(e.message||e).slice(0,140)}`
+            :`Something went wrong — ${String(e.message||e).slice(0,140)}`;
+          inFlight.setMsgs(prev=>prev.map(m=>m.id===inFlight.msgId&&!m.content
+            ?{...m,content:msg,revealed:msg.length,streaming:false}:m));
+        }
       }
       if(!streamSpeakActiveRef.current)clearSound();
       maybeAutoListen();

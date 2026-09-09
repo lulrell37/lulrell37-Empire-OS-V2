@@ -63,6 +63,40 @@ set `COUNCIL=off` to disable. Tunables: `COUNCIL_ROUNDS`, `COUNCIL_RESEARCH_MAX`
 (default 8), `COUNCIL_SEARCH_MAX` (default 6). The persona roster is a distilled
 copy of `src/personas/personas.js` kept in `councilMeeting.js`.
 
+## Telegram bots — one per persona
+
+`telegram.js` + `personaRuntime.js` + `routes/telegram.js` run a **bot per
+persona**, each a headless front door to that persona (`server/personas.js`
+roster + `chatAs` on its real provider). Locked to `TELEGRAM_OWNER_ID`; a bot is
+live only when its token env var is set:
+
+| persona | token env var |
+| --- | --- |
+| A.R.A. | `TELEGRAM_BOT_TOKEN` |
+| S.T.E.P.H.A.N.I.E. | `TELEGRAM_BOT_TOKEN_STEPHANIE` |
+| H.A.V.E.N. | `TELEGRAM_BOT_TOKEN_HAVEN` |
+| J.A.R.V.I.S. | `TELEGRAM_BOT_TOKEN_JARVIS` |
+| S.E.L.E.N.E. | `TELEGRAM_BOT_TOKEN_SELENE` |
+
+Each bot keeps its **own** chat history (`tg_messages.persona`) and memory slice
+(`persona_memory` rows tagged with its id). Server-safe tags only: `[RELAY_TO]`,
+`[SAVE_NOTE]`, `[READ_NOTE]` (incl. paging), `[MEMORY_QUERY]`, `[SEARCH_WEB]`,
+`[DEEP_RESEARCH]`, plus `[READ_HUD]` (H.A.V.E.N./J.A.R.V.I.S.) and `[BUILD_STATUS]`
+(J.A.R.V.I.S.). App-only actions (HUD edits, 3D Lab, trades, filing a build) are
+declined with "that needs the app open". A.R.A. additionally keeps her task /
+expense / date / council tags.
+
+Voice notes work both ways: Whisper in (`OPENAI_API_KEY`); out is xAI
+`grok-voice` for A.R.A. and **ElevenLabs** (`ELEVENLABS_API_KEY`, each persona's
+`voiceId` in `personas.js`) for the rest — no key ⇒ text-only replies.
+
+Webhooks: `POST /telegram/webhook/:persona/:secret` (secret is
+`sha256('telegram-webhook:' + persona + ':' + SYNC_TOKEN)`, namespaced per bot).
+Set `PUBLIC_URL` to auto-register all of them on boot, or
+`POST /telegram/set-webhook { url }` once. `GET /telegram/info` reports every
+configured bot. **After deploying this change, re-register** — the webhook paths
+and secrets changed from the single-bot scheme.
+
 ## Local dev
 
 ```sh
@@ -80,7 +114,10 @@ curl localhost:3000/health
    - Run command: `cd server && npm start`
    (The repo `.replit` already has this under `[deployment]`.)
 2. Deployment **Secrets**: `SYNC_TOKEN` (long random string), `ANTHROPIC_API_KEY`,
-   `XAI_API_KEY`, `OPENAI_API_KEY`, `ELEVENLABS_API_KEY`.
+   `XAI_API_KEY`, `OPENAI_API_KEY`, `ELEVENLABS_API_KEY`. For the Telegram bots:
+   `TELEGRAM_OWNER_ID`, `PUBLIC_URL`, and one `TELEGRAM_BOT_TOKEN[_PERSONA]` per
+   bot (see the Telegram section). For S.C.O.U.T. signals: `SCOUT_CRON=on` plus
+   `ADZUNA_APP_ID` / `ADZUNA_APP_KEY` and `YELP_API_KEY`.
    `DATABASE_URL` is injected automatically.
 3. Open the app → Settings → **BACKEND**, paste the deployment URL and the same
    `SYNC_TOKEN`.
