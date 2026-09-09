@@ -510,6 +510,14 @@ async function runCouncilMeeting(opts = {}) {
   let push = { skipped: 'not attempted' };
   try { push = await pushCouncil(date, headline, stamp); } catch (e) { push = { error: e.message }; }
 
+  // Mirror to the Telegram bot for the scheduled 5am run. A convened run is
+  // reported by A.R.A. herself in the chat that asked for it, so skip it here.
+  if (!force) {
+    try {
+      await require('./telegram').notifyOwner(`Empire Council — ${date}\n\n${headline}\n\nThe full transcript is saved as a Note.`);
+    } catch (e) { console.error('council telegram mirror failed:', e.message); }
+  }
+
   await publishLive({ active: false, phase: 'done', speaking: null, headline, progress: 1 });
 
   return {

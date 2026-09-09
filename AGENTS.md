@@ -31,6 +31,25 @@ Key pinned native-module versions for SDK 51:
 | expo-notifications | ~0.28.19 |
 | expo-device | ~6.0.2 |
 
+## Backend (`server/`)
+
+Node/Express on a Replit Reserved VM (always-on: nudge/briefing/council crons).
+Postgres via `sync_rows` — a generic last-write-wins JSON row store the app syncs
+to; the server reads/writes app tables (`tasks`, `notes`, …) as JSON blobs
+without knowing their shape. AI keys live here; the app's `/ai/<provider>` proxy
+forwards with them. See `DEPLOY_BACKEND.md` (gitignored — holds the real token).
+
+**Telegram bot** — `server/telegram.js` + `server/araRuntime.js` + `routes/telegram.js`
+are a headless front door to the **A.R.A.** persona (`@EmpireOS_Ara_bot`). It's a
+server-side re-implementation of just A.R.A.'s turn: context from `sync_rows`,
+history in `tg_messages`, a subset of the app's command tags (notes, tasks,
+expenses, dates, web/deep research, memory, council convene, `[RELAY_TO]` to any
+persona via `server/personas.js`). App-only tags (open-app, 3D Lab, HUD panels,
+trades, build requests) are deferred back to the app. Locked to `TELEGRAM_OWNER_ID`.
+Voice notes work both ways (`server/araVoice.js`): Whisper in (`OPENAI_API_KEY`),
+xAI `grok-voice-latest` / voice "ara" out (`XAI_API_KEY`), OGG/Opus via the
+bundled `ffmpeg-static`.
+
 ## Builds
 
 Android APK via EAS (`eas build --platform android --profile preview`), also

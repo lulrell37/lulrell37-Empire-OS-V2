@@ -40,14 +40,70 @@ async function accessToken() {
   return cache.token;
 }
 
-async function gapi(path, { query: q, raw = false } = {}) {
+async function gapi(path, { query: q, raw = false, method = 'GET', json, body, headers } = {}) {
   const token = await accessToken();
   if (!token) throw new Error('google not linked');
   const url = new URL(`https://www.googleapis.com${path}`);
   if (q) for (const [k, v] of Object.entries(q)) url.searchParams.set(k, String(v));
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  const h = { Authorization: `Bearer ${token}`, ...(headers || {}) };
+  let payload = body;
+  if (json !== undefined) { h['Content-Type'] = 'application/json'; payload = JSON.stringify(json); }
+  const res = await fetch(url, { method, headers: h, body: payload });
   if (!res.ok) throw new Error(`google ${res.status}: ${(await res.text()).slice(0, 160)}`);
   return raw ? res.text() : res.json();
+}
+
+// Notes live as .md files in a Drive folder called "Empire OS Notes" (so an
+// Obsidian vault can sync to them) — same convention as the app's googleClient.
+const NOTES_FOLDER = 'Empire OS Notes';
+const mdName = (t) => (/\.md$/i.test(t) ? t : `${String(t || '').trim()}.md`);
+const baseName = (n) => String(n || '').replace(/\.md$/i, '').trim();
+
+async function notesFolderId() {
+  const found = await gapi('/drive/v3/files', {
+    query: {
+      q: `trashed=false and mimeType='application/vnd.google-apps.folder' and name='${NOTES_FOLDER}'`,
+      pageSize: 1, fields: 'files(id)',
+    },
+  });
+  if (found.files && found.files[0]) return found.files[0].id;
+  const made = await gapi('/drive/v3/files', {
+    method: 'POST', json: { name: NOTES_FOLDER, mimeType: 'application/vnd.google-apps.folder' },
+    query: { fields: 'id' },
+  });
+  return made.id;
+}
+
+// Create-or-update a Drive note by title — write the first time, edit in place
+// after. Mirrors the app's [SAVE_NOTE] path. Returns { name, id, created }.
+async function saveDriveNote(title, content) {
+  if (!(await googleLinked())) throw new Error('google not linked');
+  const clean = baseName(title);
+  const esc = clean.replace(/'/g, "\\'");
+  const list = await gapi('/drive/v3/files', {
+    query: { q: `trashed=false and name contains '${esc}'`, pageSize: 10, fields: 'files(id,name,mimeType)' },
+  });
+  const want = clean.toLowerCase();
+  const hit = ((list && list.files) || []).find((f) => baseName(f.name).toLowerCase() === want);
+  if (hit) {
+    await gapi(`/upload/drive/v3/files/${hit.id}`, {
+      method: 'PATCH', query: { uploadType: 'media' },
+      headers: { 'Content-Type': 'text/markdown' }, body: content || '',
+    });
+    return { name: hit.name, id: hit.id, created: false };
+  }
+  const folder = await notesFolderId().catch(() => null);
+  const meta = { name: mdName(clean), mimeType: 'text/markdown' };
+  if (folder) meta.parents = [folder];
+  const boundary = 'empireos' + Math.random().toString(36).slice(2);
+  const multipart =
+    `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n` +
+    `--${boundary}\r\nContent-Type: text/markdown\r\n\r\n${content || ''}\r\n--${boundary}--`;
+  const made = await gapi('/upload/drive/v3/files', {
+    method: 'POST', query: { uploadType: 'multipart', fields: 'id,name' },
+    headers: { 'Content-Type': `multipart/related; boundary=${boundary}` }, body: multipart,
+  });
+  return { name: made.name, id: made.id, created: true };
 }
 
 // Read a Drive note (a text/plain file or a Google Doc) by exact title, matching
@@ -73,4 +129,4 @@ async function readDriveNote(title) {
   return { name: file.name, text };
 }
 
-module.exports = { accessToken, googleLinked, readDriveNote };
+module.exports = { accessToken, googleLinked, readDriveNote, saveDriveNote };

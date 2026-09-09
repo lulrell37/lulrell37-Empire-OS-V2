@@ -208,7 +208,11 @@ async function runNudgeCycle({ force = false } = {}) {
         { to: tokens, title: n.title, body: n.body, data: n.data, priority: 'high', channelId: 'default' },
       ]);
       await pruneDead(tokens, tickets);
-      if (!force) await markSeen(n.key);
+      if (!force) {
+        await markSeen(n.key);
+        // Reach the owner on the Telegram bot too, as A.R.A.'s channel.
+        try { await require('./telegram').notifyOwner(`${n.title}\n${n.body}`); } catch (e) { console.error('nudge telegram mirror failed:', e.message); }
+      }
       result.sent.push(n.key);
     } catch (e) {
       console.error('nudge send failed', n.key, e.message);

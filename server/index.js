@@ -6,6 +6,7 @@ const auth = require('./auth');
 const { runNudgeCycle } = require('./pushSender');
 const { runDailyBriefing } = require('./dailyBriefing');
 const { runCouncilMeeting, endCouncilLive } = require('./councilMeeting');
+const telegram = require('./telegram');
 
 const app = express();
 app.disable('x-powered-by');
@@ -23,6 +24,10 @@ app.use('/push', auth, json, require('./routes/push'));
 app.use('/google', auth, json, require('./routes/google'));
 app.use('/council', auth, json, require('./routes/council'));
 
+// Telegram bot — headless front door to the A.R.A. persona. The webhook is
+// guarded by its own secret path + header + owner-id check (no bearer auth).
+app.use('/telegram', express.json({ limit: '1mb' }), require('./routes/telegram'));
+
 app.use((req, res) => res.status(404).json({ error: 'not found' }));
 app.use((err, req, res, next) => {
   console.error('unhandled', err);
@@ -36,6 +41,7 @@ db.init()
     startNudgeCron();
     startDailyBriefingCron();
     startCouncilCron();
+    registerTelegramWebhook();
   })
   .catch((e) => {
     console.error('DB init failed:', e.message);
@@ -84,4 +90,16 @@ function startCouncilCron() {
       .catch((e) => { console.error('council meeting failed:', e.message); endCouncilLive(e.message).catch(() => {}); });
   }, { timezone: 'America/New_York' });
   console.log('council cron scheduled (05:00 ET)');
+}
+
+// Point the Telegram bot's webhook at this deployment on boot, so the bot keeps
+// working across redeploys without a manual step. Needs TELEGRAM_BOT_TOKEN +
+// TELEGRAM_OWNER_ID + PUBLIC_URL (the deployment's public https origin).
+// Without PUBLIC_URL, register once by hand: POST /telegram/set-webhook { url }.
+function registerTelegramWebhook() {
+  if (!telegram.isConfigured()) return console.log('telegram bot disabled (set TELEGRAM_BOT_TOKEN + TELEGRAM_OWNER_ID)');
+  if (!process.env.PUBLIC_URL) return console.log('telegram bot on — set PUBLIC_URL to auto-register the webhook, or POST /telegram/set-webhook');
+  telegram.setWebhook(process.env.PUBLIC_URL)
+    .then((r) => console.log('telegram webhook set:', r.url))
+    .catch((e) => console.error('telegram webhook registration failed:', e.message));
 }

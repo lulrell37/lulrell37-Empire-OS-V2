@@ -42,3 +42,21 @@ CREATE TABLE IF NOT EXISTS google_tokens (
   refresh_token text,
   updated_at    bigint
 );
+
+-- Telegram <-> A.R.A. conversation. The bot is a headless front door to the
+-- A.R.A. persona (server/araRuntime.js); this is her chat history with the owner
+-- there, independent of the in-app persona chat. One row per message.
+CREATE TABLE IF NOT EXISTS tg_messages (
+  id      bigserial PRIMARY KEY,
+  role    text   NOT NULL,          -- 'user' | 'assistant'
+  content text   NOT NULL,
+  ts      bigint NOT NULL
+);
+CREATE INDEX IF NOT EXISTS tg_messages_ts_idx ON tg_messages (id DESC);
+
+-- De-dupe for Telegram webhook retries — Telegram re-delivers an update until it
+-- gets a 200, and a slow A.R.A. turn can outlast that. One row per handled update.
+CREATE TABLE IF NOT EXISTS tg_seen (
+  update_id bigint PRIMARY KEY,
+  seen_at   bigint NOT NULL
+);
