@@ -35,7 +35,7 @@ async function qualify(candidates) {
   ).join('\n\n');
   let resp = '';
   try {
-    resp = await chatAs('anthropic', CLAUDE_MODEL, ICP_SYSTEM, `CANDIDATES:\n\n${list}`, { maxTokens: 900 });
+    resp = await chatAs('anthropic', CLAUDE_MODEL, ICP_SYSTEM, `CANDIDATES:\n\n${list}`, { maxTokens: 900, apiOnly: true });
   } catch (e) {
     console.error('scout qualify failed:', e.message);
     return [];

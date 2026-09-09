@@ -2,6 +2,8 @@
 // else that needs a one-shot completion off the server-held keys). Mirrors the
 // provider handling in councilMeeting.js: each persona speaks on its own
 // provider when that provider's key is set, and falls back to Claude on any miss.
+const { claudeSubText, subscriptionEnabled } = require('./claudeSub');
+
 const CLAUDE_MODEL = 'claude-sonnet-5';
 
 const PROVIDER = {
@@ -15,8 +17,21 @@ const WEB_SEARCH_TOOL = [{ type: 'web_search_20250305', name: 'web_search', max_
 
 // Anthropic messages call. `tools` optional (web search). `system` may be a
 // string or the array form (for a cache_control prefix). Returns joined text.
-async function claudeText(system, messages, { maxTokens = 900, tools, model = CLAUDE_MODEL } = {}) {
+//
+// When CLAUDE_SUBSCRIPTION=on (and no `tools`, and `apiOnly` isn't set), this
+// first tries the Claude Code CLI on the subscription's usage pool and only
+// falls back to the metered API on failure. `tools` calls and `apiOnly` callers
+// (crons) always hit the API.
+async function claudeText(system, messages, { maxTokens = 900, tools, model = CLAUDE_MODEL, apiOnly } = {}) {
   const msgs = typeof messages === 'string' ? [{ role: 'user', content: messages }] : messages;
+  if (!tools && !apiOnly && subscriptionEnabled()) {
+    try {
+      const out = await claudeSubText(typeof system === 'string' ? system : (system || []).map((s) => s.text || '').join('\n'), msgs, { model });
+      if (out) return out;
+    } catch (e) {
+      console.error(`llm: claude subscription failed (${e.message}) — falling back to metered API`);
+    }
+  }
   const body = { model, max_tokens: maxTokens, system, messages: msgs };
   if (tools) body.tools = tools;
   const res = await fetch(`${PROVIDER.anthropic.base}/v1/messages`, {
@@ -68,7 +83,7 @@ async function geminiText(model, system, messages, maxTokens) {
 // Speak as a persona on its real provider when that key is set; fall back to
 // Claude on any miss (no key, error, empty). `system` is a string; `messages` is
 // a string or a [{role,content}] array (no system entry — this adds it).
-async function chatAs(api, model, system, messages, { maxTokens = 900 } = {}) {
+async function chatAs(api, model, system, messages, { maxTokens = 900, apiOnly } = {}) {
   const msgs = typeof messages === 'string' ? [{ role: 'user', content: messages }] : messages;
   if (api && api !== 'anthropic' && keyFor(api)) {
     try {
@@ -83,7 +98,7 @@ async function chatAs(api, model, system, messages, { maxTokens = 900 } = {}) {
       console.error(`llm: ${api} failed (${e.message}) — falling back to claude`);
     }
   }
-  return claudeText(system, msgs, { maxTokens });
+  return claudeText(system, msgs, { maxTokens, apiOnly });
 }
 
 // Live web research — always Claude + the web_search tool.

@@ -63,6 +63,31 @@ set `COUNCIL=off` to disable. Tunables: `COUNCIL_ROUNDS`, `COUNCIL_RESEARCH_MAX`
 (default 8), `COUNCIL_SEARCH_MAX` (default 6). The persona roster is a distilled
 copy of `src/personas/personas.js` kept in `councilMeeting.js`.
 
+## Subscription-billed Claude (optional)
+
+By default every Claude call bills per token against `ANTHROPIC_API_KEY`. Set
+`CLAUDE_SUBSCRIPTION=on` + `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`
+on a machine logged into a Claude Pro/Max account) and the **interactive persona
+path** — `chatAs` and the no-tool `claudeText` calls behind it: Telegram turns,
+`[RELAY_TO]`, `[MEMORY_QUERY]` — runs through the `claude` CLI headless
+(`claudeSub.js`) on the subscription's usage pool instead.
+
+Everything else stays on the metered API on purpose:
+
+- **web / deep research** (`[SEARCH_WEB]`, `[DEEP_RESEARCH]`) — needs the
+  `web_search` tool;
+- **crons** — daily briefing, nightly council, scout signals (`apiOnly`), so a
+  burst can't drain the weekly subscription limit.
+
+On any CLI failure (bad token, rate limit, missing binary) the call falls back
+to `ANTHROPIC_API_KEY` automatically, so the key stays **required**. The
+`@anthropic-ai/claude-code` package (a ~200 MB platform binary) is a dependency;
+`npm ci` installs it. One person chatting one persona at a time fits a Pro plan
+for light use; bump to Max 5× if you start getting rate-limited.
+
+Note: driving a subscription from a server is outside Anthropic's consumer terms.
+Low volume makes a flag unlikely, not impossible.
+
 ## Telegram bots — one per persona
 
 `telegram.js` + `personaRuntime.js` + `routes/telegram.js` run a **bot per
@@ -117,7 +142,9 @@ curl localhost:3000/health
    `XAI_API_KEY`, `OPENAI_API_KEY`, `ELEVENLABS_API_KEY`. For the Telegram bots:
    `TELEGRAM_OWNER_ID`, `PUBLIC_URL`, and one `TELEGRAM_BOT_TOKEN[_PERSONA]` per
    bot (see the Telegram section). For S.C.O.U.T. signals: `SCOUT_CRON=on` plus
-   `ADZUNA_APP_ID` / `ADZUNA_APP_KEY` and `YELP_API_KEY`.
+   `ADZUNA_APP_ID` / `ADZUNA_APP_KEY` and `YELP_API_KEY`. To bill persona chat to
+   a Claude subscription: `CLAUDE_SUBSCRIPTION=on` + `CLAUDE_CODE_OAUTH_TOKEN`
+   (see "Subscription-billed Claude" above).
    `DATABASE_URL` is injected automatically.
 3. Open the app → Settings → **BACKEND**, paste the deployment URL and the same
    `SYNC_TOKEN`.

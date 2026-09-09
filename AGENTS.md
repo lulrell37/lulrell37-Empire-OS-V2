@@ -40,6 +40,12 @@ to; the server reads/writes app tables (`tasks`, `notes`, …) as JSON blobs
 without knowing their shape. AI keys live here; the app's `/ai/<provider>` proxy
 forwards with them. See `DEPLOY_BACKEND.md` (gitignored — holds the real token).
 
+Optionally (`CLAUDE_SUBSCRIPTION=on` + `CLAUDE_CODE_OAUTH_TOKEN`), the interactive
+persona path (`llm.js` `chatAs` + no-tool `claudeText`) runs through the bundled
+`claude` CLI headless (`server/claudeSub.js`) on a Pro/Max subscription instead
+of the metered key, falling back to `ANTHROPIC_API_KEY` on any failure. Web/deep
+research and the crons stay on the API. See `server/README.md`.
+
 **Telegram bots** — `server/telegram.js` + `server/personaRuntime.js` +
 `routes/telegram.js` run **one bot per persona** (A.R.A., S.T.E.P.H.A.N.I.E.,
 H.A.V.E.N., J.A.R.V.I.S., S.E.L.E.N.E.), each a headless front door to that
