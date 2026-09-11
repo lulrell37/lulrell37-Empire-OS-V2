@@ -47,7 +47,9 @@ import{extractUrls,fetchLinkContext,linkContextToBlock}from '../services/mediaCo
 import{prepareImage}from '../services/imagePrep';
 
 const TEAM_PHOTO=require('../../assets/teamphoto.png');
-const HANDS_FREE_SILENCE_MS=3000;   // quiet for this long AFTER real speech -> stop (allow mid-sentence pauses)
+const HANDS_FREE_SILENCE_MS=1200;      // quiet for this long AFTER a normal utterance -> stop
+const HANDS_FREE_SILENCE_SLOW_MS=2200; // longer grace when barely anything has been said yet (slow starter)
+const HANDS_FREE_SPOKE_ENOUGH_MS=1500; // spoke at least this long -> use the snappy endpoint
 const HANDS_FREE_VOICE_DB=-47;      // metering above this counts as "talking"
 const HANDS_FREE_MAX_MS=30000;      // hard cap on one hands-free take
 const HANDS_FREE_NOMETER_MS=8000;   // devices that don't report metering -> fixed take
@@ -203,6 +205,7 @@ export default function CommandScreen({navigation,route}){
   const manualRef=useRef(false); // true while the current take was started by the SPEAK button
   const interimContinueRef=useRef(null); // {isGroup} set when the last voiced reply was a stall — consumed by the auto-listen effect to keep the persona going instead of reopening the mic
   const interimStreakRef=useRef(0);      // consecutive stalls this turn — capped by INTERIM_CONTINUE_MAX
+  const lastSpokenRef=useRef('');        // the last thing a persona said out loud — used to reject the mic hearing itself
   const{flagFirmIssue,clearFirmIssue,setActivity}=useEmpireStore();
   const isFocused=useIsFocused();
 
@@ -517,10 +520,15 @@ export default function CommandScreen({navigation,route}){
     if(talking){
       clearSilenceTimer();
     }else if(!silenceTimerRef.current){
+      // Adaptive endpoint: end the take ~1.2s after a normal utterance so the
+      // reply comes back fast, but hold longer when almost nothing has been
+      // said yet so a slow start isn't chopped mid-thought.
+      const spokeMs=voicedCountRef.current*250;
+      const graceMs=spokeMs<HANDS_FREE_SPOKE_ENOUGH_MS?HANDS_FREE_SILENCE_SLOW_MS:HANDS_FREE_SILENCE_MS;
       silenceTimerRef.current=setTimeout(()=>{
         silenceTimerRef.current=null;
         if(recordingRef.current)stopRecording();
-      },HANDS_FREE_SILENCE_MS);
+      },graceMs);
     }
   }
 
@@ -1132,7 +1140,7 @@ export default function CommandScreen({navigation,route}){
     try{
       const transcript=await transcribeAudio(uri);
       const clean=(transcript||'').trim();
-      if(clean&&!isLikelyHallucination(clean)){
+      if(clean&&!isLikelyHallucination(clean)&&!isEchoOfPersona(clean)){
         const isGroup=mode!=='direct';
         const userMsg={id:Date.now().toString(),role:'user',content:clean,persona:'user'};
         if(isGroup)setGroupMessages(prev=>[...prev,userMsg]);
@@ -1159,6 +1167,22 @@ export default function CommandScreen({navigation,route}){
     const words=s.split(' ');
     if(words.length>=3&&new Set(words).size===1)return true; // "you you you"
     return false;
+  }
+
+  // The mic hearing the persona's own reply through the speaker and shipping it
+  // to Whisper as if Mr. Burrus said it — a recurring feedback bug. Reject a
+  // transcript that is verbatim from, or mostly built out of, the last thing a
+  // persona spoke.
+  function isEchoOfPersona(text){
+    const norm=x=>String(x||'').toLowerCase().replace(/[^a-z0-9\s]/g,'').replace(/\s+/g,' ').trim();
+    const t=norm(text),said=norm(lastSpokenRef.current);
+    if(!t||!said)return false;
+    if(t.length>=12&&said.includes(t))return true;                 // a chunk lifted straight from the reply
+    const tw=t.split(' ').filter(w=>w.length>2);
+    if(tw.length<2)return false;
+    const sw=new Set(said.split(' '));
+    const overlap=tw.filter(w=>sw.has(w)).length/tw.length;
+    return overlap>=0.75;                                          // almost every content word came from the reply
   }
 
   // Pick one or more photos and STAGE them — they don't send until you hit SEND,
@@ -1700,7 +1724,7 @@ export default function CommandScreen({navigation,route}){
               await handleCommands(sResp,'ara',cmdCallbacks);
               if(!isGroup)await saveMessage('ara','assistant',sDisplay,'direct');
               savePersonaMemory('ara',`YOU: ${text}\nA.R.A. (firm synthesis): ${sDisplay}`).catch(()=>{});
-              if(sDisplay)replies.push({name:p.name,text:sDisplay});
+              if(sDisplay){replies.push({name:p.name,text:sDisplay});lastSpokenRef.current=sDisplay;}
               if(willVoice&&!myAbort.signal.aborted){
                 await speakWithReveal(sDisplay,p,synthId,isGroup,{turns:hist.filter(h=>h.role==='user'||h.role==='assistant').slice(-6),userText:text});
                 if(!myAbort.signal.aborted)sPatch(m=>({...m,content:sDisplay,revealed:sDisplay.length,streaming:false}));
@@ -1730,7 +1754,7 @@ export default function CommandScreen({navigation,route}){
           savePersonaMemory(pid,`YOU: ${text}\n${p.name}: ${stripCommands(response)||response}`).catch(()=>{});
         }
         const display=stripCommands(response)||response;
-        if(display)replies.push({name:p.name,text:display});
+        if(display){replies.push({name:p.name,text:display});lastSpokenRef.current=display;}
         await handleCommands(response,pid,cmdCallbacks);
         try{
           const gw=await googleWriteCommands(response,{onConfirm:queueGoogleAction});
