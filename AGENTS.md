@@ -31,6 +31,37 @@ Key pinned native-module versions for SDK 51:
 | expo-notifications | ~0.28.19 |
 | expo-device | ~6.0.2 |
 | expo-image-manipulator | ~12.0.5 |
+| react-native-live-audio-stream | 1.1.1 |
+
+`react-native-live-audio-stream` is a plain autolinked RN native module (not an
+Expo module — no `expo-modules-core` dependency), added for A.R.A. LIVE below.
+It needs no config plugin: it declares no permissions beyond `RECORD_AUDIO`,
+already present via `expo-av`. Any change here needs a fresh native build (see
+Builds below) — it will not ship OTA.
+
+## A.R.A. LIVE — realtime duplex voice (`src/services/realtimeVoice.js`)
+
+A true duplex voice call with A.R.A. over xAI's `grok-voice-latest` realtime
+socket, separate from the turn-based hands-free loop in `CommandScreen.js`
+(record → Whisper → text call → TTS → play). The mic streams continuously via
+`react-native-live-audio-stream` (Android capture uses the `VOICE_COMMUNICATION`
+audio source — hardware AEC, so the phone speaker's own output isn't picked back
+up as input); the server's own VAD (`turn_detection: server_vad`) decides when
+you're done talking and drives generation directly, and can interrupt her
+mid-sentence the instant you start talking again (`input_audio_buffer.
+speech_started` stops local playback — real barge-in, no separate "should I
+reopen the mic" state machine).
+
+Scope: she keeps live read access via realtime function calling
+(`read_hud`, `query_memory`) so she isn't flying blind, but write-side command
+tags (`SAVE_NOTE`, `REMEMBER`, canvas tags, web search, …) are NOT wired into
+this session — those stay on the text turn. iOS echo cancellation depends on
+the library's own `AVAudioEngine` capture and hasn't been verified as strong as
+Android's `VOICE_COMMUNICATION` source — worth a real check on iOS hardware
+before trusting it hands-free with speaker output.
+
+Toggled per-persona ("GO LIVE" in A.R.A.'s direct chat) — every other persona
+still uses the turn-based loop.
 
 ## Backend (`server/`)
 

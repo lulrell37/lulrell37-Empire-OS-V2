@@ -10,6 +10,7 @@ import{Camera}from 'expo-camera';
 import*as FileSystem from 'expo-file-system';
 import{PERSONA_LIST,getPersona,resolveSpecialist}from '../personas/personas';
 import{callPersona,textToSpeech,transcribeAudio,queryMemory,webSearch,getLastTtsFailReason}from '../services/aiService';
+import{startAraLive,stopAraLive}from '../services/realtimeVoice';
 import{reportError}from '../../ErrorBanner';
 import{drStart,drGetActive,drTick,drDismiss,drDeliverPending,DR_POLL_MS}from '../services/deepResearch';
 import{autoTraderBusy}from '../services/autoTrader';
@@ -108,6 +109,10 @@ export default function CommandScreen({navigation,route}){
   const[continuous,setContinuous]=useState(false);
   const[recording,setRecording]=useState(false);
   const[handsFree,setHandsFree]=useState(false);
+  const[araLiveOn,setAraLiveOn]=useState(false);
+  const[araLiveState,setAraLiveState]=useState('stopped'); // 'connecting'|'listening'|'speaking'|'stopped'
+  const araLiveMsgIdRef=useRef(null); // the assistant bubble currently being filled by A.R.A. LIVE's streamed transcript
+  const araLiveUserMsgIdRef=useRef(null); // the user bubble currently being filled by A.R.A. LIVE's live transcript of you
   const[customPersonas,setCustomPersonas]=useState([]);
   const[showCustomPicker,setShowCustomPicker]=useState(false);
   const[selectedCustom,setSelectedCustom]=useState([]);
@@ -423,9 +428,20 @@ export default function CommandScreen({navigation,route}){
       if(recordingRef.current){try{recordingRef.current.stopAndUnloadAsync();}catch{}recordingRef.current=null;}
       clearSound();
       if(araWsRef.current){try{araWsRef.current.close();}catch{}araWsRef.current=null;}
+      stopAraLive();
       try{Speech.stop();}catch{}
     };
   },[]);
+  // A.R.A. LIVE only makes sense while you're actually looking at her direct
+  // chat — leaving her orb, switching persona/mode, or leaving the screen ends
+  // the call rather than leaving it running silently in the background.
+  useEffect(()=>{
+    if(araLiveOn&&!(activePersona==='ara'&&mode==='direct'&&isFocused)){
+      setAraLiveOn(false);setAraLiveState('stopped');
+      araLiveMsgIdRef.current=null;araLiveUserMsgIdRef.current=null;
+      stopAraLive();
+    }
+  },[araLiveOn,activePersona,mode,isFocused]);
   // Navigating away from Command: stop listening / speaking immediately. The
   // continuous-voice effect gates on isFocused, so it resumes on return.
   useEffect(()=>{
@@ -1029,6 +1045,65 @@ export default function CommandScreen({navigation,route}){
   function resumeAudio(){
     voiceControlRef.current?.resume();
     setVoicePaused(false);
+  }
+
+  // A.R.A.'s realtime duplex mode — see src/services/realtimeVoice.js. Owns the
+  // mic exclusively while on, so it can't run alongside the turn-based loop.
+  async function toggleAraLive(){
+    if(araLiveOn){
+      setAraLiveOn(false);setAraLiveState('stopped');
+      araLiveMsgIdRef.current=null;araLiveUserMsgIdRef.current=null;
+      await stopAraLive();
+      return;
+    }
+    if(handsFreeRef.current){setHandsFree(false);handsFreeRef.current=false;clearSilenceTimer();}
+    if(recordingRef.current)stopRecording();
+    await clearSound();
+    setAraLiveOn(true);setAraLiveState('connecting');
+    try{
+      await startAraLive({
+        onState:(st)=>setAraLiveState(st),
+        onUserText:(text,final)=>{
+          if(!text?.trim())return;
+          const content=text.trim();
+          if(!araLiveUserMsgIdRef.current){
+            const id=`aralive-u-${Date.now()}`;
+            araLiveUserMsgIdRef.current=id;
+            setMessages(prev=>[...prev,{id,role:'user',content,persona:'user'}]);
+          }else{
+            const id=araLiveUserMsgIdRef.current;
+            setMessages(prev=>prev.map(m=>m.id===id?{...m,content}:m));
+          }
+          if(final){
+            saveMessage('ara','user',content,'direct').catch(()=>{});
+            araLiveUserMsgIdRef.current=null;
+            araLiveMsgIdRef.current=null; // her reply to this turn starts a fresh bubble
+          }
+        },
+        onAraText:(text,final)=>{
+          if(!text)return;
+          if(!araLiveMsgIdRef.current){
+            const id=`aralive-a-${Date.now()}`;
+            araLiveMsgIdRef.current=id;
+            setMessages(prev=>[...prev,{id,role:'assistant',content:text,persona:'ara',streaming:!final}]);
+          }else{
+            const id=araLiveMsgIdRef.current;
+            setMessages(prev=>prev.map(m=>m.id===id?{...m,content:text,streaming:!final}:m));
+          }
+          if(final){
+            saveMessage('ara','assistant',text,'direct').catch(()=>{});
+            araLiveMsgIdRef.current=null;
+          }
+        },
+        onError:(err)=>{
+          notify('A.R.A. LIVE: '+err.message,{severity:'error'});
+          setAraLiveOn(false);setAraLiveState('stopped');
+        },
+      });
+    }catch(e){
+      notify('A.R.A. LIVE failed to start: '+e.message,{severity:'error'});
+      setAraLiveOn(false);setAraLiveState('stopped');
+    }
   }
 
   function toggleHandsFree(){
@@ -2487,6 +2562,14 @@ export default function CommandScreen({navigation,route}){
               <View style={[s.iactDot,handsFree&&{backgroundColor:'#4CAF50'}]}/>
               <Text style={[s.iactT,handsFree&&{color:'#4CAF50'}]}>{handsFree?'AUTO ON':'AUTO OFF'}</Text>
             </TouchableOpacity>
+            {activePersona==='ara'&&mode==='direct'&&(
+              <TouchableOpacity style={[s.iact,araLiveOn&&{borderColor:'#00CED1',backgroundColor:'#00CED111'}]} onPress={toggleAraLive}>
+                <View style={[s.iactDot,araLiveOn&&{backgroundColor:'#00CED1'}]}/>
+                <Text style={[s.iactT,araLiveOn&&{color:'#00CED1'}]}>
+                  {araLiveOn?(araLiveState==='connecting'?'LIVE — CONNECTING':araLiveState==='speaking'?'LIVE — SPEAKING':'LIVE — LISTENING'):'GO LIVE'}
+                </Text>
+              </TouchableOpacity>
+            )}
             <TouchableOpacity style={[s.iact,voiceOn&&!voiceMuted&&{borderColor:'#E8C98A',backgroundColor:'#E8C98A11'}]} onPress={()=>{if(voiceOn)stopAudio();setVoiceOn(v=>!v);setVoicePaused(false);}}>
               <View style={[s.iactDot,voiceOn&&!voiceMuted&&{backgroundColor:'#E8C98A'}]}/>
               <Text style={[s.iactT,voiceOn&&!voiceMuted&&{color:'#E8C98A'}]}>{voiceOn?'VOICE ON':'VOICE OFF'}</Text>
