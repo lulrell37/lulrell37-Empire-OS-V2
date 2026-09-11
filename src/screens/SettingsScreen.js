@@ -433,11 +433,11 @@ export default function SettingsScreen({navigation}){
             </TouchableOpacity>
 
             <Text style={[s.secTitle,{marginTop:28}]}>T.A.L.O.N. AUTO-TRADE</Text>
-            <Text style={s.secSub}>Lets T.A.L.O.N. open and close 0.01-lot trades on its own while the app is open — no confirmation. DEMO ACCOUNT ONLY; the loop refuses to touch a live account. No caps or loss limit — this is an experiment to see how it does. In chat he still only proposes, closes or adjusts a trade when you ask, and that still needs a tap to confirm — this toggle is separate, unattended trading.</Text>
+            <Text style={s.secSub}>Lets T.A.L.O.N. open and close 0.01-lot trades on its own while the app is open — no confirmation. DEMO ACCOUNT ONLY; the loop refuses to touch a live account. No caps or loss limit — this is an experiment to see how it does. This toggle is unattended, self-initiated trading — separate from chat, where he still only proposes, closes or adjusts a trade when you ask, but fires it immediately, same as here.</Text>
             <TouchableOpacity style={s.toggleRow} onPress={toggleAutoTrade} activeOpacity={0.7}>
               <View style={{flex:1,paddingRight:12}}>
                 <Text style={s.toggleLabel}>AUTONOMOUS TRADING</Text>
-                <Text style={s.toggleSub}>{autoTrade?`On — T.A.L.O.N. is watching ${autoSyms} every ${autoEvery} min.`:'Off — T.A.L.O.N. only trades when you confirm a proposal.'}</Text>
+                <Text style={s.toggleSub}>{autoTrade?`On — T.A.L.O.N. is watching ${autoSyms} every ${autoEvery} min.`:'Off — T.A.L.O.N. only trades when you ask him to, in chat.'}</Text>
               </View>
               <View style={[s.switch,autoTrade&&s.switchOn]}><View style={[s.knob,autoTrade&&s.knobOn]}/></View>
             </TouchableOpacity>

@@ -1996,63 +1996,42 @@ export default function CommandScreen({navigation,route}){
     pushSystemMsg(`— ${label} cancelled —`);
     advanceGoogle();
   }
-  function closePosition(id){
-    const isAll=String(id).toLowerCase()==='all';
-    Alert.alert(
-      isAll?'Close all positions?':`Close position #${id}?`,
-      isAll?'Closes every open position at market.':'Closes it at market.',
-      [
-        {text:'Cancel',style:'cancel'},
-        {text:'Close',style:'destructive',onPress:async()=>{
-          try{
-            if(isAll){
-              const ps=await tlPositions();
-              for(const pos of ps)await tlClosePosition(pos.id);
-              pushSystemMsg(`— CLOSE ORDER SENT · ${ps.length} position(s) —`);
-            }else{
-              await tlClosePosition(id);
-              pushSystemMsg(`— CLOSE ORDER SENT · position ${id} —`);
-            }
-          }catch(e){pushSystemMsg(`Close failed: ${e.message}`);}
-          setTimeout(()=>reconcileOpenTrades().catch(()=>{}),4000);
-        }},
-      ],
-    );
+  async function closePosition(id){
+    try{
+      if(String(id).toLowerCase()==='all'){
+        const ps=await tlPositions();
+        for(const pos of ps)await tlClosePosition(pos.id);
+        pushSystemMsg(`— CLOSE ORDER SENT · ${ps.length} position(s) —`);
+      }else{
+        await tlClosePosition(id);
+        pushSystemMsg(`— CLOSE ORDER SENT · position ${id} —`);
+      }
+    }catch(e){pushSystemMsg(`Close failed: ${e.message}`);}
+    setTimeout(()=>reconcileOpenTrades().catch(()=>{}),4000);
   }
   // Move a position's stop to its entry (or `offset` price-units into profit).
   // Only touches trades already in profit — a break-even stop on a losing trade
   // would sit the wrong side of price and the broker would reject it anyway.
-  // Still needs a confirmed tap, same as opening or closing — nothing T.A.L.O.N.
-  // proposes fires without one.
-  function moveToBreakeven(id,offset=0){
-    const isAll=String(id).toLowerCase()==='all';
-    const off=Number(offset)||0;
-    Alert.alert(
-      isAll?'Move all profitable stops to break-even?':`Move #${id}'s stop to break-even?`,
-      off?`Locks in ${off} price-unit(s) of profit. Only touches a position already in profit.`:'Only touches a position already in profit.',
-      [
-        {text:'Cancel',style:'cancel'},
-        {text:'Move stop',onPress:async()=>{
-          try{
-            const all=await tlPositions();
-            const targets=isAll?all:all.filter(p=>String(p.id)===String(id));
-            if(!targets.length){pushSystemMsg(isAll?`— break-even: nothing open —`:`— break-even: no open position ${id} —`);return;}
-            let moved=0;
-            for(const pos of targets){
-              if(Number(pos.unrealizedPl)<=0){pushSystemMsg(`— #${pos.id} isn't in profit yet — stop left as is —`);continue;}
-              const isBuy=String(pos.side).toLowerCase().startsWith('b');
-              const be=+(Number(pos.avgPrice)+(isBuy?off:-off)).toFixed(5);
-              try{
-                await tlModifyPosition(pos.id,{stopLoss:be});
-                moved++;
-                pushSystemMsg(`— #${pos.id} stop → ${be}${off?` (+${off} locked in)`:' · break-even'} —`);
-              }catch(e){pushSystemMsg(`Break-even #${pos.id} failed: ${e.message}`);}
-            }
-            if(moved)setTimeout(()=>reconcileOpenTrades().catch(()=>{}),4000);
-          }catch(e){pushSystemMsg(`Break-even failed: ${e.message}`);}
-        }},
-      ],
-    );
+  async function moveToBreakeven(id,offset=0){
+    try{
+      const all=await tlPositions();
+      const isAll=String(id).toLowerCase()==='all';
+      const targets=isAll?all:all.filter(p=>String(p.id)===String(id));
+      if(!targets.length){pushSystemMsg(isAll?`— break-even: nothing open —`:`— break-even: no open position ${id} —`);return;}
+      const off=Number(offset)||0;
+      let moved=0;
+      for(const pos of targets){
+        if(Number(pos.unrealizedPl)<=0){pushSystemMsg(`— #${pos.id} isn't in profit yet — stop left as is —`);continue;}
+        const isBuy=String(pos.side).toLowerCase().startsWith('b');
+        const be=+(Number(pos.avgPrice)+(isBuy?off:-off)).toFixed(5);
+        try{
+          await tlModifyPosition(pos.id,{stopLoss:be});
+          moved++;
+          pushSystemMsg(`— #${pos.id} stop → ${be}${off?` (+${off} locked in)`:' · break-even'} —`);
+        }catch(e){pushSystemMsg(`Break-even #${pos.id} failed: ${e.message}`);}
+      }
+      if(moved)setTimeout(()=>reconcileOpenTrades().catch(()=>{}),4000);
+    }catch(e){pushSystemMsg(`Break-even failed: ${e.message}`);}
   }
   function startDeepResearch(topic,pid){
     if(deepResearch){pushSystemMsg('Deep research is already running — one at a time.');return;}
@@ -2289,38 +2268,27 @@ export default function CommandScreen({navigation,route}){
     return()=>{stop=true;clearInterval(iv);};
   },[isFocused]);// eslint-disable-line react-hooks/exhaustive-deps
 
-  // T.A.L.O.N. proposing a trade in chat is just a proposal — nothing fires
-  // until you tap Place order. The unattended auto-trade loop that used to
-  // execute this straight off the tag has been retired.
-  function sendTrade(prop){
+  // T.A.L.O.N. proposing a trade in chat fires immediately — same as auto-trade,
+  // no confirmation tap. Mirrors services/autoTrader.js's own order-placement path.
+  async function sendTrade(prop){
     if(!prop||tradeBusy)return;
+    setTradeBusy(true);
     const{symbol,side,stopLoss,takeProfit,qty,entry,rationale,pid}=prop;
     const sym=symbol||'XAUUSD';
-    const q=Math.min(qty||MAX_QTY,MAX_QTY);
-    Alert.alert(
-      `Place ${String(side||'').toUpperCase()} ${sym}?`,
-      `${q} lot · SL ${stopLoss??'—'} · TP ${takeProfit??'—'}${rationale?`\n\n${rationale}`:''}`,
-      [
-        {text:'Cancel',style:'cancel'},
-        {text:'Place order',onPress:async()=>{
-          setTradeBusy(true);
-          try{
-            const open=await tlPositions().catch(()=>[]);
-            const maxOpen=Math.min(MAX_OPEN_POSITIONS,Math.max(1,parseInt(await getSetting('auto_trade_max_open',String(MAX_OPEN_POSITIONS)),10)||MAX_OPEN_POSITIONS));
-            if(open.length>=maxOpen){
-              pushSystemMsg(`— ${maxOpen} positions already open (the limit) — close one before adding another —`);
-              return;
-            }
-            const r=await tlPlaceOrder({symbol:sym,side,qty:q,stopLoss,takeProfit});
-            pushSystemMsg(`— ORDER SENT · ${r.side.toUpperCase()} ${r.qty} ${sym} · SL ${r.stopLoss??'—'} · TP ${r.takeProfit??'—'} · #${r.orderId||'?'} —`);
-            savePersonaMemory(pid||TRADER_ID,`T.A.L.O.N.: order sent ${r.side} ${r.qty} ${sym} SL ${r.stopLoss} TP ${r.takeProfit}${rationale?` — ${rationale}`:''}`).catch(()=>{});
-            recordTradeOpen({symbol:sym,side:r.side,qty:r.qty,entry,stopLoss,takeProfit,rationale,orderId:r.orderId}).catch(()=>{});
-            setTimeout(()=>reconcileOpenTrades().catch(()=>{}),6000);
-          }catch(e){pushSystemMsg(`Order failed: ${e.message}`);}
-          finally{setTradeBusy(false);}
-        }},
-      ],
-    );
+    try{
+      const open=await tlPositions().catch(()=>[]);
+      const maxOpen=Math.min(MAX_OPEN_POSITIONS,Math.max(1,parseInt(await getSetting('auto_trade_max_open',String(MAX_OPEN_POSITIONS)),10)||MAX_OPEN_POSITIONS));
+      if(open.length>=maxOpen){
+        pushSystemMsg(`— ${maxOpen} positions already open (the limit) — close one before adding another —`);
+        return;
+      }
+      const r=await tlPlaceOrder({symbol:sym,side,qty:Math.min(qty||MAX_QTY,MAX_QTY),stopLoss,takeProfit});
+      pushSystemMsg(`— ORDER SENT · ${r.side.toUpperCase()} ${r.qty} ${sym} · SL ${r.stopLoss??'—'} · TP ${r.takeProfit??'—'} · #${r.orderId||'?'} —`);
+      savePersonaMemory(pid||TRADER_ID,`T.A.L.O.N.: order sent ${r.side} ${r.qty} ${sym} SL ${r.stopLoss} TP ${r.takeProfit}${rationale?` — ${rationale}`:''}`).catch(()=>{});
+      recordTradeOpen({symbol:sym,side:r.side,qty:r.qty,entry,stopLoss,takeProfit,rationale,orderId:r.orderId}).catch(()=>{});
+      setTimeout(()=>reconcileOpenTrades().catch(()=>{}),6000);
+    }catch(e){pushSystemMsg(`Order failed: ${e.message}`);}
+    finally{setTradeBusy(false);}
   }
 
   function interject(){
