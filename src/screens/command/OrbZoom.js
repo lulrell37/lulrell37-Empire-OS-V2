@@ -8,6 +8,7 @@
 // worklets, which is what hard-crashed the earlier 3D version.
 import React,{useState,useEffect,useMemo,useCallback,useRef,useImperativeHandle,forwardRef}from 'react';
 import{View,Text,StyleSheet,TouchableOpacity,ActivityIndicator,Dimensions,Platform,Animated,PanResponder,Image,Easing,ScrollView,Alert}from 'react-native';
+import Svg,{Path}from 'react-native-svg';
 import PersonaOrb from './PersonaOrb';
 import MemorySpiral from './MemorySpiral';
 import MemoryPopup from './MemoryPopup';
@@ -21,30 +22,44 @@ const WHEEL_MID=1200;// px of scroll slack each side of the wheel-catcher — bi
 const SAMP=[],SIN=[],COS=[];
 for(let k=0;k<=480;k++){const v=-12*Math.PI+(24*Math.PI)*(k/480);SAMP.push(v);SIN.push(Math.sin(v));COS.push(Math.cos(v));}
 
-// Personas scattered at random through a 3D volume — no hierarchy, no tethers,
-// no fixed seats: A.R.A. is just another orb. Seeded so the layout is stable
-// across a session; a min-distance pass keeps them from clumping. You yaw the
-// cloud and fly forward / back through it; tap an orb to open that persona.
+// Everyone but A.R.A. scattered at random through a 3D volume, seeded so the
+// layout is stable across a session; a min-distance pass keeps them from
+// clumping. You yaw the cloud and fly forward / back through it; tap an orb to
+// open that persona.
+//
+// A.R.A. gets a fixed seat front-and-centre instead of a random slot — she's
+// personal-assistant-to-everyone, so every other orb tethers back to her (see
+// the tether layer in PersonaSphereInner). She isn't otherwise special-cased:
+// no size boost, no anchor halo, no dedicated pan responder, and she still
+// yaws with the rest of the cloud — that extra machinery was tried before and
+// reverted for being more trouble than it was worth. Just her seat, and the
+// tethers pointing at it.
+const ARA_ID='ara';
+const ID_INDEX={};
+PERSONA_LIST.forEach((p,i)=>{ID_INDEX[p.id]=i;});
+const ARA_INDEX=ID_INDEX[ARA_ID];
+
 const SCATTER=(()=>{
   let a=0x9e3779b9;
   const rnd=()=>{a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};
-  const pts=[];
+  const pts=new Array(PERSONA_LIST.length);
   for(let i=0;i<PERSONA_LIST.length;i++){
+    if(i===ARA_INDEX)continue;
     let best=null,bestD=-1;
     for(let tries=0;tries<40;tries++){
       const c={x:(rnd()*2-1)*8.0,y:(rnd()*2-1)*5.4,z:(rnd()*2-1)*4.0};
       let d=99;
-      for(const p of pts)d=Math.min(d,Math.hypot(p.x-c.x,p.y-c.y,p.z-c.z));
+      for(let j=0;j<pts.length;j++){if(!pts[j])continue;d=Math.min(d,Math.hypot(pts[j].x-c.x,pts[j].y-c.y,pts[j].z-c.z));}
       if(d>bestD){bestD=d;best=c;}
     }
-    pts.push(best);
+    pts[i]=best;
   }
+  // Front and centre: at the camera's starting dolly (-5.0) this lands her
+  // depth ~0.6 — the nearest, biggest orb the moment the galaxy opens.
+  if(ARA_INDEX!=null)pts[ARA_INDEX]={x:0,y:0.15,z:-4.4};
   return pts;
 })();
 const Z_SPAN=6.6;     // half-depth of the cloud; dolly ranges ±(Z_SPAN+2)
-
-const ID_INDEX={};
-PERSONA_LIST.forEach((p,i)=>{ID_INDEX[p.id]=i;});
 
 function touchDist(t){return Math.hypot(t[0].pageX-t[1].pageX,t[0].pageY-t[1].pageY);}
 
@@ -367,6 +382,12 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,busyPersonas,onPick,on
   const glowPulse=useRef(new Animated.Value(0)).current;
   const sizeRef=useRef(size);
   const sparkles=useRef(PERSONA_LIST.map(()=>new Animated.Value(Math.random()))).current;
+  // Gentle idle bob — a small vertical drift, deliberately subtle (±4px) after
+  // an earlier, much bigger version read as distracting. A.R.A. holds still on
+  // her front seat; only the scattered cloud behind her drifts.
+  const bobs=useRef(PERSONA_LIST.map(()=>new Animated.Value(Math.random()))).current;
+  const bobNow=useRef(PERSONA_LIST.map(()=>0)); // live bob offset per persona, kept in sync via listener below so the tether math can include it — the tether must track the orb's true rendered centre, bob included, or it visibly detaches during the wiggle
+  const tetherRefs=useRef({});
 
   useEffect(()=>{sizeRef.current=size;},[size]);
 
@@ -393,6 +414,52 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,busyPersonas,onPick,on
 
   // An orb's current screen position — its pinned spot or the cloud projection.
   // Used by the drag responders below for the grab offset.
+  // Tether layer: every orb but A.R.A. gets a curved line back to her front
+  // seat, redrawn every frame from the same projection that positions the
+  // orbs themselves (pinned spot or cloud projection — whichever endpointFor
+  // would give it), so the line can never drift off an orb's real centre.
+  // Pushed straight onto each <Path> with setNativeProps — an earlier version
+  // drove this off the same Animated values as the orb positions and the SVG
+  // layer never saw updates once idle drift moved to the native thread, since
+  // react-native-svg doesn't propagate props down a nested Animated graph.
+  // A plain per-frame recompute sidesteps that entirely.
+  useEffect(()=>{
+    if(ARA_INDEX==null)return;
+    let raf=null;
+    const tick=()=>{
+      const yv=yawNow.current,dv=dollyNow.current;
+      const araPin=pinnedRef.current[ARA_ID];
+      const araPt=araPin
+        ?{x:sizeRef.current.w/2+araPin.tx,y:sizeRef.current.h*0.42+araPin.ty,depth:0.6}
+        :project(ARA_INDEX,yv,dv);
+      for(let i=0;i<PERSONA_LIST.length;i++){
+        if(i===ARA_INDEX)continue;
+        const p=PERSONA_LIST[i];
+        const node=tetherRefs.current[p.id];
+        if(!node)continue;
+        const pin=pinnedRef.current[p.id];
+        const pt=pin?{x:sizeRef.current.w/2+pin.tx,y:sizeRef.current.h*0.42+pin.ty,depth:2}:project(i,yv,dv);
+        if(!pin)pt.y+=bobNow.current[i]; // must match the orb's true rendered centre, bob included, or the tether visibly detaches during the wiggle
+        if(pt.depth<0.3||araPt.depth<-1){node.setNativeProps({opacity:0});continue;}
+        const dist=Math.hypot(pt.x-araPt.x,pt.y-araPt.y)||1;
+        // Quadratic bezier, control point 2*sag below the chord's midpoint —
+        // a quad curve's own midpoint only travels half way to the control
+        // point, so this lands the visible dip at exactly `sag` px. Never a
+        // straight line, however short the link.
+        const sag=Math.max(8,Math.min(56,dist*0.16));
+        const mx=(araPt.x+pt.x)/2,my=(araPt.y+pt.y)/2+sag*2;
+        const opacity=Math.max(0.05,Math.min(0.38,1.05-pt.depth*0.09));
+        node.setNativeProps({
+          d:`M${araPt.x.toFixed(1)},${araPt.y.toFixed(1)} Q${mx.toFixed(1)},${my.toFixed(1)} ${pt.x.toFixed(1)},${pt.y.toFixed(1)}`,
+          opacity,
+        });
+      }
+      raf=requestAnimationFrame(tick);
+    };
+    raf=requestAnimationFrame(tick);
+    return()=>{if(raf)cancelAnimationFrame(raf);};
+  },[project]);
+
   const endpointFor=useCallback((id,yv,dv)=>{
     const i=ID_INDEX[id];
     const pin=pinnedRef.current[id];
@@ -437,6 +504,30 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,busyPersonas,onPick,on
     ])));
     loops.forEach(l=>l.start());
     return()=>loops.forEach(l=>l.stop());
+  },[]);// eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(()=>{
+    // Idle bob — small, slow, native-driven vertical drift on the same
+    // transform layer as the twinkle above. A.R.A. is excluded: she holds her
+    // front seat still, everyone else drifts gently behind her.
+    // A listener on each bob mirrors its current offset into bobNow — even
+    // though the animation itself runs on the native thread, the tether tick
+    // (below) needs the live number so the line's endpoint always lands on
+    // the orb's true centre, bob included, and never detaches from it.
+    const listenerIds=bobs.map((v,i)=>i===ARA_INDEX?null:v.addListener(({value})=>{bobNow.current[i]=-4*value;}));
+    const loops=bobs.map((v,i)=>{
+      if(i===ARA_INDEX)return null;
+      return Animated.loop(Animated.sequence([
+        Animated.delay(i*220),
+        Animated.timing(v,{toValue:1,duration:3200+((i*173)%1400),easing:Easing.inOut(Easing.sin),useNativeDriver:true}),
+        Animated.timing(v,{toValue:0,duration:3200+((i*241)%1400),easing:Easing.inOut(Easing.sin),useNativeDriver:true}),
+      ]));
+    });
+    loops.forEach(l=>l&&l.start());
+    return()=>{
+      loops.forEach(l=>l&&l.stop());
+      bobs.forEach((v,i)=>{if(listenerIds[i]!=null)v.removeListener(listenerIds[i]);});
+    };
   },[]);// eslint-disable-line react-hooks/exhaustive-deps
 
   // pickAt(x,y): the persona nearest that screen point (in front of the viewer),
@@ -504,6 +595,9 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,busyPersonas,onPick,on
         // matter what the JS thread is doing. Deliberately gentle.
         sparkleScale:sparkles[i].interpolate({inputRange:[0,1],outputRange:[0.97,1.04]}),
         sparkleOpacity:sparkles[i].interpolate({inputRange:[0,1],outputRange:[0.82,1]}),
+        // Idle bob rides the same native layer as the twinkle. null for A.R.A.
+        // (index ARA_INDEX) — omitted from the transform below so she's still.
+        bobY:i===ARA_INDEX?null:bobs[i].interpolate({inputRange:[0,1],outputRange:[0,-4]}),
         // Depth-driven scale/opacity — JS-driven (they track yaw/dolly) but
         // completely static while the camera is still.
         scale:depth.interpolate({inputRange:[0.3,2.2,6,11],outputRange:[1.55,1.12,0.45,0.22],extrapolate:'clamp'}),
@@ -606,13 +700,23 @@ function PersonaSphereInner({activeId,pics,unreadPersonas,busyPersonas,onPick,on
         boxRef.current&&boxRef.current.measureInWindow&&boxRef.current.measureInWindow((x,y)=>{originRef.current={x:x||0,y:y||0};});
       }}>
       <View style={StyleSheet.absoluteFill} {...pan.panHandlers}>
-        {order.map(oi=>orbs[oi]).filter(({p})=>!pinned[p.id]).map(({p,translateX,translateY,scale,opacity,sparkleScale,sparkleOpacity})=>{
+        {/* Tethers — every orb but A.R.A. curves back to her front seat.
+            Rendered behind the orbs and updated imperatively every frame
+            (see the effect above); `d`/`opacity` here are just placeholders
+            until the first tick. */}
+        <Svg style={StyleSheet.absoluteFill} pointerEvents="none">
+          {PERSONA_LIST.filter(p=>p.id!==ARA_ID).map(p=>(
+            <Path key={p.id} ref={r=>{tetherRefs.current[p.id]=r;}} d="M0,0 L0,0" stroke={p.color} strokeWidth={1} fill="none" opacity={0}/>
+          ))}
+        </Svg>
+        {order.map(oi=>orbs[oi]).filter(({p})=>!pinned[p.id]).map(({p,translateX,translateY,scale,opacity,sparkleScale,sparkleOpacity,bobY})=>{
           const selected=group.includes(p.id);
           return(
             <Animated.View key={p.id} style={[s.orbWrap,{opacity,transform:[{translateX},{translateY},{scale}]}]}>
-              {/* Twinkle lives on its own native-driven transform layer,
-                  separate from the JS-driven cloud position above. */}
-              <Animated.View style={{opacity:sparkleOpacity,transform:[{scale:sparkleScale}]}}>
+              {/* Twinkle (+ idle bob, if any) live on their own native-driven
+                  transform layer, separate from the JS-driven cloud position
+                  above. */}
+              <Animated.View style={{opacity:sparkleOpacity,transform:bobY?[{scale:sparkleScale},{translateY:bobY}]:[{scale:sparkleScale}]}}>
                 <View style={s.orbBox} {...orbResponders[p.id].panHandlers}>
                   <OrbVisual p={p} selected={selected} pic={pics[p.id]} unread={unreadPersonas?.has?.(p.id)} busy={busyPersonas?.has?.(p.id)} glowPulse={glowPulse}/>
                 </View>
