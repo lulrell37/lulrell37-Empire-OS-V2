@@ -96,6 +96,7 @@ export default function CommandScreen({navigation,route}){
   const[activePersona,setActivePersona]=useState('jarvis');
   const[mode,setMode]=useState('direct');
   const[input,setInput]=useState('');
+  const[pendingImages,setPendingImages]=useState([]); // staged {uri,mime} — attached but not sent until SEND
   const[messages,setMessages]=useState([]);
   const[groupMessages,setGroupMessages]=useState([]);
   const[loading,setLoading]=useState(false);
@@ -1160,21 +1161,16 @@ export default function CommandScreen({navigation,route}){
     return false;
   }
 
+  // Pick one or more photos and STAGE them — they don't send until you hit SEND,
+  // so you can attach a batch and type a message to go with them first.
   async function pickImage(){
     try{
       const{status}=await ImagePicker.requestMediaLibraryPermissionsAsync();
       if(status!=='granted'){notify('Photo library access needed — grant it in Settings',{severity:'error'});return;}
-      const result=await ImagePicker.launchImageLibraryAsync({mediaTypes:ImagePicker.MediaTypeOptions.Images,quality:0.8});
-      if(!result.canceled&&result.assets[0]){
-        const asset=result.assets[0];
-        const msg=`[Image attached]\n${(inputRef.current||input).trim()||'What do you see in this image?'}`;
-        setInput('');inputRef.current='';try{textInputRef.current?.clear();}catch{}
-        const userMsg={id:Date.now().toString(),role:'user',content:msg,persona:'user',image:asset.uri};
-        const isGroup=mode!=='direct';
-        if(isGroup)setGroupMessages(prev=>[...prev,userMsg]);
-        else{setMessages(prev=>[...prev,userMsg]);await saveMessage(activePersona,'user',msg,'direct');}
-        await runRound(msg,isGroup,[{type:'image',uri:asset.uri,mime:asset.mimeType||'image/jpeg'}]);
-      }
+      const result=await ImagePicker.launchImageLibraryAsync({mediaTypes:ImagePicker.MediaTypeOptions.Images,allowsMultipleSelection:true,selectionLimit:0,quality:0.8});
+      if(result.canceled||!result.assets?.length)return;
+      const picked=result.assets.map(a=>({uri:a.uri,mime:a.mimeType||'image/jpeg'}));
+      setPendingImages(prev=>[...prev,...picked].slice(0,20));
     }catch(e){notify('Error: '+e.message,{severity:'error'});}
   }
 
@@ -1280,13 +1276,8 @@ export default function CommandScreen({navigation,route}){
     try{
       const photo=await cameraRef.takePictureAsync({quality:0.8});
       setShowCamera(false);
-      const msg=`[Photo taken]\n${(inputRef.current||input).trim()||'What do you see in this photo?'}`;
-      setInput('');inputRef.current='';try{textInputRef.current?.clear();}catch{}
-      const userMsg={id:Date.now().toString(),role:'user',content:msg,persona:'user',image:photo.uri};
-      const isGroup=mode!=='direct';
-      if(isGroup)setGroupMessages(prev=>[...prev,userMsg]);
-      else{setMessages(prev=>[...prev,userMsg]);await saveMessage(activePersona,'user',msg,'direct');}
-      await runRound(msg,isGroup,[{type:'image',uri:photo.uri,mime:'image/jpeg'}]);
+      // Stage it alongside any library picks — send when you hit SEND.
+      setPendingImages(prev=>[...prev,{uri:photo.uri,mime:'image/jpeg'}].slice(0,20));
     }catch(e){notify('Error: '+e.message,{severity:'error'});}
   }
 
@@ -1341,17 +1332,24 @@ export default function CommandScreen({navigation,route}){
     // flush any IME composition, then read it.
     try{textInputRef.current?.blur();}catch{}
     await new Promise(r=>setTimeout(r,40));
-    const text=(inputRef.current||input).trim();if(!text||loading)return;
-    inputRef.current='';setInput('');
+    const text=(inputRef.current||input).trim();
+    const imgs=pendingImages;
+    if((!text&&!imgs.length)||loading)return;
+    inputRef.current='';setInput('');setPendingImages([]);
     try{textInputRef.current?.clear();}catch{}
     Keyboard.dismiss();abortRef.current?.abort();stopAudio();
     interimContinueRef.current=null;interimStreakRef.current=0; // a real message from Mr. Burrus supersedes any pending "keep going"
     atBottomRef.current=true;   // sending your own message always snaps the chat down
     const isGroup=mode!=='direct';
-    const userMsg={id:Date.now().toString(),role:'user',content:text,persona:'user'};
+    const modelText=text||(imgs.length>1?'What do you see in these images?':'What do you see in this image?');
+    const shown=text||`[${imgs.length} image${imgs.length>1?'s':''} attached]`;
+    const userMsg={id:Date.now().toString(),role:'user',content:shown,persona:'user',images:imgs.map(i=>i.uri)};
     if(isGroup)setGroupMessages(prev=>[...prev,userMsg]);
-    else{setMessages(prev=>[...prev,userMsg]);await saveMessage(activePersona,'user',text,'direct');}
-    await runRound(text,isGroup,extractUrls(text).map(u=>({type:'link',url:u})));
+    else{setMessages(prev=>[...prev,userMsg]);await saveMessage(activePersona,'user',shown,'direct');}
+    await runRound(modelText,isGroup,[
+      ...extractUrls(text).map(u=>({type:'link',url:u})),
+      ...imgs.map(i=>({type:'image',uri:i.uri,mime:i.mime})),
+    ]);
   }
 
   async function runRound(text,isGroup,attachments=[]){
@@ -2201,12 +2199,17 @@ export default function CommandScreen({navigation,route}){
 
   function renderMsg({item}){
     const p=item.persona&&item.persona!=='user'&&item.persona!=='system'?getPersona(item.persona):null;
-    if(item.role==='user')return(
+    if(item.role==='user'){
+      const imgs=item.images?.length?item.images:(item.image?[item.image]:[]);
+      return(
       <View>
-        {item.image&&<Image source={{uri:item.image}} style={{width:200,height:150,borderRadius:8,marginBottom:4,alignSelf:'flex-end'}}/>}
-        <View style={s.userBubble}><Text style={s.userText} selectable>{item.content}</Text></View>
+        {imgs.length>0&&<View style={{flexDirection:'row',flexWrap:'wrap',gap:4,justifyContent:'flex-end',marginBottom:4}}>
+          {imgs.map((uri,i)=>(<Image key={i} source={{uri}} style={{width:imgs.length>1?120:200,height:imgs.length>1?120:150,borderRadius:8}}/>))}
+        </View>}
+        {!!item.content&&<View style={s.userBubble}><Text style={s.userText} selectable>{item.content}</Text></View>}
       </View>
-    );
+      );
+    }
     if(item.role==='system')return(<View style={s.sysBubble}><Text style={s.sysText} selectable>{item.content}</Text></View>);
     const pic=personaPics[p?.id];
     const shown=item.streaming?String(item.content||'').slice(0,item.revealed||0):item.content;
@@ -2430,9 +2433,24 @@ export default function CommandScreen({navigation,route}){
           The galaxy (group) and the memory spiral have no chat bar. */}
       {composerVisible&&<KeyboardAvoidingView behavior={Platform.OS==='ios'?'padding':'height'}>
         <View style={s.inputArea}>
+          {pendingImages.length>0&&(
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.stagedTray}>
+              {pendingImages.map((im,i)=>(
+                <View key={im.uri+i} style={s.stagedItem}>
+                  <Image source={{uri:im.uri}} style={s.stagedThumb}/>
+                  <TouchableOpacity style={s.stagedX} onPress={()=>setPendingImages(prev=>prev.filter((_,j)=>j!==i))}>
+                    <Text style={s.stagedXT}>✕</Text>
+                  </TouchableOpacity>
+                </View>
+              ))}
+              <TouchableOpacity style={s.stagedClear} onPress={()=>setPendingImages([])}>
+                <Text style={s.stagedClearT}>CLEAR{'\n'}ALL</Text>
+              </TouchableOpacity>
+            </ScrollView>
+          )}
           <View style={s.inputRow}>
-            <TextInput ref={textInputRef} style={s.input} defaultValue="" onChangeText={t=>{inputRef.current=t;setInput(t);}} placeholder="Speak your directive..." placeholderTextColor="#333" multiline maxLength={2000} autoCorrect={false} autoComplete="off" autoCapitalize="sentences" spellCheck={false}/>
-            <TouchableOpacity style={[s.sendBtn,{backgroundColor:mode==='direct'?cp.color:'#E8C98A'}]} onPress={send} disabled={loading||!input.trim()}>
+            <TextInput ref={textInputRef} style={s.input} defaultValue="" onChangeText={t=>{inputRef.current=t;setInput(t);}} placeholder={pendingImages.length?`${pendingImages.length} photo${pendingImages.length>1?'s':''} attached — add a message...`:"Speak your directive..."} placeholderTextColor="#333" multiline maxLength={2000} autoCorrect={false} autoComplete="off" autoCapitalize="sentences" spellCheck={false}/>
+            <TouchableOpacity style={[s.sendBtn,{backgroundColor:mode==='direct'?cp.color:'#E8C98A'}]} onPress={send} disabled={loading||(!input.trim()&&!pendingImages.length)}>
               <Text style={s.sendT}>SEND</Text>
             </TouchableOpacity>
           </View>
@@ -2463,8 +2481,8 @@ export default function CommandScreen({navigation,route}){
               <View style={[s.iactDot,{backgroundColor:'#E05555'}]}/>
               <Text style={[s.iactT,{color:'#E05555'}]}>STOP</Text>
             </TouchableOpacity>}
-            <TouchableOpacity style={s.iact} onPress={pickImage}>
-              <View style={s.iactDot}/><Text style={s.iactT}>IMAGE</Text>
+            <TouchableOpacity style={[s.iact,pendingImages.length>0&&{borderColor:'#E8C98A',backgroundColor:'#E8C98A11'}]} onPress={pickImage}>
+              <View style={[s.iactDot,pendingImages.length>0&&{backgroundColor:'#E8C98A'}]}/><Text style={[s.iactT,pendingImages.length>0&&{color:'#E8C98A'}]}>{pendingImages.length>0?`IMAGE (${pendingImages.length})`:'IMAGE'}</Text>
             </TouchableOpacity>
             <TouchableOpacity style={s.iact} onPress={pickVideo}>
               <View style={s.iactDot}/><Text style={s.iactT}>VIDEO</Text>
@@ -2602,6 +2620,13 @@ const s=StyleSheet.create({
   firmSub:{fontFamily:'monospace',fontSize:8,color:'#4a7d7d',letterSpacing:1,marginTop:2},
   firmX:{color:'#4a7d7d',fontSize:14,paddingHorizontal:4},
   inputArea:{borderTopWidth:1,borderTopColor:'#111'},
+  stagedTray:{flexDirection:'row',gap:8,paddingHorizontal:10,paddingTop:8,alignItems:'center'},
+  stagedItem:{width:56,height:56},
+  stagedThumb:{width:56,height:56,borderRadius:6,borderWidth:1,borderColor:'#222'},
+  stagedX:{position:'absolute',top:-6,right:-6,width:18,height:18,borderRadius:9,backgroundColor:'#000',borderWidth:1,borderColor:'#444',alignItems:'center',justifyContent:'center'},
+  stagedXT:{color:'#E05555',fontSize:10,fontWeight:'700'},
+  stagedClear:{width:56,height:56,borderRadius:6,borderWidth:1,borderColor:'#222',alignItems:'center',justifyContent:'center'},
+  stagedClearT:{fontFamily:'monospace',fontSize:8,color:'#555',letterSpacing:1,textAlign:'center'},
   inputRow:{flexDirection:'row',alignItems:'flex-end',paddingHorizontal:10,paddingTop:8,paddingBottom:4,gap:8},
   input:{flex:1,backgroundColor:'#080808',borderWidth:1,borderColor:'#151515',borderRadius:8,paddingHorizontal:12,paddingVertical:9,color:'#DDD',fontSize:14,maxHeight:90},
   sendBtn:{paddingHorizontal:14,paddingVertical:10,borderRadius:8,alignItems:'center',justifyContent:'center'},
