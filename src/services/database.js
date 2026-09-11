@@ -22,7 +22,7 @@ export async function initDatabase(){
     CREATE TABLE IF NOT EXISTS build_jobs(id TEXT PRIMARY KEY,repo_owner TEXT,repo_name TEXT,issue_number INTEGER,pr_number INTEGER,spec TEXT,state TEXT,question TEXT,last_comment_id INTEGER DEFAULT 0,title TEXT,project_name TEXT,created_at INTEGER,updated_at INTEGER);
     CREATE TABLE IF NOT EXISTS trades(id INTEGER PRIMARY KEY AUTOINCREMENT,persona TEXT DEFAULT 'talon',symbol TEXT,side TEXT,qty REAL,entry_ref REAL,entry_fill REAL,stop_loss REAL,take_profit REAL,setup TEXT,rationale TEXT,status TEXT DEFAULT 'open',order_id TEXT,position_id TEXT,opened_at INTEGER,closed_at INTEGER,exit_price REAL,realized_pl REAL,pl_estimated INTEGER DEFAULT 0,outcome TEXT,r_multiple REAL,review TEXT,misses INTEGER DEFAULT 0,last_unrealized REAL,auto INTEGER DEFAULT 0,created_at INTEGER,updated_at INTEGER);
     CREATE TABLE IF NOT EXISTS deep_research(id TEXT PRIMARY KEY,topic TEXT,persona TEXT,mode TEXT DEFAULT 'direct',model TEXT,status TEXT DEFAULT 'running',progress TEXT,result TEXT,error TEXT,started_at INTEGER,finished_at INTEGER,created_at INTEGER,updated_at INTEGER);
-    CREATE TABLE IF NOT EXISTS leads(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT,business TEXT,website TEXT,contact TEXT,bottleneck TEXT,segment TEXT,value TEXT,stage TEXT DEFAULT 'new',next_action TEXT,next_touch TEXT,last_touch TEXT,log TEXT DEFAULT '',source TEXT DEFAULT 'scout',source_id TEXT,created_at INTEGER,updated_at INTEGER);
+    CREATE TABLE IF NOT EXISTS leads(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT,business TEXT,website TEXT,contact TEXT,bottleneck TEXT,segment TEXT,value TEXT,stage TEXT DEFAULT 'new',next_action TEXT,next_touch TEXT,last_touch TEXT,log TEXT DEFAULT '',source TEXT DEFAULT 'scout',source_id TEXT,heat INTEGER DEFAULT 0,signal TEXT,created_at INTEGER,updated_at INTEGER);
     CREATE TABLE IF NOT EXISTS clip_jobs(id TEXT PRIMARY KEY,issue_number INTEGER,media_url TEXT,instructions TEXT,status TEXT DEFAULT 'queued',result_url TEXT,share_url TEXT,note TEXT,last_comment_id INTEGER DEFAULT 0,created_at INTEGER,updated_at INTEGER);
     CREATE TABLE IF NOT EXISTS watch_jobs(id TEXT PRIMARY KEY,issue_number INTEGER,media_url TEXT,focus TEXT,persona TEXT,status TEXT DEFAULT 'queued',report_url TEXT,summary TEXT,note TEXT,last_comment_id INTEGER DEFAULT 0,created_at INTEGER,updated_at INTEGER);
     CREATE TABLE IF NOT EXISTS content_items(id TEXT PRIMARY KEY,page TEXT,kind TEXT DEFAULT 'reel',slot TEXT,prompt TEXT,caption TEXT,hashtags TEXT,status TEXT DEFAULT 'queued',media_uri TEXT,media_type TEXT,thumb_uri TEXT,gen_job_id TEXT,gen_phase TEXT,scheduled_for TEXT,posted_id TEXT,posted_url TEXT,posted_at INTEGER,error TEXT,note TEXT,created_at INTEGER,updated_at INTEGER);
@@ -33,6 +33,8 @@ export async function initDatabase(){
   await migrateColumn('trades','auto','INTEGER DEFAULT 0');
   await migrateColumn('deep_research','delivered','INTEGER DEFAULT 0');
   await migrateColumn('leads','source_id','TEXT');
+  await migrateColumn('leads','heat','INTEGER DEFAULT 0');
+  await migrateColumn('leads','signal','TEXT');
   await migrateColumn('persona_memory','pinned_until','INTEGER');
   await migrateColumn('messages','unread','INTEGER DEFAULT 0');
   await migrateColumn('business_targets','notes','TEXT');
@@ -598,7 +600,7 @@ export async function deleteNote(id){await db.runAsync('DELETE FROM notes WHERE 
 // [LEAD_ADD] / [LEAD_UPDATE] / [LEAD_LOG] tags; the Command-screen LeadsPanel
 // and the follow-up nudges read it back. Synced like tasks/notes.
 export const LEAD_STAGES=['inbound','new','contacted','replied','qualifying','call_booked','won','lost','cold'];
-const LEAD_FIELDS=['name','business','website','contact','bottleneck','segment','value','stage','next_action','next_touch','last_touch','log','source','source_id'];
+const LEAD_FIELDS=['name','business','website','contact','bottleneck','segment','value','stage','next_action','next_touch','last_touch','log','source','source_id','heat','signal'];
 // A lead is only worth keeping if there's a way to reach the prospect directly.
 // S.C.O.U.T.'s outbound prospecting and chat [LEAD_ADD]s are held to this;
 // inbound social signals (a Reddit/HN/X post, replied to on-platform) are not.
@@ -631,7 +633,7 @@ export async function appendLeadLog(id,line){
   const nextLog=lead.log?`${stamped}\n${lead.log}`:stamped;
   await db.runAsync('UPDATE leads SET log=?,last_touch=? WHERE id=?',[nextLog,getTodayStr(),id]);
 }
-export async function getAllLeads(){return await db.getAllAsync('SELECT * FROM leads ORDER BY updated_at DESC');}
+export async function getAllLeads(){return await db.getAllAsync('SELECT * FROM leads ORDER BY COALESCE(heat,0) DESC, updated_at DESC');}
 export async function getLeads(stage){return stage?await db.getAllAsync('SELECT * FROM leads WHERE stage=? ORDER BY updated_at DESC',[stage]):getAllLeads();}
 export async function getLead(id){return await db.getFirstAsync('SELECT * FROM leads WHERE id=?',[id]);}
 // Resolve a reference S.C.O.U.T. wrote — a row id, or a name/business substring.
@@ -679,7 +681,7 @@ export async function getLeadsForOutreach(limit=5){
      WHERE stage IN ('inbound','new')
        AND contact LIKE '%_@_%._%'
        AND COALESCE(log,'') NOT LIKE '%mailed%'
-     ORDER BY (stage='inbound') DESC, created_at ASC
+     ORDER BY (stage='inbound') DESC, COALESCE(heat,0) DESC, created_at ASC
      LIMIT ?`,[limit]);
 }
 

@@ -40,7 +40,7 @@ export default function SettingsScreen({navigation}){
   const[autoTrade,setAutoTrade]=useState(false);
   const[autoSyms,setAutoSyms]=useState('XAUUSD, EURUSD, GBPUSD, USDJPY, GBPJPY, AUDUSD, XAGUSD, BTCUSD');
   const[autoEvery,setAutoEvery]=useState('15');
-  const[autoMaxOpen,setAutoMaxOpen]=useState('5');
+  const[autoMaxOpen,setAutoMaxOpen]=useState('5'); // risk cap — how many positions T.A.L.O.N. may run at once; applies to every trade, auto or confirmed
   const[weatherPlace,setWeatherPlace]=useState('Waldorf, MD');
   const[inboundSheet,setInboundSheet]=useState('');
   const[autoScout,setAutoScout]=useState(false);
@@ -160,14 +160,6 @@ export default function SettingsScreen({navigation}){
     await refreshAutoTrader().catch(()=>{});
   }
   async function saveAutoSyms(){await setSetting('auto_trade_symbols',autoSyms.trim()||'XAUUSD');await refreshAutoTrader().catch(()=>{});}
-  async function saveWeatherPlace(){await setSetting('weather_place',weatherPlace.trim()||'Waldorf, MD');await setSetting('weather_geo','');resetWeather();}
-  async function saveInboundSheet(){
-    // accept a full Sheets URL or a bare id
-    const m=inboundSheet.trim().match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
-    const id=m?m[1]:inboundSheet.trim();
-    setInboundSheet(id);
-    await setSetting('inbound_sheet_id',id);
-  }
   async function saveAutoEvery(){
     const n=Math.max(1,parseInt(autoEvery,10)||15);
     setAutoEvery(String(n));await setSetting('auto_trade_interval_min',String(n));await refreshAutoTrader().catch(()=>{});
@@ -175,6 +167,14 @@ export default function SettingsScreen({navigation}){
   async function saveAutoMaxOpen(){
     const n=Math.min(5,Math.max(1,parseInt(autoMaxOpen,10)||5));
     setAutoMaxOpen(String(n));await setSetting('auto_trade_max_open',String(n));await refreshAutoTrader().catch(()=>{});
+  }
+  async function saveWeatherPlace(){await setSetting('weather_place',weatherPlace.trim()||'Waldorf, MD');await setSetting('weather_geo','');resetWeather();}
+  async function saveInboundSheet(){
+    // accept a full Sheets URL or a bare id
+    const m=inboundSheet.trim().match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+    const id=m?m[1]:inboundSheet.trim();
+    setInboundSheet(id);
+    await setSetting('inbound_sheet_id',id);
   }
   async function toggleAutoScout(){
     const nv=!autoScout;
@@ -433,11 +433,11 @@ export default function SettingsScreen({navigation}){
             </TouchableOpacity>
 
             <Text style={[s.secTitle,{marginTop:28}]}>T.A.L.O.N. AUTO-TRADE</Text>
-            <Text style={s.secSub}>Lets T.A.L.O.N. open and close 0.01-lot trades on its own while the app is open — no confirmation. DEMO ACCOUNT ONLY; the loop refuses to touch a live account. No caps or loss limit — this is an experiment to see how it does.</Text>
+            <Text style={s.secSub}>Lets T.A.L.O.N. open and close 0.01-lot trades on its own while the app is open — no confirmation. DEMO ACCOUNT ONLY; the loop refuses to touch a live account. No caps or loss limit — this is an experiment to see how it does. This toggle is unattended, self-initiated trading — separate from chat, where he still only proposes, closes or adjusts a trade when you ask, but fires it immediately, same as here.</Text>
             <TouchableOpacity style={s.toggleRow} onPress={toggleAutoTrade} activeOpacity={0.7}>
               <View style={{flex:1,paddingRight:12}}>
                 <Text style={s.toggleLabel}>AUTONOMOUS TRADING</Text>
-                <Text style={s.toggleSub}>{autoTrade?`On — T.A.L.O.N. is watching ${autoSyms} every ${autoEvery} min.`:'Off — T.A.L.O.N. only trades when you confirm a proposal.'}</Text>
+                <Text style={s.toggleSub}>{autoTrade?`On — T.A.L.O.N. is watching ${autoSyms} every ${autoEvery} min.`:'Off — T.A.L.O.N. only trades when you ask him to, in chat.'}</Text>
               </View>
               <View style={[s.switch,autoTrade&&s.switchOn]}><View style={[s.knob,autoTrade&&s.knobOn]}/></View>
             </TouchableOpacity>

@@ -437,14 +437,14 @@ export function MarketPanel({active=true}){
               {auto.lastCycleAt?`last scan ${Math.round((Date.now()-auto.lastCycleAt)/60000)}m ago`:'no scan completed yet'}
             </Text>
           )}
-          {rec&&(rec.count>0||rec.openCount>0)&&(
-            <Text style={ps.autoRec}>
-              {rec.wins}W–{rec.losses}L{rec.be?`–${rec.be}BE`:''}
-              {rec.winRate!=null?` · ${rec.winRate}%`:''}
-              {` · net ${rec.net>=0?'+':''}${rec.net}`}
-              {rec.openCount?` · ${rec.openCount} open`:''}
-            </Text>
-          )}
+          {/* Record always shows, even at a clean 0W-0L-0BE start, rather than
+              hiding until there's a first closed trade. */}
+          <Text style={ps.autoRec}>
+            {(rec?.wins)||0}W–{(rec?.losses)||0}L–{(rec?.be)||0}BE
+            {rec?.winRate!=null?` · ${rec.winRate}%`:''}
+            {` · net ${((rec?.net)||0)>=0?'+':''}${(rec?.net)||0}`}
+            {rec?.openCount?` · ${rec.openCount} open`:''}
+          </Text>
           {auto.recent.map(t=>(
             <Text key={t.id} style={ps.autoLine} numberOfLines={1}>
               ⟳ #{t.id} {t.symbol} {t.side} {t.status==='closed'?(t.outcome||'').toUpperCase():t.status.toUpperCase()}

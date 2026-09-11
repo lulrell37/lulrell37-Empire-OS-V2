@@ -6,6 +6,7 @@ const auth = require('./auth');
 const { runNudgeCycle } = require('./pushSender');
 const { runDailyBriefing } = require('./dailyBriefing');
 const { runCouncilMeeting, endCouncilLive } = require('./councilMeeting');
+const { runScoutSignalCycle } = require('./autoScout');
 const telegram = require('./telegram');
 
 const app = express();
@@ -24,8 +25,8 @@ app.use('/push', auth, json, require('./routes/push'));
 app.use('/google', auth, json, require('./routes/google'));
 app.use('/council', auth, json, require('./routes/council'));
 
-// Telegram bot — headless front door to the A.R.A. persona. The webhook is
-// guarded by its own secret path + header + owner-id check (no bearer auth).
+// Telegram bots — one headless front door per persona. Each webhook is guarded
+// by its own persona-namespaced secret path + header + owner-id check (no bearer).
 app.use('/telegram', express.json({ limit: '1mb' }), require('./routes/telegram'));
 
 app.use((req, res) => res.status(404).json({ error: 'not found' }));
@@ -41,6 +42,7 @@ db.init()
     startNudgeCron();
     startDailyBriefingCron();
     startCouncilCron();
+    startScoutSignalCron();
     registerTelegramWebhook();
   })
   .catch((e) => {
@@ -92,14 +94,32 @@ function startCouncilCron() {
   console.log('council cron scheduled (05:00 ET)');
 }
 
-// Point the Telegram bot's webhook at this deployment on boot, so the bot keeps
-// working across redeploys without a manual step. Needs TELEGRAM_BOT_TOKEN +
-// TELEGRAM_OWNER_ID + PUBLIC_URL (the deployment's public https origin).
-// Without PUBLIC_URL, register once by hand: POST /telegram/set-webhook { url }.
+// Server-side S.C.O.U.T. — buying-intent signal discovery. Walks one grid cell
+// every SCOUT_INTERVAL_MIN minutes (default 30), writes warm leads into the sync
+// store. OFF by default; set SCOUT_CRON=on. Needs ANTHROPIC_API_KEY (qualify)
+// and at least one source key (ADZUNA_APP_ID/KEY, YELP_API_KEY).
+function startScoutSignalCron() {
+  if (process.env.SCOUT_CRON !== 'on') return console.log('scout signal cron disabled (set SCOUT_CRON=on to enable)');
+  if (!process.env.ANTHROPIC_API_KEY) return console.log('scout signal cron off (no ANTHROPIC_API_KEY)');
+  const mins = Math.min(55, Math.max(10, parseInt(process.env.SCOUT_INTERVAL_MIN || '30', 10) || 30));
+  cron.schedule(`*/${mins} * * * *`, () => {
+    runScoutSignalCycle()
+      .then((r) => console.log('scout signal cycle:', JSON.stringify(r)))
+      .catch((e) => console.error('scout signal cycle failed:', e.message));
+  });
+  console.log(`scout signal cron scheduled (every ${mins}m)`);
+}
+
+// Point every configured Telegram bot's webhook at this deployment on boot, so
+// the bots keep working across redeploys without a manual step. Needs
+// TELEGRAM_OWNER_ID + at least one TELEGRAM_BOT_TOKEN[_PERSONA] + PUBLIC_URL (the
+// deployment's public https origin). Without PUBLIC_URL, register once by hand:
+// POST /telegram/set-webhook { url }.
 function registerTelegramWebhook() {
-  if (!telegram.isConfigured()) return console.log('telegram bot disabled (set TELEGRAM_BOT_TOKEN + TELEGRAM_OWNER_ID)');
-  if (!process.env.PUBLIC_URL) return console.log('telegram bot on — set PUBLIC_URL to auto-register the webhook, or POST /telegram/set-webhook');
+  if (!telegram.isConfigured()) return console.log('telegram bots disabled (set TELEGRAM_OWNER_ID + a TELEGRAM_BOT_TOKEN[_PERSONA])');
+  const live = telegram.configuredBots().map((b) => b.personaId).join(', ');
+  if (!process.env.PUBLIC_URL) return console.log(`telegram bots on (${live}) — set PUBLIC_URL to auto-register webhooks, or POST /telegram/set-webhook`);
   telegram.setWebhook(process.env.PUBLIC_URL)
-    .then((r) => console.log('telegram webhook set:', r.url))
+    .then((rs) => console.log('telegram webhooks set:', rs.map((r) => r.error ? `${r.persona}:ERR ${r.error}` : r.persona).join(', ')))
     .catch((e) => console.error('telegram webhook registration failed:', e.message));
 }

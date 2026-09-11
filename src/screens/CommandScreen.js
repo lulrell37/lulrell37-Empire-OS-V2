@@ -10,6 +10,7 @@ import{Camera}from 'expo-camera';
 import*as FileSystem from 'expo-file-system';
 import{PERSONA_LIST,getPersona,resolveSpecialist}from '../personas/personas';
 import{callPersona,textToSpeech,transcribeAudio,queryMemory,webSearch,getLastTtsFailReason}from '../services/aiService';
+import{startAraLive,stopAraLive}from '../services/realtimeVoice';
 import{reportError}from '../../ErrorBanner';
 import{drStart,drGetActive,drTick,drDismiss,drDeliverPending,DR_POLL_MS}from '../services/deepResearch';
 import{autoTraderBusy}from '../services/autoTrader';
@@ -44,9 +45,12 @@ import{pushLeadsToSheet}from '../services/leadsSheet';
 import NudgeBar from './command/NudgeBar';
 import{parseChartSpec}from '../services/chartSpec';
 import{extractUrls,fetchLinkContext,linkContextToBlock}from '../services/mediaContext';
+import{prepareImage}from '../services/imagePrep';
 
 const TEAM_PHOTO=require('../../assets/teamphoto.png');
-const HANDS_FREE_SILENCE_MS=3000;   // quiet for this long AFTER real speech -> stop (allow mid-sentence pauses)
+const HANDS_FREE_SILENCE_MS=1200;      // quiet for this long AFTER a normal utterance -> stop
+const HANDS_FREE_SILENCE_SLOW_MS=2200; // longer grace when barely anything has been said yet (slow starter)
+const HANDS_FREE_SPOKE_ENOUGH_MS=1500; // spoke at least this long -> use the snappy endpoint
 const HANDS_FREE_VOICE_DB=-47;      // metering above this counts as "talking"
 const HANDS_FREE_MAX_MS=30000;      // hard cap on one hands-free take
 const HANDS_FREE_NOMETER_MS=8000;   // devices that don't report metering -> fixed take
@@ -95,6 +99,7 @@ export default function CommandScreen({navigation,route}){
   const[activePersona,setActivePersona]=useState('jarvis');
   const[mode,setMode]=useState('direct');
   const[input,setInput]=useState('');
+  const[pendingImages,setPendingImages]=useState([]); // staged {uri,mime} — attached but not sent until SEND
   const[messages,setMessages]=useState([]);
   const[groupMessages,setGroupMessages]=useState([]);
   const[loading,setLoading]=useState(false);
@@ -104,6 +109,10 @@ export default function CommandScreen({navigation,route}){
   const[continuous,setContinuous]=useState(false);
   const[recording,setRecording]=useState(false);
   const[handsFree,setHandsFree]=useState(false);
+  const[araLiveOn,setAraLiveOn]=useState(false);
+  const[araLiveState,setAraLiveState]=useState('stopped'); // 'connecting'|'listening'|'speaking'|'stopped'
+  const araLiveMsgIdRef=useRef(null); // the assistant bubble currently being filled by A.R.A. LIVE's streamed transcript
+  const araLiveUserMsgIdRef=useRef(null); // the user bubble currently being filled by A.R.A. LIVE's live transcript of you
   const[customPersonas,setCustomPersonas]=useState([]);
   const[showCustomPicker,setShowCustomPicker]=useState(false);
   const[selectedCustom,setSelectedCustom]=useState([]);
@@ -201,6 +210,7 @@ export default function CommandScreen({navigation,route}){
   const manualRef=useRef(false); // true while the current take was started by the SPEAK button
   const interimContinueRef=useRef(null); // {isGroup} set when the last voiced reply was a stall — consumed by the auto-listen effect to keep the persona going instead of reopening the mic
   const interimStreakRef=useRef(0);      // consecutive stalls this turn — capped by INTERIM_CONTINUE_MAX
+  const lastSpokenRef=useRef('');        // the last thing a persona said out loud — used to reject the mic hearing itself
   const{flagFirmIssue,clearFirmIssue,setActivity}=useEmpireStore();
   const isFocused=useIsFocused();
 
@@ -418,9 +428,20 @@ export default function CommandScreen({navigation,route}){
       if(recordingRef.current){try{recordingRef.current.stopAndUnloadAsync();}catch{}recordingRef.current=null;}
       clearSound();
       if(araWsRef.current){try{araWsRef.current.close();}catch{}araWsRef.current=null;}
+      stopAraLive();
       try{Speech.stop();}catch{}
     };
   },[]);
+  // A.R.A. LIVE only makes sense while you're actually looking at her direct
+  // chat — leaving her orb, switching persona/mode, or leaving the screen ends
+  // the call rather than leaving it running silently in the background.
+  useEffect(()=>{
+    if(araLiveOn&&!(activePersona==='ara'&&mode==='direct'&&isFocused)){
+      setAraLiveOn(false);setAraLiveState('stopped');
+      araLiveMsgIdRef.current=null;araLiveUserMsgIdRef.current=null;
+      stopAraLive();
+    }
+  },[araLiveOn,activePersona,mode,isFocused]);
   // Navigating away from Command: stop listening / speaking immediately. The
   // continuous-voice effect gates on isFocused, so it resumes on return.
   useEffect(()=>{
@@ -515,10 +536,15 @@ export default function CommandScreen({navigation,route}){
     if(talking){
       clearSilenceTimer();
     }else if(!silenceTimerRef.current){
+      // Adaptive endpoint: end the take ~1.2s after a normal utterance so the
+      // reply comes back fast, but hold longer when almost nothing has been
+      // said yet so a slow start isn't chopped mid-thought.
+      const spokeMs=voicedCountRef.current*250;
+      const graceMs=spokeMs<HANDS_FREE_SPOKE_ENOUGH_MS?HANDS_FREE_SILENCE_SLOW_MS:HANDS_FREE_SILENCE_MS;
       silenceTimerRef.current=setTimeout(()=>{
         silenceTimerRef.current=null;
         if(recordingRef.current)stopRecording();
-      },HANDS_FREE_SILENCE_MS);
+      },graceMs);
     }
   }
 
@@ -1021,6 +1047,65 @@ export default function CommandScreen({navigation,route}){
     setVoicePaused(false);
   }
 
+  // A.R.A.'s realtime duplex mode — see src/services/realtimeVoice.js. Owns the
+  // mic exclusively while on, so it can't run alongside the turn-based loop.
+  async function toggleAraLive(){
+    if(araLiveOn){
+      setAraLiveOn(false);setAraLiveState('stopped');
+      araLiveMsgIdRef.current=null;araLiveUserMsgIdRef.current=null;
+      await stopAraLive();
+      return;
+    }
+    if(handsFreeRef.current){setHandsFree(false);handsFreeRef.current=false;clearSilenceTimer();}
+    if(recordingRef.current)stopRecording();
+    await clearSound();
+    setAraLiveOn(true);setAraLiveState('connecting');
+    try{
+      await startAraLive({
+        onState:(st)=>setAraLiveState(st),
+        onUserText:(text,final)=>{
+          if(!text?.trim())return;
+          const content=text.trim();
+          if(!araLiveUserMsgIdRef.current){
+            const id=`aralive-u-${Date.now()}`;
+            araLiveUserMsgIdRef.current=id;
+            setMessages(prev=>[...prev,{id,role:'user',content,persona:'user'}]);
+          }else{
+            const id=araLiveUserMsgIdRef.current;
+            setMessages(prev=>prev.map(m=>m.id===id?{...m,content}:m));
+          }
+          if(final){
+            saveMessage('ara','user',content,'direct').catch(()=>{});
+            araLiveUserMsgIdRef.current=null;
+            araLiveMsgIdRef.current=null; // her reply to this turn starts a fresh bubble
+          }
+        },
+        onAraText:(text,final)=>{
+          if(!text)return;
+          if(!araLiveMsgIdRef.current){
+            const id=`aralive-a-${Date.now()}`;
+            araLiveMsgIdRef.current=id;
+            setMessages(prev=>[...prev,{id,role:'assistant',content:text,persona:'ara',streaming:!final}]);
+          }else{
+            const id=araLiveMsgIdRef.current;
+            setMessages(prev=>prev.map(m=>m.id===id?{...m,content:text,streaming:!final}:m));
+          }
+          if(final){
+            saveMessage('ara','assistant',text,'direct').catch(()=>{});
+            araLiveMsgIdRef.current=null;
+          }
+        },
+        onError:(err)=>{
+          notify('A.R.A. LIVE: '+err.message,{severity:'error'});
+          setAraLiveOn(false);setAraLiveState('stopped');
+        },
+      });
+    }catch(e){
+      notify('A.R.A. LIVE failed to start: '+e.message,{severity:'error'});
+      setAraLiveOn(false);setAraLiveState('stopped');
+    }
+  }
+
   function toggleHandsFree(){
     setHandsFree(v=>{
       const next=!v;
@@ -1130,7 +1215,7 @@ export default function CommandScreen({navigation,route}){
     try{
       const transcript=await transcribeAudio(uri);
       const clean=(transcript||'').trim();
-      if(clean&&!isLikelyHallucination(clean)){
+      if(clean&&!isLikelyHallucination(clean)&&!isEchoOfPersona(clean)){
         const isGroup=mode!=='direct';
         const userMsg={id:Date.now().toString(),role:'user',content:clean,persona:'user'};
         if(isGroup)setGroupMessages(prev=>[...prev,userMsg]);
@@ -1159,21 +1244,32 @@ export default function CommandScreen({navigation,route}){
     return false;
   }
 
+  // The mic hearing the persona's own reply through the speaker and shipping it
+  // to Whisper as if Mr. Burrus said it — a recurring feedback bug. Reject a
+  // transcript that is verbatim from, or mostly built out of, the last thing a
+  // persona spoke.
+  function isEchoOfPersona(text){
+    const norm=x=>String(x||'').toLowerCase().replace(/[^a-z0-9\s]/g,'').replace(/\s+/g,' ').trim();
+    const t=norm(text),said=norm(lastSpokenRef.current);
+    if(!t||!said)return false;
+    if(t.length>=12&&said.includes(t))return true;                 // a chunk lifted straight from the reply
+    const tw=t.split(' ').filter(w=>w.length>2);
+    if(tw.length<2)return false;
+    const sw=new Set(said.split(' '));
+    const overlap=tw.filter(w=>sw.has(w)).length/tw.length;
+    return overlap>=0.75;                                          // almost every content word came from the reply
+  }
+
+  // Pick one or more photos and STAGE them — they don't send until you hit SEND,
+  // so you can attach a batch and type a message to go with them first.
   async function pickImage(){
     try{
       const{status}=await ImagePicker.requestMediaLibraryPermissionsAsync();
       if(status!=='granted'){notify('Photo library access needed — grant it in Settings',{severity:'error'});return;}
-      const result=await ImagePicker.launchImageLibraryAsync({mediaTypes:ImagePicker.MediaTypeOptions.Images,quality:0.8});
-      if(!result.canceled&&result.assets[0]){
-        const asset=result.assets[0];
-        const msg=`[Image attached]\n${(inputRef.current||input).trim()||'What do you see in this image?'}`;
-        setInput('');inputRef.current='';try{textInputRef.current?.clear();}catch{}
-        const userMsg={id:Date.now().toString(),role:'user',content:msg,persona:'user',image:asset.uri};
-        const isGroup=mode!=='direct';
-        if(isGroup)setGroupMessages(prev=>[...prev,userMsg]);
-        else{setMessages(prev=>[...prev,userMsg]);await saveMessage(activePersona,'user',msg,'direct');}
-        await runRound(msg,isGroup,[{type:'image',uri:asset.uri,mime:asset.mimeType||'image/jpeg'}]);
-      }
+      const result=await ImagePicker.launchImageLibraryAsync({mediaTypes:ImagePicker.MediaTypeOptions.Images,allowsMultipleSelection:true,selectionLimit:0,quality:0.8});
+      if(result.canceled||!result.assets?.length)return;
+      const picked=result.assets.map(a=>({uri:a.uri,mime:a.mimeType||'image/jpeg'}));
+      setPendingImages(prev=>[...prev,...picked].slice(0,20));
     }catch(e){notify('Error: '+e.message,{severity:'error'});}
   }
 
@@ -1279,13 +1375,8 @@ export default function CommandScreen({navigation,route}){
     try{
       const photo=await cameraRef.takePictureAsync({quality:0.8});
       setShowCamera(false);
-      const msg=`[Photo taken]\n${(inputRef.current||input).trim()||'What do you see in this photo?'}`;
-      setInput('');inputRef.current='';try{textInputRef.current?.clear();}catch{}
-      const userMsg={id:Date.now().toString(),role:'user',content:msg,persona:'user',image:photo.uri};
-      const isGroup=mode!=='direct';
-      if(isGroup)setGroupMessages(prev=>[...prev,userMsg]);
-      else{setMessages(prev=>[...prev,userMsg]);await saveMessage(activePersona,'user',msg,'direct');}
-      await runRound(msg,isGroup,[{type:'image',uri:photo.uri,mime:'image/jpeg'}]);
+      // Stage it alongside any library picks — send when you hit SEND.
+      setPendingImages(prev=>[...prev,{uri:photo.uri,mime:'image/jpeg'}].slice(0,20));
     }catch(e){notify('Error: '+e.message,{severity:'error'});}
   }
 
@@ -1340,17 +1431,24 @@ export default function CommandScreen({navigation,route}){
     // flush any IME composition, then read it.
     try{textInputRef.current?.blur();}catch{}
     await new Promise(r=>setTimeout(r,40));
-    const text=(inputRef.current||input).trim();if(!text||loading)return;
-    inputRef.current='';setInput('');
+    const text=(inputRef.current||input).trim();
+    const imgs=pendingImages;
+    if((!text&&!imgs.length)||loading)return;
+    inputRef.current='';setInput('');setPendingImages([]);
     try{textInputRef.current?.clear();}catch{}
     Keyboard.dismiss();abortRef.current?.abort();stopAudio();
     interimContinueRef.current=null;interimStreakRef.current=0; // a real message from Mr. Burrus supersedes any pending "keep going"
     atBottomRef.current=true;   // sending your own message always snaps the chat down
     const isGroup=mode!=='direct';
-    const userMsg={id:Date.now().toString(),role:'user',content:text,persona:'user'};
+    const modelText=text||(imgs.length>1?'What do you see in these images?':'What do you see in this image?');
+    const shown=text||`[${imgs.length} image${imgs.length>1?'s':''} attached]`;
+    const userMsg={id:Date.now().toString(),role:'user',content:shown,persona:'user',images:imgs.map(i=>i.uri)};
     if(isGroup)setGroupMessages(prev=>[...prev,userMsg]);
-    else{setMessages(prev=>[...prev,userMsg]);await saveMessage(activePersona,'user',text,'direct');}
-    await runRound(text,isGroup,extractUrls(text).map(u=>({type:'link',url:u})));
+    else{setMessages(prev=>[...prev,userMsg]);await saveMessage(activePersona,'user',shown,'direct');}
+    await runRound(modelText,isGroup,[
+      ...extractUrls(text).map(u=>({type:'link',url:u})),
+      ...imgs.map(i=>({type:'image',uri:i.uri,mime:i.mime})),
+    ]);
   }
 
   async function runRound(text,isGroup,attachments=[]){
@@ -1360,7 +1458,7 @@ export default function CommandScreen({navigation,route}){
     const replies=[];
     // Attachments → image blocks the model sees + link context it can read.
     const atts=Array.isArray(attachments)?attachments:[];
-    const images=atts.filter(a=>a&&a.type==='image').map(a=>({uri:a.uri,data:a.data,mime:a.mime}));
+    let images=atts.filter(a=>a&&a.type==='image').map(a=>({uri:a.uri,data:a.data,mime:a.mime}));
     const linkAtts=atts.filter(a=>a&&a.type==='link');
     let linkText='';
     if(linkAtts.length){
@@ -1376,6 +1474,29 @@ export default function CommandScreen({navigation,route}){
       }
     }
     const modelText=text+(linkText?`\n\n${linkText}`:'');
+    // Downscale + re-encode every image to JPEG before it reaches a vision model.
+    // Raw library assets are often HEIC or over the 5 MB payload cap, which 400s
+    // the request; without this the reply just never came and the failure only
+    // ever flashed in the banner. If every image fails to prepare, say so in the
+    // thread rather than sending a text-only turn that looks like it ignored the
+    // picture.
+    const hadImages=images.length>0;
+    if(hadImages){
+      const prepped=[];
+      for(const im of images){
+        try{prepped.push(await prepareImage(im));}
+        catch(e){/* unreadable asset — dropped */}
+      }
+      images=prepped;
+    }
+    // Track the reply bubble in flight so the catch below can put the failure
+    // *in the thread* — an empty frozen bubble (what a vision-turn 400 used to
+    // leave behind) reads as the persona ignoring the message.
+    // Every image dropped in prep (HEIC the manipulator can't read, a corrupt
+    // asset) — fail loudly in the thread, not with a text-only turn that reads
+    // as the persona ignoring the picture.
+    const imagesLost=hadImages&&!images.length;
+    let inFlight=null;
     try{
       for(const pid of targets){
         if(myAbort.signal.aborted)break;
@@ -1388,6 +1509,8 @@ export default function CommandScreen({navigation,route}){
         const setMsgs=isGroup?setGroupMessages:setMessages;
         const patch=(fn)=>setMsgs(prev=>prev.map(m=>m.id===msgId?fn(m):m));
         setMsgs(prev=>[...prev,{id:msgId,role:'assistant',content:'',persona:pid,revealed:0,streaming:true}]);
+        inFlight={setMsgs,msgId,name:p.name,hadImages};
+        if(imagesLost)throw new Error("that image is in a format I can't open — send a screenshot or a JPEG");
         vizRef.personaId=pid;vizRef.color=p.color;vizRef.speaking=true; // orb lights up the moment tokens start
         // When not voicing, type the reply into the bubble live as tokens arrive.
         // When voicing, hold the text hidden and let speakWithReveal sync it to speech.
@@ -1444,11 +1567,11 @@ export default function CommandScreen({navigation,route}){
             else{
               const tally={};ls.forEach(l=>{tally[l.stage]=(tally[l.stage]||0)+1;});
               const head=Object.entries(tally).map(([k,v])=>`${v} ${k}`).join(' · ');
-              injections.push(`PIPELINE (${ls.length} lead${ls.length===1?'':'s'}) — ${head}:\n`+ls.map(l=>{
+              injections.push(`PIPELINE (${ls.length} lead${ls.length===1?'':'s'}, hottest first) — ${head}:\n`+ls.map(l=>{
                 const top=(l.log||'').split('\n')[0];
-                return `  #${l.id} ${l.name}${l.business?` · ${l.business}`:''} · ${String(l.stage||'new').toUpperCase()}`
+                return `  #${l.id} ${l.name}${l.business?` · ${l.business}`:''} · ${String(l.stage||'new').toUpperCase()}${l.heat?` · heat ${l.heat}`:''}`
                   +`${l.next_touch?` · next ${l.next_touch}`:''}${l.next_action?` · ${l.next_action}`:''}`
-                  +` · ${l.contact||'needs contact'}${top?`\n     last: ${top}`:''}`;
+                  +` · ${l.contact||'needs contact'}${l.signal?`\n     signal: ${l.signal}`:''}${top?`\n     last: ${top}`:''}`;
               }).join('\n'));
             }
           }catch(e){injections.push('PIPELINE: failed — '+e.message);}
@@ -1676,7 +1799,7 @@ export default function CommandScreen({navigation,route}){
               await handleCommands(sResp,'ara',cmdCallbacks);
               if(!isGroup)await saveMessage('ara','assistant',sDisplay,'direct');
               savePersonaMemory('ara',`YOU: ${text}\nA.R.A. (firm synthesis): ${sDisplay}`).catch(()=>{});
-              if(sDisplay)replies.push({name:p.name,text:sDisplay});
+              if(sDisplay){replies.push({name:p.name,text:sDisplay});lastSpokenRef.current=sDisplay;}
               if(willVoice&&!myAbort.signal.aborted){
                 await speakWithReveal(sDisplay,p,synthId,isGroup,{turns:hist.filter(h=>h.role==='user'||h.role==='assistant').slice(-6),userText:text});
                 if(!myAbort.signal.aborted)sPatch(m=>({...m,content:sDisplay,revealed:sDisplay.length,streaming:false}));
@@ -1706,7 +1829,7 @@ export default function CommandScreen({navigation,route}){
           savePersonaMemory(pid,`YOU: ${text}\n${p.name}: ${stripCommands(response)||response}`).catch(()=>{});
         }
         const display=stripCommands(response)||response;
-        if(display)replies.push({name:p.name,text:display});
+        if(display){replies.push({name:p.name,text:display});lastSpokenRef.current=display;}
         await handleCommands(response,pid,cmdCallbacks);
         try{
           const gw=await googleWriteCommands(response,{onConfirm:queueGoogleAction});
@@ -1772,6 +1895,15 @@ export default function CommandScreen({navigation,route}){
       if(e.name!=='AbortError'){
         const who=isGroup?'the group':getPersona(activePersona).name;
         reportIssue('ai:reply',`${who} couldn't reply`,e);
+        // Put it in the failed bubble too, if that bubble is still empty — the
+        // banner alone fades in 18s and left "she said nothing" for image turns.
+        if(inFlight){
+          const msg=inFlight.hadImages
+            ?`Couldn't read that image — ${String(e.message||e).slice(0,140)}`
+            :`Something went wrong — ${String(e.message||e).slice(0,140)}`;
+          inFlight.setMsgs(prev=>prev.map(m=>m.id===inFlight.msgId&&!m.content
+            ?{...m,content:msg,revealed:msg.length,streaming:false}:m));
+        }
       }
       if(!streamSpeakActiveRef.current)clearSound();
       maybeAutoListen();
@@ -2166,12 +2298,17 @@ export default function CommandScreen({navigation,route}){
 
   function renderMsg({item}){
     const p=item.persona&&item.persona!=='user'&&item.persona!=='system'?getPersona(item.persona):null;
-    if(item.role==='user')return(
+    if(item.role==='user'){
+      const imgs=item.images?.length?item.images:(item.image?[item.image]:[]);
+      return(
       <View>
-        {item.image&&<Image source={{uri:item.image}} style={{width:200,height:150,borderRadius:8,marginBottom:4,alignSelf:'flex-end'}}/>}
-        <View style={s.userBubble}><Text style={s.userText} selectable>{item.content}</Text></View>
+        {imgs.length>0&&<View style={{flexDirection:'row',flexWrap:'wrap',gap:4,justifyContent:'flex-end',marginBottom:4}}>
+          {imgs.map((uri,i)=>(<Image key={i} source={{uri}} style={{width:imgs.length>1?120:200,height:imgs.length>1?120:150,borderRadius:8}}/>))}
+        </View>}
+        {!!item.content&&<View style={s.userBubble}><Text style={s.userText} selectable>{item.content}</Text></View>}
       </View>
-    );
+      );
+    }
     if(item.role==='system')return(<View style={s.sysBubble}><Text style={s.sysText} selectable>{item.content}</Text></View>);
     const pic=personaPics[p?.id];
     const shown=item.streaming?String(item.content||'').slice(0,item.revealed||0):item.content;
@@ -2395,9 +2532,24 @@ export default function CommandScreen({navigation,route}){
           The galaxy (group) and the memory spiral have no chat bar. */}
       {composerVisible&&<KeyboardAvoidingView behavior={Platform.OS==='ios'?'padding':'height'}>
         <View style={s.inputArea}>
+          {pendingImages.length>0&&(
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.stagedTray}>
+              {pendingImages.map((im,i)=>(
+                <View key={im.uri+i} style={s.stagedItem}>
+                  <Image source={{uri:im.uri}} style={s.stagedThumb}/>
+                  <TouchableOpacity style={s.stagedX} onPress={()=>setPendingImages(prev=>prev.filter((_,j)=>j!==i))}>
+                    <Text style={s.stagedXT}>✕</Text>
+                  </TouchableOpacity>
+                </View>
+              ))}
+              <TouchableOpacity style={s.stagedClear} onPress={()=>setPendingImages([])}>
+                <Text style={s.stagedClearT}>CLEAR{'\n'}ALL</Text>
+              </TouchableOpacity>
+            </ScrollView>
+          )}
           <View style={s.inputRow}>
-            <TextInput ref={textInputRef} style={s.input} defaultValue="" onChangeText={t=>{inputRef.current=t;setInput(t);}} placeholder="Speak your directive..." placeholderTextColor="#333" multiline maxLength={2000} autoCorrect={false} autoComplete="off" autoCapitalize="sentences" spellCheck={false}/>
-            <TouchableOpacity style={[s.sendBtn,{backgroundColor:mode==='direct'?cp.color:'#E8C98A'}]} onPress={send} disabled={loading||!input.trim()}>
+            <TextInput ref={textInputRef} style={s.input} defaultValue="" onChangeText={t=>{inputRef.current=t;setInput(t);}} placeholder={pendingImages.length?`${pendingImages.length} photo${pendingImages.length>1?'s':''} attached — add a message...`:"Speak your directive..."} placeholderTextColor="#333" multiline maxLength={2000} autoCorrect={false} autoComplete="off" autoCapitalize="sentences" spellCheck={false}/>
+            <TouchableOpacity style={[s.sendBtn,{backgroundColor:mode==='direct'?cp.color:'#E8C98A'}]} onPress={send} disabled={loading||(!input.trim()&&!pendingImages.length)}>
               <Text style={s.sendT}>SEND</Text>
             </TouchableOpacity>
           </View>
@@ -2410,6 +2562,14 @@ export default function CommandScreen({navigation,route}){
               <View style={[s.iactDot,handsFree&&{backgroundColor:'#4CAF50'}]}/>
               <Text style={[s.iactT,handsFree&&{color:'#4CAF50'}]}>{handsFree?'AUTO ON':'AUTO OFF'}</Text>
             </TouchableOpacity>
+            {activePersona==='ara'&&mode==='direct'&&(
+              <TouchableOpacity style={[s.iact,araLiveOn&&{borderColor:'#00CED1',backgroundColor:'#00CED111'}]} onPress={toggleAraLive}>
+                <View style={[s.iactDot,araLiveOn&&{backgroundColor:'#00CED1'}]}/>
+                <Text style={[s.iactT,araLiveOn&&{color:'#00CED1'}]}>
+                  {araLiveOn?(araLiveState==='connecting'?'LIVE — CONNECTING':araLiveState==='speaking'?'LIVE — SPEAKING':'LIVE — LISTENING'):'GO LIVE'}
+                </Text>
+              </TouchableOpacity>
+            )}
             <TouchableOpacity style={[s.iact,voiceOn&&!voiceMuted&&{borderColor:'#E8C98A',backgroundColor:'#E8C98A11'}]} onPress={()=>{if(voiceOn)stopAudio();setVoiceOn(v=>!v);setVoicePaused(false);}}>
               <View style={[s.iactDot,voiceOn&&!voiceMuted&&{backgroundColor:'#E8C98A'}]}/>
               <Text style={[s.iactT,voiceOn&&!voiceMuted&&{color:'#E8C98A'}]}>{voiceOn?'VOICE ON':'VOICE OFF'}</Text>
@@ -2428,8 +2588,8 @@ export default function CommandScreen({navigation,route}){
               <View style={[s.iactDot,{backgroundColor:'#E05555'}]}/>
               <Text style={[s.iactT,{color:'#E05555'}]}>STOP</Text>
             </TouchableOpacity>}
-            <TouchableOpacity style={s.iact} onPress={pickImage}>
-              <View style={s.iactDot}/><Text style={s.iactT}>IMAGE</Text>
+            <TouchableOpacity style={[s.iact,pendingImages.length>0&&{borderColor:'#E8C98A',backgroundColor:'#E8C98A11'}]} onPress={pickImage}>
+              <View style={[s.iactDot,pendingImages.length>0&&{backgroundColor:'#E8C98A'}]}/><Text style={[s.iactT,pendingImages.length>0&&{color:'#E8C98A'}]}>{pendingImages.length>0?`IMAGE (${pendingImages.length})`:'IMAGE'}</Text>
             </TouchableOpacity>
             <TouchableOpacity style={s.iact} onPress={pickVideo}>
               <View style={s.iactDot}/><Text style={s.iactT}>VIDEO</Text>
@@ -2567,6 +2727,13 @@ const s=StyleSheet.create({
   firmSub:{fontFamily:'monospace',fontSize:8,color:'#4a7d7d',letterSpacing:1,marginTop:2},
   firmX:{color:'#4a7d7d',fontSize:14,paddingHorizontal:4},
   inputArea:{borderTopWidth:1,borderTopColor:'#111'},
+  stagedTray:{flexDirection:'row',gap:8,paddingHorizontal:10,paddingTop:8,alignItems:'center'},
+  stagedItem:{width:56,height:56},
+  stagedThumb:{width:56,height:56,borderRadius:6,borderWidth:1,borderColor:'#222'},
+  stagedX:{position:'absolute',top:-6,right:-6,width:18,height:18,borderRadius:9,backgroundColor:'#000',borderWidth:1,borderColor:'#444',alignItems:'center',justifyContent:'center'},
+  stagedXT:{color:'#E05555',fontSize:10,fontWeight:'700'},
+  stagedClear:{width:56,height:56,borderRadius:6,borderWidth:1,borderColor:'#222',alignItems:'center',justifyContent:'center'},
+  stagedClearT:{fontFamily:'monospace',fontSize:8,color:'#555',letterSpacing:1,textAlign:'center'},
   inputRow:{flexDirection:'row',alignItems:'flex-end',paddingHorizontal:10,paddingTop:8,paddingBottom:4,gap:8},
   input:{flex:1,backgroundColor:'#080808',borderWidth:1,borderColor:'#151515',borderRadius:8,paddingHorizontal:12,paddingVertical:9,color:'#DDD',fontSize:14,maxHeight:90},
   sendBtn:{paddingHorizontal:14,paddingVertical:10,borderRadius:8,alignItems:'center',justifyContent:'center'},

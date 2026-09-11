@@ -1,21 +1,23 @@
-// A.R.A., headless — the persona runtime behind the Telegram bot.
+// The persona runtime behind the Telegram bots — one bot per persona, each
+// running that persona headless.
 //
 // The in-app persona runtime (src/services/aiService.js + commandHandler.js)
-// lives on the device. This is a server-side re-implementation of just A.R.A.,
-// scoped to what works without the app open: chat, notes, tasks, expenses,
-// dates, web + deep research, memory, the nightly council, and relaying to any
-// other persona. Anything that needs the phone or the holographic HUD (opening
-// an app, the 3D Lab, detaching panels, placing a trade) is deferred back to the
-// app — A.R.A. is told to say so plainly.
+// lives on the device. This is a server-side re-implementation scoped to what
+// works without the app open: chat, notes, tasks, expenses, dates, web + deep
+// research, memory, the nightly council, and relaying to any other persona.
+// Anything that needs the phone or the holographic HUD (opening an app, the 3D
+// Lab, detaching panels, placing a trade, HUD edits, filing a build) is deferred
+// back to the app — the persona is told to say so plainly.
 //
 // Context and writes go through the same sync_rows store the app syncs from, so
-// a task A.R.A. adds here shows up in the app on its next pull, and vice versa.
+// a task added here shows up in the app on its next pull, and vice versa. Each
+// persona keeps its own Telegram history (tg_messages.persona) and its own
+// memory slice (persona_memory rows tagged with its id).
 const crypto = require('crypto');
 const { query } = require('./db');
 const { chatAs, claudeText, webResearch } = require('./llm');
-const { ROSTER, resolvePersonaId, rosterLines, personaSystem } = require('./personas');
+const { ROSTER, resolvePersonaId, rosterLines, personaSystem, personaTgIdentity } = require('./personas');
 const { readDriveNote, saveDriveNote, googleLinked } = require('./google');
-const telegram = require('./telegram');
 
 const TZ = 'America/New_York';
 const HISTORY_TURNS = 16;
@@ -168,12 +170,14 @@ function contextBlock(ctx) {
   return L.join('\n');
 }
 
-// --- A.R.A.'s identity, headless ---------------------------------------
+// --- persona identities, headless ------------------------------------
 
 const ARA_IDENTITY = `You are A.R.A. — Attentive Relationship & Affairs Architect, full personal assistant to Mr. Burrus. Call him "Mr. Burrus". Warm, sharp, a step ahead. You are talking to him over Telegram (text), away from the Empire OS app — so keep replies tight and mobile-readable, no long status briefings unless he asks. Reply directly to what he just said. Never open with a HUD readout or a "here is where things stand" preamble.
 
 You have a live context block below — time, Empire Score, businesses and revenue, tasks, pipeline, trades, builds, the last council headline and W.I.R.E.'s latest brief. Read from it; don't invent these numbers.`;
 
+// A.R.A. runs the day, so she gets the full tool set (task list, expenses, dates,
+// council control). The other personas get a leaner set focused on their lane.
 const ARA_TOOLS = `[WHAT YOU CAN DO FROM HERE — emit the tag in your reply; the tag is what acts, not saying you'll do it. No literal ] inside a tag.
  - [SEARCH_WEB: query] — one live web lookup; the result comes back before you answer. Use only when the answer turns on something current.
  - [DEEP_RESEARCH: topic] — ONLY when he explicitly asks for "deep research" / "a deep dive". Runs in the background (several minutes, ~12 searches, cited); you'll get the finished brief and it's saved as a Note. Tell him it's running.
@@ -191,6 +195,26 @@ const ARA_TOOLS = `[WHAT YOU CAN DO FROM HERE — emit the tag in your reply; th
 NOT AVAILABLE over Telegram — if he asks for one of these, say plainly that it needs the app open, and offer the nearest thing you can do:
  opening an app on his phone, the 3D Laboratory, detaching/docking HUD panels, the analytics board and charts, placing or closing trades, editing clips, the client-project delegation flow, filing a build request (note the spec and tell him to file it from the app so he can track it).]`;
 
+// Extra per-persona tag lines folded into GENERIC_TOOLS.
+const PERSONA_EXTRA_TOOLS = {
+  haven: ' - [READ_HUD] — pull the live HUD (Batman Protocol training template, morning routine, streak). Read it before advising on training; never assume a fixed schedule.',
+  jarvis: ' - [READ_HUD] — pull the live HUD (tasks, routine, Batman Protocol, targets).\n - [BUILD_STATUS] — the current state of the app build pipeline (open build jobs, PRs, questions).',
+};
+
+function genericTools(personaId) {
+  const extra = PERSONA_EXTRA_TOOLS[personaId] ? '\n' + PERSONA_EXTRA_TOOLS[personaId] : '';
+  return `[WHAT YOU CAN DO FROM HERE — emit the tag in your reply; the tag is what acts, not saying you'll do it. No literal ] inside a tag.
+ - [SEARCH_WEB: query] — one live web lookup; the result comes back before you answer. Use only when the answer turns on something current.
+ - [DEEP_RESEARCH: topic] — ONLY when he explicitly asks for "deep research" / "a deep dive". Runs in the background (several minutes, cited); you'll get the finished brief and it's saved as a Note. Tell him it's running.
+ - [RELAY_TO: persona-id | a complete, specific question] — hand something outside your lane to another persona. Synchronous: you get their real answer back this turn. Ask a full question; never guess their answer.
+ - [MEMORY_QUERY: precise question] — search your own history with Mr. Burrus when he points back to something not in view.
+ - [SAVE_NOTE: title | content] — write (or overwrite) a Drive note. A short "Saved that as '<title>'." is enough.
+ - [READ_NOTE: title] — pull a Drive note's contents before you answer. Long notes page: [READ_NOTE: title | 2], [READ_NOTE: title | all].${extra}
+
+NOT AVAILABLE over Telegram — if he asks for one, say plainly it needs the app open, and offer the nearest thing you can do here:
+ editing the HUD / Batman Protocol / routine / targets, the 3D Laboratory, HUD panels, the analytics board, placing or closing trades, editing clips, filing a build request (note the spec and tell him to file it from the app).]`;
+}
+
 function systemPrompt(ctx) {
   return [
     ARA_IDENTITY,
@@ -198,6 +222,17 @@ function systemPrompt(ctx) {
     `[THE EMPIRE — the other personas who serve Mr. Burrus. Hand anything outside your lane to one with [RELAY_TO: id | ...]:\n${rosterLines()}\n]`,
     `[LIVE CONTEXT:\n${contextBlock(ctx)}\n]`,
     `[THE CURRENT MOMENT — right now it is ${momentET()} (America/New_York); Mr. Burrus is in Waldorf, MD. This is authoritative; the chat history and memory may be hours or days old, so don't assume it's still the same day.]`,
+  ].join('\n\n');
+}
+
+// System prompt for a non-A.R.A. persona running its own bot.
+function personaSystemPrompt(personaId, ctx) {
+  return [
+    `${personaTgIdentity(personaId)}\n\nYou are talking to Mr. Burrus over Telegram (text), away from the Empire OS app — keep replies tight and mobile-readable. Reply directly to what he just said; no status-briefing preamble. There is a live context block below — read from it, don't invent numbers.`,
+    genericTools(personaId),
+    `[THE EMPIRE — the other personas. Hand anything outside your lane to one with [RELAY_TO: id | ...]:\n${rosterLines()}\n]`,
+    `[LIVE CONTEXT:\n${contextBlock(ctx)}\n]`,
+    `[THE CURRENT MOMENT — right now it is ${momentET()} (America/New_York); Mr. Burrus is in Waldorf, MD. This is authoritative; chat history and memory may be hours or days old.]`,
   ].join('\n\n');
 }
 
@@ -216,9 +251,10 @@ function stripTags(text) {
   return String(text || '').replace(TAG_RE, '').replace(/\n{3,}/g, '\n\n').trim();
 }
 
-// Synchronous tags — run them, return text to feed back so A.R.A. can answer
-// with the results. Returns a string (possibly empty).
-async function runInjections(text) {
+// Synchronous tags — run them, return text to feed back so the persona can
+// answer with the results. Returns a string (possibly empty). `persona` is the
+// id of the persona whose turn this is (scopes memory, blocks self-relay).
+async function runInjections(text, persona = 'ara') {
   const parts = [];
   for (const { name, arg } of findTags(text)) {
     try {
@@ -228,12 +264,17 @@ async function runInjections(text) {
         const n = await readDriveNote(arg).catch(() => null);
         parts.push(n ? `NOTE "${n.name}":\n${n.text}` : `READ_NOTE "${arg}": not found (or Google not connected).`);
       } else if (name === 'MEMORY_QUERY' && arg) {
-        parts.push(`MEMORY_QUERY "${arg}":\n${await memoryQuery(arg)}`);
+        parts.push(`MEMORY_QUERY "${arg}":\n${await memoryQuery(arg, persona)}`);
+      } else if (name === 'READ_HUD') {
+        parts.push(`HUD:\n${await readHud()}`);
+      } else if (name === 'BUILD_STATUS') {
+        parts.push(`BUILD PIPELINE:\n${await buildStatus()}`);
       } else if (name === 'RELAY_TO' && arg) {
         const [ref, ...rest] = arg.split('|');
         const msg = rest.join('|').trim();
         const id = resolvePersonaId(ref);
         if (!id || !msg) { parts.push(`RELAY_TO "${arg}": couldn't route that.`); continue; }
+        if (id === persona) { parts.push(`RELAY_TO "${ref}": that's you — just answer him directly.`); continue; }
         parts.push(`${ROSTER[id].name} replied:\n${await relayToPersona(id, msg)}`);
       }
     } catch (e) {
@@ -243,9 +284,37 @@ async function runInjections(text) {
   return parts.join('\n\n');
 }
 
+// The live HUD as readable lines — Batman Protocol template, morning routine,
+// score/streak. Used by [READ_HUD] (H.A.V.E.N. / J.A.R.V.I.S.).
+async function readHud() {
+  const h = (await syncedRows('hud_state').catch(() => []))[0] || {};
+  const L = [`Empire Score ${h.empire_score || 0}% · streak ${h.streak || 0}d`];
+  const routine = asObject(h.morning_routine, []);
+  if (Array.isArray(routine) && routine.length) {
+    L.push(`Morning routine: ${routine.map((r) => (typeof r === 'string' ? r : r.label || r.id)).join(', ')}`);
+  }
+  const bt = asObject(h.batman_template, []);
+  if (Array.isArray(bt) && bt.length) {
+    L.push('Batman Protocol (7-day template):');
+    for (const d of bt) L.push(`  ${d.day || d.label || ''}: ${d.label || ''}${d.desc ? ` — ${d.desc}` : ''}`);
+  } else {
+    const bp = asObject(h.batman_protocol, {});
+    if (bp && Object.keys(bp).length) L.push(`Batman Protocol: ${JSON.stringify(bp).slice(0, 800)}`);
+  }
+  return L.join('\n');
+}
+
+// Open build jobs for [BUILD_STATUS] (J.A.R.V.I.S.).
+async function buildStatus() {
+  const jobs = (await syncedRows('build_jobs').catch(() => []))
+    .filter((j) => j.state && !['pushed', 'failed', 'cancelled'].includes(j.state));
+  if (!jobs.length) return 'No open build jobs.';
+  return jobs.map((j) => `#${j.issue_number || '?'} [${j.state}]${j.pr_number ? ` PR #${j.pr_number}` : ''} ${j.title || (j.spec || '').slice(0, 60)}${j.state === 'question' && j.question ? `\n   asked: ${String(j.question).slice(0, 240)}` : ''}`).join('\n');
+}
+
 // Side-effect tags — apply after A.R.A.'s final reply. Returns human-readable
 // notes for the caller to log / surface.
-async function applyEffects(text, deliver) {
+async function applyEffects(text, deliver, persona = 'ara') {
   const notes = [];
   const now = Date.now();
   const done = new Set();
@@ -263,7 +332,7 @@ async function applyEffects(text, deliver) {
             const r = await saveDriveNote(title, content);
             notes.push(`note ${r.created ? 'created' : 'updated'}: ${r.name}`);
           } catch {
-            await upsertSyncRow('notes', newId(), { title, content, persona: 'ara', created_at: now, updated_at: now });
+            await upsertSyncRow('notes', newId(), { title, content, persona, created_at: now, updated_at: now });
             notes.push(`note saved locally: ${title}`);
           }
         }
@@ -304,13 +373,13 @@ async function applyEffects(text, deliver) {
         const [thing, days] = arg.split('|').map((s) => s.trim());
         const d = Math.max(1, Math.min(30, parseInt(days, 10) || 3));
         await upsertSyncRow('persona_memory', newId(), {
-          persona: 'ara', content: 'PINNED: ' + thing, category: 'general', keywords: '[]',
+          persona, content: 'PINNED: ' + thing, category: 'general', keywords: '[]',
           date: todayET(), created_at: now, pinned_until: now + d * 86400000,
         });
         notes.push(`pinned for ${d}d: ${thing}`);
       } else if (name === 'UNPIN_MEMORY' && arg) {
         const rows = await query("SELECT sync_id, data FROM sync_rows WHERE table_name = 'persona_memory' AND deleted = false");
-        const hit = rows.rows.find((r) => (r.data || {}).persona === 'ara' && (r.data || {}).pinned_until && String((r.data || {}).content || '').toLowerCase().includes(arg.toLowerCase()));
+        const hit = rows.rows.find((r) => (r.data || {}).persona === persona && (r.data || {}).pinned_until && String((r.data || {}).content || '').toLowerCase().includes(arg.toLowerCase()));
         if (hit) { await upsertSyncRow('persona_memory', hit.sync_id, { ...hit.data, pinned_until: null, updated_at: now }); notes.push('unpinned'); }
       } else if (name === 'COUNCIL_IDEA' && arg) {
         const list = asObject(await getSetting('council_ideas'), []) || [];
@@ -329,7 +398,7 @@ async function applyEffects(text, deliver) {
         convokeCouncil(deliver);
       } else if (name === 'DEEP_RESEARCH' && arg) {
         notes.push('deep research started');
-        runDeepResearch(arg, deliver);
+        runDeepResearch(arg, deliver, persona);
       }
     } catch (e) {
       notes.push(`${name}: failed — ${e.message}`);
@@ -347,17 +416,18 @@ async function relayToPersona(id, message) {
   return chatAs(p.api, p.model, sys, message, { maxTokens: 700 });
 }
 
-// The Claude-backed memory index over A.R.A.'s stored exchanges (persona_memory
-// rows tagged persona='ara'), same idea as aiService.queryMemory.
-async function memoryQuery(question) {
+// The Claude-backed memory index over a persona's stored exchanges
+// (persona_memory rows tagged with its id), same idea as aiService.queryMemory.
+async function memoryQuery(question, persona = 'ara') {
   const rows = (await syncedRows('persona_memory').catch(() => []))
-    .filter((r) => r.persona === 'ara')
+    .filter((r) => r.persona === persona)
     .sort((a, b) => (b.created_at || 0) - (a.created_at || 0))
     .slice(0, 120);
   if (!rows.length) return 'No stored memories yet.';
   const corpus = rows.map((r) => `[${r.date || ''}${r.category ? ' · ' + r.category : ''}]\n${r.content}`).join('\n\n').slice(0, 55000);
+  const who = (ROSTER[persona] && ROSTER[persona].name) || persona;
   return claudeText(
-    `You are the private memory index for A.R.A., Mr. Burrus's assistant. Below are stored exchanges, newest first. Answer the recall question using ONLY what's here. Be specific — quote dates and details. If it's not covered, say so in one sentence. No preamble.\n\n=== MEMORIES ===\n${corpus}\n=== END ===`,
+    `You are the private memory index for ${who}, one of Mr. Burrus's personas. Below are stored exchanges, newest first. Answer the recall question using ONLY what's here. Be specific — quote dates and details. If it's not covered, say so in one sentence. No preamble.\n\n=== MEMORIES ===\n${corpus}\n=== END ===`,
     question,
     { maxTokens: 600 },
   );
@@ -376,7 +446,7 @@ async function convokeCouncil(deliver) {
   }
 }
 
-async function runDeepResearch(topic, deliver) {
+async function runDeepResearch(topic, deliver, persona = 'ara') {
   const DR_SYSTEM = `You are a research analyst. Produce a thorough, well-structured, cited brief on the topic given.
 - Use web_search aggressively: several distinct angles, follow leads past the first page, verify load-bearing figures against a second source.
 - Structure: a 2-4 sentence executive summary; findings grouped by theme with the specific numbers, dates, names and quotes; then a short "what this means / what to do".
@@ -388,7 +458,7 @@ async function runDeepResearch(topic, deliver) {
     });
     const title = `Research — ${String(topic).slice(0, 60)}`;
     try { await saveDriveNote(title, brief); } catch {
-      await upsertSyncRow('notes', newId(), { title, content: brief, persona: 'ara', created_at: Date.now(), updated_at: Date.now() });
+      await upsertSyncRow('notes', newId(), { title, content: brief, persona, created_at: Date.now(), updated_at: Date.now() });
     }
     await deliver(`Deep research done — "${topic}". Saved as a Note.\n\n${brief.slice(0, 3500)}`);
   } catch (e) {
@@ -398,53 +468,61 @@ async function runDeepResearch(topic, deliver) {
 
 // --- history ---------------------------------------------------------
 
-async function loadHistory() {
-  const { rows } = await query('SELECT role, content FROM tg_messages ORDER BY id DESC LIMIT $1', [HISTORY_TURNS]);
+async function loadHistory(persona = 'ara') {
+  const { rows } = await query(
+    'SELECT role, content FROM tg_messages WHERE persona = $1 ORDER BY id DESC LIMIT $2',
+    [persona, HISTORY_TURNS],
+  );
   const hist = rows.reverse().map((r) => ({ role: r.role, content: r.content }));
   // Anthropic (the fallback provider) needs the first message to be 'user'.
   while (hist.length && hist[0].role !== 'user') hist.shift();
   return hist;
 }
-async function saveMessage(role, content) {
-  await query('INSERT INTO tg_messages (role, content, ts) VALUES ($1, $2, $3)', [role, content, Date.now()]);
+async function saveMessage(persona, role, content) {
+  await query('INSERT INTO tg_messages (persona, role, content, ts) VALUES ($1, $2, $3, $4)', [persona, role, content, Date.now()]);
 }
 
 // --- the turn -------------------------------------------------------
 
-// Run one A.R.A. turn for `userText`. `deliver(text)` sends a message to the
-// owner — used for the final reply and for background job results. Returns
+// Run one turn for `personaId` on `userText`. `deliver(text)` sends a message to
+// the owner — used for the final reply and for background job results. Returns
 // { text, effects }.
-async function runAraTurn(userText, deliver) {
+async function runPersonaTurn(personaId, userText, deliver) {
+  const persona = ROSTER[personaId] ? personaId : 'ara';
+  const p = ROSTER[persona];
   const ctx = await gatherContext();
-  const sys = systemPrompt(ctx);
-  const history = await loadHistory();
+  const sys = persona === 'ara' ? systemPrompt(ctx) : personaSystemPrompt(persona, ctx);
+  const history = await loadHistory(persona);
   const messages = [...history, { role: 'user', content: `[${momentET()}] ${userText}` }];
 
-  let reply = await chatAs('xai', 'grok-4', sys, messages, { maxTokens: 1200 });
+  let reply = await chatAs(p.api, p.model, sys, messages, { maxTokens: 1200 });
   const replies = [reply];
 
   for (let round = 0; round < 2; round++) {
-    const inj = await runInjections(reply);
+    const inj = await runInjections(reply, persona);
     if (!inj) break;
     messages.push({ role: 'assistant', content: reply });
     messages.push({ role: 'user', content: `[tool results — now reply to Mr. Burrus using these; do not repeat the tool tags]\n\n${inj}` });
-    reply = await chatAs('xai', 'grok-4', sys, messages, { maxTokens: 1200 });
+    reply = await chatAs(p.api, p.model, sys, messages, { maxTokens: 1200 });
     replies.push(reply);
   }
 
   // Side-effect tags fire once, from anywhere across the rounds (deduped).
-  const effects = await applyEffects(replies.join('\n'), deliver).catch((e) => [`effects failed: ${e.message}`]);
+  const effects = await applyEffects(replies.join('\n'), deliver, persona).catch((e) => [`effects failed: ${e.message}`]);
   let clean = stripTags(reply);
   if (!clean) clean = effects.length ? `Done — ${effects.join('; ')}.` : 'On it.';
 
-  await saveMessage('user', userText);
-  await saveMessage('assistant', clean);
+  await saveMessage(persona, 'user', userText);
+  await saveMessage(persona, 'assistant', clean);
   await upsertSyncRow('persona_memory', newId(), {
-    persona: 'ara', content: `YOU: ${userText}\nA.R.A.: ${clean}`,
+    persona, content: `YOU: ${userText}\n${p.name}: ${clean}`,
     category: 'general', keywords: '[]', date: todayET(), created_at: Date.now(),
   }).catch(() => {});
 
   return { text: clean, effects };
 }
 
-module.exports = { runAraTurn, gatherContext, contextBlock };
+// Back-compat: A.R.A.'s turn.
+const runAraTurn = (userText, deliver) => runPersonaTurn('ara', userText, deliver);
+
+module.exports = { runPersonaTurn, runAraTurn, gatherContext, contextBlock };

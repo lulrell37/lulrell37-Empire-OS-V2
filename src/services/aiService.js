@@ -313,12 +313,11 @@ export async function callPersona(personaId,messages,signal=null,onDelta=null,op
   if(hasVision){
     const provider=(api==='openai'||grokVisionModel)?'openai':'claude';
     const blocks=await toImageBlocks(images,provider);
-    if(blocks.length){
-      for(let i=hist.length-1;i>=0;i--){
-        if(hist[i].role==='user'){
-          hist[i]={role:'user',content:[{type:'text',text:String(hist[i].content||'')},...blocks]};
-          break;
-        }
+    if(!blocks.length)throw new Error('image could not be read (unsupported format or too large)');
+    for(let i=hist.length-1;i>=0;i--){
+      if(hist[i].role==='user'){
+        hist[i]={role:'user',content:[{type:'text',text:String(hist[i].content||'')},...blocks]};
+        break;
       }
     }
   }
