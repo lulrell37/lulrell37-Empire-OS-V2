@@ -12,15 +12,17 @@
 //     in the HUD NEWS panel, in her own chat/memory, and on the banner.
 //
 // When a brief carries a ===MARKETIMPACT=== line at `high` confidence, it is
-// handed to T.A.L.O.N., who places the trade (0.01 lot, DEMO ACCOUNT ONLY —
-// same hard rule as autoTrader.js). Gated on the `news_wire_trades` setting.
+// handed to T.A.L.O.N., who works out a level and flags it in chat for review —
+// nothing is ever placed automatically (T.A.L.O.N. no longer trades without a
+// confirmed tap, see CommandScreen.js's sendTrade). Gated on the
+// `news_wire_trades` setting.
 //
 // Mirrors services/dailyBriefing.js (ET date stamps) + services/autoScout.js
-// (foreground loop) + services/autoTrader.js (guarded trade path).
+// (foreground loop).
 import{getSetting,setSetting,updateHudState,getHudState,saveMessage,savePersonaMemory}from './database';
 import{webSearch,callPersona,newsTradeLevels}from './aiService';
-import{tlStatus,tlConnect,tlSnapshot,tlFormatSnapshot,tlPlaceOrder,tlPositions,tlInstrumentsById,MAX_QTY,MAX_OPEN_POSITIONS}from './tradeLocker';
-import{recordTradeOpen,TRADER_ID}from './tradeJournal';
+import{tlStatus,tlConnect,tlSnapshot,tlFormatSnapshot,tlPositions,tlInstrumentsById,MAX_OPEN_POSITIONS}from './tradeLocker';
+import{TRADER_ID}from './tradeJournal';
 
 const TZ='America/New_York';
 const SEEN_MAX=140;
@@ -190,18 +192,20 @@ async function pollHeadlines(){
   }
 }
 
-// --- News → T.A.L.O.N. trade hand-off (demo account only) ---
+// --- News → T.A.L.O.N. trade ALERT (never places anything on its own) ---
+// Flags a high-confidence market-mover to T.A.L.O.N. with a worked-out level,
+// same as any other setup he'd bring to Mr. Burrus — placing it still needs a
+// confirmed tap in chat (see CommandScreen.js's sendTrade). This used to place
+// the order outright; that autonomous path was removed.
 async function newsTradeHandoff(impacts){
   const highs=impacts.filter(i=>/^high/.test(i.confidence));
   if(!highs.length)return;
   if((await getSetting('news_wire_trades','1'))!=='1'){
-    emit(`— W.I.R.E. flags ${highs.map(i=>`${i.side.toUpperCase()} ${i.symbol}`).join(', ')} — news trades are off, not placing —`);
+    emit(`— W.I.R.E. flags ${highs.map(i=>`${i.side.toUpperCase()} ${i.symbol}`).join(', ')} — news-driven alerts are off —`);
     return;
   }
-  // Same hard rule as autoTrader.js: reachable + DEMO only.
   let st=tlStatus();
-  if(!st.connected){try{await tlConnect();st=tlStatus();}catch(e){emit(`— W.I.R.E. → T.A.L.O.N.: can't reach TradeLocker, not placing —`);return;}}
-  if(st.env!=='demo'){emit(`— W.I.R.E. → T.A.L.O.N.: LIVE account — news trades are demo-only, not placing —`);return;}
+  if(!st.connected){try{await tlConnect();st=tlStatus();}catch(e){emit(`— W.I.R.E. → T.A.L.O.N.: can't reach TradeLocker to size a level —`);return;}}
 
   const positions=await tlPositions().catch(()=>[]);
   const idToSym=await tlInstrumentsById().catch(()=>({}));
@@ -209,8 +213,8 @@ async function newsTradeHandoff(impacts){
   let openCount=positions.length;
 
   for(const imp of highs){
-    if(openSyms.has(imp.symbol))continue;                 // one position per pair
-    if(openCount>=MAX_OPEN_POSITIONS){emit(`— W.I.R.E. → T.A.L.O.N.: book full (${MAX_OPEN_POSITIONS}), holding ${imp.symbol} —`);break;}
+    if(openSyms.has(imp.symbol))continue;                 // already holding this pair
+    if(openCount>=MAX_OPEN_POSITIONS){emit(`— W.I.R.E. → T.A.L.O.N.: book full (${MAX_OPEN_POSITIONS}), flagging ${imp.symbol} anyway —`);}
     let snap;
     try{snap=await tlSnapshot(imp.symbol);}
     catch(e){emit(`— W.I.R.E. → T.A.L.O.N.: no market data for ${imp.symbol} —`);continue;}
@@ -219,17 +223,11 @@ async function newsTradeHandoff(impacts){
     catch(e){emit(`— W.I.R.E. → T.A.L.O.N.: ${imp.symbol} levels call failed —`);continue;}
     if(!lv){emit(`— W.I.R.E. → T.A.L.O.N.: ${imp.symbol} — T.A.L.O.N. couldn't set levels —`);continue;}
     const price=snap.quote?.mid??(imp.side==='buy'?snap.quote?.ask:snap.quote?.bid);
-    try{
-      const r=await tlPlaceOrder({symbol:imp.symbol,side:imp.side,qty:MAX_QTY,stopLoss:lv.stopLoss,takeProfit:lv.takeProfit});
-      await recordTradeOpen({symbol:imp.symbol,side:r.side,qty:r.qty,entry:price,stopLoss:lv.stopLoss,takeProfit:lv.takeProfit,
-        rationale:`news — ${imp.thesis}`.slice(0,180),orderId:r.orderId,setup:'news',auto:true}).catch(()=>{});
-      openSyms.add(imp.symbol);openCount++;
-      emit(`— W.I.R.E. → T.A.L.O.N. · ${r.side.toUpperCase()} ${r.qty} ${imp.symbol} @ ~${price??'mkt'} · SL ${lv.stopLoss} TP ${lv.takeProfit} — ${imp.thesis.slice(0,80)} —`);
-      const note=`[news trade] ${r.side} ${imp.symbol} @ ~${price??'mkt'} on: ${imp.thesis}`;
-      savePersonaMemory(TRADER_ID,note).catch(()=>{});
-      savePersonaMemory('wire',note).catch(()=>{});
-      saveMessage('talon','assistant',`Took the W.I.R.E. call — ${r.side.toUpperCase()} ${imp.symbol} @ ~${price??'mkt'}, SL ${lv.stopLoss}, TP ${lv.takeProfit}. ${lv.note||''}`.trim(),'direct').catch(()=>{});
-    }catch(e){emitErr('order',`W.I.R.E. → T.A.L.O.N. order rejected on ${imp.symbol}`,e);emit(`— W.I.R.E. → T.A.L.O.N.: ${imp.symbol} order rejected — ${e.message} —`);}
+    emit(`— W.I.R.E. → T.A.L.O.N. · flags ${imp.side.toUpperCase()} ${imp.symbol} @ ~${price??'mkt'} · SL ${lv.stopLoss} TP ${lv.takeProfit} — ${imp.thesis.slice(0,80)} — say the word to place it —`);
+    const note=`[news setup — not placed] ${imp.side} ${imp.symbol} @ ~${price??'mkt'} on: ${imp.thesis}`;
+    savePersonaMemory(TRADER_ID,note).catch(()=>{});
+    savePersonaMemory('wire',note).catch(()=>{});
+    saveMessage('talon','assistant',`W.I.R.E. flagged a high-confidence mover — ${imp.side.toUpperCase()} ${imp.symbol} @ ~${price??'mkt'}, SL ${lv.stopLoss}, TP ${lv.takeProfit}. ${lv.note||''} Say the word and I'll place it.`.trim(),'direct').catch(()=>{});
   }
 }
 

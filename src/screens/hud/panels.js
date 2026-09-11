@@ -10,7 +10,6 @@ import{colors,space,radius,type,FONTS}from '../../theme';
 import{tlStatus,tlQuote,tlPositions,tlClosePosition,tlInstrumentsById}from '../../services/tradeLocker';
 import{getBuildJobs,getSetting,getAllTrades,getTasks}from '../../services/database';
 import{tradeRecord,TRADER_ID}from '../../services/tradeJournal';
-import{autoTraderRunning,autoTraderLastCycleAt}from '../../services/autoTrader';
 import{refreshDailyBriefing}from '../../services/dailyBriefing';
 import{refreshNewsBrief}from '../../services/newsWire';
 import{googleConnected,calendarEvents,gmailUnreadList,tasksListRaw}from '../../services/googleClient';
@@ -382,18 +381,12 @@ export function MarketPanel({active=true}){
       }
     }catch{}
     try{
-      const[on,syms,every,rec,all]=await Promise.all([
-        getSetting('auto_trade','0'),
-        getSetting('auto_trade_symbols','XAUUSD, EURUSD, GBPJPY, BTCUSD'),
-        getSetting('auto_trade_interval_min','15'),
+      const[rec,all]=await Promise.all([
         tradeRecord({}).catch(()=>null),
         getAllTrades(TRADER_ID,60).catch(()=>[]),
       ]);
       if(!alive.current)return;
-      setAuto({
-        on:on==='1',live:autoTraderRunning(),lastCycleAt:autoTraderLastCycleAt(),syms,every,rec,
-        recent:(all||[]).filter(t=>t.auto).slice(0,3),
-      });
+      setAuto({rec,recent:(all||[]).filter(t=>t.auto).slice(0,3)});
     }catch{}
   },[names]);
 
@@ -424,19 +417,8 @@ export function MarketPanel({active=true}){
   const rec=auto?.rec;
   return(
     <>
-      {auto&&(
+      {auto&&(rec||auto.recent?.length>0)&&(
         <View style={ps.autoBox}>
-          <View style={ps.autoTopRow}>
-            <Text style={[ps.autoTag,{color:auto.on?colors.online:colors.textFaint}]}>
-              {auto.on?(auto.live?'● T.A.L.O.N. AUTO-TRADE':'○ AUTO-TRADE (paused — app foreground only)'):'○ AUTO-TRADE OFF'}
-            </Text>
-          </View>
-          {auto.on&&<Text style={ps.autoMeta}>{auto.syms} · every {auto.every}m</Text>}
-          {auto.on&&auto.live&&(
-            <Text style={[ps.autoMeta,{color:auto.lastCycleAt&&Date.now()-auto.lastCycleAt<(Number(auto.every)||15)*60000*2.5?colors.textFaint:colors.danger}]}>
-              {auto.lastCycleAt?`last scan ${Math.round((Date.now()-auto.lastCycleAt)/60000)}m ago`:'no scan completed yet'}
-            </Text>
-          )}
           {rec&&(rec.count>0||rec.openCount>0)&&(
             <Text style={ps.autoRec}>
               {rec.wins}W–{rec.losses}L{rec.be?`–${rec.be}BE`:''}
