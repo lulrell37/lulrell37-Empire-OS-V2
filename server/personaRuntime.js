@@ -193,7 +193,7 @@ You have a live context block below — time, Empire Score, streak, Batman Proto
 // A.R.A. runs the day, so she gets the full tool set (task list, expenses, dates,
 // council control). The other personas get a leaner set focused on their lane.
 const ARA_TOOLS = `[WHAT YOU CAN DO FROM HERE — emit the tag in your reply; the tag is what acts, not saying you'll do it. No literal ] inside a tag.
- - [SEARCH_WEB: query] — one live web lookup; the result comes back before you answer. Use only when the answer turns on something current.
+ - [SEARCH_WEB: query] — one live web lookup; the result comes back before you answer. Use it for anything that turns on something current — including weather/forecast for a place; never guess that from memory.
  - [DEEP_RESEARCH: topic] — ONLY when he explicitly asks for "deep research" / "a deep dive". Runs in the background (several minutes, ~12 searches, cited); you'll get the finished brief and it's saved as a Note. Tell him it's running.
  - [RELAY_TO: persona-id | a complete, specific question] — hand something outside your lane to another persona. This is synchronous: you get their real answer back this turn before you reply. Ask a full question, then use what they say — never guess their answer.
  - [MEMORY_QUERY: precise question] — search your full history with Mr. Burrus when he points back to something not in view; the answer comes back before you reply.
@@ -220,7 +220,7 @@ const PERSONA_EXTRA_TOOLS = {
 function genericTools(personaId) {
   const extra = PERSONA_EXTRA_TOOLS[personaId] ? '\n' + PERSONA_EXTRA_TOOLS[personaId] : '';
   return `[WHAT YOU CAN DO FROM HERE — emit the tag in your reply; the tag is what acts, not saying you'll do it. No literal ] inside a tag.
- - [SEARCH_WEB: query] — one live web lookup; the result comes back before you answer. Use only when the answer turns on something current.
+ - [SEARCH_WEB: query] — one live web lookup; the result comes back before you answer. Use it for anything that turns on something current — including weather/forecast for a place; never guess that from memory.
  - [DEEP_RESEARCH: topic] — ONLY when he explicitly asks for "deep research" / "a deep dive". Runs in the background (several minutes, cited); you'll get the finished brief and it's saved as a Note. Tell him it's running.
  - [RELAY_TO: persona-id | a complete, specific question] — hand something outside your lane to another persona. Synchronous: you get their real answer back this turn. Ask a full question; never guess their answer.
  - [MEMORY_QUERY: precise question] — search your own history with Mr. Burrus when he points back to something not in view.
