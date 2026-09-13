@@ -8,6 +8,10 @@ const { runDailyBriefing } = require('./dailyBriefing');
 const { runCouncilMeeting, endCouncilLive } = require('./councilMeeting');
 const { runScoutSignalCycle } = require('./autoScout');
 const telegram = require('./telegram');
+const talonAutoTrade = require('./talonAutoTrade');
+const newsWire = require('./newsWire');
+const scoutOutreach = require('./scoutOutreach');
+const autoAtlas = require('./autoAtlas');
 
 const app = express();
 app.disable('x-powered-by');
@@ -23,6 +27,7 @@ const json = express.json({ limit: '25mb' });
 app.use('/sync', auth, json, require('./routes/sync'));
 app.use('/push', auth, json, require('./routes/push'));
 app.use('/google', auth, json, require('./routes/google'));
+app.use('/trade', auth, json, require('./routes/trade'));
 app.use('/council', auth, json, require('./routes/council'));
 
 // Telegram bots — one headless front door per persona. Each webhook is guarded
@@ -43,6 +48,10 @@ db.init()
     startDailyBriefingCron();
     startCouncilCron();
     startScoutSignalCron();
+    startTalonAutoTradeCron();
+    startNewsWireCron();
+    startScoutOutreachCron();
+    startAutoAtlasCron();
     registerTelegramWebhook();
   })
   .catch((e) => {
@@ -108,6 +117,50 @@ function startScoutSignalCron() {
       .catch((e) => console.error('scout signal cycle failed:', e.message));
   });
   console.log(`scout signal cron scheduled (every ${mins}m)`);
+}
+
+// T.A.L.O.N. auto-trade — the loop that used to run only while the app was
+// foregrounded (src/services/autoTrader.js). Ticks every 5 min; self-paces
+// internally to the app's own `auto_trade_interval_min` setting, and the whole
+// thing is a no-op unless the app's `auto_trade` toggle (Settings › Trading) is
+// on — no separate on/off surface needed. TALON_AUTOTRADE=off kills this
+// instance's cron outright (e.g. running two backend instances).
+function startTalonAutoTradeCron() {
+  if (process.env.TALON_AUTOTRADE === 'off') return console.log('T.A.L.O.N. auto-trade cron disabled (TALON_AUTOTRADE=off)');
+  if (!process.env.ANTHROPIC_API_KEY) return console.log('T.A.L.O.N. auto-trade cron off (no ANTHROPIC_API_KEY)');
+  cron.schedule('*/5 * * * *', () => talonAutoTrade.tick().catch((e) => console.error('talon auto-trade cron failed:', e.message)));
+  console.log('T.A.L.O.N. auto-trade cron scheduled (every 5m, self-paced to auto_trade_interval_min)');
+}
+
+// W.I.R.E. news desk — ports src/services/newsWire.js's setInterval(10min).
+// Its own poll-window/dedup logic decides whether there's actually anything to
+// do on a given tick. NEWS_WIRE=off disables this instance's cron.
+function startNewsWireCron() {
+  if (process.env.NEWS_WIRE === 'off') return console.log('W.I.R.E. news desk cron disabled (NEWS_WIRE=off)');
+  if (!process.env.ANTHROPIC_API_KEY) return console.log('W.I.R.E. news desk cron off (no ANTHROPIC_API_KEY)');
+  cron.schedule('*/10 * * * *', () => newsWire.tick().catch((e) => console.error('news wire cron failed:', e.message)));
+  console.log('W.I.R.E. news desk cron scheduled (every 10m)');
+}
+
+// S.C.O.U.T. cold outreach — the outreach half of src/services/autoScout.js
+// (distinct from startScoutSignalCron's signal *discovery* above). Ticks every
+// 5 min; self-paces to `auto_scout_interval_min`. SCOUT_OUTREACH=off disables
+// this instance's cron. Needs Google linked (gmail.send) to actually send.
+function startScoutOutreachCron() {
+  if (process.env.SCOUT_OUTREACH === 'off') return console.log('S.C.O.U.T. outreach cron disabled (SCOUT_OUTREACH=off)');
+  if (!process.env.ANTHROPIC_API_KEY) return console.log('S.C.O.U.T. outreach cron off (no ANTHROPIC_API_KEY)');
+  cron.schedule('*/5 * * * *', () => scoutOutreach.tick().catch((e) => console.error('scout outreach cron failed:', e.message)));
+  console.log('S.C.O.U.T. outreach cron scheduled (every 5m, self-paced to auto_scout_interval_min)');
+}
+
+// A.T.L.A.S. unprompted money review — ports src/services/autoAtlas.js. Ticks
+// every 30 min; self-paces to `auto_atlas_interval_hours`. AUTO_ATLAS=off
+// disables this instance's cron.
+function startAutoAtlasCron() {
+  if (process.env.AUTO_ATLAS === 'off') return console.log('A.T.L.A.S. auto-review cron disabled (AUTO_ATLAS=off)');
+  if (!process.env.ANTHROPIC_API_KEY) return console.log('A.T.L.A.S. auto-review cron off (no ANTHROPIC_API_KEY)');
+  cron.schedule('*/30 * * * *', () => autoAtlas.tick().catch((e) => console.error('auto-atlas cron failed:', e.message)));
+  console.log('A.T.L.A.S. auto-review cron scheduled (every 30m, self-paced to auto_atlas_interval_hours)');
 }
 
 // Point every configured Telegram bot's webhook at this deployment on boot, so

@@ -2,7 +2,14 @@
 // table the app syncs to). councilMeeting.js and personaRuntime.js each carry
 // their own copies of these for historical reasons; new server code should use
 // this module.
+const crypto = require('crypto');
 const { query } = require('./db');
+
+const TZ = 'America/New_York';
+const newId = () => crypto.randomBytes(16).toString('hex');
+function todayET() {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+}
 
 async function syncedRow(table, syncId) {
   const { rows } = await query(
@@ -40,4 +47,15 @@ async function setSetting(key, value) {
   await upsertSyncRow('app_settings', key, { key, value: String(value) });
 }
 
-module.exports = { syncedRow, syncedRows, upsertSyncRow, getSetting, setSetting };
+// A persona memory row (synced, unlike the app's local-only `messages` chat
+// table) — the one durable way a server-side loop hands a persona something to
+// carry into its next conversation, in the app or over Telegram.
+async function saveMemory(persona, content) {
+  const text = String(content || '').trim();
+  if (!text) return;
+  await upsertSyncRow('persona_memory', newId(), {
+    persona, content: text, category: 'general', keywords: '[]', date: todayET(), created_at: Date.now(),
+  });
+}
+
+module.exports = { syncedRow, syncedRows, upsertSyncRow, getSetting, setSetting, saveMemory, newId, todayET };

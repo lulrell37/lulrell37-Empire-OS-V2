@@ -1,8 +1,11 @@
 // T.A.L.O.N. autonomous trading loop — DEMO ACCOUNT ONLY.
 //
-// Runs while the app is open (App.js starts/stops it on foreground). Every
-// `auto_trade_interval_min` minutes it pulls a fresh snapshot for each watched
-// symbol, asks T.A.L.O.N. for a decision, and — with NO confirmation prompt —
+// Runs while the app is open (App.js starts/stops it on foreground) — but only
+// when no backend is configured. Once a backend is linked, server/talonAutoTrade.js
+// is the sole actor (App.js stops starting this loop at all) so the two can't
+// double-trade; see AGENTS.md. Every `auto_trade_interval_min` minutes it pulls
+// a fresh snapshot for each watched symbol, asks T.A.L.O.N. for a decision,
+// and — with NO confirmation prompt —
 // acts: opens a 0.01-lot position, or closes ones it wants out of. Every fill is
 // recorded in the trade journal (auto=1) so it keeps learning from it.
 //

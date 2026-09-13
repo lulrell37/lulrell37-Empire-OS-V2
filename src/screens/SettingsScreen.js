@@ -6,11 +6,11 @@ import*as Clipboard from 'expo-clipboard';
 import{saveKeys,loadKeys,saveGoogleToken,loadGoogleToken,clearGoogleToken,saveTradeCreds,loadTradeCreds,clearTradeCreds,saveGitHubToken,loadGitHubToken,clearGitHubToken,saveBackend,loadBackend,clearBackend}from '../services/keyStore';
 import{runSync,pingBackend,initSyncStatus}from '../services/sync';
 import{registerPushToken,unregisterPushToken,sendTestPush}from '../services/push';
-import{tlConnect,tlReset}from '../services/tradeLocker';
-import{refreshAutoTrader}from '../services/autoTrader';
-import{refreshAutoScout}from '../services/autoScout';
-import{refreshAutoAtlas}from '../services/autoAtlas';
-import{refreshNewsWire}from '../services/newsWire';
+import{tlConnect,tlReset,syncTradeCredsToBackend,clearTradeCredsOnBackend}from '../services/tradeLocker';
+import{refreshAutoTrader,startAutoTrader,stopAutoTrader}from '../services/autoTrader';
+import{refreshAutoScout,startAutoScout,stopAutoScout}from '../services/autoScout';
+import{refreshAutoAtlas,startAutoAtlas,stopAutoAtlas}from '../services/autoAtlas';
+import{refreshNewsWire,startNewsWire,stopNewsWire}from '../services/newsWire';
 import{createLeadsSheet,unlinkLeadsSheet,leadsSheetUrl}from '../services/leadsSheet';
 import{resetWeather}from '../services/weather';
 import{ghVerify}from '../services/buildAgent';
@@ -115,6 +115,10 @@ export default function SettingsScreen({navigation}){
       setBeSync({lastSync:st.lastSync,error:st.error,running:st.running});
       registerPushToken().catch(()=>{});
       syncGoogleTokenToBackend().catch(()=>{}); // let the server-side council read the Drive brief
+      syncTradeCredsToBackend().catch(()=>{}); // so server-side T.A.L.O.N./W.I.R.E. can trade without the app open
+      // The server now owns T.A.L.O.N./S.C.O.U.T./A.T.L.A.S./W.I.R.E. — stop the
+      // local loops immediately so the two never double-trade/double-email.
+      stopAutoTrader();stopAutoScout();stopAutoAtlas();stopNewsWire();
       Alert.alert(st.error?'Connected · first sync failed':'Connected',st.error||'Backend linked. This device now syncs, routes AI calls through it, and gets scheduled nudges.');
     }catch(e){Alert.alert('Backend',e.message);}
     finally{setBeBusy(false);}
@@ -138,6 +142,9 @@ export default function SettingsScreen({navigation}){
   async function disconnectBackend(){
     await unregisterPushToken().catch(()=>{});
     await clearBackend();setBeConfigured(false);setBeToken('');setBeSync({lastSync:0,error:null,running:false});
+    // No server left to run them — resume the local loops so the feature keeps
+    // working standalone (each still no-ops unless its own Settings toggle is on).
+    startAutoTrader().catch(()=>{});startAutoScout().catch(()=>{});startAutoAtlas().catch(()=>{});startNewsWire().catch(()=>{});
     Alert.alert('Disconnected','Backend removed. This device is fully local again.');
   }
   async function connectTradeLocker(){
@@ -148,6 +155,7 @@ export default function SettingsScreen({navigation}){
       await saveTradeCreds(creds);
       const acct=await tlConnect();
       setTlAccount(acct);
+      syncTradeCredsToBackend().catch(()=>{}); // so server-side T.A.L.O.N./W.I.R.E. can trade without the app open
       Alert.alert('Connected',`${acct.env.toUpperCase()} · ${acct.currency} ${Number(acct.balance||0).toLocaleString()} · acct ${acct.accountId}`);
     }catch(e){Alert.alert('TradeLocker',e.message);}
     finally{setTlBusy(false);}
@@ -227,6 +235,7 @@ export default function SettingsScreen({navigation}){
   async function disconnectTradeLocker(){
     await clearTradeCreds();tlReset();setTlAccount(null);setTl({email:'',password:'',server:'',env:'demo'});
     setAutoTrade(false);await setSetting('auto_trade','0');await refreshAutoTrader().catch(()=>{});
+    clearTradeCredsOnBackend().catch(()=>{});
     Alert.alert('Disconnected','TradeLocker login removed.');
   }
   async function connectGitHub(){

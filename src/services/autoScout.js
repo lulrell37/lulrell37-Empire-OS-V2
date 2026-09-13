@@ -1,6 +1,8 @@
 // S.C.O.U.T. autonomous prospecting + outreach loop.
 //
-// Runs while the app is open (App.js starts/stops it on foreground), gated on
+// Runs while the app is open (App.js starts/stops it on foreground) — but only
+// when no backend is configured; once one is linked, server/scoutOutreach.js is
+// the sole actor (see AGENTS.md) so leads/emails never double up. Gated on
 // the `auto_scout` setting. Every `auto_scout_interval_min` minutes it:
 //   1. sweeps for people already looking for us — X, Bluesky, Hacker News
 //      (incl. the monthly SEEKING FREELANCER thread), Reddit (business + city

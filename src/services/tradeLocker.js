@@ -1,12 +1,44 @@
 // TradeLocker REST client — public API (public-api.tradelocker.com).
-// Assisted trading only: everything here runs while the app is open. No backend,
-// so no background monitoring, no overnight stop management.
+// This device-side client itself still only runs while the app is open, but
+// once a backend is configured the same login is handed to it (below) so
+// server/tradeLocker.js — the server-side port of this file — can trade and
+// monitor positions with the app closed. See server/talonAutoTrade.js.
 //
 // Auth: POST /auth/jwt/token { email, password, server } -> { accessToken,
 // refreshToken, expireDate }. All /trade/* calls need Authorization: Bearer +
 // an `accNum` header. Account state / positions come back as bare arrays whose
 // column order is fixed by /trade/config (hardcoded below from the docs).
-import{loadTradeCreds}from './keyStore';
+import{loadTradeCreds,loadBackend}from './keyStore';
+
+// Hand the TradeLocker login to the backend once, so the server-side T.A.L.O.N.
+// auto-trade loop and W.I.R.E.'s news-trade hand-off can reach the account
+// without the phone. No-op with no backend, no saved creds, or if the same
+// creds were already sent this launch. Mirrors googleClient.syncGoogleTokenToBackend
+// — called on TradeLocker connect, on backend connect, and on app start.
+let lastPushedCreds=null;
+export async function syncTradeCredsToBackend(){
+  const be=await loadBackend();
+  const creds=await loadTradeCreds();
+  if(!be||!creds?.email||!creds?.password||!creds?.server)return;
+  const key=JSON.stringify(creds);
+  if(key===lastPushedCreds)return;
+  try{
+    const res=await fetch(be.url+'/trade/creds',{
+      method:'POST',
+      headers:{Authorization:'Bearer '+be.token,'Content-Type':'application/json'},
+      body:key,
+    });
+    if(res.ok)lastPushedCreds=key;
+  }catch{}
+}
+
+// Drop the TradeLocker login from the backend (called when TradeLocker is disconnected).
+export async function clearTradeCredsOnBackend(){
+  lastPushedCreds=null;
+  const be=await loadBackend();
+  if(!be)return;
+  try{await fetch(be.url+'/trade/creds',{method:'DELETE',headers:{Authorization:'Bearer '+be.token}});}catch{}
+}
 
 const BASE={demo:'https://demo.tradelocker.com/backend-api',live:'https://live.tradelocker.com/backend-api'};
 
