@@ -22,10 +22,10 @@ import LaboratoryScreen from './src/screens/LaboratoryScreen';
 import AnalyticsScreen from './src/screens/AnalyticsScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
 import{initDatabase}from './src/services/database';
-import{loadKeys}from './src/services/keyStore';
+import{loadKeys,loadBackend}from './src/services/keyStore';
 import{runSync,initSyncStatus}from './src/services/sync';
 import{registerPushToken}from './src/services/push';
-import{tlInit}from './src/services/tradeLocker';
+import{tlInit,syncTradeCredsToBackend}from './src/services/tradeLocker';
 import{startAutoTrader,stopAutoTrader}from './src/services/autoTrader';
 import{startAutoScout,stopAutoScout}from './src/services/autoScout';
 import{startAutoAtlas,stopAutoAtlas}from './src/services/autoAtlas';
@@ -58,6 +58,7 @@ export default function App(){
         runSync().catch(()=>{}); // no-op unless a backend is configured
         registerPushToken().catch(()=>{}); // no-op unless a backend is configured
         syncGoogleTokenToBackend().catch(()=>{}); // no-op unless backend + Google both linked
+        syncTradeCredsToBackend().catch(()=>{}); // no-op unless backend + TradeLocker both linked
       }
       catch(e){console.warn('Init error:',e);reportError('Init error: '+e.message);}
       finally{setIsReady(true);await SplashScreen.hideAsync();}
@@ -80,7 +81,7 @@ export default function App(){
   },[]);
   useEffect(()=>{
     // Sync on every return to the foreground + a gentle background interval.
-    const sub=AppState.addEventListener('change',(st)=>{if(st==='active'){runSync().catch(()=>{});refreshDailyBriefing().catch(()=>{});importInboundForm().catch(()=>{});pushLeadsToSheet().catch(()=>{});syncGoogleTokenToBackend().catch(()=>{});}});
+    const sub=AppState.addEventListener('change',(st)=>{if(st==='active'){runSync().catch(()=>{});refreshDailyBriefing().catch(()=>{});importInboundForm().catch(()=>{});pushLeadsToSheet().catch(()=>{});syncGoogleTokenToBackend().catch(()=>{});syncTradeCredsToBackend().catch(()=>{});}});
     const iv=setInterval(()=>{runSync().catch(()=>{});},120000);
     const inb=setInterval(()=>{importInboundForm().catch(()=>{});},300000);
     const lsh=setInterval(()=>{pushLeadsToSheet().catch(()=>{});},300000);
@@ -91,16 +92,27 @@ export default function App(){
     return()=>{sub.remove();clearInterval(iv);clearInterval(inb);clearInterval(lsh);};
   },[]);
   useEffect(()=>{
-    // T.A.L.O.N. auto-trader — only actually runs when enabled in Settings (demo only).
-    startAutoTrader().catch(()=>{});
-    // S.C.O.U.T. auto-scout — only runs when enabled in Settings › OUTREACH.
-    startAutoScout().catch(()=>{});
-    // A.T.L.A.S. auto-review — only runs when enabled in Settings › OUTREACH.
-    startAutoAtlas().catch(()=>{});
-    // W.I.R.E. news desk — hourly poll + 6am/8pm briefs. On by default; toggle in Settings › NEWS.
-    startNewsWire().catch(()=>{});
+    // These four now also run server-side (server/talonAutoTrade.js,
+    // scoutOutreach.js, autoAtlas.js, newsWire.js) once a backend is
+    // configured, so they keep working with the app closed. The app and the
+    // server must never run the same loop at once — that would double every
+    // order/email/brief — so once a backend is linked, the server is the sole
+    // actor and these local loops simply don't start. No backend: unchanged,
+    // local loops run exactly as before (the feature still works standalone).
+    async function startLocalLoopsIfNoBackend(){
+      if(await loadBackend())return;
+      // T.A.L.O.N. auto-trader — only actually runs when enabled in Settings (demo only).
+      startAutoTrader().catch(()=>{});
+      // S.C.O.U.T. auto-scout — only runs when enabled in Settings › OUTREACH.
+      startAutoScout().catch(()=>{});
+      // A.T.L.A.S. auto-review — only runs when enabled in Settings › OUTREACH.
+      startAutoAtlas().catch(()=>{});
+      // W.I.R.E. news desk — hourly poll + 6am/8pm briefs. On by default; toggle in Settings › NEWS.
+      startNewsWire().catch(()=>{});
+    }
+    startLocalLoopsIfNoBackend();
     const sub=AppState.addEventListener('change',(st)=>{
-      if(st==='active'){startAutoTrader().catch(()=>{});startAutoScout().catch(()=>{});startAutoAtlas().catch(()=>{});startNewsWire().catch(()=>{});}
+      if(st==='active')startLocalLoopsIfNoBackend();
       else{stopAutoTrader();stopAutoScout();stopAutoAtlas();stopNewsWire();}
     });
     return()=>{sub.remove();stopAutoTrader();stopAutoScout();stopAutoAtlas();stopNewsWire();};

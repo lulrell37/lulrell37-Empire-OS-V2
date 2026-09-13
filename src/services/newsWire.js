@@ -1,5 +1,7 @@
 // W.I.R.E. — the Empire news desk. Two tiers, both running only while the app is
-// open (App.js starts/stops on foreground), gated on the `news_wire` setting:
+// open (App.js starts/stops on foreground) — but only when no backend is
+// configured; once one is linked, server/newsWire.js is the sole actor (see
+// AGENTS.md). Gated on the `news_wire` setting:
 //
 //   Tier 1 — a headline POLL every 2 hours during waking hours (6am–11pm ET,
 //     nothing overnight): one cheap web search + a short classify call. If

@@ -4,6 +4,11 @@
 // timer, she looks at the live empire status and drops one unprompted read —
 // what's working, what's not, the one thing worth acting on.
 //
+// Runs client-side only when no backend is configured; once one is linked,
+// server/autoAtlas.js is the sole actor (see AGENTS.md) and delivers the same
+// review as a push notification instead (the app's own chat table isn't part
+// of the synced dataset, so a server-written message can't reach it).
+//
 // No money moves and no messages send on their own here — it's pure analysis,
 // written straight into A.T.L.A.S.'s own chat (queued unread — see the orb
 // badge in CommandScreen/OrbZoom) so it's waiting whenever Mr. Burrus opens

@@ -43,6 +43,20 @@ CREATE TABLE IF NOT EXISTS google_tokens (
   updated_at    bigint
 );
 
+-- TradeLocker login, so the server-side T.A.L.O.N. auto-trade / W.I.R.E. news-
+-- trade crons can reach the account without the app open. Single owner ->
+-- single row, same shape as the app's SecureStore record (see
+-- src/services/keyStore.js saveTradeCreds). The app posts this on TradeLocker
+-- connect / backend connect / app start, and deletes it on disconnect.
+CREATE TABLE IF NOT EXISTS trade_creds (
+  id         int PRIMARY KEY DEFAULT 1,
+  email      text,
+  password   text,
+  server     text,
+  env        text,
+  updated_at bigint
+);
+
 -- Telegram <-> persona conversation. Each persona runs its own bot
 -- (server/personaRuntime.js); this is its chat history with the owner there,
 -- independent of the in-app persona chat and of the other bots. One row per

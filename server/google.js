@@ -129,4 +129,28 @@ async function readDriveNote(title) {
   return { name: file.name, text };
 }
 
-module.exports = { accessToken, googleLinked, readDriveNote, saveDriveNote };
+// Send a plain-text email as the owner — used by the server-side S.C.O.U.T.
+// outreach cron for cold opens + follow-ups. The stored refresh token already
+// carries gmail.send (granted at OAuth time alongside drive/gmail.readonly/
+// calendar/tasks — see src/services/googleAuth.js SCOPES), so no re-auth is
+// needed for this to start working.
+function utf8Bytes(str) {
+  return Buffer.from(String(str || ''), 'utf8');
+}
+function b64url(buf) {
+  return buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+async function gmailSend({ to, subject, body }) {
+  if (!(await googleLinked())) throw new Error('google not linked');
+  const raw = [
+    `To: ${to}`,
+    `Subject: =?UTF-8?B?${utf8Bytes(subject || '').toString('base64')}?=`,
+    'MIME-Version: 1.0',
+    'Content-Type: text/plain; charset="UTF-8"',
+    '',
+    String(body || ''),
+  ].join('\r\n');
+  return gapi('/gmail/v1/users/me/messages/send', { method: 'POST', json: { raw: b64url(utf8Bytes(raw)) } });
+}
+
+module.exports = { accessToken, googleLinked, readDriveNote, saveDriveNote, gmailSend };

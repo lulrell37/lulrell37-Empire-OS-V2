@@ -90,8 +90,43 @@ always-on cron (`SCOUT_CRON=on`) that walks the metro×segment grid
 (`server/scoutTargets.js`), pulls free buying-intent signals (job postings via
 Adzuna, review velocity via Yelp), qualifies against Empire Digital's ICP with
 one Claude call, scores each `leads.heat` 0-100, and writes warm leads into
-`sync_rows`. Discovery only — the app-side `src/services/autoScout.js` still owns
-outreach and now works highest-heat leads first.
+`sync_rows`. Discovery only — outreach is a separate module (below) that works
+highest-heat leads first.
+
+**Server-side ports of the app's four "autonomous" loops** — T.A.L.O.N.
+auto-trade, W.I.R.E.'s news desk, S.C.O.U.T.'s cold-outreach loop (distinct
+from the signal-discovery cron above), and A.T.L.A.S.'s unprompted money
+review were originally plain `setInterval` timers in `src/services/`, started
+and stopped by `App.js` on foreground/background — meaning all four died the
+moment the app was closed. Each now has a server-side twin
+(`server/talonAutoTrade.js`, `server/newsWire.js`, `server/scoutOutreach.js`,
+`server/autoAtlas.js`, wired into crons in `server/index.js`) that reads/writes
+the same `sync_rows` tables and the same `app_settings` toggles the app's own
+Settings screen already writes — so flipping a toggle in the app controls the
+server loop too, no separate on/off surface. Each also has its own
+`TALON_AUTOTRADE` / `NEWS_WIRE` / `SCOUT_OUTREACH` / `AUTO_ATLAS` env kill
+switch (default on) for this deployment specifically.
+
+The app and the server must never run the same loop at once — that would
+double every order/email/brief — so `App.js` only starts the four local loops
+when `loadBackend()` finds no backend configured; once one is linked the
+server becomes the sole actor and the client-side versions in `src/services/`
+stop starting at all (`SettingsScreen.js`'s backend connect/disconnect
+handlers flip this immediately rather than waiting for the next foreground).
+TradeLocker's login travels to the server the same way the Google refresh
+token does (`POST /trade/creds`, `server/routes/trade.js`, table
+`trade_creds`) — pushed on TradeLocker connect, backend connect, and app
+start (`syncTradeCredsToBackend()` in `src/services/tradeLocker.js`).
+
+One real gap this surfaced: the app's own per-persona chat table (`messages`
+in `src/services/database.js`) is **not** part of the synced dataset, so a
+server-side write can't land "in her chat" the way the on-device loops do.
+A.T.L.A.S.'s auto-review — whose entire point was showing up unread in her
+chat — is delivered as a push notification instead when run server-side
+(`pushSender.pushAlert`), plus a `persona_memory` row so the context still
+carries into her next real conversation. W.I.R.E.'s brief and T.A.L.O.N.'s
+trades don't have this problem: they land in `hud_state` and `trades`, both
+already synced and already what the NEWS panel and Trade Journal UI read.
 
 ## Builds
 

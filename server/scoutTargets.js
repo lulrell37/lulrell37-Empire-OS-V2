@@ -62,4 +62,32 @@ function cityOf(metro) {
   return parts.join(' ');
 }
 
-module.exports = { US_METROS, SEGMENTS, HIRING_SIGNAL_ROLES, pickTarget, cityOf };
+// metro string ("New York NY") -> its craigslist subdomain ("newyork"), for the
+// computer-gigs RSS the outreach cron's inbound sweep reads. Mirrors
+// src/services/scoutTargets.js craigslistSub exactly.
+const CL_OVERRIDES = {
+  'San Francisco CA': 'sfbay', 'San Jose CA': 'sfbay', 'Riverside CA': 'inlandempire',
+  'Virginia Beach VA': 'norfolk', 'Birmingham AL': 'bham', 'Colorado Springs CO': 'cosprings',
+  'Washington DC': 'washingtondc', 'Grand Rapids MI': 'grandrapids',
+};
+function craigslistSub(metro) {
+  if (CL_OVERRIDES[metro]) return CL_OVERRIDES[metro];
+  const parts = String(metro || '').trim().split(/\s+/);
+  if (parts.length > 1) parts.pop(); // drop the trailing state code
+  return parts.join('').toLowerCase().replace(/[^a-z]/g, '');
+}
+
+// Rotating inbound-scan phrases so the loop doesn't hit the same query every cycle.
+const INBOUND_QUERIES = [
+  'looking for someone to build a custom tool for my business',
+  'is there software that can automate this for a small business',
+  'need help automating repetitive work in my company',
+  'want a custom app built for my business operations',
+  'small business owner drowning in manual admin work',
+  'how do I stop doing this task manually every day',
+];
+function pickInboundQuery(cursor = 0) {
+  return INBOUND_QUERIES[Math.abs(Math.floor(cursor)) % INBOUND_QUERIES.length];
+}
+
+module.exports = { US_METROS, SEGMENTS, HIRING_SIGNAL_ROLES, pickTarget, cityOf, craigslistSub, pickInboundQuery };

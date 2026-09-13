@@ -244,6 +244,21 @@ async function pushCouncil(dateStr, headline, runKey) {
   return { sent: tokens.length };
 }
 
+// One-off alert push for the server-side T.A.L.O.N./W.I.R.E./A.T.L.A.S. loops —
+// same shape as pushCouncil, keyed so a given event (e.g. one news break, one
+// day's auto-review) only pushes once. Pass a fresh `key` per event.
+async function pushAlert(key, title, body, data) {
+  if (await seen(key)) return { skipped: 'already sent' };
+  const tokens = await deviceTokens();
+  if (!tokens.length) return { skipped: 'no devices' };
+  const tickets = await sendExpo([
+    { to: tokens, title, body, data: data || {}, priority: 'high', channelId: 'default' },
+  ]);
+  await pruneDead(tokens, tickets);
+  await markSeen(key);
+  return { sent: tokens.length };
+}
+
 // One-off "does push work" ping to every registered device.
 async function sendTest() {
   const tokens = await deviceTokens();
@@ -255,4 +270,4 @@ async function sendTest() {
   return { devices: tokens.length };
 }
 
-module.exports = { runNudgeCycle, sendTest, computeNudges, pushCouncil };
+module.exports = { runNudgeCycle, sendTest, computeNudges, pushCouncil, pushAlert };

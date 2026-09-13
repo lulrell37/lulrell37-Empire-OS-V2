@@ -129,6 +129,19 @@ function upcomingDates(dates, days = 21) {
   return out.sort((a, b) => a.daysOut - b.daysOut);
 }
 
+// Batman Protocol lines — shared by contextBlock (folded into every persona's
+// live context, so no one needs to ask for it) and readHud (the on-demand
+// [READ_HUD] tag some personas also carry, for a fresh re-pull mid-turn).
+function batmanLines(h) {
+  const bt = asObject(h.batman_template, []);
+  if (Array.isArray(bt) && bt.length) {
+    return [`Batman Protocol (7-day template): ${bt.map((d) => `${d.day || d.label || ''}: ${d.label || ''}${d.desc ? ` — ${d.desc}` : ''}`).join(' | ')}`];
+  }
+  const bp = asObject(h.batman_protocol, {});
+  if (bp && Object.keys(bp).length) return [`Batman Protocol: ${JSON.stringify(bp).slice(0, 400)}`];
+  return [];
+}
+
 function contextBlock(ctx) {
   const L = [];
   const h = ctx.hud || {};
@@ -144,6 +157,7 @@ function contextBlock(ctx) {
     const done = routine.filter((r) => routineDone[r.id]).length;
     L.push(`Morning Routine (${done}/${routine.length}): ${routine.map((r) => `${routineDone[r.id] ? '[x]' : '[ ]'} ${r.label}`).join(', ')}`);
   }
+  L.push(...batmanLines(h));
 
   if (ctx.businesses.length) {
     L.push('\nBUSINESSES (month-to-date revenue vs monthly target):');
@@ -174,7 +188,7 @@ function contextBlock(ctx) {
 
 const ARA_IDENTITY = `You are A.R.A. — Attentive Relationship & Affairs Architect, full personal assistant to Mr. Burrus. Call him "Mr. Burrus". Warm, sharp, a step ahead. You are talking to him over Telegram (text), away from the Empire OS app — so keep replies tight and mobile-readable, no long status briefings unless he asks. Reply directly to what he just said. Never open with a HUD readout or a "here is where things stand" preamble.
 
-You have a live context block below — time, Empire Score, businesses and revenue, tasks, pipeline, trades, builds, the last council headline and W.I.R.E.'s latest brief. Read from it; don't invent these numbers.`;
+You have a live context block below — time, Empire Score, streak, Batman Protocol, morning routine, businesses and revenue, tasks, dates, pipeline, trades, builds, the last council headline and W.I.R.E.'s latest brief. Read from it; don't invent these numbers.`;
 
 // A.R.A. runs the day, so she gets the full tool set (task list, expenses, dates,
 // council control). The other personas get a leaner set focused on their lane.
@@ -192,7 +206,9 @@ const ARA_TOOLS = `[WHAT YOU CAN DO FROM HERE — emit the tag in your reply; th
  - [COUNCIL_IDEA: text] / [COUNCIL_NOTE: text] — add to the nightly Empire Council's agenda / brief.
  - [COUNCIL_CONVENE] — run the Empire Council now, off its 5am schedule (a few minutes; the outcome comes back here and is saved as a Note).
 
-NOT AVAILABLE over Telegram — if he asks for one of these, say plainly that it needs the app open, and offer the nearest thing you can do:
+Everything in LIVE CONTEXT below — Empire Score, streak, Batman Protocol, morning routine, businesses and revenue, tasks, dates, outreach pipeline, trades, builds, the council, W.I.R.E.'s brief — is pulled fresh for every message. It IS the HUD; you're not missing it, you're looking at it. Web search, deep research, notes, memory, tasks, expenses, dates and the council are real actions you take directly from here, not things you relay to the app. Never tell him to open the app to check something already in front of you, and never say you "can't" do anything on the two lists above — you can.
+
+NOT AVAILABLE over Telegram — ONLY these genuinely need the phone or the 3D HUD in hand. If he asks for one of these, say plainly it needs the app open, and offer the nearest thing you can do:
  opening an app on his phone, the 3D Laboratory, detaching/docking HUD panels, the analytics board and charts, placing or closing trades, editing clips, the client-project delegation flow, filing a build request (note the spec and tell him to file it from the app so he can track it).]`;
 
 // Extra per-persona tag lines folded into GENERIC_TOOLS.
@@ -211,7 +227,9 @@ function genericTools(personaId) {
  - [SAVE_NOTE: title | content] — write (or overwrite) a Drive note. A short "Saved that as '<title>'." is enough.
  - [READ_NOTE: title] — pull a Drive note's contents before you answer. Long notes page: [READ_NOTE: title | 2], [READ_NOTE: title | all].${extra}
 
-NOT AVAILABLE over Telegram — if he asks for one, say plainly it needs the app open, and offer the nearest thing you can do here:
+Everything in LIVE CONTEXT below is pulled fresh for every message — it IS the HUD, not a stand-in for it. Web search, deep research, notes and memory are real actions you take directly from here. Never tell him to open the app to check something already in front of you, and never say you "can't" do anything on the list above — you can.
+
+NOT AVAILABLE over Telegram — ONLY these genuinely need the phone or the 3D HUD in hand. If he asks for one, say plainly it needs the app open, and offer the nearest thing you can do here:
  editing the HUD / Batman Protocol / routine / targets, the 3D Laboratory, HUD panels, the analytics board, placing or closing trades, editing clips, filing a build request (note the spec and tell him to file it from the app).]`;
 }
 
@@ -293,14 +311,7 @@ async function readHud() {
   if (Array.isArray(routine) && routine.length) {
     L.push(`Morning routine: ${routine.map((r) => (typeof r === 'string' ? r : r.label || r.id)).join(', ')}`);
   }
-  const bt = asObject(h.batman_template, []);
-  if (Array.isArray(bt) && bt.length) {
-    L.push('Batman Protocol (7-day template):');
-    for (const d of bt) L.push(`  ${d.day || d.label || ''}: ${d.label || ''}${d.desc ? ` — ${d.desc}` : ''}`);
-  } else {
-    const bp = asObject(h.batman_protocol, {});
-    if (bp && Object.keys(bp).length) L.push(`Batman Protocol: ${JSON.stringify(bp).slice(0, 800)}`);
-  }
+  L.push(...batmanLines(h));
   return L.join('\n');
 }
 
