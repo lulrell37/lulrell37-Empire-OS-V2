@@ -30,6 +30,27 @@ export const CLIP={
 const FADE=0.35; // crossfade seconds between steady-state moods
 const WALK_SPEED=1.6; // office units/sec
 
+// The sourced rig's own rest pose (rotation.y = 0) faces -Z, not +Z — verified
+// directly from its skeleton: the left ball-of-foot bone sits at a more
+// negative Z than the ankle above it (foot_l z=0.036, ball_l z=-0.113), and a
+// standing figure's toes point the way it faces. Every place in this file (and
+// in OfficeScene.js) that converts between "the world direction we want this
+// character facing" and its actual `rotation.y` goes through this constant —
+// get it wrong in only one of those places and the body, its walk direction,
+// and the face-to-face camera all disagree about which way it's looking
+// (exactly what happened before this was pinned down: the camera ended up
+// behind the character instead of in front of it).
+export const MODEL_FORWARD_OFFSET=Math.PI;
+// rotation.y -> the unit vector that rotation actually points the model along,
+// in world space.
+export function worldForward(rotationY){
+  const y=rotationY+MODEL_FORWARD_OFFSET;
+  return new THREE.Vector3(Math.sin(y),0,Math.cos(y));
+}
+// A desired world-facing yaw (0 = toward +Z, see officeLayout.js) -> the
+// rotation.y to actually assign so the model faces that way.
+export function yawToRotation(yaw){return yaw+MODEL_FORWARD_OFFSET;}
+
 // One shared mesh/skeleton — body type is a non-uniform scale on the hip/spine
 // (torso) and limb bones rather than a separate model, so all three "builds"
 // reuse the exact same animation clips with no retargeting.
@@ -203,7 +224,7 @@ export function createOfficeCharacter({persona,bodyType='average'}){
       }else{
         d.normalize();
         root.position.addScaledVector(d,Math.min(dist,WALK_SPEED*dt));
-        root.rotation.y=Math.atan2(d.x,d.z);
+        root.rotation.y=yawToRotation(Math.atan2(d.x,d.z));
       }
     }
   }
