@@ -1,0 +1,16 @@
+diff --git a/node_modules/expo-sqlite/android/build.gradle b/node_modules/expo-sqlite/android/build.gradle
+index a43cfac..c28d402 100644
+--- a/node_modules/expo-sqlite/android/build.gradle
++++ b/node_modules/expo-sqlite/android/build.gradle
+@@ -93,6 +93,11 @@ def downloadSQLite = tasks.register('downloadSQLite', Download) {
+   onlyIfNewer(true)
+   overwrite(false)
+   dest(new File(downloadsDir, "sqlite-amalgamation-${SQLITE_VERSION}.zip"))
++  // EAS build workers occasionally hit a transient "Network is unreachable"
++  // reaching sqlite.org mid-build (seen twice on real EAS builds — see
++  // patches/expo-sqlite+14.0.6.patch). Retry a few times before failing the
++  // whole native build over what's usually a momentary blip.
++  retries(5)
+ }
+ 
+ def prepareSQLite = tasks.register("prepareSQLite", Copy) {
