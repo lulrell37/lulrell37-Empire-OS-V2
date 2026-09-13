@@ -57,8 +57,11 @@ function cityMat(uniforms,opts={}){return createHoloMaterial(uniforms,{...opts,d
 // anchor height. The four screen landmarks ring the forum; Web is the east gate.
 const HEROES=[
   {name:'HUD',       route:'HUD',       label:'EMPIRE STATE',     sub:'THE HUD',          tint:0xE8C98A, at:[12,12],  ly:8.5,  shape:'rotunda'},
-  // The personas live in the galaxy now — you reach it by zooming all the way
-  // out of the city, not through a landmark. (Old 'Council' towers removed.)
+  // THE OFFICE — where the personas actually are now: a 3D desk floor
+  // (src/screens/command/OfficeScene.js), reached like any other landmark.
+  // Reinstates the empty slot the old 'Council' towers left when personas
+  // moved to the (now-retired) orb galaxy.
+  {name:'Office',    route:'Command',   label:'THE OFFICE',      sub:'THE OFFICE',       tint:0x6C8EBF, at:[0,25],   ly:9,    shape:'office'},
   {name:'Content',   route:'Content',   label:'THE STUDIO',      sub:'CONTENT QUEUE',    tint:0xEC4899, at:[-12,12], ly:10.5, shape:'towers'},
   {name:'Laboratory',route:'Laboratory',label:'THE DIAGRAM',      sub:'THE LABORATORY',   tint:0x9AD3E0, at:[-12,-12],ly:10.5, shape:'observatory'},
   {name:'Settings',  route:'Settings',  label:'THE WORKSHOP',     sub:'SETTINGS',         tint:0x9AA0A6, at:[12,-12], ly:8.5,  shape:'ziggurat'},
@@ -328,6 +331,20 @@ function buildHero(hero,uniforms){
     // corner obelisks
     for(const sx of[-2.6,2.6])for(const sz of[-2.6,2.6])
       put(new THREE.CylinderGeometry(0.06,0.28,3.2,4),hmat,sx,1.6,sz).rotation.y=Math.PI/4;
+
+  }else if(hero.shape==='office'){                  // OFFICE — a plain corporate tower, windowed facade
+    put(box(4.4,0.6,3.4,0,0,0),emat,0,1.05,0);        // entrance base/lobby band
+    put(box(3.6,7.6,2.8,0,0,0),hmat,0,5.1,0);         // tower body (hmat already carries the window grid)
+    put(box(4.0,0.35,3.2,0,0,0),emat,0,9.0,0);        // cornice ledge
+    put(box(2.8,0.3,2.2,0,0,0),emat,0,9.35,0);        // roof cap
+    // entrance awning
+    put(box(3.0,0.18,1.3,0,0,0),emat,0,2.15,1.9);
+    for(const sx of[-1.3,1.3])put(new THREE.CylinderGeometry(0.06,0.06,1.15,6),hmat,sx,1.55,2.4);
+    // rooftop parapet posts + a small beacon orb, same topper language as the
+    // other landmarks
+    for(const sx of[-1.2,1.2])for(const sz of[-0.9,0.9])
+      put(new THREE.CylinderGeometry(0.05,0.05,0.5,6),hmat,sx,9.6,sz);
+    const orb=put(new THREE.IcosahedronGeometry(0.4,1),emat,0,10.0,0);orb.userData.spin=1;
 
   }else if(hero.shape==='ledger'){                  // LEADS — S.C.O.U.T.'s pipeline as a ruled ledger stele
     put(new THREE.BoxGeometry(2.6,0.5,2.0),hmat,0,1.15,0);          // base slab
@@ -707,8 +724,6 @@ function EmpireCity({navigation}){
   const applyWheelZoom=useCallback((delta)=>{
     if(!delta)return;
     const lo=engine.minR-engine.baseR,hi=engine.maxR-engine.baseR;
-    // Already zoomed all the way out and still pulling back — leave for the galaxy.
-    if(delta>0&&engine.dolly>=hi-0.001){engine.wantExit=true;return;}
     engine.dolly=Math.max(lo,Math.min(hi,engine.dolly+delta*0.02));
     engine.idle=0;
   },[engine]);
@@ -738,7 +753,7 @@ function EmpireCity({navigation}){
 
   useFocusEffect(useCallback(()=>{
     engine.active=true;engine.entering=null;engine.navigated=false;
-    engine.dolly=0;engine.wantEnter=false;engine.wantExit=false;
+    engine.dolly=0;engine.wantEnter=false;
     return()=>{engine.active=false;};
   },[engine]));
 
@@ -795,8 +810,6 @@ function EmpireCity({navigation}){
       .onEnd(e=>{
         const r=engine.baseR+engine.dolly;
         if(e.scale>1&&r<=engine.minR+0.5)engine.wantEnter=true;
-        // pinched all the way out and still going — rise back to the galaxy
-        if(e.scale<1&&r>=engine.maxR-3)engine.wantExit=true;
       });
     const tap=Gesture.Tap().runOnJS(true).maxDistance(18)
       .onEnd((e,ok)=>{if(ok){const t=raycastAt(e.x,e.y);if(t){const h=HEROES.find(x=>x.name===t);if(h)enterHero(h);}}});
@@ -836,7 +849,6 @@ function EmpireCity({navigation}){
         const dt=Math.min(0.05,(now-engine.last)/1000);
         engine.last=now;
         if(engine.active===false)return;
-        if(engine.wantExit&&!engine.navigated){engine.navigated=true;navigation.navigate('Command');return;}
 
         const T=engine.uniforms.uTime.value+=dt;
         engine.idle+=dt;
