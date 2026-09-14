@@ -113,16 +113,18 @@ export function createOfficeCharacter({persona,bodyType='average'}){
   if(!baseGLTF)throw new Error('preloadOfficeModel() must resolve before createOfficeCharacter()');
   const root=cloneSkeleton(baseGLTF.scene);
 
-  // Tint: the whole body is one material (M_Main) plus the small joint caps
-  // (M_Joints) — recolor both from persona.color so each desk reads as that
-  // persona at a glance, same signal the old orb color used to carry.
+  // The base mannequin body goes a neutral skin-ish tone — persona.color now
+  // lives on the jacket (below), the monitor screen, the nameplate and the
+  // name label, so it reads as "a person wearing that color" rather than "a
+  // person made of solid-color plastic." Joint caps stay a soft neutral too.
   const tint=new THREE.Color(persona.color||'#E8C98A');
-  const jointTint=tint.clone().multiplyScalar(0.55);
+  const skinTone=new THREE.Color(0xC9AE8C);
+  const jointTone=new THREE.Color(0x8a8478);
   root.traverse(o=>{
     if(!o.isMesh||!o.material)return;
     const mats=(Array.isArray(o.material)?o.material:[o.material]).map(m=>{
       const c=m.clone();
-      c.color=(m.name==='M_Joints')?jointTint.clone():tint.clone();
+      c.color=(m.name==='M_Joints')?jointTone.clone():skinTone.clone();
       return c;
     });
     o.material=Array.isArray(o.material)?mats:mats[0];
@@ -134,17 +136,56 @@ export function createOfficeCharacter({persona,bodyType='average'}){
   TORSO_BONES.forEach(n=>{const b=root.getObjectByName(n);if(b)b.scale.setScalar(bs.torso);});
   LIMB_BONES.forEach(n=>{const b=root.getObjectByName(n);if(b)b.scale.set(bs.limbX,1,bs.limbZ);});
 
-  // Face "plate" — a small photo card parented to the head bone, not a UV
-  // texture wrap (this mesh has no dedicated head UV island to wrap onto). Its
-  // texture is filled in async by setFaceTexture() once the Settings photo
-  // (if any) has loaded; until then it's simply invisible.
+  // Anything parented to a bone lives in this rig's bone-local space, which
+  // is exactly 100x smaller than the world-scale everything else here is
+  // authored in — verified directly: a 0.08-unit box parented to the Head
+  // bone measured 8 world units across (nearly the size of the whole body).
+  // That ratio comes straight from the "Armature" node's own scale (100,100,
+  // 100) sitting above every bone. Divide any size/offset meant for a bone
+  // child by BONE_LOCAL_SCALE so it actually reads at the intended real-world
+  // size instead of dwarfing the character it's attached to.
+  const BONE_LOCAL_SCALE=100;
+  const bl=(worldUnits)=>worldUnits/BONE_LOCAL_SCALE;
+
+  // Hair — a small dark cap parented to the head bone, so the silhouette
+  // reads as a person instead of a bald peg doll.
   const headBone=root.getObjectByName('Head');
+  if(headBone){
+    const hair=new THREE.Mesh(
+      new THREE.SphereGeometry(bl(0.11),10,8,0,Math.PI*2,0,Math.PI*0.58),
+      new THREE.MeshStandardMaterial({color:0x2a2018,roughness:0.75}),
+    );
+    hair.position.set(0,bl(0.04),0);
+    headBone.add(hair);
+  }
+
+  // Jacket — a torso block tinted in persona.color, parented to the mid-spine
+  // bone so it moves with the body and follows every animation. This (plus
+  // the monitor screen, nameplate, and name label) is where persona.color
+  // actually shows up now that the base body is a neutral tone.
+  const torsoBone=root.getObjectByName('spine_02');
+  if(torsoBone){
+    const jacket=new THREE.Mesh(
+      new THREE.BoxGeometry(bl(0.34),bl(0.42),bl(0.22)),
+      new THREE.MeshStandardMaterial({color:tint,roughness:0.55}),
+    );
+    jacket.position.set(0,bl(0.03),bl(0.01));
+    torsoBone.add(jacket);
+  }
+
+  // Face "plate" — a small photo card parented to the head bone, not a UV
+  // texture wrap (this mesh has no dedicated head UV island to wrap onto).
+  // Sits toward -Z, the model's own verified rest-pose forward (see
+  // MODEL_FORWARD_OFFSET above) — i.e. in front of the face, not behind the
+  // skull. Its texture is filled in async by setFaceTexture() once the
+  // Settings photo (if any) has loaded; until then it's simply invisible.
   let facePlate=null;
   if(headBone){
-    const geo=new THREE.PlaneGeometry(0.34,0.34);
+    const geo=new THREE.PlaneGeometry(bl(0.44),bl(0.44));
     const mat=new THREE.MeshBasicMaterial({transparent:true,opacity:0,depthWrite:false});
     facePlate=new THREE.Mesh(geo,mat);
-    facePlate.position.set(0,0.05,0.16); // forward of the head bone's pivot — tuned against the real model at runtime
+    facePlate.position.set(0,bl(0.06),-bl(0.2));
+    facePlate.rotation.y=Math.PI; // plane's default normal faces +Z; flip to face outward with the head
     headBone.add(facePlate);
   }
 
