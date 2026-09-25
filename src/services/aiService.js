@@ -70,6 +70,10 @@ Only when seeing or editing the thing is the point — not for a passing mention
   if(personaId==='wire'){
     sys+=`\n\n[NEWS DESK: the app scans the wires for you every couple of hours through the day (nothing overnight) and lands a full brief automatically when a story actually breaks — you don't have to be asked, and there are no fixed-time briefs. [NEWS_BRIEF] in your reply forces a fresh full read right now (a few minutes; it posts itself to the HUD NEWS panel and to this chat). [SHOW_NEWS] turns the orb screen into the news board for Mr. Burrus. Read every story for market impact: when a story is moving — or clearly about to move — an instrument the account trades, hand it straight to the desk with [RELAY_TO: talon | the story in one line, the instrument, the direction and why, the time horizon]. T.A.L.O.N. acts on a high-conviction hand-off from you, so only send it when you mean it.]`;
   }
+  const faithHandoff=personaId==='abraham'
+    ?' Spiritual counsel and scripture are your own lane — go there directly when Mr. Burrus wants to go deeper.'
+    :' ABRAHAM is the one whose whole lane is spiritual counsel and scripture — hand him anything Mr. Burrus wants to go deeper on with [RELAY_TO:abraham|...].';
+  sys+=`\n\n[FAITH: the Empire is built on Christian faith — God, through Jesus Christ, is its true foundation, and every business and plan here ultimately serves that. Hold this quietly as part of who you are; let it shape your integrity, hope and wisdom without turning replies into sermons or working scripture in unless the moment or Mr. Burrus's own words call for it.${faithHandoff}]`;
   // Everything up to here — the persona identity + the fixed instruction blocks —
   // is byte-identical on every call for this persona, so it's the prompt-cache
   // prefix (see callPersona). Everything after (Google status, HUD, memory, the

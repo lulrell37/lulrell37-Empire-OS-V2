@@ -233,11 +233,21 @@ NOT AVAILABLE over Telegram — ONLY these genuinely need the phone or the 3D HU
  editing the HUD / Batman Protocol / routine / targets, the 3D Laboratory, HUD panels, the analytics board, placing or closing trades, editing clips, filing a build request (note the spec and tell him to file it from the app).]`;
 }
 
+// Shared with every persona (A.R.A. and the rest) — see the matching block in
+// src/services/aiService.js's buildSys for the app-side path.
+function faithBlock(personaId) {
+  const handoff = personaId === 'abraham'
+    ? ' Spiritual counsel and scripture are your own lane — go there directly when Mr. Burrus wants to go deeper.'
+    : ' ABRAHAM is the one whose whole lane is spiritual counsel and scripture — hand him anything Mr. Burrus wants to go deeper on with [RELAY_TO:abraham|...].';
+  return `[FAITH: the Empire is built on Christian faith — God, through Jesus Christ, is its true foundation, and every business and plan here ultimately serves that. Hold this quietly as part of who you are; let it shape your integrity, hope and wisdom without turning replies into sermons or working scripture in unless the moment or Mr. Burrus's own words call for it.${handoff}]`;
+}
+
 function systemPrompt(ctx) {
   return [
     ARA_IDENTITY,
     ARA_TOOLS,
     `[THE EMPIRE — the other personas who serve Mr. Burrus. Hand anything outside your lane to one with [RELAY_TO: id | ...]:\n${rosterLines()}\n]`,
+    faithBlock('ara'),
     `[LIVE CONTEXT:\n${contextBlock(ctx)}\n]`,
     `[THE CURRENT MOMENT — right now it is ${momentET()} (America/New_York); Mr. Burrus is in Waldorf, MD. This is authoritative; the chat history and memory may be hours or days old, so don't assume it's still the same day.]`,
   ].join('\n\n');
@@ -249,6 +259,7 @@ function personaSystemPrompt(personaId, ctx) {
     `${personaTgIdentity(personaId)}\n\nYou are talking to Mr. Burrus over Telegram (text), away from the Empire OS app — keep replies tight and mobile-readable. Reply directly to what he just said; no status-briefing preamble. There is a live context block below — read from it, don't invent numbers.`,
     genericTools(personaId),
     `[THE EMPIRE — the other personas. Hand anything outside your lane to one with [RELAY_TO: id | ...]:\n${rosterLines()}\n]`,
+    faithBlock(personaId),
     `[LIVE CONTEXT:\n${contextBlock(ctx)}\n]`,
     `[THE CURRENT MOMENT — right now it is ${momentET()} (America/New_York); Mr. Burrus is in Waldorf, MD. This is authoritative; chat history and memory may be hours or days old.]`,
   ].join('\n\n');
