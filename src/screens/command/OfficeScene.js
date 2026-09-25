@@ -25,9 +25,10 @@ import{Gesture,GestureDetector}from 'react-native-gesture-handler';
 import{getPersona,PERSONA_LIST}from '../../personas/personas';
 import{desksForFloor,deskFor,floorForPersona,ROOM}from './officeLayout';
 import{buildRoom}from './officeRoom';
-import{preloadOfficeModel,createOfficeCharacter,loadFaceTexture,yawToRotation,worldForward}from './officeCharacter';
+import{preloadOfficeModel,preloadBodyModel,createOfficeCharacter,loadFaceTexture,yawToRotation,worldForward}from './officeCharacter';
 import{disposeObject}from './holoMaterial';
 import bodyTypes from '../../../assets/persona-faces/body-types.json';
+import bodyModels from '../../../assets/persona-faces/body-models.json';
 
 const DESK_CAM_OFFSET=new THREE.Vector3(0,1.55,2.1); // in front of a seated/standing character, roughly head height
 // officeWorker.glb's rig measures 1.83 world units tall at scale 1 (verified
@@ -138,7 +139,7 @@ function OfficeSceneInner({personaId,color,active,vizRef,personaPics,unreadPerso
       asker.standUp(()=>asker.walkTo(spot,()=>asker.setMood('talk')));
     }else if(prevTarget){
       const home=new THREE.Vector3(askerDesk.x,0,askerDesk.z);
-      asker.walkTo(home,()=>{asker.group.rotation.y=yawToRotation(askerDesk.facing);asker.sitDown();});
+      asker.walkTo(home,()=>{asker.group.rotation.y=yawToRotation(askerDesk.facing,asker.forwardOffset);asker.sitDown();});
     }
   },[relayBusy,personaId,engine]);
 
@@ -186,6 +187,9 @@ function OfficeSceneInner({personaId,color,active,vizRef,personaPics,unreadPerso
       const midZ=(ROOM.frontZ+ROOM.backZ)/2;
 
       await preloadOfficeModel();
+      // Only load an alt body's ~15MB glb if some persona actually uses it.
+      const neededBodyModels=[...new Set(Object.values(bodyModels))].filter(m=>m&&m!=='mannequin');
+      await Promise.all(neededBodyModels.map(preloadBodyModel));
       const rooms={};
       [1,2].forEach(f=>{
         const room=buildRoom(f);
@@ -200,10 +204,10 @@ function OfficeSceneInner({personaId,color,active,vizRef,personaPics,unreadPerso
       PERSONA_LIST.forEach(p=>{
         const desk=deskFor(p.id);
         if(!desk)return;
-        const ch=createOfficeCharacter({persona:p,bodyType:bodyTypes[p.id]||'average'});
+        const ch=createOfficeCharacter({persona:p,bodyType:bodyTypes[p.id]||'average',bodyModel:bodyModels[p.id]||'mannequin'});
         ch.group.scale.setScalar(CHAR_SCALE);
         ch.group.position.set(desk.x,0,desk.z);
-        ch.group.rotation.y=yawToRotation(desk.facing);
+        ch.group.rotation.y=yawToRotation(desk.facing,ch.forwardOffset);
         rooms[desk.floor].group.add(ch.group);
         engine.characters[p.id]=ch;
         const pic=personaPics&&personaPics[p.id];
@@ -251,7 +255,7 @@ function OfficeSceneInner({personaId,color,active,vizRef,personaPics,unreadPerso
             // same way the model's own rest pose was measured — see
             // officeCharacter.js) and looks back at them — true face-to-face
             // regardless of which desk or which way they turned to get there.
-            const facing=worldForward(ch.group.rotation.y);
+            const facing=worldForward(ch.group.rotation.y,ch.forwardOffset);
             const camPos=look.clone().addScaledVector(facing,DESK_CAM_OFFSET.z);
             camera.position.lerp(camPos,0.12);
             engine._lookTarget=engine._lookTarget||look.clone();

@@ -18,6 +18,20 @@ import{b64ToArrayBuffer}from './holoMaterial';
 
 const MODEL=require('../../../assets/models/officeWorker.glb');
 
+// Alternate body meshes — Quaternius's "Universal Base Characters" pack,
+// explicitly published to pair with the same Universal Animation Library
+// MODEL's clips come from (see assets/models/LICENSE.md). Verified directly,
+// not just taken on their word: both files' skeletons carry the exact same 65
+// bone names, so baseGLTF.animations (below) plays on these meshes with zero
+// retargeting — a persona can use one of these instead of the mannequin
+// without touching a single animation clip. Textured PBR meshes, not the
+// mannequin's flat-tinted placeholder — see the skip of the skin-tone
+// override and the procedural hair cap in createOfficeCharacter below.
+const ALT_BODY_MODEL={
+  quaterniusMale:require('../../../assets/models/personaBodyMale.glb'),
+  quaterniusFemale:require('../../../assets/models/personaBodyFemale.glb'),
+};
+
 export const CLIP={
   SIT_IDLE:'Armature|Sitting_Idle_Loop',
   SIT_TALK:'Armature|Sitting_Talking_Loop', // stand-in for "busy" — see file note above
@@ -30,26 +44,37 @@ export const CLIP={
 const FADE=0.35; // crossfade seconds between steady-state moods
 const WALK_SPEED=1.6; // office units/sec
 
-// The sourced rig's own rest pose (rotation.y = 0) faces -Z, not +Z — verified
+// The mannequin's own rest pose (rotation.y = 0) faces -Z, not +Z — verified
 // directly from its skeleton: the left ball-of-foot bone sits at a more
 // negative Z than the ankle above it (foot_l z=0.036, ball_l z=-0.113), and a
 // standing figure's toes point the way it faces. Every place in this file (and
 // in OfficeScene.js) that converts between "the world direction we want this
-// character facing" and its actual `rotation.y` goes through this constant —
-// get it wrong in only one of those places and the body, its walk direction,
-// and the face-to-face camera all disagree about which way it's looking
-// (exactly what happened before this was pinned down: the camera ended up
-// behind the character instead of in front of it).
+// character facing" and its actual `rotation.y` goes through this offset —
+// get it wrong and the body, its walk direction, and the face-to-face camera
+// all disagree about which way it's looking (exactly what happened before
+// this was pinned down: the camera ended up behind the character instead of
+// in front of it).
+//
+// This is NOT a fixed constant across body models — verified the same way for
+// the Quaternius alt bodies (see assets/models/LICENSE.md) and their rest
+// pose faces +Z, the opposite of the mannequin, despite sharing every bone
+// name. FORWARD_OFFSET below is per-bodyModel; createOfficeCharacter resolves
+// it once and hands it back as the character's own `forwardOffset` — always
+// use THAT, not this mannequin-only constant, when calling worldForward /
+// yawToRotation for a character that might be on an alt body.
 export const MODEL_FORWARD_OFFSET=Math.PI;
+const FORWARD_OFFSET={mannequin:MODEL_FORWARD_OFFSET,quaterniusMale:0,quaterniusFemale:0};
+function forwardOffsetFor(bodyModel){return FORWARD_OFFSET[bodyModel]??0;}
 // rotation.y -> the unit vector that rotation actually points the model along,
-// in world space.
-export function worldForward(rotationY){
-  const y=rotationY+MODEL_FORWARD_OFFSET;
+// in world space. `offset` defaults to the mannequin's for any caller that
+// hasn't been updated to pass a character's own forwardOffset.
+export function worldForward(rotationY,offset=MODEL_FORWARD_OFFSET){
+  const y=rotationY+offset;
   return new THREE.Vector3(Math.sin(y),0,Math.cos(y));
 }
 // A desired world-facing yaw (0 = toward +Z, see officeLayout.js) -> the
 // rotation.y to actually assign so the model faces that way.
-export function yawToRotation(yaw){return yaw+MODEL_FORWARD_OFFSET;}
+export function yawToRotation(yaw,offset=MODEL_FORWARD_OFFSET){return yaw+offset;}
 
 // One shared mesh/skeleton — body type is a non-uniform scale on the hip/spine
 // (torso) and limb bones rather than a separate model, so all three "builds"
@@ -65,22 +90,44 @@ const LIMB_BONES=['upperarm_l','upperarm_r','thigh_l','thigh_r'];
 let baseGLTF=null;
 let loadingPromise=null;
 
+async function loadGLTFModule(mod){
+  const asset=Asset.fromModule(mod);
+  await asset.downloadAsync();
+  const b64=await FileSystem.readAsStringAsync(asset.localUri||asset.uri,{encoding:FileSystem.EncodingType.Base64});
+  return new Promise((res,rej)=>{
+    new GLTFLoader().parse(b64ToArrayBuffer(b64),'',res,rej);
+  });
+}
+
 // Call once (e.g. from OfficeScene's onContextCreate) before creating any
 // characters. Safe to call multiple times — later calls resolve instantly.
 export function preloadOfficeModel(){
   if(baseGLTF)return Promise.resolve(baseGLTF);
   if(loadingPromise)return loadingPromise;
   loadingPromise=(async()=>{
-    const asset=Asset.fromModule(MODEL);
-    await asset.downloadAsync();
-    const b64=await FileSystem.readAsStringAsync(asset.localUri||asset.uri,{encoding:FileSystem.EncodingType.Base64});
-    const gltf=await new Promise((res,rej)=>{
-      new GLTFLoader().parse(b64ToArrayBuffer(b64),'',res,rej);
-    });
+    const gltf=await loadGLTFModule(MODEL);
     baseGLTF={scene:gltf.scene,animations:gltf.animations};
     return baseGLTF;
   })();
   return loadingPromise;
+}
+
+// Alternate body meshes (see ALT_BODY_MODEL above) — scene only, no
+// animations of their own; they play baseGLTF's clips on their own skeleton.
+// `key` is one of ALT_BODY_MODEL's keys. Cached per key, same call-multiple-
+// times-safely contract as preloadOfficeModel.
+const altBodyScenes={};
+const altBodyLoading={};
+export function preloadBodyModel(key){
+  if(!ALT_BODY_MODEL[key])return Promise.reject(new Error(`unknown body model "${key}"`));
+  if(altBodyScenes[key])return Promise.resolve(altBodyScenes[key]);
+  if(altBodyLoading[key])return altBodyLoading[key];
+  altBodyLoading[key]=(async()=>{
+    const gltf=await loadGLTFModule(ALT_BODY_MODEL[key]);
+    altBodyScenes[key]=gltf.scene;
+    return gltf.scene;
+  })();
+  return altBodyLoading[key];
 }
 
 // personaPics stores a `data:image/jpeg;base64,...` string (Settings' existing
@@ -109,26 +156,34 @@ async function loadFaceTexture(personaId,dataUri){
 
 // Creates one character. `baseGLTF` must already be loaded (preloadOfficeModel).
 // Returns {group, setMood, standUp, sitDown, walkTo, update, dispose}.
-export function createOfficeCharacter({persona,bodyType='average'}){
+export function createOfficeCharacter({persona,bodyType='average',bodyModel='mannequin'}){
   if(!baseGLTF)throw new Error('preloadOfficeModel() must resolve before createOfficeCharacter()');
-  const root=cloneSkeleton(baseGLTF.scene);
+  const isMannequin=bodyModel==='mannequin';
+  const forwardOffset=forwardOffsetFor(bodyModel);
+  const sourceScene=isMannequin?baseGLTF.scene:altBodyScenes[bodyModel];
+  if(!sourceScene)throw new Error(`preloadBodyModel(${JSON.stringify(bodyModel)}) must resolve before createOfficeCharacter()`);
+  const root=cloneSkeleton(sourceScene);
 
-  // The base mannequin body goes a neutral skin-ish tone — persona.color now
-  // lives on the jacket (below), the monitor screen, the nameplate and the
-  // name label, so it reads as "a person wearing that color" rather than "a
-  // person made of solid-color plastic." Joint caps stay a soft neutral too.
   const tint=new THREE.Color(persona.color||'#E8C98A');
-  const skinTone=new THREE.Color(0xC9AE8C);
-  const jointTone=new THREE.Color(0x8a8478);
-  root.traverse(o=>{
-    if(!o.isMesh||!o.material)return;
-    const mats=(Array.isArray(o.material)?o.material:[o.material]).map(m=>{
-      const c=m.clone();
-      c.color=(m.name==='M_Joints')?jointTone.clone():skinTone.clone();
-      return c;
+  if(isMannequin){
+    // The base mannequin body goes a neutral skin-ish tone — persona.color now
+    // lives on the jacket (below), the monitor screen, the nameplate and the
+    // name label, so it reads as "a person wearing that color" rather than "a
+    // person made of solid-color plastic." Joint caps stay a soft neutral too.
+    const skinTone=new THREE.Color(0xC9AE8C);
+    const jointTone=new THREE.Color(0x8a8478);
+    root.traverse(o=>{
+      if(!o.isMesh||!o.material)return;
+      const mats=(Array.isArray(o.material)?o.material:[o.material]).map(m=>{
+        const c=m.clone();
+        c.color=(m.name==='M_Joints')?jointTone.clone():skinTone.clone();
+        return c;
+      });
+      o.material=Array.isArray(o.material)?mats:mats[0];
     });
-    o.material=Array.isArray(o.material)?mats:mats[0];
-  });
+  }
+  // Alt bodies (Quaternius) ship their own painted PBR skin/hair/eye textures
+  // — leave those materials alone rather than flattening them to a tint.
 
   // Body type — scale specific bone groups so slim/average/heavy reads as a
   // build difference on the one shared skeleton.
@@ -137,20 +192,26 @@ export function createOfficeCharacter({persona,bodyType='average'}){
   LIMB_BONES.forEach(n=>{const b=root.getObjectByName(n);if(b)b.scale.set(bs.limbX,1,bs.limbZ);});
 
   // Anything parented to a bone lives in this rig's bone-local space, which
-  // is exactly 100x smaller than the world-scale everything else here is
-  // authored in — verified directly: a 0.08-unit box parented to the Head
-  // bone measured 8 world units across (nearly the size of the whole body).
-  // That ratio comes straight from the "Armature" node's own scale (100,100,
-  // 100) sitting above every bone. Divide any size/offset meant for a bone
-  // child by BONE_LOCAL_SCALE so it actually reads at the intended real-world
-  // size instead of dwarfing the character it's attached to.
-  const BONE_LOCAL_SCALE=100;
+  // on the mannequin is exactly 100x smaller than the world-scale everything
+  // else here is authored in — verified directly: a 0.08-unit box parented to
+  // the Head bone measured 8 world units across (nearly the size of the whole
+  // body). That ratio comes straight from the mannequin's "Armature" node
+  // having its own scale of (100,100,100) sitting above every bone. The
+  // Quaternius alt bodies do NOT carry that 100x armature scale (verified the
+  // same way — their Armature node's scale is the glTF default of 1) even
+  // though every bone name matches, so the same 0.08-unit box would land
+  // right-sized there with no division at all. Divide any size/offset meant
+  // for a bone child by BONE_LOCAL_SCALE so it reads at the intended
+  // real-world size instead of dwarfing (mannequin) or vanishing into
+  // (alt body) the character it's attached to.
+  const BONE_LOCAL_SCALE=isMannequin?100:1;
   const bl=(worldUnits)=>worldUnits/BONE_LOCAL_SCALE;
 
-  // Hair — a small dark cap parented to the head bone, so the silhouette
-  // reads as a person instead of a bald peg doll.
+  // Hair — a small dark cap parented to the head bone, so the mannequin's
+  // silhouette reads as a person instead of a bald peg doll. Alt bodies
+  // already carry their own real hair mesh (MI_Hair_1) — skip the cap there.
   const headBone=root.getObjectByName('Head');
-  if(headBone){
+  if(headBone&&isMannequin){
     const hair=new THREE.Mesh(
       new THREE.SphereGeometry(bl(0.11),10,8,0,Math.PI*2,0,Math.PI*0.58),
       new THREE.MeshStandardMaterial({color:0x2a2018,roughness:0.75}),
@@ -265,7 +326,7 @@ export function createOfficeCharacter({persona,bodyType='average'}){
       }else{
         d.normalize();
         root.position.addScaledVector(d,Math.min(dist,WALK_SPEED*dt));
-        root.rotation.y=yawToRotation(Math.atan2(d.x,d.z));
+        root.rotation.y=yawToRotation(Math.atan2(d.x,d.z),forwardOffset);
       }
     }
   }
@@ -289,7 +350,7 @@ export function createOfficeCharacter({persona,bodyType='average'}){
   }
 
   setMood('idle');
-  return{group:root,setMood,standUp,sitDown,walkTo,update,setFaceTexture,isTransitioning,dispose,userData:{personaId:persona.id}};
+  return{group:root,setMood,standUp,sitDown,walkTo,update,setFaceTexture,isTransitioning,dispose,forwardOffset,userData:{personaId:persona.id}};
 }
 
 export{loadFaceTexture};
