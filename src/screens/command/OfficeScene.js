@@ -188,8 +188,15 @@ function OfficeSceneInner({personaId,color,active,vizRef,personaPics,unreadPerso
 
       await preloadOfficeModel();
       // Only load an alt body's ~15MB glb if some persona actually uses it.
+      // One at a time (each is a ~20MB base64 string in flight — two at once
+      // doubles the peak), and a failure only costs that body: its personas
+      // fall back to the mannequin instead of the whole office failing to open.
       const neededBodyModels=[...new Set(Object.values(bodyModels))].filter(m=>m&&m!=='mannequin');
-      await Promise.all(neededBodyModels.map(preloadBodyModel));
+      const loadedBodyModels=new Set(['mannequin']);
+      for(const m of neededBodyModels){
+        try{await preloadBodyModel(m);loadedBodyModels.add(m);}
+        catch(e){console.warn(`OFFICE: body model "${m}" failed to load, using mannequin`,e?.message||e);}
+      }
       const rooms={};
       [1,2].forEach(f=>{
         const room=buildRoom(f);
@@ -204,7 +211,7 @@ function OfficeSceneInner({personaId,color,active,vizRef,personaPics,unreadPerso
       PERSONA_LIST.forEach(p=>{
         const desk=deskFor(p.id);
         if(!desk)return;
-        const ch=createOfficeCharacter({persona:p,bodyType:bodyTypes[p.id]||'average',bodyModel:bodyModels[p.id]||'mannequin'});
+        const ch=createOfficeCharacter({persona:p,bodyType:bodyTypes[p.id]||'average',bodyModel:loadedBodyModels.has(bodyModels[p.id])?bodyModels[p.id]:'mannequin'});
         ch.group.scale.setScalar(CHAR_SCALE);
         ch.group.position.set(desk.x,0,desk.z);
         ch.group.rotation.y=yawToRotation(desk.facing,ch.forwardOffset);
