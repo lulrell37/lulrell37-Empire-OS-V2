@@ -39,7 +39,7 @@ export default function SettingsScreen({navigation}){
   const[tlAccount,setTlAccount]=useState(null);
   const[autoTrade,setAutoTrade]=useState(false);
   const[autoSyms,setAutoSyms]=useState('XAUUSD, EURUSD, GBPUSD, USDJPY, GBPJPY, AUDUSD, XAGUSD, BTCUSD');
-  const[autoEvery,setAutoEvery]=useState('15');
+  const[autoEvery,setAutoEvery]=useState('60');
   const[autoMaxOpen,setAutoMaxOpen]=useState('5'); // risk cap — how many positions T.A.L.O.N. may run at once; applies to every trade, auto or confirmed
   const[weatherPlace,setWeatherPlace]=useState('Waldorf, MD');
   const[inboundSheet,setInboundSheet]=useState('');
@@ -86,7 +86,7 @@ export default function SettingsScreen({navigation}){
     const tc=await loadTradeCreds();if(tc)setTl({email:tc.email||'',password:tc.password||'',server:tc.server||'',env:tc.env||'demo'});
     setAutoTrade((await getSetting('auto_trade','0'))==='1');
     setAutoSyms(await getSetting('auto_trade_symbols','XAUUSD, EURUSD, GBPUSD, USDJPY, GBPJPY, AUDUSD, XAGUSD, BTCUSD'));
-    setAutoEvery(await getSetting('auto_trade_interval_min','15'));
+    setAutoEvery(await getSetting('auto_trade_interval_min','60'));
     setAutoMaxOpen(await getSetting('auto_trade_max_open','5'));
     setWeatherPlace(await getSetting('weather_place','Waldorf, MD'));
     setInboundSheet(await getSetting('inbound_sheet_id',''));
@@ -169,7 +169,7 @@ export default function SettingsScreen({navigation}){
   }
   async function saveAutoSyms(){await setSetting('auto_trade_symbols',autoSyms.trim()||'XAUUSD');await refreshAutoTrader().catch(()=>{});}
   async function saveAutoEvery(){
-    const n=Math.max(1,parseInt(autoEvery,10)||15);
+    const n=Math.max(1,parseInt(autoEvery,10)||60);
     setAutoEvery(String(n));await setSetting('auto_trade_interval_min',String(n));await refreshAutoTrader().catch(()=>{});
   }
   async function saveAutoMaxOpen(){
@@ -456,7 +456,7 @@ export default function SettingsScreen({navigation}){
             </View>
             <View style={s.keyField}>
               <Text style={s.keyLabel}>CHECK EVERY (MINUTES)</Text>
-              <TextInput style={s.keyInput} value={String(autoEvery)} onChangeText={setAutoEvery} onBlur={saveAutoEvery} placeholder="15" placeholderTextColor="#1A1A1A" keyboardType="number-pad"/>
+              <TextInput style={s.keyInput} value={String(autoEvery)} onChangeText={setAutoEvery} onBlur={saveAutoEvery} placeholder="60" placeholderTextColor="#1A1A1A" keyboardType="number-pad"/>
             </View>
             <View style={s.keyField}>
               <Text style={s.keyLabel}>MAX OPEN POSITIONS (1–5)</Text>
