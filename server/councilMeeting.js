@@ -171,22 +171,10 @@ async function endCouncilLive(error) {
 // --- model calls ---------------------------------------------------------
 
 // Anthropic messages call. `tools` optional (web search). Joined text of all text
-// blocks. This is also the fallback for every non-Anthropic persona.
-async function claudeText(system, user, { maxTokens = 700, tools, model = CLAUDE_MODEL } = {}) {
-  const body = { model, max_tokens: maxTokens, system, messages: [{ role: 'user', content: user }] };
-  if (tools) body.tools = tools;
-  const res = await fetch(`${PROVIDER.anthropic.base}/v1/messages`, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'x-api-key': process.env.ANTHROPIC_API_KEY,
-      'anthropic-version': '2023-06-01',
-    },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error(`anthropic ${res.status}: ${(await res.text()).slice(0, 160)}`);
-  const d = await res.json();
-  return (d.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('\n').trim();
+// blocks. This is also the fallback for every non-Anthropic persona. Delegates to
+// llm.js so it shares the Grok fallback when Anthropic is out of credits.
+async function claudeText(system, user, opts = {}) {
+  return require('./llm').claudeText(system, user, { maxTokens: 700, ...opts });
 }
 
 // One-shot call to an OpenAI-compatible chat endpoint (xAI + OpenAI).

@@ -17,7 +17,10 @@ const app = express();
 app.disable('x-powered-by');
 app.set('trust proxy', true);
 
-app.get('/health', (req, res) => res.json({ ok: true, service: 'empire-os-backend', ts: Date.now() }));
+app.get('/health', (req, res) => {
+  const { subscriptionStatus, creditStatus } = require('./llm');
+  res.json({ ok: true, service: 'empire-os-backend', ts: Date.now(), ai: { claudeSubscription: subscriptionStatus(), credits: creditStatus() } });
+});
 
 // AI proxy: no body parser — the request body is streamed straight through.
 app.use('/ai', auth, require('./routes/ai'));
