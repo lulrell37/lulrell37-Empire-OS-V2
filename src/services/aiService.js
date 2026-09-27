@@ -27,6 +27,38 @@ async function aiRoute(provider,localKey,label){
   if(!localKey)throw new Error(`No ${label} API key. Add one in Settings → KEYS, or connect a backend in Settings → BACKEND.`);
   return{base:AI_BASE[provider],auth:AI_KEYHDR[provider](localKey)};
 }
+// The Grok routes to try, in order. With a backend linked, text turns go
+// through the server's own XAI_API_KEY (a Replit Secret) — a DIFFERENT key from
+// the one in Settings → KEYS, which the realtime voice socket always uses. If
+// those two keys belong to different xAI teams, voice works while text says
+// the team is out of credits. So: every error names which key it came from,
+// and a billing/credit refusal on the server key retries once on the app key.
+const XAI_BILLING_ERR=/credit|spending limit|billing|balance|payment|insufficient|exhausted/i;
+async function grokRoutes(localKey){
+  const be=await loadBackend();
+  const routes=[];
+  if(be)routes.push({base:be.url+'/ai/xai',auth:{Authorization:'Bearer '+be.token},via:'server key (backend XAI_API_KEY)'});
+  if(localKey)routes.push({base:AI_BASE.grok,auth:AI_KEYHDR.grok(localKey),via:'app key (Settings → KEYS)'});
+  if(!routes.length)throw new Error('No Grok API key. Add one in Settings → KEYS, or connect a backend in Settings → BACKEND.');
+  return routes;
+}
+async function withGrokRoutes(localKey,fn,canRetry=()=>true){
+  const routes=await grokRoutes(localKey);
+  for(let i=0;i<routes.length;i++){
+    try{return await fn(routes[i]);}
+    catch(e){
+      if(e?.name==='AbortError')throw e;
+      const msg=String(e?.message||e);
+      if(i<routes.length-1&&XAI_BILLING_ERR.test(msg)&&canRetry()){
+        console.warn(`Grok: ${routes[i].via} refused on billing — retrying on ${routes[i+1].via}`);
+        continue;
+      }
+      const err=new Error(`${msg} [via ${routes[i].via}]`);
+      if(e?.status)err.status=e.status;
+      throw err;
+    }
+  }
+}
 // The full context-injected system prompt for a persona (HUD, memory, style).
 // Exported so the Grok realtime voice socket can be seeded with the same context
 // the text turn gets, instead of the bare personality prompt.
@@ -369,7 +401,7 @@ export async function callPersona(personaId,messages,signal=null,onDelta=null,op
    }
   }
   if(api==='grok'){
-    const{base,auth}=await aiRoute('grok',k?.grok,'Grok');
+    await withGrokRoutes(k?.grok,async({base,auth})=>{
     const url=base+'/v1/chat/completions';
     const headers={'Content-Type':'application/json',...auth};
     const body=JSON.stringify({model:grokModel,max_tokens:maxTokens,messages:[{role:'system',content:sys},...hist],stream});
@@ -385,6 +417,7 @@ export async function callPersona(personaId,messages,signal=null,onDelta=null,op
       emit(d.choices?.[0]?.message?.content||'');
       if(d.usage)await trackApiUsage('grok',d.usage.prompt_tokens||0,d.usage.completion_tokens||0).catch(()=>{});
     }
+    },()=>response==='');// only retry if nothing has streamed yet
   }else if(api==='openai'){
     const{base,auth}=await aiRoute('openai',k?.openai,'OpenAI');
     const url=base+'/v1/chat/completions';
@@ -572,7 +605,7 @@ function looksLikeNoSearch(t){
 // which is what was dumping every Grok search onto the Claude fallback).
 async function grokLiveSearch(persona,query,signal){
   const k=await ensureKeys();
-  const{base,auth}=await aiRoute('grok',k?.grok,'Grok');
+  return withGrokRoutes(k?.grok,async({base,auth})=>{
   const res=await fetch(base+'/v1/responses',{method:'POST',headers:{'Content-Type':'application/json',...auth},body:JSON.stringify({
     model:persona.api==='grok'&&persona.model&&!/latest/.test(persona.model)?persona.model:'grok-4',
     max_output_tokens:1500,
@@ -586,6 +619,7 @@ async function grokLiveSearch(persona,query,signal){
     .flatMap(o=>o.content||[]).filter(c=>c.type==='output_text').map(c=>c.text).join('\n');
   const cites=d.citations?.length?`\n\nSources: ${d.citations.slice(0,8).join(' · ')}`:'';
   return(txt+cites).trim();
+  });
 }
 
 async function claudeWebSearch(query,signal){

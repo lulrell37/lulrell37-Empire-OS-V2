@@ -127,6 +127,8 @@ export function preloadBodyModel(key){
     altBodyScenes[key]=gltf.scene;
     return gltf.scene;
   })();
+  // Don't cache a failure — the next office open should get a fresh attempt.
+  altBodyLoading[key].catch(()=>{delete altBodyLoading[key];});
   return altBodyLoading[key];
 }
 
@@ -224,8 +226,11 @@ export function createOfficeCharacter({persona,bodyType='average',bodyModel='man
   // bone so it moves with the body and follows every animation. This (plus
   // the monitor screen, nameplate, and name label) is where persona.color
   // actually shows up now that the base body is a neutral tone.
+  // Mannequin only: the alt bodies wear their own painted outfit, and a flat
+  // tinted box over it covers the texture — persona.color still shows on the
+  // monitor, nameplate and name label for them.
   const torsoBone=root.getObjectByName('spine_02');
-  if(torsoBone){
+  if(torsoBone&&isMannequin){
     const jacket=new THREE.Mesh(
       new THREE.BoxGeometry(bl(0.34),bl(0.42),bl(0.22)),
       new THREE.MeshStandardMaterial({color:tint,roughness:0.55}),
