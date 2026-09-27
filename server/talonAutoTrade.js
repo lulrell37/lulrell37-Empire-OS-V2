@@ -17,9 +17,24 @@ let warnedDisconnected = false;
 // whatever `auto_trade_interval_min` says, same due-check pattern as
 // server/autoAtlas.js.
 async function dueNow() {
-  const mins = Math.max(1, parseInt(await getSetting('auto_trade_interval_min', '15'), 10) || 15);
+  const mins = Math.max(1, parseInt(await getSetting('auto_trade_interval_min', '60'), 10) || 60);
   const last = parseInt(await getSetting('talon_last_cycle_at', '0'), 10) || 0;
   return Date.now() - last >= mins * 60000;
+}
+
+// FX/metals trade Sun 17:00 ET → Fri 17:00 ET with a daily 17:00-18:00 ET
+// break; crypto trades around the clock. Scanning a closed market is a Claude
+// call per symbol for nothing — the cron runs 24/7 now, not just while the app
+// was open, so weekends alone were ~a quarter of T.A.L.O.N.'s spend.
+const CRYPTO = /^(BTC|ETH|SOL|XRP|LTC|DOGE|ADA|BNB)/;
+function fxOpen(now = new Date()) {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'short', hour: '2-digit', hour12: false })
+    .formatToParts(now).map((x) => [x.type, x.value]));
+  const h = parseInt(p.hour, 10) % 24;
+  if (p.weekday === 'Sat') return false;
+  if (p.weekday === 'Sun') return h >= 18;
+  if (p.weekday === 'Fri') return h < 17;
+  return h !== 17;
 }
 
 async function tick() {
@@ -48,7 +63,9 @@ async function tick() {
     await reconcileOpenTrades().catch(() => {});
 
     const symsRaw = await getSetting('auto_trade_symbols', 'XAUUSD, EURUSD, GBPUSD, USDJPY, GBPJPY, AUDUSD, XAGUSD, BTCUSD');
-    const syms = [...new Set(symsRaw.split(/[\s,]+/).map((s) => s.trim().toUpperCase()).filter(Boolean))].slice(0, 12);
+    const marketOpen = fxOpen();
+    const syms = [...new Set(symsRaw.split(/[\s,]+/).map((s) => s.trim().toUpperCase()).filter(Boolean))].slice(0, 12)
+      .filter((sym) => marketOpen || CRYPTO.test(sym));
     if (!syms.length) return;
 
     const maxOpen = Math.min(MAX_OPEN_POSITIONS, Math.max(1, parseInt(await getSetting('auto_trade_max_open', String(MAX_OPEN_POSITIONS)), 10) || MAX_OPEN_POSITIONS));

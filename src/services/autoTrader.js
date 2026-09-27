@@ -189,7 +189,7 @@ export async function startAutoTrader(){
   if(running)return;
   if((await getSetting('auto_trade','0'))!=='1')return;
   running=true;
-  const mins=Math.max(1,parseInt(await getSetting('auto_trade_interval_min','15'),10)||15);
+  const mins=Math.max(1,parseInt(await getSetting('auto_trade_interval_min','60'),10)||60);
   timer=setInterval(runOnce,mins*60000);
   setTimeout(()=>{runOnce();},8000); // first pass shortly after start
   emit(`AUTO-TRADE ON — watching every ${mins} min on the DEMO account.`);
