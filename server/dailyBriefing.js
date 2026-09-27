@@ -56,15 +56,8 @@ async function remember(kind, value) {
 }
 
 async function claude(system, user) {
-  const key = process.env.ANTHROPIC_API_KEY;
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({ model: 'claude-sonnet-5', max_tokens: 300, system, messages: [{ role: 'user', content: user }] }),
-  });
-  if (!res.ok) throw new Error(`anthropic ${res.status}: ${(await res.text()).slice(0, 120)}`);
-  const d = await res.json();
-  const raw = (d.content && d.content[0] && d.content[0].text || '').trim();
+  // Via llm.js so it shares the Grok fallback when Anthropic is out of credits.
+  const raw = await require('./llm').claudeText(system, user, { maxTokens: 300 });
   const m = raw.match(/\{[\s\S]*\}/);
   if (!m) throw new Error('no JSON in reply');
   return JSON.parse(m[0]);

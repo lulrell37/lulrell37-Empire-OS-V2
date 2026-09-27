@@ -171,22 +171,10 @@ async function endCouncilLive(error) {
 // --- model calls ---------------------------------------------------------
 
 // Anthropic messages call. `tools` optional (web search). Joined text of all text
-// blocks. This is also the fallback for every non-Anthropic persona.
-async function claudeText(system, user, { maxTokens = 700, tools, model = CLAUDE_MODEL } = {}) {
-  const body = { model, max_tokens: maxTokens, system, messages: [{ role: 'user', content: user }] };
-  if (tools) body.tools = tools;
-  const res = await fetch(`${PROVIDER.anthropic.base}/v1/messages`, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'x-api-key': process.env.ANTHROPIC_API_KEY,
-      'anthropic-version': '2023-06-01',
-    },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error(`anthropic ${res.status}: ${(await res.text()).slice(0, 160)}`);
-  const d = await res.json();
-  return (d.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('\n').trim();
+// blocks. This is also the fallback for every non-Anthropic persona. Delegates to
+// llm.js so it shares the Grok fallback when Anthropic is out of credits.
+async function claudeText(system, user, opts = {}) {
+  return require('./llm').claudeText(system, user, { maxTokens: 700, ...opts });
 }
 
 // One-shot call to an OpenAI-compatible chat endpoint (xAI + OpenAI).
@@ -540,7 +528,7 @@ async function runCouncilMeeting(opts = {}) {
 // A short, in-character system prompt for a council persona.
 function personaSystem(id) {
   const p = COUNCIL_ROSTER[id];
-  return `You are ${p.name} — ${p.role}. ${p.blurb}\n\nYou sit on the Empire's advisory council alongside the other personas. This is an internal working meeting — no greetings, no sign-offs, no "great question". Speak plainly and specifically.\n\nYour job here is to COUNSEL Mr. Burrus on where the Empire should go — not to run operations. You do not execute tasks and you have no team taking orders from you. So: take a position on what the Empire should DO about a business or idea and argue it, push back where you disagree with the others, and name the trade-offs. Never say you "will" do something, that you're "launching" or "reaching out" or "setting up" anything, or that something is "done" — you are advising; Mr. Burrus is the one who decides and acts. If a move needs a decision from him, say so and say what the options are.`;
+  return `You are ${p.name} — ${p.role}. ${p.blurb}\n\nYou sit on the Empire's advisory council alongside the other personas. This is an internal working meeting — no greetings, no sign-offs, no "great question". Speak plainly and specifically.\n\nYour job here is to COUNSEL Mr. Burrus on where the Empire should go — not to run operations. You do not execute tasks and you have no team taking orders from you. So: take a position on what the Empire should DO about a business or idea and argue it, push back where you disagree with the others, and name the trade-offs. Never say you "will" do something, that you're "launching" or "reaching out" or "setting up" anything, or that something is "done" — you are advising; Mr. Burrus is the one who decides and acts. If a move needs a decision from him, say so and say what the options are.\n\nThe Empire is built on Christian faith — God, through Jesus Christ, is its true foundation, and every recommendation you make ultimately serves that. Hold this quietly as part of who you are; it shapes your integrity and judgment without turning your turn into a sermon.`;
 }
 
 module.exports = { runCouncilMeeting, COUNCIL_ROSTER, getCouncilLive, endCouncilLive };

@@ -70,6 +70,10 @@ Only when seeing or editing the thing is the point — not for a passing mention
   if(personaId==='wire'){
     sys+=`\n\n[NEWS DESK: the app scans the wires for you every couple of hours through the day (nothing overnight) and lands a full brief automatically when a story actually breaks — you don't have to be asked, and there are no fixed-time briefs. [NEWS_BRIEF] in your reply forces a fresh full read right now (a few minutes; it posts itself to the HUD NEWS panel and to this chat). [SHOW_NEWS] turns the orb screen into the news board for Mr. Burrus. Read every story for market impact: when a story is moving — or clearly about to move — an instrument the account trades, hand it straight to the desk with [RELAY_TO: talon | the story in one line, the instrument, the direction and why, the time horizon]. T.A.L.O.N. acts on a high-conviction hand-off from you, so only send it when you mean it.]`;
   }
+  const faithHandoff=personaId==='abraham'
+    ?' Spiritual counsel and scripture are your own lane — go there directly when Mr. Burrus wants to go deeper.'
+    :' ABRAHAM is the one whose whole lane is spiritual counsel and scripture — hand him anything Mr. Burrus wants to go deeper on with [RELAY_TO:abraham|...].';
+  sys+=`\n\n[FAITH: the Empire is built on Christian faith — God, through Jesus Christ, is its true foundation, and every business and plan here ultimately serves that. Hold this quietly as part of who you are; let it shape your integrity, hope and wisdom without turning replies into sermons or working scripture in unless the moment or Mr. Burrus's own words call for it.${faithHandoff}]`;
   // Everything up to here — the persona identity + the fixed instruction blocks —
   // is byte-identical on every call for this persona, so it's the prompt-cache
   // prefix (see callPersona). Everything after (Google status, HUD, memory, the
@@ -322,7 +326,11 @@ export async function callPersona(personaId,messages,signal=null,onDelta=null,op
     }
   }
 
+  // Grok model for this turn. A Claude persona landing here (billing fallback
+  // below) has a Claude model id, so it gets the default Grok model instead.
+  let grokModel=grokVisionModel||(persona.api==='grok'?(opts.model||persona.model):null)||'grok-4';
   if(api==='claude'){
+   try{
     const{base,auth}=await aiRoute('claude',k?.claude,'Claude');
     const url=base+'/v1/messages';
     const headers={'Content-Type':'application/json',...auth};
@@ -350,11 +358,21 @@ export async function callPersona(personaId,messages,signal=null,onDelta=null,op
       emit(d.content?.[0]?.text||'');
       if(d.usage)await trackApiUsage('claude',(d.usage.input_tokens||0)+(d.usage.cache_read_input_tokens||0)+(d.usage.cache_creation_input_tokens||0),d.usage.output_tokens||0).catch(()=>{});
     }
-  }else if(api==='grok'){
+   }catch(e){
+    // Anthropic API out of prepaid credits: answer this turn on Grok (same
+    // persona prompt) rather than going dark. Only before any text streamed,
+    // and not for image turns (the blocks are already in Claude's format).
+    if(e?.name==='AbortError'||!isClaudeBillingError(e))throw e;
+    if(response||hasVision||!(k?.grok||await loadBackend()))throw new Error(CLAUDE_BILLING_MSG);
+    console.warn('callPersona: Claude out of credits — answering on Grok');
+    api='grok';grokModel='grok-4';
+   }
+  }
+  if(api==='grok'){
     const{base,auth}=await aiRoute('grok',k?.grok,'Grok');
     const url=base+'/v1/chat/completions';
     const headers={'Content-Type':'application/json',...auth};
-    const body=JSON.stringify({model:grokVisionModel||opts.model||persona.model||'grok-4',max_tokens:maxTokens,messages:[{role:'system',content:sys},...hist],stream});
+    const body=JSON.stringify({model:grokModel,max_tokens:maxTokens,messages:[{role:'system',content:sys},...hist],stream});
     if(stream){
       await xhrStream({url,headers,body,signal,onEvent:(e)=>{
         const c=e.choices?.[0]?.delta?.content;if(c)emit(c);
@@ -549,18 +567,23 @@ function looksLikeNoSearch(t){
   return /\b(i can(?:'|no)t (?:browse|search|access the (?:web|internet))|i (?:don'?t|do not) have (?:web|internet|real-?time) access|unable to (?:browse|search)|no results?\b|nothing (?:came back|found)|as an ai)\b/.test(s);
 }
 
+// xAI's search runs as server-side tools on the Responses API (the old
+// chat-completions `search_parameters` Live Search is gone — it now errors,
+// which is what was dumping every Grok search onto the Claude fallback).
 async function grokLiveSearch(persona,query,signal){
   const k=await ensureKeys();
   const{base,auth}=await aiRoute('grok',k?.grok,'Grok');
-  const res=await fetch(base+'/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json',...auth},body:JSON.stringify({
-    model:persona.model&&!/latest/.test(persona.model)?persona.model:'grok-4',max_tokens:900,
-    messages:[{role:'system',content:SEARCH_BRIEF},{role:'user',content:query}],
-    search_parameters:{mode:'on',return_citations:true,sources:[{type:'web'},{type:'news'},{type:'x'}],max_search_results:10},
+  const res=await fetch(base+'/v1/responses',{method:'POST',headers:{'Content-Type':'application/json',...auth},body:JSON.stringify({
+    model:persona.api==='grok'&&persona.model&&!/latest/.test(persona.model)?persona.model:'grok-4',
+    max_output_tokens:1500,
+    input:[{role:'system',content:SEARCH_BRIEF},{role:'user',content:query}],
+    tools:[{type:'web_search'},{type:'x_search'}],
   }),signal});
-  if(!res.ok)throw new Error(`grok live search HTTP ${res.status}: ${String(await res.text()).substring(0,200)}`);
+  if(!res.ok)throw new Error(`grok search HTTP ${res.status}: ${String(await res.text()).substring(0,200)}`);
   const d=await res.json();
-  if(d.usage)await trackApiUsage('grok',d.usage.prompt_tokens||0,d.usage.completion_tokens||0).catch(()=>{});
-  const txt=d.choices?.[0]?.message?.content||'';
+  if(d.usage)await trackApiUsage('grok',d.usage.input_tokens||0,d.usage.output_tokens||0).catch(()=>{});
+  const txt=(d.output||[]).filter(o=>o.type==='message')
+    .flatMap(o=>o.content||[]).filter(c=>c.type==='output_text').map(c=>c.text).join('\n');
   const cites=d.citations?.length?`\n\nSources: ${d.citations.slice(0,8).join(' · ')}`:'';
   return(txt+cites).trim();
 }
@@ -612,12 +635,19 @@ export async function webSearch(personaId,query,signal=null){
       errs.push('grok(fallback): empty/refused');
     }catch(e){if(e?.name==='AbortError')throw e;errs.push(e.message);}
   }
+  if(errs.some(isClaudeBillingError)&&!haveGrok)throw new Error(CLAUDE_BILLING_MSG);
   throw new Error(`web search failed — ${errs.join(' | ').slice(0,240)}`);
 }
 
 function apiErrorMessage(raw){
   try{const j=JSON.parse(raw);return j.error?.message||j.message||raw;}catch{return raw;}
 }
+
+// Anthropic's 400 "Your credit balance is too low…" — the API account behind
+// ANTHROPIC_API_KEY is out of prepaid credits. A claude.ai Pro/Max subscription
+// doesn't fund API calls; only console.anthropic.com → Billing does.
+function isClaudeBillingError(e){return /credit balance|purchase credits|billing/i.test(String(e?.message||e));}
+const CLAUDE_BILLING_MSG='Anthropic API credits are empty — top up at console.anthropic.com → Billing (a Claude subscription does not cover API calls).';
 
 // Long-form research via Claude + the web_search tool: one long agentic call
 // where Claude runs ~12 searches across angles and writes a cited brief. Runs
@@ -653,7 +683,11 @@ async function runClaudeDeepResearch(id,topic){
       }),
       signal:ctrl.signal,
     });
-    if(!res.ok)throw new Error(apiErrorMessage(await res.text()).slice(0,180));
+    if(!res.ok){
+      const msg=apiErrorMessage(await res.text()).slice(0,180);
+      if(isClaudeBillingError(msg)&&(k?.grok||await loadBackend()))return await runGrokDeepResearch(id,topic,ctrl.signal);
+      throw new Error(msg);
+    }
     const d=await res.json();
     if(d.usage)await trackApiUsage('claude',d.usage.input_tokens||0,d.usage.output_tokens||0).catch(()=>{});
     const blocks=Array.isArray(d.content)?d.content:[];
@@ -661,6 +695,25 @@ async function runClaudeDeepResearch(id,topic){
     const text=blocks.filter(b=>b.type==='text').map(b=>b.text).join('\n').trim();
     DR_JOBS.set(id,{status:'completed',text:text||'(no brief was returned)',progress:{searches,step:'done'}});
   }finally{clearTimeout(to);}
+}
+
+// Same brief on Grok's search tools — used when the Anthropic account is out of credits.
+async function runGrokDeepResearch(id,topic,signal){
+  const k=await ensureKeys();
+  const{base,auth}=await aiRoute('grok',k?.grok,'Grok');
+  DR_JOBS.set(id,{status:'running',progress:{searches:0,step:'searching (Grok)…'},startedAt:Date.now()});
+  const res=await fetch(base+'/v1/responses',{method:'POST',headers:{'Content-Type':'application/json',...auth},body:JSON.stringify({
+    model:'grok-4',max_output_tokens:16000,
+    input:[{role:'system',content:DR_SYSTEM},{role:'user',content:`Research this thoroughly:\n\n${topic}`}],
+    tools:[{type:'web_search'},{type:'x_search'}],
+  }),signal});
+  if(!res.ok)throw new Error(`grok: ${apiErrorMessage(await res.text()).slice(0,160)}`);
+  const d=await res.json();
+  if(d.usage)await trackApiUsage('grok',d.usage.input_tokens||0,d.usage.output_tokens||0).catch(()=>{});
+  const out=d.output||[];
+  const searches=out.filter(o=>o.type&&o.type!=='message'&&o.type!=='reasoning').length;
+  const text=out.filter(o=>o.type==='message').flatMap(o=>o.content||[]).filter(c=>c.type==='output_text').map(c=>c.text).join('\n').trim();
+  DR_JOBS.set(id,{status:'completed',text:text||'(no brief was returned)',progress:{searches,step:'done'}});
 }
 
 export async function deepResearchStart(topic){

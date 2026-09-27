@@ -35,7 +35,7 @@ import{recordTradeOpen,reconcileOpenTrades,traderJournalBlock,setStrategy,setTra
 import{loadKeys,loadGitHubToken}from '../services/keyStore';
 import useEmpireStore from '../store/useEmpireStore';
 import{useIsFocused,useFocusEffect}from '@react-navigation/native';
-import OrbZoom from './command/OrbZoom';
+import OfficeScene from './command/OfficeScene';
 import Canvas from './command/Canvas';
 import ActivityPane from './command/ActivityPane';
 import{convokeCouncil}from '../services/council';
@@ -121,8 +121,8 @@ export default function CommandScreen({navigation,route}){
   const[cameraRef,setCameraRef]=useState(null);
   const[clipUp,setClipUp]=useState(null); // 0..1 while uploading a clip for R.O.G.U.E., else null
   const[view,setView]=useState('viz'); // viz | text
-  const[orbLevel,setOrbLevel]=useState('group'); // lifted so it survives the viz/text toggle
-  const orbZoomRef=useRef(null);
+  const[orbLevel,setOrbLevel]=useState('office'); // lifted so it survives the viz/text toggle — 'office' (all desks) | 'desk' (face-to-face)
+  const officeRef=useRef(null);
   const[tradeBusy,setTradeBusy]=useState(false); // guards against two proposals landing at once
   const[deepResearch,setDeepResearch]=useState(null); // deep_research row + progressObj; null when idle. Persisted — see services/deepResearch.js
   // THE CANVAS — a persona has turned the viz panel into an interactive surface
@@ -136,7 +136,7 @@ export default function CommandScreen({navigation,route}){
   const projectRef=useRef(null);
   const activePersonaRef=useRef('jarvis');
   const modeRef=useRef('direct');
-  const orbLevelRef=useRef('group');
+  const orbLevelRef=useRef('office');
   const isFocusedRef=useRef(true);
   // Personas with a reply sitting unread because Mr. Burrus left that orb
   // before it landed (zoomed out, switched orbs, or went back to the city).
@@ -236,7 +236,7 @@ export default function CommandScreen({navigation,route}){
   // Poll the auto-agents' cycle flags while the galaxy is on screen so
   // S.C.O.U.T. / A.T.L.A.S. / T.A.L.O.N. light up their orb while working.
   useEffect(()=>{
-    if(!isFocused||view!=='viz'||orbLevel!=='group'){setAgentBusy(prev=>prev.size?new Set():prev);return;}
+    if(!isFocused||view!=='viz'||orbLevel!=='office'){setAgentBusy(prev=>prev.size?new Set():prev);return;}
     const tick=()=>{
       const next=new Set();
       try{if(autoScoutBusy())next.add('scout');}catch{}
@@ -339,7 +339,7 @@ export default function CommandScreen({navigation,route}){
   // Mr. Burrus was away, it's already visible as text (loadHistory just pulled
   // it in); this delivers the catch-up voice line and clears the badge.
   useEffect(()=>{
-    if(mode!=='direct'||orbLevel!=='orb')return;
+    if(mode!=='direct'||orbLevel!=='desk')return;
     const persona=activePersona;
     getUnreadMessages(persona).then(async(rows)=>{
       if(!rows||!rows.length)return;
@@ -458,11 +458,12 @@ export default function CommandScreen({navigation,route}){
     const h=await getMessages(persona,40);
     setMessages(h.reverse().map(m=>({id:m.id.toString(),role:m.role,content:m.content,persona:m.persona})));
   }
-  // Is Mr. Burrus actually looking at this persona's orb right now? If not —
-  // he zoomed out, switched to a different orb, or left for the city — the
-  // reply about to be saved should queue unread instead of being spoken live.
+  // Is Mr. Burrus actually looking at this persona face-to-face right now? If
+  // not — he backed out to the office overview, switched to a different desk,
+  // or left for the city — the reply about to be saved should queue unread
+  // instead of being spoken live.
   function isPresentFor(pid){
-    return isFocusedRef.current&&modeRef.current==='direct'&&orbLevelRef.current==='orb'&&activePersonaRef.current===pid;
+    return isFocusedRef.current&&modeRef.current==='direct'&&orbLevelRef.current==='desk'&&activePersonaRef.current===pid;
   }
 
   function clearSilenceTimer(){
@@ -1386,7 +1387,7 @@ export default function CommandScreen({navigation,route}){
 
   const jarvisBuildFilter=useCallback((j)=>!j.project_name,[]);
   const firmBuildFilter=useCallback((j)=>!!projectRef.current&&j.project_name===projectRef.current.name,[project?.name]);// eslint-disable-line react-hooks/exhaustive-deps
-  const pickPersonaFromOrb=useCallback((id)=>{setMode('direct');setActivePersona(id);setOrbLevel('orb');},[]);
+  const pickPersonaFromOrb=useCallback((id)=>{setMode('direct');setActivePersona(id);setOrbLevel('desk');},[]);
   const launchGroupFromOrb=useCallback((ids)=>{setCustomPersonas(ids);setMode('custom');setView('text');},[]);
 
   // Back to the Empire city — the only way out of the Command screen now that
@@ -1398,12 +1399,10 @@ export default function CommandScreen({navigation,route}){
     navigation.navigate('Map');
   }
 
-  // Header back button: on the visualization, step back one zoom level
-  // (a memory -> the memory spiral -> the persona orb -> the persona sphere);
-  // only leave for the city once you're already at the sphere.
-  // The galaxy (view==='viz', group level) is the app's home screen. Back steps
-  // in from the edges toward it: chart overlay -> chat -> deeper viz levels ->
-  // the galaxy; once there, returns false so the OS handles it (exits the app).
+  // Header back button: on the visualization, step back one level (face-to-face
+  // -> the office overview); the office overview is as far as this screen goes,
+  // so back from there leaves for the city map — Command is reached FROM a
+  // landmark now, it isn't home anymore.
   function handleBack(){
     if(view==='viz'&&artifact){
       if(canvasRef.current&&canvasRef.current.back&&canvasRef.current.back())return true;
@@ -1416,7 +1415,8 @@ export default function CommandScreen({navigation,route}){
       setView('viz');return true;
     }
     if(view==='activity'){setView('viz');return true;}
-    if(view==='viz'&&orbZoomRef.current&&orbZoomRef.current.back())return true;
+    if(view==='viz'&&officeRef.current&&officeRef.current.back())return true;
+    if(view==='viz'){goToCity();return true;}
     return false;
   }
   // Android hardware back does the same thing.
@@ -2358,12 +2358,12 @@ export default function CommandScreen({navigation,route}){
   useEffect(()=>{setActivity(activityItems);},[activityItems,setActivity]);
   useEffect(()=>()=>setActivity([]),[setActivity]); // clear on unmount (leaving for the map)
 
-  // Personas the galaxy sphere shows a pulsing gold "working" aura on — every
-  // active-activity persona, plus the one whose reply is still streaming while
-  // Mr. Burrus has zoomed out.
+  // Personas the office shows typing-at-their-desk for — every active-activity
+  // persona, plus the one whose reply is still streaming while Mr. Burrus has
+  // backed out to the office overview.
   const busyPersonas=useMemo(()=>{
     const set=new Set(activityItems.map(a=>a.persona));
-    if(loading&&activePersona&&orbLevel==='group')set.add(activePersona);
+    if(loading&&activePersona&&orbLevel==='office')set.add(activePersona);
     return set;
   },[activityItems,loading,activePersona,orbLevel]);
 
@@ -2390,12 +2390,14 @@ export default function CommandScreen({navigation,route}){
     );
   }
 
-  // The galaxy (viz + group) is the bare home screen — no back affordance, no
-  // view toggle, no composer. Step into a persona's orb and the chrome comes
-  // back: the ◉/≣ toggle and the back arrow at any non-group level, the chat
-  // composer specifically at the orb level (talk to that persona) and in chat.
-  const chromeVisible=view!=='viz'||orbLevel!=='group';
-  const composerVisible=view==='text'||(view==='viz'&&orbLevel==='orb');
+  // The office overview (viz + office level) is the bare landing state for this
+  // screen — no back affordance beyond the brand mark (which already goes back
+  // to the city), no view toggle, no composer. Walk up to a persona's desk and
+  // the chrome comes back: the ◉/≣ toggle and the back arrow at any non-office
+  // level, the chat composer specifically at the desk level (face-to-face) and
+  // in chat.
+  const chromeVisible=view!=='viz'||orbLevel!=='office';
+  const composerVisible=view==='text'||(view==='viz'&&orbLevel==='desk');
 
   return(
     <SafeAreaView style={s.container} edges={['top','bottom']}>
@@ -2405,9 +2407,8 @@ export default function CommandScreen({navigation,route}){
             <Text style={s.empireOS}>‹ BACK</Text>
           </TouchableOpacity>
         ):(
-          // The galaxy is home. The brand mark is the way to the city map —
-          // for now, the only way (the Earth that used to sit on the galaxy
-          // floor is gone).
+          // The office overview has no back arrow of its own — the brand mark
+          // is the way back to the city map.
           <TouchableOpacity onPress={goToCity} hitSlop={{top:12,bottom:12,left:12,right:16}}>
             <Text style={s.empireOS}>♔ EMPIRE OS<Text style={s.empireOSmap}>  ⌖ MAP</Text></Text>
           </TouchableOpacity>
@@ -2480,8 +2481,8 @@ export default function CommandScreen({navigation,route}){
 
       {view==='viz'?(
         <View style={{flex:1}}>
-        <OrbZoom
-          ref={orbZoomRef}
+        <OfficeScene
+          ref={officeRef}
           personaId={activePersona}
           color={cp.color}
           active={isFocused&&!artifact}
@@ -2491,6 +2492,7 @@ export default function CommandScreen({navigation,route}){
           onLevelChange={setOrbLevel}
           unreadPersonas={unreadPersonas}
           busyPersonas={busyPersonas}
+          relayBusy={relayBusy}
           onPickPersona={pickPersonaFromOrb}
           onLaunchGroup={launchGroupFromOrb}
         />

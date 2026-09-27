@@ -63,6 +63,35 @@ set `COUNCIL=off` to disable. Tunables: `COUNCIL_ROUNDS`, `COUNCIL_RESEARCH_MAX`
 (default 8), `COUNCIL_SEARCH_MAX` (default 6). The persona roster is a distilled
 copy of `src/personas/personas.js` kept in `councilMeeting.js`.
 
+## Claude: subscription first, then API, then Grok
+
+Every server-side Claude call (`llm.js` `claudeText` — Telegram personas,
+relays, memory recall, web/deep research, council, briefing, T.A.L.O.N., the
+autonomous loops) and every app Claude turn that comes through the `/ai/anthropic`
+proxy runs in this order:
+
+1. **Claude subscription** (`server/claudeSub.js`) — the headless Claude Code CLI
+   (`@anthropic-ai/claude-code`, a server dependency) on a Pro/Max plan, when
+   `CLAUDE_SUBSCRIPTION=on` + `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`)
+   are set. Web search uses the CLI's WebSearch tool. The CLI reports the plan's
+   usage-limit state on every call; once it says the limit is hit, the
+   subscription is parked until the reset time it gave and everything goes to
+   step 2, then the first call after the reset goes back to the subscription.
+   Requests it can't carry (images) go straight to the API.
+2. **Metered API** (`ANTHROPIC_API_KEY`, billed per token from
+   console.anthropic.com credits).
+3. **Grok** (`XAI_API_KEY`; search via xAI's `web_search` / `x_search` tools)
+   when the API account is out of credits.
+
+A provider that answers with an out-of-credits / spending-limit error (xAI,
+Anthropic, OpenAI, Gemini) is skipped for 15 minutes rather than retried every
+turn; A.R.A. on Telegram (normally Grok) drops straight to Claude while xAI is
+empty. If every step is out, the bot says so in one line instead of relaying a
+raw provider error. `GET /health` shows the current state under `ai`.
+
+The subscription pool is the same one your own Claude Code / claude.ai usage
+draws from, so heavy crons (T.A.L.O.N. scans every 15 min) eat into it.
+
 ## Telegram bots — one per persona
 
 `telegram.js` + `personaRuntime.js` + `routes/telegram.js` run a **bot per
