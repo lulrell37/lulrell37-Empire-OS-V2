@@ -27,6 +27,13 @@ r.post('/token', async (req, res) => {
   }
 });
 
+// Is Google actually usable from the server right now — not just "is a token
+// stored" — and if not, why. The personas get the same answer every turn.
+r.get('/status', async (req, res) => {
+  const { googleStatus } = require('../google');
+  res.json(await googleStatus().catch((e) => ({ linked: false, ok: false, error: e.message })));
+});
+
 r.delete('/token', async (req, res) => {
   try {
     await query('DELETE FROM google_tokens WHERE id = 1');

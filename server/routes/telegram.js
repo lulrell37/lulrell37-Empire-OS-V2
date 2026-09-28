@@ -14,6 +14,7 @@ const auth = require('../auth');
 const tg = require('../telegram');
 const { ROSTER } = require('../personas');
 const { runPersonaTurn } = require('../personaRuntime');
+const { runPending, cancelPending } = require('../personaTools');
 const { transcribe } = require('../llm');
 const { synthesizePersonaVoice } = require('../personaVoice');
 
@@ -40,11 +41,14 @@ r.post('/webhook/:persona/:secret', (req, res) => {
 });
 
 async function handleUpdate(personaId, bot, update) {
+  const cb = update && update.callback_query;
   const msg = update && update.message;
-  if (!msg || !msg.chat) return;
+  if (!cb && (!msg || !msg.chat)) return;
 
-  if (!tg.isOwner(msg.from && msg.from.id)) {
-    await bot.sendMessage(msg.chat.id, 'This bot is private.').catch(() => {});
+  const from = cb ? cb.from : msg.from;
+  if (!tg.isOwner(from && from.id)) {
+    if (cb) await bot.tg('answerCallbackQuery', { callback_query_id: cb.id, text: 'This bot is private.' }).catch(() => {});
+    else await bot.sendMessage(msg.chat.id, 'This bot is private.').catch(() => {});
     return;
   }
 
@@ -56,6 +60,8 @@ async function handleUpdate(personaId, bot, update) {
     [seenKey, Date.now()],
   ).catch(() => ({ rowCount: 1 }));
   if (!ins.rowCount) return;
+
+  if (cb) return handleConfirmTap(personaId, bot, cb);
 
   const chatId = msg.chat.id;
   const deliver = (t) => bot.sendMessage(chatId, t).catch((e) => console.error(`tg ${personaId} send:`, e.message));
@@ -84,18 +90,52 @@ async function handleUpdate(personaId, bot, update) {
   await bot.sendChatAction(chatId, spokenInput ? 'record_voice' : 'typing');
   const keepTyping = setInterval(() => bot.sendChatAction(chatId, spokenInput ? 'record_voice' : 'typing').catch(() => {}), 6000);
   try {
-    const { text: reply } = await runPersonaTurn(personaId, text, deliver);
+    const { text: reply, footer, confirms } = await runPersonaTurn(personaId, text, deliver);
     if (spokenInput) {
       const ogg = await synthesizePersonaVoice(personaId, reply, { userText: text });
       if (ogg) await bot.sendVoice(chatId, ogg).catch((e) => console.error(`tg ${personaId} sendVoice:`, e.message));
     }
-    await deliver(reply);
+    await deliver(footer ? `${reply}\n\n${footer}` : reply);
+    for (const c of confirms || []) {
+      await bot.sendMessage(chatId, `${c.label}?\n\n${c.detail}`, {
+        reply_markup: { inline_keyboard: [[
+          { text: '✅ Confirm', callback_data: `ok:${c.id}` },
+          { text: '✖ Cancel', callback_data: `no:${c.id}` },
+        ]] },
+      }).catch((e) => console.error(`tg ${personaId} confirm card:`, e.message));
+    }
   } catch (e) {
     console.error(`${personaId} turn failed:`, e.message);
     await deliver(`Something went wrong on my end: ${e.message}`);
   } finally {
     clearInterval(keepTyping);
   }
+}
+
+// Confirm / Cancel on an action card (send an email, delete an event or file).
+// Runs it, rewrites the card with the outcome, and drops a line into the
+// persona's history so she knows it went out.
+async function handleConfirmTap(personaId, bot, cb) {
+  const m = /^(ok|no):(\w+)$/.exec(String(cb.data || ''));
+  const card = cb.message;
+  await bot.tg('answerCallbackQuery', { callback_query_id: cb.id, text: m && m[1] === 'ok' ? 'On it…' : 'Cancelled' }).catch(() => {});
+  if (!m || !card) return;
+  let outcome;
+  if (m[1] === 'ok') {
+    const r = await runPending(m[2]);
+    outcome = `${r.ok ? '✅' : '⚠️'} ${r.text}`;
+    if (r.row) {
+      await query('INSERT INTO tg_messages (persona, role, content, ts) VALUES ($1, $2, $3, $4)',
+        [personaId, 'assistant', `[${r.row.label} — ${r.ok ? 'confirmed and done' : 'confirmed but failed'}: ${r.text}]`, Date.now()]).catch(() => {});
+    }
+  } else {
+    const row = await cancelPending(m[2]);
+    outcome = row ? '✖ Cancelled.' : 'Already handled.';
+  }
+  await bot.tg('editMessageText', {
+    chat_id: card.chat.id, message_id: card.message_id,
+    text: `${card.text || ''}\n\n${outcome}`.slice(0, 4000),
+  }).catch(() => bot.sendMessage(card.chat.id, outcome).catch(() => {}));
 }
 
 r.post('/set-webhook', auth, express.json(), async (req, res) => {
