@@ -208,6 +208,20 @@ const GOOGLE_TOOLS = `GOOGLE (see the GOOGLE status line below for whether it's 
  - CALENDAR: [READ_CALENDAR] (next 7 days) · [READ_CALENDAR: 30] · [READ_CALENDAR: 2026-08-01 | 30] · [CREATE_EVENT: title | 2026-06-01T14:00 | minutes] (his Eastern time) · [DELETE_EVENT: id] (confirmed).
  - SHEETS: [CREATE_SHEET: title | col1,col2 | val1,val2].`;
 
+// The persona's own prompt from the app (Settings → persona prompt, synced as the
+// `custom_prompts` row keyed by persona). In the app it replaces the built-in
+// personality outright, so it does here too — otherwise edits made in Settings
+// never reach the Telegram bot. null when he hasn't set one.
+async function customPrompt(personaId) {
+  const row = await syncedRow('custom_prompts', personaId).catch(() => null);
+  const text = row && String(row.prompt || '').trim();
+  return text || null;
+}
+
+// Telegram-specific framing layered on top of a custom prompt, since that prompt
+// was written for the app.
+const TG_FRAME = `[TELEGRAM: you are talking to Mr. Burrus over Telegram (text), away from the Empire OS app — keep replies tight and mobile-readable, no long status briefings unless he asks. Reply directly to what he just said. There is a live context block below — read from it, don't invent numbers. If your instructions above mention app-only things (the Canvas, opening apps, the 3D Lab), the tool list below is what actually works here.]`;
+
 // A.R.A. runs the day, so she gets the full tool set — the same one she has in
 // the app, minus what physically needs the phone. The other personas get a
 // leaner set focused on their lane (plus Google, which every persona has).
@@ -282,9 +296,9 @@ function faithBlock(personaId) {
   return `[FAITH: the Empire is built on Christian faith — God, through Jesus Christ, is its true foundation, and every business and plan here ultimately serves that. Hold this quietly as part of who you are; let it shape your integrity, hope and wisdom without turning replies into sermons or working scripture in unless the moment or Mr. Burrus's own words call for it.${handoff}]`;
 }
 
-function systemPrompt(ctx, gs) {
+function systemPrompt(ctx, gs, custom) {
   return [
-    ARA_IDENTITY,
+    custom ? `${custom}\n\n${TG_FRAME}` : ARA_IDENTITY,
     ARA_TOOLS,
     googleLine(gs),
     `[THE EMPIRE — the other personas who serve Mr. Burrus. Hand anything outside your lane to one with [RELAY_TO: id | ...]:\n${rosterLines()}\n]`,
@@ -295,9 +309,9 @@ function systemPrompt(ctx, gs) {
 }
 
 // System prompt for a non-A.R.A. persona running its own bot.
-function personaSystemPrompt(personaId, ctx, gs) {
+function personaSystemPrompt(personaId, ctx, gs, custom) {
   return [
-    `${personaTgIdentity(personaId)}\n\nYou are talking to Mr. Burrus over Telegram (text), away from the Empire OS app — keep replies tight and mobile-readable. Reply directly to what he just said; no status-briefing preamble. There is a live context block below — read from it, don't invent numbers.`,
+    custom ? `${custom}\n\n${TG_FRAME}` : `${personaTgIdentity(personaId)}\n\nYou are talking to Mr. Burrus over Telegram (text), away from the Empire OS app — keep replies tight and mobile-readable. Reply directly to what he just said; no status-briefing preamble. There is a live context block below — read from it, don't invent numbers.`,
     genericTools(personaId),
     googleLine(gs),
     `[THE EMPIRE — the other personas. Hand anything outside your lane to one with [RELAY_TO: id | ...]:\n${rosterLines()}\n]`,
@@ -490,10 +504,17 @@ async function applyEffects(text, deliver, persona = 'ara') {
 
 // --- relay + memory ---------------------------------------------------
 
+// A relayed / delegated persona speaks as its custom prompt when he's set one.
+async function relaySystem(id) {
+  const custom = await customPrompt(id);
+  if (!custom) return personaSystem(id);
+  return `${custom}\n\n[A.R.A. (his personal assistant) is passing you a question on his behalf, over Telegram. Answer it directly from your lane — concrete and specific, no greeting and no sign-off, a few sentences to a short paragraph. If it needs something only Mr. Burrus can decide or the app open, say so plainly.]`;
+}
+
 async function relayToPersona(id, message) {
   const p = ROSTER[id];
   const ctx = await gatherContext().catch(() => null);
-  const sys = personaSystem(id) + (ctx ? `\n\n[EMPIRE CONTEXT:\n${contextBlock(ctx)}\n]` : '');
+  const sys = (await relaySystem(id)) + (ctx ? `\n\n[EMPIRE CONTEXT:\n${contextBlock(ctx)}\n]` : '');
   return chatAs(p.api, p.model, sys, message, { maxTokens: 700 });
 }
 
@@ -511,7 +532,7 @@ async function delegate(arg) {
   const prior = ((proj && proj.contributions) || []).map((c) => `${c.persona}: ${String(c.text || '').slice(0, 600)}`).join('\n\n');
   const brief = `You are contributing to a client project A.R.A. is coordinating for Mr. Burrus.${proj ? `\n\nPROJECT: ${proj.name}\nBRIEF: ${proj.brief || '(none written)'}` : ''}${prior ? `\n\nALREADY IN FROM THE TEAM:\n${prior}` : ''}\n\nYOUR ASSIGNMENT (${tools.PROJECT_ROLES[id]}): ${task}\n\nDeliver only your part — concrete and specific, ready for the team to build on. No preamble, don't restate the brief. If you see a problem outside your lane, end with a line starting "FLAG:".`;
   const p = ROSTER[id];
-  const out = stripTags(await chatAs(p.api, p.model, personaSystem(id), brief, { maxTokens: 1100 }));
+  const out = stripTags(await chatAs(p.api, p.model, await relaySystem(id), brief, { maxTokens: 1100 }));
   if (proj && proj.name) {
     const next = { ...proj, contributions: [...(proj.contributions || []), { persona: id, task, text: out, at: Date.now() }] };
     await setSetting('active_project', JSON.stringify(next)).catch(() => {});
@@ -597,8 +618,12 @@ async function saveMessage(persona, role, content) {
 async function runPersonaTurn(personaId, userText, deliver) {
   const persona = ROSTER[personaId] ? personaId : 'ara';
   const p = ROSTER[persona];
-  const [ctx, gs] = await Promise.all([gatherContext(), googleStatus().catch((e) => ({ ok: false, error: e.message }))]);
-  const sys = persona === 'ara' ? systemPrompt(ctx, gs) : personaSystemPrompt(persona, ctx, gs);
+  const [ctx, gs, custom] = await Promise.all([
+    gatherContext(),
+    googleStatus().catch((e) => ({ ok: false, error: e.message })),
+    customPrompt(persona),
+  ]);
+  const sys = persona === 'ara' ? systemPrompt(ctx, gs, custom) : personaSystemPrompt(persona, ctx, gs, custom);
   const history = await loadHistory(persona);
   const messages = [...history, { role: 'user', content: `[${momentET()}] ${userText}` }];
 
