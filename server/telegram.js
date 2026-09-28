@@ -107,7 +107,7 @@ function makeBot(personaId, token) {
     const url = `${String(baseUrl).replace(/\/+$/, '')}/telegram/webhook/${personaId}/${secret}`;
     const result = await tg('setWebhook', {
       url, secret_token: secret,
-      allowed_updates: ['message'],
+      allowed_updates: ['message', 'callback_query'], // callback_query = Confirm / Cancel taps
       drop_pending_updates: false,
     });
     return { persona: personaId, url, result };

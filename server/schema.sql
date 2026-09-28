@@ -86,3 +86,17 @@ CREATE TABLE IF NOT EXISTS tg_seen (
   seen_key text   PRIMARY KEY,      -- '<persona>:<update_id>'
   seen_at  bigint NOT NULL
 );
+
+-- Telegram actions waiting on the owner's tap — a persona proposed something
+-- that shouldn't fire unconfirmed (send an email, delete an event or a Drive
+-- file). The bot shows Confirm / Cancel buttons; the callback runs or drops it.
+CREATE TABLE IF NOT EXISTS tg_pending (
+  id         text   PRIMARY KEY,
+  persona    text   NOT NULL,
+  kind       text   NOT NULL,
+  label      text   NOT NULL,
+  detail     text   NOT NULL DEFAULT '',
+  payload    jsonb  NOT NULL DEFAULT '{}'::jsonb,
+  created_at bigint NOT NULL,
+  resolved   text                    -- null while waiting; 'done' | 'cancelled' | 'failed'
+);

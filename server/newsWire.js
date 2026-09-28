@@ -8,7 +8,7 @@
 // MARKETIMPACT high-confidence line hands off to T.A.L.O.N. exactly like the
 // client's newsTradeHandoff, demo-account-only.
 const { webResearch, chatAs } = require('./llm');
-const { getSetting, setSetting, upsertSyncRow, syncedRows, saveMemory, todayET } = require('./syncStore');
+const { getSetting, setSetting, upsertSyncRow, syncedRow, syncedRows, saveMemory, todayET } = require('./syncStore');
 const { tlStatus, tlConnect, tlSnapshot, tlFormatSnapshot, tlPositions, tlInstrumentsById, tlPlaceOrder, MAX_QTY, MAX_OPEN_POSITIONS } = require('./tradeLocker');
 const { recordTradeOpen, TRADER_ID } = require('./tradeJournal');
 const { newsTradeLevels } = require('./talonBrain');
@@ -113,7 +113,11 @@ MONEY|<one line>
     if (!brief) return { error: 'empty brief' };
 
     const slotLabel = trigger === 'manual' ? 'manual' : 'break';
+    // Merge into the HUD row, never replace it — it also carries the routine,
+    // Batman Protocol and score that every persona's context reads.
+    const hudNow = (await syncedRow('hud_state', 'singleton')) || {};
     await upsertSyncRow('hud_state', 'singleton', {
+      ...hudNow,
       news_brief: brief, news_headlines: JSON.stringify(headlines), news_slot: slotLabel, news_updated_at: Date.now(),
     });
     await saveMemory('wire', `[news brief · ${slotLabel}] ${brief.slice(0, 4000)}`);

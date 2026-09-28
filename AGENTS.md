@@ -75,10 +75,20 @@ forwards with them. See `DEPLOY_BACKEND.md` (gitignored — holds the real token
 `routes/telegram.js` run **one bot per persona** (A.R.A., S.T.E.P.H.A.N.I.E.,
 H.A.V.E.N., J.A.R.V.I.S., S.E.L.E.N.E.), each a headless front door to that
 persona. Server-side re-implementation of a persona's turn: context from
-`sync_rows`, per-persona history in `tg_messages.persona`, a subset of the app's
-command tags (notes, web/deep research, memory, `[RELAY_TO]`, `[READ_HUD]`,
-`[BUILD_STATUS]`; A.R.A. also has tasks/expenses/dates/council). App-only tags
-(3D Lab, HUD edits, trades, build requests) are deferred back to the app. Each
+`sync_rows`, per-persona history in `tg_messages.persona`, and the app's command
+tags ported to `server/personaTools.js`. Every persona gets web/deep research,
+memory, `[RELAY_TO]` and the full Google set (Drive notes, Gmail read/send,
+Calendar, Sheets). A.R.A. also has tasks (+ Google Tasks), expenses, revenue,
+targets, dates, HUD edits (score, routine, Batman Protocol, word/verse/fact),
+the leads pipeline, the council, and THE FIRM (`[PROJECT_START]`, `[DELEGATE]`
+runs the specialists server-side). Send-email and deletes become `tg_pending`
+rows and need a Confirm tap (inline buttons → `callback_query`). Each reply
+carries a ✓/⚠️ receipt per write, and the prompt carries a live Google status
+line (`googleStatus()`, also `GET /google/status`) so a persona never claims a
+Drive save that fell back to the app's notes. Still app-only: opening apps on
+the phone, 3D Lab, HUD panel layout, the Canvas, trades, clips/video watch, and
+filing GitHub builds (the token lives on the device — `[BUILD_REQUEST]` saves
+the spec as a note instead). Each
 bot's token is `TELEGRAM_BOT_TOKEN[_PERSONA]`; all locked to `TELEGRAM_OWNER_ID`;
 webhook at `/telegram/webhook/:persona/:secret`. Voice notes both ways: Whisper
 in (`OPENAI_API_KEY`); out is xAI `grok-voice` for A.R.A. (`server/araVoice.js`,

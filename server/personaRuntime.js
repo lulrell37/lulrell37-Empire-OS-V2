@@ -2,12 +2,14 @@
 // running that persona headless.
 //
 // The in-app persona runtime (src/services/aiService.js + commandHandler.js)
-// lives on the device. This is a server-side re-implementation scoped to what
-// works without the app open: chat, notes, tasks, expenses, dates, web + deep
-// research, memory, the nightly council, and relaying to any other persona.
-// Anything that needs the phone or the holographic HUD (opening an app, the 3D
-// Lab, detaching panels, placing a trade, HUD edits, filing a build) is deferred
-// back to the app — the persona is told to say so plainly.
+// lives on the device. This is a server-side re-implementation of everything
+// that works without the phone: chat, notes, Gmail, Calendar, Drive, Sheets,
+// Google Tasks, the app's tasks, expenses, revenue, dates, HUD edits, the leads
+// pipeline, web + deep research, memory, the nightly council, client-project
+// delegation, and relaying to any other persona (server/personaTools.js holds
+// most of the tag handlers). What genuinely needs the phone — opening an app on
+// it, the 3D Lab, HUD panel layout, the Canvas, filing GitHub builds (the token
+// lives on the device) — is deferred back to the app, and the persona says so.
 //
 // Context and writes go through the same sync_rows store the app syncs from, so
 // a task added here shows up in the app on its next pull, and vice versa. Each
@@ -17,7 +19,8 @@ const crypto = require('crypto');
 const { query } = require('./db');
 const { chatAs, claudeText, webResearch } = require('./llm');
 const { ROSTER, resolvePersonaId, rosterLines, personaSystem, personaTgIdentity } = require('./personas');
-const { readDriveNote, saveDriveNote, googleLinked } = require('./google');
+const { saveDriveNote, googleStatus, gTaskComplete } = require('./google');
+const tools = require('./personaTools');
 
 const TZ = 'America/New_York';
 const HISTORY_TURNS = 16;
@@ -110,7 +113,9 @@ async function gatherContext() {
   const dates = (await syncedRows('important_dates').catch(() => []));
   const councilLast = asObject(await getSetting('council_last'), null);
 
-  return { businesses, tasks, leadTally, openTrades, builds, hud, dates, councilLast };
+  const project = await tools.activeProject().catch(() => null);
+
+  return { businesses, tasks, leadTally, openTrades, builds, hud, dates, councilLast, project };
 }
 
 function upcomingDates(dates, days = 21) {
@@ -178,6 +183,11 @@ function contextBlock(ctx) {
   if (ctx.councilLast && ctx.councilLast.headline) {
     L.push(`\nLast Empire Council (${ctx.councilLast.date}): ${ctx.councilLast.headline}`);
   }
+  if (ctx.project && ctx.project.name) {
+    const p = ctx.project;
+    const who = (p.contributions || []).map((c) => `${c.persona}: ${String(c.task || '').slice(0, 100)}`).join('; ') || 'none yet';
+    L.push(`\nACTIVE CLIENT PROJECT (A.R.A. coordinating): ${p.name} — ${String(p.brief || '(no brief)').slice(0, 500)}\n  repo: ${p.repo && p.repo.owner ? `${p.repo.owner}/${p.repo.repo}` : 'not created yet'} · contributions: ${who}`);
+  }
   if (h.news_brief) {
     L.push(`\nLatest W.I.R.E. news brief${h.news_slot ? ` (${h.news_slot})` : ''}:\n${String(h.news_brief).slice(0, 700)}`);
   }
@@ -190,26 +200,47 @@ const ARA_IDENTITY = `You are A.R.A. — Attentive Relationship & Affairs Archit
 
 You have a live context block below — time, Empire Score, streak, Batman Protocol, morning routine, businesses and revenue, tasks, dates, pipeline, trades, builds, the last council headline and W.I.R.E.'s latest brief. Read from it; don't invent these numbers.`;
 
-// A.R.A. runs the day, so she gets the full tool set (task list, expenses, dates,
-// council control). The other personas get a leaner set focused on their lane.
-const ARA_TOOLS = `[WHAT YOU CAN DO FROM HERE — emit the tag in your reply; the tag is what acts, not saying you'll do it. No literal ] inside a tag.
- - [SEARCH_WEB: query] — one live web lookup; the result comes back before you answer. Use it for anything that turns on something current — including weather/forecast for a place; never guess that from memory.
- - [DEEP_RESEARCH: topic] — ONLY when he explicitly asks for "deep research" / "a deep dive". Runs in the background (several minutes, ~12 searches, cited); you'll get the finished brief and it's saved as a Note. Tell him it's running.
- - [RELAY_TO: persona-id | a complete, specific question] — hand something outside your lane to another persona. This is synchronous: you get their real answer back this turn before you reply. Ask a full question, then use what they say — never guess their answer.
- - [MEMORY_QUERY: precise question] — search your full history with Mr. Burrus when he points back to something not in view; the answer comes back before you reply.
- - [SAVE_NOTE: title | content] — write (or overwrite) a Drive note. A short "Saved that as '<title>'." is enough; don't also paste the content back.
- - [READ_NOTE: title] — pull a Drive note's contents before you answer.
- - [ADD_TASK: title | notes | YYYY-MM-DD due (optional)] / [COMPLETE_TASK: name] — his task list (syncs to the app).
- - [ADD_EXPENSE: amount | category | note] — log spending.
- - [ADD_DATE: label | YYYY-MM-DD | note] — an important date / deadline.
- - [REMEMBER: the thing | days] (1-30) — keep something time-sensitive in front of you until it expires; [UNPIN_MEMORY: a few words] drops it.
- - [COUNCIL_IDEA: text] / [COUNCIL_NOTE: text] — add to the nightly Empire Council's agenda / brief.
- - [COUNCIL_CONVENE] — run the Empire Council now, off its 5am schedule (a few minutes; the outcome comes back here and is saved as a Note).
+// Google tags every persona carries — same set as the app's GOOGLE block. Whether
+// Google actually works right now is a separate per-turn line (googleLine).
+const GOOGLE_TOOLS = `GOOGLE (see the GOOGLE status line below for whether it's working right now):
+ - NOTES: [SAVE_NOTE: title | content] writes or overwrites a Drive note by title — a short "Saved that as '<title>'." is enough, don't paste the content back. [READ_NOTE: title] (long notes page: [READ_NOTE: title | 2], [READ_NOTE: title | all]) · [LIST_NOTES] · [SEARCH_DRIVE: keyword] · [READ_FILE_ID: id] · [EDIT_NOTE: fileId | full new content] · [DELETE_FILE: fileId] (he taps to confirm).
+ - EMAIL: [READ_EMAIL] (unread inbox) · [READ_EMAIL: any Gmail search, e.g. from:bank newer_than:7d] · [READ_EMAIL_ID: id] (one full message) · [SEND_EMAIL: to | subject | body] — he gets a Confirm button before it sends; tell him it's ready to send, not that it's sent.
+ - CALENDAR: [READ_CALENDAR] (next 7 days) · [READ_CALENDAR: 30] · [READ_CALENDAR: 2026-08-01 | 30] · [CREATE_EVENT: title | 2026-06-01T14:00 | minutes] (his Eastern time) · [DELETE_EVENT: id] (confirmed).
+ - SHEETS: [CREATE_SHEET: title | col1,col2 | val1,val2].`;
 
-Everything in LIVE CONTEXT below — Empire Score, streak, Batman Protocol, morning routine, businesses and revenue, tasks, dates, outreach pipeline, trades, builds, the council, W.I.R.E.'s brief — is pulled fresh for every message. It IS the HUD; you're not missing it, you're looking at it. Web search, deep research, notes, memory, tasks, expenses, dates and the council are real actions you take directly from here, not things you relay to the app. Never tell him to open the app to check something already in front of you, and never say you "can't" do anything on the two lists above — you can.
+// A.R.A. runs the day, so she gets the full tool set — the same one she has in
+// the app, minus what physically needs the phone. The other personas get a
+// leaner set focused on their lane (plus Google, which every persona has).
+const ARA_TOOLS = `[WHAT YOU CAN DO FROM HERE — emit the tag in your reply; the tag is what acts, not saying you'll do it. No literal ] inside a tag. Read tags come back with results before you answer; write tags run after your reply and Mr. Burrus gets a receipt for each, so never claim something happened that a tag didn't do.
+ WEB & RESEARCH:
+ - [SEARCH_WEB: query] — one live web lookup. Use it for anything that turns on something current — including weather/forecast for a place; never guess that from memory.
+ - [DEEP_RESEARCH: topic] — ONLY when he explicitly asks for "deep research" / "a deep dive". Runs in the background (several minutes, ~12 searches, cited); the brief comes back here and is saved as a Note. Tell him it's running.
+ THE EMPIRE:
+ - [RELAY_TO: persona-id | a complete, specific question] — synchronous: you get their real answer back this turn. Never guess their answer.
+ - [MEMORY_QUERY: precise question] — search your full history with Mr. Burrus.
+ - [REMEMBER: the thing | days] (1-30) / [UNPIN_MEMORY: a few words] — keep something time-sensitive in front of you.
+ - [COUNCIL_IDEA: text] / [COUNCIL_NOTE: text] / [COUNCIL_CONVENE] — the nightly Empire Council's agenda, brief, or run it now.
+ ${GOOGLE_TOOLS}
+ TASKS, MONEY, DATES:
+ - [ADD_TASK: title | notes | YYYY-MM-DD] (app list) / [CREATE_TASK: title | notes | YYYY-MM-DD] (app + Google Tasks) / [COMPLETE_TASK: name] / [TASK_EDIT: name | new title] / [DELETE_TASK: name] / [READ_TASKS] (app + Google Tasks).
+ - [ADD_EXPENSE: amount | category | note] / [EXPENSE_SUMMARY] (this month by category).
+ - [ADD_REVENUE: business | amount | income or expense | note] / [SET_TARGET: business | monthly | weekly].
+ - [ADD_DATE: label | YYYY-MM-DD | note] / [SET_REMINDER: text | YYYY-MM-DD].
+ THE HUD (edits land in the app on its next sync):
+ - [UPDATE_SCORE: 0-100] / [SET_WORD: word | phonetic | definition] / [SET_VERSE: text | reference] / [SET_FACT: text]
+ - [ROUTINE_DONE: item, item] / [ROUTINE_ADD: item] / [ROUTINE_REMOVE: item] / [ROUTINE_RENAME: item | new label]
+ - [BATMAN_SET: day | label | description] — one day of the 7-day Batman Protocol.
+ PIPELINE:
+ - [LEADS] or [LEAD_LIST: stage] / [LEAD_ADD: name | business | website | contact | bottleneck | segment] / [LEAD_UPDATE: lead | stage=contacted; next_action=...; next_touch=YYYY-MM-DD; log=...] / [LEAD_LOG: lead | what happened] / [LEAD_EMAIL: lead | subject | body] (he taps to confirm).
+ THE FIRM — client & project delivery, you coordinate:
+ - [PROJECT_START: short name | one-paragraph brief | new or empire] opens it; [PROJECT_DONE] closes it.
+ - [DELEGATE: name | the specific scoped task] — one or several in a reply. Each specialist's work comes back to you this turn; then synthesize for him: what each delivered, how it fits, what's decided, what still needs his call. Roles: Selene = brand & visual; Rogue = copy & content; J.A.R.V.I.S. = architecture & build feasibility; Atlas = pricing & payments; Asia = legal & compliance; Stephanie = training content; Haven = health & wellness content; Sage = research.
+ - [BUILD_REQUEST: full spec] — saves the spec (Drive, or the app's Notes); filing it to GitHub still needs the app open, so tell him that.
 
-NOT AVAILABLE over Telegram — ONLY these genuinely need the phone or the 3D HUD in hand. If he asks for one of these, say plainly it needs the app open, and offer the nearest thing you can do:
- opening an app on his phone, the 3D Laboratory, detaching/docking HUD panels, the analytics board and charts, placing or closing trades, editing clips, the client-project delegation flow, filing a build request (note the spec and tell him to file it from the app so he can track it).]`;
+Everything in LIVE CONTEXT below is pulled fresh for every message — it IS the HUD; you're looking at it. Never tell him to open the app to check something already in front of you, and never say you "can't" do anything listed above — you can.
+
+NOT AVAILABLE over Telegram — ONLY these genuinely need the phone in hand. Say so plainly and offer the nearest thing you can do:
+ opening an app on his phone or a webpage on it, the 3D Laboratory, detaching/docking HUD panels, the Canvas (charts, the notes/tasks board, analytics board), placing or closing trades (that's T.A.L.O.N.'s desk — relay to him), editing clips or watching a video, filing a build to GitHub.]`;
 
 // Extra per-persona tag lines folded into GENERIC_TOOLS.
 const PERSONA_EXTRA_TOOLS = {
@@ -224,13 +255,22 @@ function genericTools(personaId) {
  - [DEEP_RESEARCH: topic] — ONLY when he explicitly asks for "deep research" / "a deep dive". Runs in the background (several minutes, cited); you'll get the finished brief and it's saved as a Note. Tell him it's running.
  - [RELAY_TO: persona-id | a complete, specific question] — hand something outside your lane to another persona. Synchronous: you get their real answer back this turn. Ask a full question; never guess their answer.
  - [MEMORY_QUERY: precise question] — search your own history with Mr. Burrus when he points back to something not in view.
- - [SAVE_NOTE: title | content] — write (or overwrite) a Drive note. A short "Saved that as '<title>'." is enough.
- - [READ_NOTE: title] — pull a Drive note's contents before you answer. Long notes page: [READ_NOTE: title | 2], [READ_NOTE: title | all].${extra}
+ ${GOOGLE_TOOLS}${extra}
 
-Everything in LIVE CONTEXT below is pulled fresh for every message — it IS the HUD, not a stand-in for it. Web search, deep research, notes and memory are real actions you take directly from here. Never tell him to open the app to check something already in front of you, and never say you "can't" do anything on the list above — you can.
+Write tags run after your reply and Mr. Burrus gets a receipt for each — never claim something happened that a tag didn't do.
+
+Everything in LIVE CONTEXT below is pulled fresh for every message — it IS the HUD, not a stand-in for it. Web search, deep research, Google (notes, email, calendar, sheets) and memory are real actions you take directly from here. Never tell him to open the app to check something already in front of you, and never say you "can't" do anything on the list above — you can.
 
 NOT AVAILABLE over Telegram — ONLY these genuinely need the phone or the 3D HUD in hand. If he asks for one, say plainly it needs the app open, and offer the nearest thing you can do here:
- editing the HUD / Batman Protocol / routine / targets, the 3D Laboratory, HUD panels, the analytics board, placing or closing trades, editing clips, filing a build request (note the spec and tell him to file it from the app).]`;
+ editing the HUD / Batman Protocol / routine / targets (A.R.A. can — relay to her), the 3D Laboratory, HUD panels, the analytics board, placing or closing trades, editing clips, filing a build request (note the spec and tell him to file it from the app).]`;
+}
+
+// Whether Google works right this turn. Without this the persona would announce
+// "saved to Drive" while every write was quietly failing over to the app's notes.
+function googleLine(gs) {
+  if (gs && gs.ok) return '[GOOGLE: connected and working — Drive, Gmail, Calendar, Sheets and Google Tasks are live.]';
+  const why = (gs && gs.error) || 'unknown';
+  return `[GOOGLE: NOT WORKING right now (${why}). Email, calendar, sheets and Google Tasks will fail, and [SAVE_NOTE] lands in the app's own Notes list, NOT Drive — so say "saved to your app notes", never "saved to Drive". If he asks for anything Google, tell him plainly it's disconnected and that reconnecting Google in the app (Settings → GOOGLE, with the backend linked) fixes it.]`;
 }
 
 // Shared with every persona (A.R.A. and the rest) — see the matching block in
@@ -242,10 +282,11 @@ function faithBlock(personaId) {
   return `[FAITH: the Empire is built on Christian faith — God, through Jesus Christ, is its true foundation, and every business and plan here ultimately serves that. Hold this quietly as part of who you are; let it shape your integrity, hope and wisdom without turning replies into sermons or working scripture in unless the moment or Mr. Burrus's own words call for it.${handoff}]`;
 }
 
-function systemPrompt(ctx) {
+function systemPrompt(ctx, gs) {
   return [
     ARA_IDENTITY,
     ARA_TOOLS,
+    googleLine(gs),
     `[THE EMPIRE — the other personas who serve Mr. Burrus. Hand anything outside your lane to one with [RELAY_TO: id | ...]:\n${rosterLines()}\n]`,
     faithBlock('ara'),
     `[LIVE CONTEXT:\n${contextBlock(ctx)}\n]`,
@@ -254,10 +295,11 @@ function systemPrompt(ctx) {
 }
 
 // System prompt for a non-A.R.A. persona running its own bot.
-function personaSystemPrompt(personaId, ctx) {
+function personaSystemPrompt(personaId, ctx, gs) {
   return [
     `${personaTgIdentity(personaId)}\n\nYou are talking to Mr. Burrus over Telegram (text), away from the Empire OS app — keep replies tight and mobile-readable. Reply directly to what he just said; no status-briefing preamble. There is a live context block below — read from it, don't invent numbers.`,
     genericTools(personaId),
+    googleLine(gs),
     `[THE EMPIRE — the other personas. Hand anything outside your lane to one with [RELAY_TO: id | ...]:\n${rosterLines()}\n]`,
     faithBlock(personaId),
     `[LIVE CONTEXT:\n${contextBlock(ctx)}\n]`,
@@ -289,9 +331,11 @@ async function runInjections(text, persona = 'ara') {
     try {
       if (name === 'SEARCH_WEB' && arg) {
         parts.push(`SEARCH_WEB "${arg}":\n${(await webResearch(arg)) || '(nothing found)'}`);
-      } else if (name === 'READ_NOTE' && arg) {
-        const n = await readDriveNote(arg).catch(() => null);
-        parts.push(n ? `NOTE "${n.name}":\n${n.text}` : `READ_NOTE "${arg}": not found (or Google not connected).`);
+      } else if (tools.READ_TAGS.has(name)) {
+        const out = await tools.readTag({ name, arg }, persona);
+        if (out) parts.push(`${name}${arg ? ` "${arg}"` : ''}:\n${out}`);
+      } else if (name === 'DELEGATE' && arg && persona === 'ara') {
+        parts.push(await delegate(arg));
       } else if (name === 'MEMORY_QUERY' && arg) {
         parts.push(`MEMORY_QUERY "${arg}":\n${await memoryQuery(arg, persona)}`);
       } else if (name === 'READ_HUD') {
@@ -334,10 +378,17 @@ async function buildStatus() {
   return jobs.map((j) => `#${j.issue_number || '?'} [${j.state}]${j.pr_number ? ` PR #${j.pr_number}` : ''} ${j.title || (j.spec || '').slice(0, 60)}${j.state === 'question' && j.question ? `\n   asked: ${String(j.question).slice(0, 240)}` : ''}`).join('\n');
 }
 
-// Side-effect tags — apply after A.R.A.'s final reply. Returns human-readable
-// notes for the caller to log / surface.
+// Google write tags every persona may use; the rest of personaTools' writes
+// (HUD, money, leads, THE FIRM) are A.R.A.'s.
+const GOOGLE_WRITES = new Set(['CREATE_EVENT', 'CREATE_NOTE', 'EDIT_NOTE', 'CREATE_SHEET', 'SEND_EMAIL', 'DELETE_EVENT', 'DELETE_FILE']);
+
+// Side-effect tags — apply after the persona's final reply. Returns
+// { notes, warnings, confirms }: receipts for what happened, what failed or
+// landed somewhere other than asked, and actions waiting on the owner's tap.
 async function applyEffects(text, deliver, persona = 'ara') {
   const notes = [];
+  const warnings = [];
+  const confirms = [];
   const now = Date.now();
   const done = new Set();
   for (const { name, arg } of findTags(text)) {
@@ -352,10 +403,10 @@ async function applyEffects(text, deliver, persona = 'ara') {
         if (title && content) {
           try {
             const r = await saveDriveNote(title, content);
-            notes.push(`note ${r.created ? 'created' : 'updated'}: ${r.name}`);
-          } catch {
+            notes.push(`Drive note ${r.created ? 'created' : 'updated'}: ${r.name}`);
+          } catch (e) {
             await upsertSyncRow('notes', newId(), { title, content, persona, created_at: now, updated_at: now });
-            notes.push(`note saved locally: ${title}`);
+            warnings.push(`"${title}" is NOT in Drive (${e.message}) — saved to the app's Notes instead`);
           }
         }
       } else if (name === 'ADD_TASK' && arg) {
@@ -375,6 +426,9 @@ async function applyEffects(text, deliver, persona = 'ara') {
           await upsertSyncRow('tasks', hit.sync_id, { ...hit.data, completed: 1, updated_at: now });
           notes.push(`task completed: ${hit.data.title}`);
         }
+        const gt = await gTaskComplete(arg).catch(() => null); // Google Tasks mirror, best-effort
+        if (!hit && gt) notes.push(gt);
+        if (!hit && !gt) warnings.push(`no open task matches "${arg}"`);
       } else if (name === 'ADD_EXPENSE' && arg) {
         const [amount, category, note] = arg.split('|').map((s) => s.trim());
         const a = parseFloat(String(amount).replace(/[^0-9.\-]/g, ''));
@@ -421,12 +475,17 @@ async function applyEffects(text, deliver, persona = 'ara') {
       } else if (name === 'DEEP_RESEARCH' && arg) {
         notes.push('deep research started');
         runDeepResearch(arg, deliver, persona);
+      } else if (persona === 'ara' || GOOGLE_WRITES.has(name)) {
+        const r = await tools.writeTag({ name, arg }, persona);
+        if (r && r.ok) notes.push(r.ok);
+        if (r && r.warn) warnings.push(r.warn);
+        if (r && r.confirm) confirms.push(r.confirm);
       }
     } catch (e) {
-      notes.push(`${name}: failed — ${e.message}`);
+      warnings.push(`${name} failed — ${e.message}`);
     }
   }
-  return notes;
+  return { notes, warnings, confirms };
 }
 
 // --- relay + memory ---------------------------------------------------
@@ -436,6 +495,32 @@ async function relayToPersona(id, message) {
   const ctx = await gatherContext().catch(() => null);
   const sys = personaSystem(id) + (ctx ? `\n\n[EMPIRE CONTEXT:\n${contextBlock(ctx)}\n]` : '');
   return chatAs(p.api, p.model, sys, message, { maxTokens: 700 });
+}
+
+// THE FIRM — A.R.A.'s [DELEGATE: name | task]. Each specialist gets the project
+// brief plus what the team has already turned in, answers its part, and the
+// contributions go back to A.R.A. to synthesize (same flow as CommandScreen's
+// runRound in the app), and onto the active project's record.
+async function delegate(arg) {
+  const i = arg.indexOf('|');
+  const who = i < 0 ? '' : arg.slice(0, i).trim();
+  const task = i < 0 ? '' : arg.slice(i + 1).trim();
+  const id = resolvePersonaId(who);
+  if (!id || !tools.PROJECT_ROLES[id] || !task) return `DELEGATE "${who}": not a specialist on the team — use one of ${Object.keys(tools.PROJECT_ROLES).join(', ')}.`;
+  const proj = await tools.activeProject().catch(() => null);
+  const prior = ((proj && proj.contributions) || []).map((c) => `${c.persona}: ${String(c.text || '').slice(0, 600)}`).join('\n\n');
+  const brief = `You are contributing to a client project A.R.A. is coordinating for Mr. Burrus.${proj ? `\n\nPROJECT: ${proj.name}\nBRIEF: ${proj.brief || '(none written)'}` : ''}${prior ? `\n\nALREADY IN FROM THE TEAM:\n${prior}` : ''}\n\nYOUR ASSIGNMENT (${tools.PROJECT_ROLES[id]}): ${task}\n\nDeliver only your part — concrete and specific, ready for the team to build on. No preamble, don't restate the brief. If you see a problem outside your lane, end with a line starting "FLAG:".`;
+  const p = ROSTER[id];
+  const out = stripTags(await chatAs(p.api, p.model, personaSystem(id), brief, { maxTokens: 1100 }));
+  if (proj && proj.name) {
+    const next = { ...proj, contributions: [...(proj.contributions || []), { persona: id, task, text: out, at: Date.now() }] };
+    await setSetting('active_project', JSON.stringify(next)).catch(() => {});
+  }
+  await upsertSyncRow('persona_memory', newId(), {
+    persona: id, content: `CLIENT PROJECT${proj ? ` — ${proj.name}` : ''}. A.R.A. delegated: ${task}\n\n${p.name}: ${out}`,
+    category: 'general', keywords: '[]', date: todayET(), created_at: Date.now(),
+  }).catch(() => {});
+  return `${p.name} (${tools.PROJECT_ROLES[id]}) delivered — synthesize this for Mr. Burrus:\n${out}`;
 }
 
 // The Claude-backed memory index over a persona's stored exchanges
@@ -512,8 +597,8 @@ async function saveMessage(persona, role, content) {
 async function runPersonaTurn(personaId, userText, deliver) {
   const persona = ROSTER[personaId] ? personaId : 'ara';
   const p = ROSTER[persona];
-  const ctx = await gatherContext();
-  const sys = persona === 'ara' ? systemPrompt(ctx) : personaSystemPrompt(persona, ctx);
+  const [ctx, gs] = await Promise.all([gatherContext(), googleStatus().catch((e) => ({ ok: false, error: e.message }))]);
+  const sys = persona === 'ara' ? systemPrompt(ctx, gs) : personaSystemPrompt(persona, ctx, gs);
   const history = await loadHistory(persona);
   const messages = [...history, { role: 'user', content: `[${momentET()}] ${userText}` }];
 
@@ -530,21 +615,25 @@ async function runPersonaTurn(personaId, userText, deliver) {
   }
 
   // Side-effect tags fire once, from anywhere across the rounds (deduped).
-  const effects = await applyEffects(replies.join('\n'), deliver, persona).catch((e) => [`effects failed: ${e.message}`]);
+  const fx = await applyEffects(replies.join('\n'), deliver, persona)
+    .catch((e) => ({ notes: [], warnings: [`actions failed: ${e.message}`], confirms: [] }));
   let clean = stripTags(reply);
-  if (!clean) clean = effects.length ? `Done — ${effects.join('; ')}.` : 'On it.';
+  if (!clean) clean = fx.notes.length ? `Done — ${fx.notes.join('; ')}.` : 'On it.';
+  // A receipt under the reply for every write — the reply is written before the
+  // writes run, so this is the only part guaranteed to say what really happened.
+  const footer = [...fx.notes.map((n) => `✓ ${n}`), ...fx.warnings.map((w) => `⚠️ ${w}`)].join('\n');
 
   await saveMessage(persona, 'user', userText);
-  await saveMessage(persona, 'assistant', clean);
+  await saveMessage(persona, 'assistant', footer ? `${clean}\n\n${footer}` : clean);
   await upsertSyncRow('persona_memory', newId(), {
     persona, content: `YOU: ${userText}\n${p.name}: ${clean}`,
     category: 'general', keywords: '[]', date: todayET(), created_at: Date.now(),
   }).catch(() => {});
 
-  return { text: clean, effects };
+  return { text: clean, footer, confirms: fx.confirms };
 }
 
 // Back-compat: A.R.A.'s turn.
 const runAraTurn = (userText, deliver) => runPersonaTurn('ara', userText, deliver);
 
-module.exports = { runPersonaTurn, runAraTurn, gatherContext, contextBlock };
+module.exports = { runPersonaTurn, runAraTurn, gatherContext, contextBlock, applyEffects };
