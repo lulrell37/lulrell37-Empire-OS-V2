@@ -67,7 +67,7 @@ const ROSTER = {
   },
   atlas: {
     name: 'A.T.L.A.S.', role: 'Wealth Strategist', api: 'anthropic', model: CLAUDE,
-    blurb: 'Numbers are his language, sovereignty is the mission. Capital allocation, cash flow, debt, leverage, the big money calls.',
+    blurb: 'Numbers are her language, sovereignty is the mission. Capital allocation, cash flow, debt, leverage, the big money calls.',
   },
   talon: {
     name: 'T.A.L.O.N.', role: 'Trader', api: 'anthropic', model: CLAUDE,
@@ -109,6 +109,18 @@ const ROSTER = {
   },
 };
 
+// Each persona's gender, as Mr. Burrus set it — every persona is told its own
+// and everyone else's, so nobody calls A.T.L.A.S. "he" or T.A.L.O.N. "she".
+// Personas not listed have none set.
+const GENDER = { ara: 'f', jarvis: 'm', selene: 'f', atlas: 'f', stephanie: 'f', haven: 'f', aisha: 'f', talon: 'm', wire: 'f', scout: 'f', andrew: 'm', scribe: 'm', hook: 'm', rogue: 'f', nova: 'm', sage: 'f', pulse: 'm', abraham: 'm', batman: 'm', pen: 'm', forge: 'm', herald: 'm' };
+const pronouns = (id) => (GENDER[id] === 'f' ? 'she/her' : GENDER[id] === 'm' ? 'he/him' : '');
+// "[YOU: ...]" line for a persona's own system prompt ('' when unset).
+function genderLine(id) {
+  const g = GENDER[id];
+  if (!g) return '';
+  return `[YOU: you are ${g === 'f' ? 'a woman — she/her' : 'a man — he/him'}. The other personas' genders are in the roster; always use the right pronouns for each of them.]`;
+}
+
 // Aliases so a relay target written loosely still resolves.
 const ALIASES = {
   jarvis: 'jarvis', ara: 'ara', selene: 'selene', scribe: 'scribe', hook: 'hook',
@@ -127,7 +139,7 @@ function resolvePersonaId(ref) {
 function rosterLines() {
   return Object.entries(ROSTER)
     .filter(([id]) => id !== 'ara')
-    .map(([id, p]) => ` - ${p.name} (${id}) — ${p.role}`)
+    .map(([id, p]) => ` - ${p.name} (${id}) — ${p.role}${pronouns(id) ? ` · ${pronouns(id)}` : ''}`)
     .join('\n');
 }
 
@@ -135,7 +147,7 @@ function rosterLines() {
 function personaSystem(id) {
   const p = ROSTER[id];
   if (!p) return '';
-  return `You are ${p.name} — ${p.role} of The Empire, one of the personas who serve Mr. Burrus. ${p.blurb}\n\nA.R.A. (his personal assistant) is relaying a question to you on his behalf. Answer it directly, in your own voice, from your lane — concrete and specific, no greeting and no sign-off. If it needs something only Mr. Burrus can decide or something you'd need the app open to do, say so plainly. Keep it tight: a few sentences to a short paragraph.`;
+  return `You are ${p.name} — ${p.role} of The Empire, one of the personas who serve Mr. Burrus. ${p.blurb}${genderLine(id) ? `\n\n${genderLine(id)}` : ''}\n\n[THE EMPIRE:\n${rosterLines()}\n]\n\nA.R.A. (his personal assistant) is relaying a question to you on his behalf. Answer it directly, in your own voice, from your lane — concrete and specific, no greeting and no sign-off. If it needs something only Mr. Burrus can decide or something you'd need the app open to do, say so plainly. Keep it tight: a few sentences to a short paragraph.`;
 }
 
 // The full identity line for a persona running its own Telegram bot (fuller than
@@ -144,7 +156,8 @@ function personaSystem(id) {
 function personaTgIdentity(id) {
   const p = ROSTER[id];
   if (!p) return '';
-  return p.tgIdentity || `You are ${p.name} — ${p.role} of The Empire. ${p.blurb}`;
+  const base = p.tgIdentity || `You are ${p.name} — ${p.role} of The Empire. ${p.blurb}`;
+  return genderLine(id) ? `${base}\n\n${genderLine(id)}` : base;
 }
 
 // ElevenLabs voice id for a persona (for Telegram voice-note replies), or null.
@@ -153,6 +166,6 @@ function personaVoiceId(id) {
 }
 
 module.exports = {
-  ROSTER, resolvePersonaId, rosterLines, personaSystem,
+  ROSTER, resolvePersonaId, rosterLines, personaSystem, genderLine, pronouns,
   personaTgIdentity, personaVoiceId,
 };
