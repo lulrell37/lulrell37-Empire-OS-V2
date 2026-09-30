@@ -1,8 +1,14 @@
-# Manual only. Pushing/merging to main does NOT build — the whole point is to
-# batch work and spend one EAS build per "push everything", on demand. Trigger
-# from the Actions tab ("Run workflow") or: gh workflow run build.yml
+# Builds on every push to main. Server-only / docs-only pushes are skipped —
+# the backend ships from Replit, not the APK. Still runnable by hand from the
+# Actions tab ("Run workflow") or: gh workflow run build.yml
 name: Build Android APK
 on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'server/**'
+      - 'docs/**'
+      - '**/*.md'
   workflow_dispatch:
 jobs:
   build:

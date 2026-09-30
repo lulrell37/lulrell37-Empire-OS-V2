@@ -141,6 +141,13 @@ already synced and already what the NEWS panel and Trade Journal UI read.
 ## Builds
 
 Android APK via EAS (`eas build --platform android --profile preview`), also
-wired through GitHub Actions on push to `main`. Any change that adds or updates a
+wired through GitHub Actions (`.github/workflows/build.yml`) on every push to
+`main` (server-only and docs-only pushes skip it; also runnable by hand). There
+is no OTA path — the app has no `expo-updates` — so app changes reach the phone
+only through a new APK. Any change that adds or updates a
 native module (fonts, `expo-gl`, `reanimated`, …) requires a fresh native build —
 it will not ship as an OTA update.
+
+**"Push it" means ship it:** when the owner says push, commit, merge into
+`main` and push, so the APK build starts. Pushing only the feature branch
+builds nothing.
