@@ -18,9 +18,11 @@
 const crypto = require('crypto');
 const { query } = require('./db');
 const { chatAs, claudeText, webResearch } = require('./llm');
-const { ROSTER, resolvePersonaId, rosterLines, personaSystem, personaTgIdentity } = require('./personas');
+const { ROSTER, resolvePersonaId, rosterLines, personaSystem, personaTgIdentity, genderLine } = require('./personas');
 const { saveDriveNote, googleStatus, gTaskComplete } = require('./google');
 const tools = require('./personaTools');
+const { tlSnapshot, tlFormatSnapshot } = require('./tradeLocker');
+const { formatTradeRecord } = require('./tradeJournal');
 
 const TZ = 'America/New_York';
 const HISTORY_TURNS = 16;
@@ -299,26 +301,28 @@ function faithBlock(personaId) {
 function systemPrompt(ctx, gs, custom) {
   return [
     custom ? `${custom}\n\n${TG_FRAME}` : ARA_IDENTITY,
+    genderLine('ara'),
     ARA_TOOLS,
     googleLine(gs),
     `[THE EMPIRE — the other personas who serve Mr. Burrus. Hand anything outside your lane to one with [RELAY_TO: id | ...]:\n${rosterLines()}\n]`,
     faithBlock('ara'),
     `[LIVE CONTEXT:\n${contextBlock(ctx)}\n]`,
     `[THE CURRENT MOMENT — right now it is ${momentET()} (America/New_York); Mr. Burrus is in Waldorf, MD. This is authoritative; the chat history and memory may be hours or days old, so don't assume it's still the same day.]`,
-  ].join('\n\n');
+  ].filter(Boolean).join('\n\n');
 }
 
 // System prompt for a non-A.R.A. persona running its own bot.
 function personaSystemPrompt(personaId, ctx, gs, custom) {
   return [
     custom ? `${custom}\n\n${TG_FRAME}` : `${personaTgIdentity(personaId)}\n\nYou are talking to Mr. Burrus over Telegram (text), away from the Empire OS app — keep replies tight and mobile-readable. Reply directly to what he just said; no status-briefing preamble. There is a live context block below — read from it, don't invent numbers.`,
+    custom ? genderLine(personaId) : '', // the built-in identity already carries it
     genericTools(personaId),
     googleLine(gs),
     `[THE EMPIRE — the other personas. Hand anything outside your lane to one with [RELAY_TO: id | ...]:\n${rosterLines()}\n]`,
     faithBlock(personaId),
     `[LIVE CONTEXT:\n${contextBlock(ctx)}\n]`,
     `[THE CURRENT MOMENT — right now it is ${momentET()} (America/New_York); Mr. Burrus is in Waldorf, MD. This is authoritative; chat history and memory may be hours or days old.]`,
-  ].join('\n\n');
+  ].filter(Boolean).join('\n\n');
 }
 
 // --- tag handling ------------------------------------------------------
@@ -339,11 +343,16 @@ function stripTags(text) {
 // Synchronous tags — run them, return text to feed back so the persona can
 // answer with the results. Returns a string (possibly empty). `persona` is the
 // id of the persona whose turn this is (scopes memory, blocks self-relay).
-async function runInjections(text, persona = 'ara') {
+// `convo` is the recent Telegram exchange, handed to a relayed persona so it
+// knows what's being talked about; `depth` > 0 means we're already inside a
+// relay (one hop further is allowed — A.T.L.A.S. → T.A.L.O.N. — not a chain).
+async function runInjections(text, persona = 'ara', { convo = '', depth = 0 } = {}) {
   const parts = [];
   for (const { name, arg } of findTags(text)) {
     try {
-      if (name === 'SEARCH_WEB' && arg) {
+      if (name === 'TRADE_SCAN') {
+        parts.push(await tradeScan(arg));
+      } else if (name === 'SEARCH_WEB' && arg) {
         parts.push(`SEARCH_WEB "${arg}":\n${(await webResearch(arg)) || '(nothing found)'}`);
       } else if (tools.READ_TAGS.has(name)) {
         const out = await tools.readTag({ name, arg }, persona);
@@ -362,13 +371,30 @@ async function runInjections(text, persona = 'ara') {
         const id = resolvePersonaId(ref);
         if (!id || !msg) { parts.push(`RELAY_TO "${arg}": couldn't route that.`); continue; }
         if (id === persona) { parts.push(`RELAY_TO "${ref}": that's you — just answer him directly.`); continue; }
-        parts.push(`${ROSTER[id].name} replied:\n${await relayToPersona(id, msg)}`);
+        if (depth > 1) { parts.push(`RELAY_TO "${ref}": not from inside a relay — answer with what you have.`); continue; }
+        parts.push(`YOU ASKED ${ROSTER[id].name}: "${msg}"\n${ROSTER[id].name} REPLIED:\n${await relayToPersona(id, msg, { from: persona, convo, depth: depth + 1 })}`);
       }
     } catch (e) {
       parts.push(`${name}: failed — ${e.message}`);
     }
   }
   return parts.join('\n\n');
+}
+
+// [TRADE_SCAN: SYMBOL, SYMBOL] — the same read-only market snapshot T.A.L.O.N.
+// gets in the app (price, 1D/4H/1H/15m, cross-market, account, positions) plus
+// his real record. Never places anything; trades stay on T.A.L.O.N.'s desk.
+async function tradeScan(arg) {
+  let syms = String(arg || '').split(/[\s,]+/).map((x) => x.trim().toUpperCase()).filter(Boolean);
+  syms = [...new Set(syms.length ? syms : ['XAUUSD'])].slice(0, 4);
+  const out = [];
+  for (const sym of syms) {
+    try { out.push(`MARKET SNAPSHOT ${sym}:\n${tlFormatSnapshot(await tlSnapshot(sym))}`); }
+    catch (e) { out.push(`MARKET SNAPSHOT ${sym}: failed — ${e.message}`); }
+  }
+  const rec = await formatTradeRecord().catch(() => '');
+  if (rec) out.push(rec);
+  return out.join('\n\n');
 }
 
 // The live HUD as readable lines — Batman Protocol template, morning routine,
@@ -505,17 +531,47 @@ async function applyEffects(text, deliver, persona = 'ara') {
 // --- relay + memory ---------------------------------------------------
 
 // A relayed / delegated persona speaks as its custom prompt when he's set one.
-async function relaySystem(id) {
+async function relaySystem(id, from = 'ara') {
   const custom = await customPrompt(id);
   if (!custom) return personaSystem(id);
-  return `${custom}\n\n[A.R.A. (his personal assistant) is passing you a question on his behalf, over Telegram. Answer it directly from your lane — concrete and specific, no greeting and no sign-off, a few sentences to a short paragraph. If it needs something only Mr. Burrus can decide or the app open, say so plainly.]`;
+  const who = from === 'ara' ? 'A.R.A. (his personal assistant)' : ((ROSTER[from] && ROSTER[from].name) || 'Another persona');
+  return `${custom}${genderLine(id) ? `\n\n${genderLine(id)}` : ''}\n\n[THE EMPIRE:\n${rosterLines()}\n]\n\n[${who} is passing you a question on his behalf, over Telegram. Answer it directly from your lane — concrete and specific, no greeting and no sign-off, a few sentences to a short paragraph. If it needs something only Mr. Burrus can decide or the app open, say so plainly.]`;
 }
 
-async function relayToPersona(id, message) {
+// What a relayed persona can actually use from here. Its app prompt lists app
+// tags too; only these do anything server-side, and a trade tag it writes does
+// NOT execute — without saying so it would claim a trade it never placed.
+const RELAY_TOOLS = `[TOOLS ON THIS RELAY — emit the tag and the result comes back before you answer: [SEARCH_WEB: query] · [TRADE_SCAN: SYMBOL] (live price/structure read, read-only) · [READ_HUD] · [MEMORY_QUERY: question] · [RELAY_TO: persona-id | complete question] (to hand off something outside your lane). Nothing you write here places, closes or modifies a trade — if that's what's called for, say what you'd do and that it needs T.A.L.O.N.'s desk in the app. Never claim you did something a tag didn't.]`;
+
+// Ask persona `id` a question on another persona's behalf and return its answer
+// as plain text. It gets the live context and the recent conversation (so a
+// relay like "ask Atlas about gold" carries what was actually being discussed),
+// and one round of its own lookups before it answers — without that, a reply
+// that was just "[TRADE_SCAN: XAUUSD]" came back as the whole answer.
+async function relayToPersona(id, message, { from = 'ara', convo = '', depth = 1 } = {}) {
   const p = ROSTER[id];
   const ctx = await gatherContext().catch(() => null);
-  const sys = (await relaySystem(id)) + (ctx ? `\n\n[EMPIRE CONTEXT:\n${contextBlock(ctx)}\n]` : '');
-  return chatAs(p.api, p.model, sys, message, { maxTokens: 700 });
+  const sys = [
+    await relaySystem(id, from),
+    RELAY_TOOLS,
+    ctx ? `[EMPIRE CONTEXT:\n${contextBlock(ctx)}\n]` : '',
+    convo ? `[THE CONVERSATION YOU'RE BEING PULLED INTO — Mr. Burrus and ${(ROSTER[from] && ROSTER[from].name) || from}, most recent last:\n${convo}\n]` : '',
+    `[THE CURRENT MOMENT — ${momentET()} (America/New_York).]`,
+  ].filter(Boolean).join('\n\n');
+  const messages = [{ role: 'user', content: message }];
+  let reply = await chatAs(p.api, p.model, sys, messages, { maxTokens: 900 });
+  const inj = await runInjections(reply, id, { convo, depth });
+  if (inj) {
+    messages.push({ role: 'assistant', content: reply });
+    messages.push({ role: 'user', content: `[tool results — now answer the question using these; do not repeat the tool tags]\n\n${inj}` });
+    reply = await chatAs(p.api, p.model, sys, messages, { maxTokens: 900 });
+  }
+  const clean = stripTags(reply);
+  upsertSyncRow('persona_memory', newId(), {
+    persona: id, content: `[relayed from ${(ROSTER[from] && ROSTER[from].name) || from} on Telegram] ${message}\n${p.name}: ${clean}`,
+    category: 'general', keywords: '[]', date: todayET(), created_at: Date.now(),
+  }).catch(() => {});
+  return clean || `(${p.name} came back empty)`;
 }
 
 // THE FIRM — A.R.A.'s [DELEGATE: name | task]. Each specialist gets the project
@@ -606,6 +662,13 @@ async function loadHistory(persona = 'ara') {
   while (hist.length && hist[0].role !== 'user') hist.shift();
   return hist;
 }
+// The last few turns as plain lines, for a relayed persona's context.
+function convoLines(history, userText, persona) {
+  const who = (ROSTER[persona] && ROSTER[persona].name) || persona;
+  return [...history.slice(-8), { role: 'user', content: userText }]
+    .map((m) => `${m.role === 'user' ? 'Mr. Burrus' : who}: ${String(m.content).replace(/\s+/g, ' ').slice(0, 500)}`)
+    .join('\n');
+}
 async function saveMessage(persona, role, content) {
   await query('INSERT INTO tg_messages (persona, role, content, ts) VALUES ($1, $2, $3, $4)', [persona, role, content, Date.now()]);
 }
@@ -626,13 +689,16 @@ async function runPersonaTurn(personaId, userText, deliver) {
   const sys = persona === 'ara' ? systemPrompt(ctx, gs, custom) : personaSystemPrompt(persona, ctx, gs, custom);
   const history = await loadHistory(persona);
   const messages = [...history, { role: 'user', content: `[${momentET()}] ${userText}` }];
+  const convo = convoLines(history, userText, persona);
 
   let reply = await chatAs(p.api, p.model, sys, messages, { maxTokens: 1200 });
   const replies = [reply];
+  const looked = [];
 
   for (let round = 0; round < 2; round++) {
-    const inj = await runInjections(reply, persona);
+    const inj = await runInjections(reply, persona, { convo });
     if (!inj) break;
+    looked.push(inj);
     messages.push({ role: 'assistant', content: reply });
     messages.push({ role: 'user', content: `[tool results — now reply to Mr. Burrus using these; do not repeat the tool tags]\n\n${inj}` });
     reply = await chatAs(p.api, p.model, sys, messages, { maxTokens: 1200 });
@@ -648,7 +714,11 @@ async function runPersonaTurn(personaId, userText, deliver) {
   // writes run, so this is the only part guaranteed to say what really happened.
   const footer = [...fx.notes.map((n) => `✓ ${n}`), ...fx.warnings.map((w) => `⚠️ ${w}`)].join('\n');
 
-  await saveMessage(persona, 'user', userText);
+  // What she looked up / heard back this turn rides along with his message in
+  // history — otherwise the next turn ("no, not a trade scan") has only her
+  // summary to go on and no idea what A.T.L.A.S. or the web actually said.
+  const lookedUp = looked.join('\n\n').slice(0, 2500);
+  await saveMessage(persona, 'user', lookedUp ? `${userText}\n\n[what you looked up / were told while answering this:\n${lookedUp}\n]` : userText);
   await saveMessage(persona, 'assistant', footer ? `${clean}\n\n${footer}` : clean);
   await upsertSyncRow('persona_memory', newId(), {
     persona, content: `YOU: ${userText}\n${p.name}: ${clean}`,

@@ -20,7 +20,7 @@ import{handleCommands,stripCommands}from '../services/commandHandler';
 import{reportIssue,clearIssueKey,notify}from '../services/report';
 import{googleReadInjections,googleWriteCommands}from '../services/googleCommands';
 import{driveUploadFile,googleConnected}from '../services/googleClient';
-import{getMessages,saveMessage,getAllPersonaPics,savePersonaMemory,getSetting,setSetting,getExpenseSummary,addBuildJob,updateBuildJob,getBuildJob,getBuildJobByIssue,getBuildJobs,deleteBuildJob,buildJobRepo,DEFAULT_BUILD_REPO,getCustomPrompt,getAllLeads,addClipJob,addWatchJob,getActiveWatchJobs,getActiveClipJobs,getActiveBuildJobs,getClipJobs,getWatchJobs,getGeneratingContentItems,getUnreadPersonas,getUnreadMessages,markPersonaRead,getContentItems,getContentTally,getContentPages,updateContentItem}from '../services/database';
+import{getMessages,saveMessage,getAllPersonaPics,savePersonaMemory,getSetting,setSetting,getExpenseSummary,addBuildJob,updateBuildJob,getBuildJob,getBuildJobByIssue,getBuildJobs,deleteBuildJob,buildJobRepo,DEFAULT_BUILD_REPO,getCustomPrompt,getAllLeads,addClipJob,addWatchJob,getActiveWatchJobs,getActiveClipJobs,getActiveBuildJobs,getClipJobs,getWatchJobs,getGeneratingContentItems,getUnreadPersonas,getUnreadMessages,markPersonaRead,getContentItems,getContentTally,getContentPages,updateContentItem,getHudState}from '../services/database';
 import{compileBatch,publishContent,contentStatusLine}from '../services/socialPublish';
 import{pollContentJobs}from '../services/contentJobs';
 import{speak as speakOneShot}from '../services/voice';
@@ -1550,6 +1550,17 @@ export default function CommandScreen({navigation,route}){
           try{await reconcileOpenTrades();injections.push(await traderJournalBlock());}
           catch(e){/* journal is best-effort — never block a scan */}
         }
+        // [READ_HUD] — a fresh read of the HUD plus the money/trading/outreach
+        // status, fed back so the persona answers with it. It used to be a
+        // callback nobody listened to, so a reply that was only "[READ_HUD]"
+        // stripped down to an empty bubble.
+        if(/\[READ_HUD\]/i.test(response)&&!myAbort.signal.aborted){
+          try{
+            const h=await getHudState()||{};
+            const{empireStatusBlock}=await import('../services/empireStatus');
+            injections.push(`HUD — Empire Score ${h.empire_score||0}% · streak ${h.streak||0}d${await empireStatusBlock(pid)}`);
+          }catch(e){injections.push('HUD: failed — '+e.message);}
+        }
         if(/\[BUILD_STATUS\]/i.test(response)&&!myAbort.signal.aborted){
           try{
             const jobs=await getBuildJobs(20);
@@ -1828,7 +1839,15 @@ export default function CommandScreen({navigation,route}){
           response=await callPersona(pid,hist2,myAbort.signal,willVoice?null:onDelta,{skipSave:true,...voiceModelOpts(p),images});
           savePersonaMemory(pid,`YOU: ${text}\n${p.name}: ${stripCommands(response)||response}`).catch(()=>{});
         }
-        const display=stripCommands(response)||response;
+        let display=(stripCommands(response)||'').trim();
+        // A reply that was nothing but tags (or nothing at all) used to land as
+        // an empty bubble — "he won't respond". Ask once more for the actual
+        // answer; if that's empty too, say so in the thread instead of silence.
+        if(!display&&!myAbort.signal.aborted){
+          const hist3=[...hist,{role:'assistant',content:response||'(no reply)'},{role:'user',content:`[Your last reply had no words for Mr. Burrus${response?' — only command tags':''}. He asked: "${text}". Answer him now in plain words, using what's in your context.]`}];
+          try{response=await callPersona(pid,hist3,myAbort.signal,null,{skipSave:true,...voiceModelOpts(p)});}catch(e){if(e.name==='AbortError')throw e;}
+          display=(stripCommands(response||'')||'').trim()||`(${p.name} came back empty — try asking again.)`;
+        }
         if(display){replies.push({name:p.name,text:display});lastSpokenRef.current=display;}
         await handleCommands(response,pid,cmdCallbacks);
         try{

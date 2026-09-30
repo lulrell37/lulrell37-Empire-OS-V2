@@ -93,7 +93,7 @@ PINNING: when he tells you something that matters over the next few days — a t
   sys+=`\n\n[THE CANVAS — the orb screen Mr. Burrus is looking at can become an interactive surface. When he asks to SEE or WORK WITH something rather than just hear it, emit the matching tag in the same reply as your answer and the orb transforms into it; he takes it from there and closes it himself.
 - [SHOW_NOTES] — his notes as a list he can open and edit. [SHOW_NOTE: exact title] opens one straight away.
 - [SHOW_TASKS] — his tasks and morning routine as a checklist he can tick, add to and rename.
-- [SHOW_ANALYTICS] — the live Empire board: revenue vs target, content, trading, outreach. (P.U.L.S.E.'s home turf — hand analytics questions to her with [RELAY_TO:pulse|...].)
+- [SHOW_ANALYTICS] — the live Empire board: revenue vs target, content, trading, outreach. (P.U.L.S.E.'s home turf — hand analytics questions to him with [RELAY_TO:pulse|...].)
 - [SHOW_CHART: type | title | data] — a chart. type = line, area, bar, or pie. data = "label:value, label:value, ..." for one series, or "A=x:1,y:2; B=x:3,y:4" for several. Use it for trends, breakdowns and comparisons — not one or two numbers.
 Only when seeing or editing the thing is the point — not for a passing mention. One surface per reply.]`;
   sys+=`\n\n[WEB: You can search the live web with [SEARCH_WEB: query] (max 1 per turn) — the result comes back before you reply. Use it only when the answer really turns on something current that you can't know: today's price, a recent event, a just-released product, a fast-moving number, current weather/forecast for a place. Never guess or answer from memory on any of those — search. For general knowledge, or in quick back-and-forth conversation, just answer directly — a search adds a noticeable delay before you can speak, so it must be worth it. Don't mention the mechanism; weave in what you find with source names.]`;
@@ -165,7 +165,10 @@ Only when seeing or editing the thing is the point — not for a passing mention
   }catch{}
   // A.R.A. runs the day and N.O.V.A. reads across domains — both get a live
   // cross-front status read (revenue, trading, outreach, builds) every turn.
-  if(personaId==='ara'||personaId==='nova'){
+  // A.T.L.A.S. and P.U.L.S.E. live in those numbers (their prompts say "pull
+  // revenue from the HUD"), and the HUD block above carries none of it — without
+  // this they'd emit [READ_HUD] hoping for figures and answer with nothing.
+  if(['ara','nova','atlas','pulse'].includes(personaId)){
     try{
       const{empireStatusBlock}=await import('./empireStatus');
       sys+=await empireStatusBlock(personaId);
@@ -175,8 +178,10 @@ Only when seeing or editing the thing is the point — not for a passing mention
   // how it participates in A.R.A.-coordinated projects. Kept here (not in
   // persona.system) so it still applies when the user has set a custom prompt.
   try{
-    const{PERSONA_LIST,PROJECT_ROLES}=await import('../personas/personas');
-    const roster=PERSONA_LIST.filter(x=>x.id!==personaId).map(x=>` - ${x.name} (${x.id}) — ${x.role}`).join('\n');
+    const{PERSONA_LIST,PROJECT_ROLES,PERSONA_GENDER,pronounsOf}=await import('../personas/personas');
+    const g=PERSONA_GENDER[personaId];
+    if(g)sys+=`\n\n[YOU: you are ${g==='f'?'a woman — she/her':'a man — he/him'}. The other personas' genders are in the roster below; always use the right pronouns for each of them.]`;
+    const roster=PERSONA_LIST.filter(x=>x.id!==personaId).map(x=>` - ${x.name} (${x.id}) — ${x.role}${pronounsOf(x.id)?` · ${pronounsOf(x.id)}`:''}`).join('\n');
     if(roster)sys+=`\n\n[THE EMPIRE — the other personas who serve Mr. Burrus alongside you. Know them, refer to them by name, and hand off anything outside your lane with [RELAY_TO: id | message]. This is synchronous: the app actually asks them and hands you their real answer back in this same turn before you respond to Mr. Burrus — so ask a complete, specific question (not "I'll check with X and get back to you"), then use what they say. Don't guess at what another persona would say; relay to them and wait for it.\n${roster}\n]`;
     if(personaId==='ara'){
       sys+=`\n\n[THE FIRM — client & project delivery. When Mr. Burrus brings you a project (a client website, a launch, a course, a brand) you run it as coordinator: scope it, delegate it, pull the pieces together, keep him in the loop.
