@@ -115,6 +115,13 @@ Each bot keeps its **own** chat history (`tg_messages.persona`) and memory slice
 declined with "that needs the app open". A.R.A. additionally keeps her task /
 expense / date / council tags.
 
+Long-term memory is **Mem0** (`server/mem0.js`, `MEM0_API_KEY` — the same key as
+the app's Settings → KEYS). Each persona is one Mem0 `user_id`, shared with the
+app, so every Telegram exchange is added there and each turn pulls the facts
+relevant to his message; `[MEMORY_QUERY]` searches it first. The prompt also
+carries pinned memories and the last ~3 days of in-app exchanges (from the
+synced `persona_memory` table). No key ⇒ the synced table alone.
+
 Voice notes work both ways: Whisper in (`OPENAI_API_KEY`); out is xAI
 `grok-voice` for A.R.A. and **ElevenLabs** (`ELEVENLABS_API_KEY`, each persona's
 `voiceId` in `personas.js`) for the rest — no key ⇒ text-only replies.
@@ -143,7 +150,7 @@ curl localhost:3000/health
    - Run command: `cd server && npm start`
    (The repo `.replit` already has this under `[deployment]`.)
 2. Deployment **Secrets**: `SYNC_TOKEN` (long random string), `ANTHROPIC_API_KEY`,
-   `XAI_API_KEY`, `OPENAI_API_KEY`, `ELEVENLABS_API_KEY`. For the Telegram bots:
+   `XAI_API_KEY`, `OPENAI_API_KEY`, `ELEVENLABS_API_KEY`, `MEM0_API_KEY`. For the Telegram bots:
    `TELEGRAM_OWNER_ID`, `PUBLIC_URL`, and one `TELEGRAM_BOT_TOKEN[_PERSONA]` per
    bot (see the Telegram section). For S.C.O.U.T. signals: `SCOUT_CRON=on` plus
    `ADZUNA_APP_ID` / `ADZUNA_APP_KEY` and `YELP_API_KEY`.

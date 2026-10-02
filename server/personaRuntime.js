@@ -21,6 +21,7 @@ const { chatAs, claudeText, webResearch } = require('./llm');
 const { ROSTER, resolvePersonaId, rosterLines, personaSystem, personaTgIdentity, genderLine } = require('./personas');
 const { saveDriveNote, googleStatus, gTaskComplete } = require('./google');
 const tools = require('./personaTools');
+const { mem0Remember, mem0Search } = require('./mem0');
 const { tlSnapshot, tlFormatSnapshot } = require('./tradeLocker');
 const { formatTradeRecord } = require('./tradeJournal');
 
@@ -207,8 +208,12 @@ function contextBlock(ctx) {
 // ([REMEMBER], in the app or here) and his recent conversations with her in the
 // app — the app's own chat isn't synced, but every exchange there lands in
 // persona_memory, so this is how "what we talked about earlier" carries over.
-async function memoryBlock(persona) {
+async function memoryBlock(persona, userText = '') {
   const now = Date.now();
+  // Mem0's extracted facts relevant to what he just said — the same store the
+  // app reads, so anything learned in either place shows up here.
+  const facts = (await mem0Search(persona, userText, { topK: 18 }))
+    .map((f) => String(f.memory || '').trim()).filter((m) => m.length > 2);
   const rows = (await syncedRows('persona_memory').catch(() => []))
     .filter((r) => r.persona === persona)
     .sort((a, b) => (Number(b.created_at) || 0) - (Number(a.created_at) || 0));
@@ -220,6 +225,9 @@ async function memoryBlock(persona) {
     .slice(0, 12)
     .reverse();
   const L = [];
+  if (facts.length) {
+    L.push(`[WHAT YOU KNOW about what he's raising (long-term memory, most relevant first) — reference it naturally, never claim you don't remember:\n${facts.map((f) => `  - ${f.replace(/\s+/g, ' ').slice(0, 400)}`).join('\n')}\n]`);
+  }
   if (pinned.length) {
     L.push(`[PINNED — things you were asked to keep in front of you:
 ${pinned.map((r) => `  • ${String(r.content).replace(/^PINNED:\s*/, '').replace(/\s+/g, ' ').slice(0, 300)}`).join('\n')}\n]`);
@@ -649,8 +657,11 @@ async function memoryQuery(question, persona = 'ara') {
     .filter((r) => r.persona === persona)
     .sort((a, b) => (b.created_at || 0) - (a.created_at || 0))
     .slice(0, 120);
-  if (!rows.length) return 'No stored memories yet.';
-  const corpus = rows.map((r) => `[${r.date || ''}${r.category ? ' · ' + r.category : ''}]\n${r.content}`).join('\n\n').slice(0, 55000);
+  const hits = await mem0Search(persona, question, { topK: 40 });
+  if (!rows.length && !hits.length) return 'No stored memories yet.';
+  const m0 = hits.map((h) => `- ${String(h.memory || '').trim()}`).join('\n');
+  const corpus = ((m0 ? `EXTRACTED FACTS (semantic match):\n${m0}\n\nRAW EXCHANGES:\n` : '')
+    + rows.map((r) => `[${r.date || ''}${r.category ? ' · ' + r.category : ''}]\n${r.content}`).join('\n\n')).slice(0, 55000);
   const who = (ROSTER[persona] && ROSTER[persona].name) || persona;
   return claudeText(
     `You are the private memory index for ${who}, one of Mr. Burrus's personas. Below are stored exchanges, newest first. Answer the recall question using ONLY what's here. Be specific — quote dates and details. If it's not covered, say so in one sentence. No preamble.\n\n=== MEMORIES ===\n${corpus}\n=== END ===`,
@@ -735,7 +746,7 @@ async function runPersonaTurn(personaId, userText, deliver) {
     gatherContext(),
     googleStatus().catch((e) => ({ ok: false, error: e.message })),
     customPrompt(persona),
-    memoryBlock(persona).catch(() => ''),
+    memoryBlock(persona, userText).catch(() => ''),
   ]);
   const sys = persona === 'ara' ? systemPrompt(ctx, gs, custom, mem) : personaSystemPrompt(persona, ctx, gs, custom, mem);
   const history = await loadHistory(persona);
@@ -775,6 +786,7 @@ async function runPersonaTurn(personaId, userText, deliver) {
     persona, content: `YOU: ${userText}\n${p.name}: ${clean}`, source: 'telegram',
     category: 'general', keywords: '[]', date: todayET(), created_at: Date.now(),
   }).catch(() => {});
+  mem0Remember(persona, `YOU: ${userText}\n${p.name}: ${clean}`, { source: 'telegram' });
 
   return { text: clean, footer, confirms: fx.confirms };
 }
