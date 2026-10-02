@@ -25,7 +25,9 @@ const { tlSnapshot, tlFormatSnapshot } = require('./tradeLocker');
 const { formatTradeRecord } = require('./tradeJournal');
 
 const TZ = 'America/New_York';
-const HISTORY_TURNS = 16;
+// Telegram messages loaded per turn (both roles) — ~20 exchanges. 16 left her
+// unsure whether "that" meant the last message or something a few back.
+const HISTORY_TURNS = 40;
 
 // --- sync store helpers (mirror councilMeeting.js) --------------------------
 
@@ -72,6 +74,11 @@ const newId = () => crypto.randomBytes(16).toString('hex');
 
 function todayET() {
   return new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+}
+function shortMomentET(ms) {
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: TZ, weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true,
+  }).format(new Date(ms));
 }
 function momentET() {
   return new Intl.DateTimeFormat('en-US', {
@@ -196,6 +203,37 @@ function contextBlock(ctx) {
   return L.join('\n');
 }
 
+// What she knows from outside this Telegram thread: anything pinned
+// ([REMEMBER], in the app or here) and his recent conversations with her in the
+// app — the app's own chat isn't synced, but every exchange there lands in
+// persona_memory, so this is how "what we talked about earlier" carries over.
+async function memoryBlock(persona) {
+  const now = Date.now();
+  const rows = (await syncedRows('persona_memory').catch(() => []))
+    .filter((r) => r.persona === persona)
+    .sort((a, b) => (Number(b.created_at) || 0) - (Number(a.created_at) || 0));
+  const pinned = rows.filter((r) => Number(r.pinned_until) > now).slice(0, 15);
+  const recent = rows
+    .filter((r) => !(Number(r.pinned_until) > now) && r.source !== 'telegram'
+      && !String(r.content || '').startsWith('PINNED:')
+      && now - (Number(r.created_at) || 0) < 3 * 86400000)
+    .slice(0, 12)
+    .reverse();
+  const L = [];
+  if (pinned.length) {
+    L.push(`[PINNED — things you were asked to keep in front of you:
+${pinned.map((r) => `  • ${String(r.content).replace(/^PINNED:\s*/, '').replace(/\s+/g, ' ').slice(0, 300)}`).join('\n')}\n]`);
+  }
+  if (recent.length) {
+    L.push(`[RECENT CONVERSATIONS WITH HIM IN THE APP (oldest first) — the same you, just a different screen. If he refers to something not in this Telegram thread, it's probably here; [MEMORY_QUERY] reaches further back:\n${recent.map((r) => `  (${r.created_at ? shortMomentET(Number(r.created_at)) : r.date || ''}) ${String(r.content || '').replace(/\s+/g, ' ').slice(0, 600)}`).join('\n')}\n]`);
+  }
+  return L.join('\n\n');
+}
+
+// How to read the thread — without this she'd ask "do you mean what we were
+// just talking about, or something from earlier?" on any short follow-up.
+const CONTINUITY = `[CONTINUITY: the messages before his latest one are your real, ongoing conversation with him — you remember all of it. Read his newest message as the next line of that conversation: "it", "that", "do it", "what about…", a one-word answer or a bare follow-up refers to the most recent exchange unless he clearly says otherwise. Don't ask which conversation he means, and don't say his message is vague — make the obvious read and act on it. Only ask a clarifying question when two readings would lead to genuinely different actions, and then name both specifically.]`;
+
 // --- persona identities, headless ------------------------------------
 
 const ARA_IDENTITY = `You are A.R.A. — Attentive Relationship & Affairs Architect, full personal assistant to Mr. Burrus. Call him "Mr. Burrus". Warm, sharp, a step ahead. You are talking to him over Telegram (text), away from the Empire OS app — so keep replies tight and mobile-readable, no long status briefings unless he asks. Reply directly to what he just said. Never open with a HUD readout or a "here is where things stand" preamble.
@@ -298,10 +336,12 @@ function faithBlock(personaId) {
   return `[FAITH: the Empire is built on Christian faith — God, through Jesus Christ, is its true foundation, and every business and plan here ultimately serves that. Hold this quietly as part of who you are; let it shape your integrity, hope and wisdom without turning replies into sermons or working scripture in unless the moment or Mr. Burrus's own words call for it.${handoff}]`;
 }
 
-function systemPrompt(ctx, gs, custom) {
+function systemPrompt(ctx, gs, custom, mem) {
   return [
     custom ? `${custom}\n\n${TG_FRAME}` : ARA_IDENTITY,
     genderLine('ara'),
+    CONTINUITY,
+    mem,
     ARA_TOOLS,
     googleLine(gs),
     `[THE EMPIRE — the other personas who serve Mr. Burrus. Hand anything outside your lane to one with [RELAY_TO: id | ...]:\n${rosterLines()}\n]`,
@@ -312,10 +352,12 @@ function systemPrompt(ctx, gs, custom) {
 }
 
 // System prompt for a non-A.R.A. persona running its own bot.
-function personaSystemPrompt(personaId, ctx, gs, custom) {
+function personaSystemPrompt(personaId, ctx, gs, custom, mem) {
   return [
     custom ? `${custom}\n\n${TG_FRAME}` : `${personaTgIdentity(personaId)}\n\nYou are talking to Mr. Burrus over Telegram (text), away from the Empire OS app — keep replies tight and mobile-readable. Reply directly to what he just said; no status-briefing preamble. There is a live context block below — read from it, don't invent numbers.`,
     custom ? genderLine(personaId) : '', // the built-in identity already carries it
+    CONTINUITY,
+    mem,
     genericTools(personaId),
     googleLine(gs),
     `[THE EMPIRE — the other personas. Hand anything outside your lane to one with [RELAY_TO: id | ...]:\n${rosterLines()}\n]`,
@@ -654,10 +696,18 @@ async function runDeepResearch(topic, deliver, persona = 'ara') {
 
 async function loadHistory(persona = 'ara') {
   const { rows } = await query(
-    'SELECT role, content FROM tg_messages WHERE persona = $1 ORDER BY id DESC LIMIT $2',
+    'SELECT role, content, ts FROM tg_messages WHERE persona = $1 ORDER BY id DESC LIMIT $2',
     [persona, HISTORY_TURNS],
   );
-  const hist = rows.reverse().map((r) => ({ role: r.role, content: r.content }));
+  // His messages carry when they were sent (the live one already does), so she
+  // can tell "just now" from "this morning". Older turns are trimmed — the last
+  // few stay whole, since that's what "it"/"that" usually points at.
+  const hist = rows.reverse().map((r, i, all) => {
+    let content = String(r.content || '');
+    if (all.length - i > 8 && content.length > 1200) content = `${content.slice(0, 1200)}…`;
+    if (r.role === 'user' && r.ts) content = `[${shortMomentET(Number(r.ts))}] ${content}`;
+    return { role: r.role, content };
+  });
   // Anthropic (the fallback provider) needs the first message to be 'user'.
   while (hist.length && hist[0].role !== 'user') hist.shift();
   return hist;
@@ -681,12 +731,13 @@ async function saveMessage(persona, role, content) {
 async function runPersonaTurn(personaId, userText, deliver) {
   const persona = ROSTER[personaId] ? personaId : 'ara';
   const p = ROSTER[persona];
-  const [ctx, gs, custom] = await Promise.all([
+  const [ctx, gs, custom, mem] = await Promise.all([
     gatherContext(),
     googleStatus().catch((e) => ({ ok: false, error: e.message })),
     customPrompt(persona),
+    memoryBlock(persona).catch(() => ''),
   ]);
-  const sys = persona === 'ara' ? systemPrompt(ctx, gs, custom) : personaSystemPrompt(persona, ctx, gs, custom);
+  const sys = persona === 'ara' ? systemPrompt(ctx, gs, custom, mem) : personaSystemPrompt(persona, ctx, gs, custom, mem);
   const history = await loadHistory(persona);
   const messages = [...history, { role: 'user', content: `[${momentET()}] ${userText}` }];
   const convo = convoLines(history, userText, persona);
@@ -721,7 +772,7 @@ async function runPersonaTurn(personaId, userText, deliver) {
   await saveMessage(persona, 'user', lookedUp ? `${userText}\n\n[what you looked up / were told while answering this:\n${lookedUp}\n]` : userText);
   await saveMessage(persona, 'assistant', footer ? `${clean}\n\n${footer}` : clean);
   await upsertSyncRow('persona_memory', newId(), {
-    persona, content: `YOU: ${userText}\n${p.name}: ${clean}`,
+    persona, content: `YOU: ${userText}\n${p.name}: ${clean}`, source: 'telegram',
     category: 'general', keywords: '[]', date: todayET(), created_at: Date.now(),
   }).catch(() => {});
 
