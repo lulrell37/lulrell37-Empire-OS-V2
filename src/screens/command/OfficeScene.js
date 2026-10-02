@@ -324,39 +324,44 @@ function OfficeSceneInner({personaId,color,active,vizRef,personaPics,unreadPerso
     Object.entries(engine.roomsByFloor||{}).forEach(([f,r])=>{r.group.visible=(Number(f)===floor);});
   },[floor,engine]);
 
+  // The floor buttons live OUTSIDE the GestureDetector: inside it, the
+  // scene's Tap gesture activates first and cancels the TouchableOpacity's
+  // JS responder, so FLOOR 2 never received its press.
   return(
-    <GestureDetector gesture={gesture}>
-      <View style={s.wrap}
-        onLayout={e=>{const{width,height}=e.nativeEvent.layout;engine.vw=width;engine.vh=height;}}>
-        <GLView style={{flex:1}} onContextCreate={onContextCreate}/>
+    <View style={s.wrap}
+      onLayout={e=>{const{width,height}=e.nativeEvent.layout;engine.vw=width;engine.vh=height;}}>
+      <GestureDetector gesture={gesture}>
+        <View style={s.wrap}>
+          <GLView style={{flex:1}} onContextCreate={onContextCreate}/>
 
-        {level==='office'&&(
-          <View style={StyleSheet.absoluteFill} pointerEvents="none">
-            {labels.map(l=>(
-              <View key={l.id} style={[s.label,{left:l.x-55,top:l.y}]}>
-                <Text style={[s.labelT,{color:l.color}]} numberOfLines={1}>{l.name.replace(/\./g,'')}</Text>
-              </View>
-            ))}
-          </View>
-        )}
+          {level==='office'&&(
+            <View style={StyleSheet.absoluteFill} pointerEvents="none">
+              {labels.map(l=>(
+                <View key={l.id} style={[s.label,{left:l.x-55,top:l.y}]}>
+                  <Text style={[s.labelT,{color:l.color}]} numberOfLines={1}>{l.name.replace(/\./g,'')}</Text>
+                </View>
+              ))}
+            </View>
+          )}
 
-        {level==='desk'&&(
-          <View style={s.rail} pointerEvents="none">
-            <Text style={[s.railT,{color}]}>{getPersona(personaId).name}</Text>
-          </View>
-        )}
+          {level==='desk'&&(
+            <View style={s.rail} pointerEvents="none">
+              <Text style={[s.railT,{color}]}>{getPersona(personaId).name}</Text>
+            </View>
+          )}
+        </View>
+      </GestureDetector>
 
-        {level==='office'&&(
-          <View style={s.floorCtl} pointerEvents="box-none">
-            {[1,2].map(f=>(
-              <TouchableOpacity key={f} style={[s.floorBtn,floor===f&&{borderColor:color,backgroundColor:color+'22'}]} onPress={()=>switchFloor(f)}>
-                <Text style={[s.floorT,floor===f&&{color}]}>FLOOR {f}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        )}
-      </View>
-    </GestureDetector>
+      {level==='office'&&(
+        <View style={s.floorCtl} pointerEvents="box-none">
+          {[1,2].map(f=>(
+            <TouchableOpacity key={f} style={[s.floorBtn,floor===f&&{borderColor:color,backgroundColor:color+'22'}]} onPress={()=>switchFloor(f)}>
+              <Text style={[s.floorT,floor===f&&{color}]}>FLOOR {f}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      )}
+    </View>
   );
 }
 
