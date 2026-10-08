@@ -68,12 +68,10 @@ async function handleUpdate(personaId, bot, update) {
 
   const voice = msg.voice || msg.audio || msg.video_note;
   let text = typeof msg.text === 'string' ? msg.text.trim() : '';
-  let spokenInput = false;
   if (voice) {
     await bot.sendChatAction(chatId, 'typing');
     try {
       text = await transcribe(await bot.downloadFile(voice.file_id), 'voice.ogg');
-      spokenInput = true;
     } catch (e) {
       await deliver(`Couldn't make out that voice note: ${e.message}`);
       return;
@@ -87,14 +85,14 @@ async function handleUpdate(personaId, bot, update) {
     return;
   }
 
-  await bot.sendChatAction(chatId, spokenInput ? 'record_voice' : 'typing');
-  const keepTyping = setInterval(() => bot.sendChatAction(chatId, spokenInput ? 'record_voice' : 'typing').catch(() => {}), 6000);
+  // Every reply goes out as both a voice note and text, however he wrote in.
+  await bot.sendChatAction(chatId, 'record_voice');
+  const keepTyping = setInterval(() => bot.sendChatAction(chatId, 'record_voice').catch(() => {}), 6000);
   try {
     const { text: reply, footer, confirms } = await runPersonaTurn(personaId, text, deliver);
-    if (spokenInput) {
-      const ogg = await synthesizePersonaVoice(personaId, reply, { userText: text });
-      if (ogg) await bot.sendVoice(chatId, ogg).catch((e) => console.error(`tg ${personaId} sendVoice:`, e.message));
-    }
+    const ogg = await synthesizePersonaVoice(personaId, reply, { userText: text })
+      .catch((e) => { console.error(`tg ${personaId} voice synth:`, e.message); return null; });
+    if (ogg) await bot.sendVoice(chatId, ogg).catch((e) => console.error(`tg ${personaId} sendVoice:`, e.message));
     await deliver(footer ? `${reply}\n\n${footer}` : reply);
     for (const c of confirms || []) {
       await bot.sendMessage(chatId, `${c.label}?\n\n${c.detail}`, {

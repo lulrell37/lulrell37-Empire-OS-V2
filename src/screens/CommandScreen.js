@@ -1701,6 +1701,7 @@ export default function CommandScreen({navigation,route}){
             pushLeadsToSheet().catch(()=>{});
           },
           onMemoryPinned:(e)=>pushSystemMsg(`— pinned for ${e.days}d: ${e.text} —`),
+          onReminderSet:(e)=>pushSystemMsg(e.error?`— ⚠️ reminder NOT set (${e.error}): ${e.text} —`:`— ⏰ reminder set for ${e.at.toLocaleString([],{weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}: ${e.text} —`),
           onCouncilIdea:({text})=>pushSystemMsg(`— COUNCIL · on the agenda for the 5am meeting: ${text} —`),
           onCouncilNote:({text})=>pushSystemMsg(`— COUNCIL · brief noted for the next meeting: ${text} —`),
           onContentQueued:({page,slot,kind})=>pushSystemMsg(`— CONTENT · ${page} queued a ${kind}${slot?` (${slot})`:''} — review it in the Content screen —`),

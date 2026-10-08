@@ -8,6 +8,7 @@ async function findContentByRef(ref){
   return all.find(x=>x.id===raw)||all.find(x=>x.id.startsWith(raw))||null;
 }
 import*as gtask from './googleClient';
+import{scheduleReminder}from './reminders';
 import{openApp,openWebpage}from './appLauncher';
 import useEmpireStore from '../store/useEmpireStore';
 const HUD_PANELS=['briefing','businesses','tasks','routine','batman','daily'];
@@ -273,6 +274,13 @@ export async function handleCommands(response,personaId,callbacks={}){
   for(const m of response.matchAll(/\[ADD_DATE:\s*([^|\]]+)\|([^|\]]+)(?:\|([^\]]+))?\]/gi)){
     await addImportantDate(m[1].trim(),m[2].trim(),m[3]?.trim()||'');
   }
+  for(const m of response.matchAll(/\[REMIND_ME:\s*([^|\]]+)\|([^\]]+)\]/gi)){
+    const txt=m[1].trim();
+    try{
+      const at=await scheduleReminder(txt,m[2].trim());
+      callbacks.onReminderSet?.({text:txt,at});
+    }catch(e){callbacks.onReminderSet?.({text:txt,error:e.message});}
+  }
   // --- S.C.O.U.T. leads pipeline ---
   for(const m of response.matchAll(/\[LEAD_ADD:\s*([^\]]+)\]/gi)){
     const parts=m[1].split('|').map(s=>s.trim());
@@ -415,7 +423,7 @@ export function stripCommands(text){
     .replace(/\[TRADE_SCAN(?::[^\]]*)?\]/gi,'').replace(/\[TRADE_PROPOSE:[^\]]*\]/gi,'').replace(/\[TRADE_CLOSE:[^\]]*\]/gi,'')
     .replace(/\[TRADE_BREAKEVEN:[^\]]*\]/gi,'')
     .replace(/\[STRATEGY_UPDATE:[\s\S]*?\]/gi,'').replace(/\[TRADE_REVIEW:[^\]]*\]/gi,'')
-    .replace(/\[ADD_EXPENSE:[^\]]*\]/gi,'').replace(/\[ADD_DATE:[^\]]*\]/gi,'').replace(/\[EXPENSE_SUMMARY\]/gi,'')
+    .replace(/\[ADD_EXPENSE:[^\]]*\]/gi,'').replace(/\[ADD_DATE:[^\]]*\]/gi,'').replace(/\[REMIND_ME:[^\]]*\]/gi,'').replace(/\[EXPENSE_SUMMARY\]/gi,'')
     .replace(/\[LEAD_ADD:[^\]]*\]/gi,'').replace(/\[LEAD_UPDATE:[^\]]*\]/gi,'').replace(/\[LEAD_LOG:[^\]]*\]/gi,'')
     .replace(/\[LEAD_EMAIL:[^\]]*\]/gi,'').replace(/\[LEAD_LIST(?::[^\]]*)?\]/gi,'').replace(/\[LEADS\]/gi,'')
     .replace(/\[SCAN_INBOUND(?::[^\]]*)?\]/gi,'')

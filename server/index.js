@@ -48,6 +48,7 @@ db.init()
   .then(() => {
     app.listen(PORT, '0.0.0.0', () => console.log(`Empire OS backend listening on :${PORT}`));
     startNudgeCron();
+    startReminderCron();
     startDailyBriefingCron();
     startCouncilCron();
     startScoutSignalCron();
@@ -73,6 +74,14 @@ function startNudgeCron() {
       .catch((e) => console.error('nudge cycle failed:', e.message));
   });
   console.log('nudge cron scheduled (every 30m)');
+}
+
+// A.R.A.'s timed reminders ([REMIND_ME]) — every minute, push whatever's due.
+function startReminderCron() {
+  if (process.env.REMINDERS === 'off') return console.log('reminder cron disabled (REMINDERS=off)');
+  const reminders = require('./reminders');
+  cron.schedule('* * * * *', () => reminders.tick().catch((e) => console.error('reminder cron failed:', e.message)));
+  console.log('reminder cron scheduled (every minute)');
 }
 
 // Daily HUD content — Word + Fact (S.T.E.P.H.A.N.I.E.) and Verse (Abraham).

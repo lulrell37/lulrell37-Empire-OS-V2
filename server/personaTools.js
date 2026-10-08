@@ -216,6 +216,9 @@ async function writeTag({ name, arg }, persona) {
       if (!p[0] || !p[1]) return null;
       await upsertSyncRow('important_dates', newId(), { label: p[0], date: p[1], note: '', created_at: now, updated_at: now });
       return { ok: `reminder saved: ${p[0]} — ${p[1]}` };
+    case 'REMIND_ME':
+      if (!p[0] || !p[1]) return { warn: 'REMIND_ME needs what | YYYY-MM-DD HH:MM' };
+      return require('./reminders').addReminder(p[0], p[1], persona);
     case 'SEND_EMAIL': {
       const [to, subject] = p;
       const body = rest(arg, 2);

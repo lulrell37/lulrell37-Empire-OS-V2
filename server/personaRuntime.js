@@ -125,7 +125,8 @@ async function gatherContext() {
 
   const project = await tools.activeProject().catch(() => null);
 
-  return { businesses, tasks, leadTally, openTrades, builds, hud, dates, councilLast, project };
+  const reminders = await require('./reminders').upcoming(8).catch(() => []);
+  return { businesses, tasks, leadTally, openTrades, builds, hud, dates, councilLast, project, reminders };
 }
 
 function upcomingDates(dates, days = 21) {
@@ -186,6 +187,7 @@ function contextBlock(ctx) {
 
   const soon = upcomingDates(ctx.dates);
   if (soon.length) L.push(`Upcoming dates: ${soon.map((d) => `${d.label} (${d.daysOut === 0 ? 'today' : d.daysOut === 1 ? 'tomorrow' : `in ${d.daysOut}d`})`).join(', ')}`);
+  if (ctx.reminders && ctx.reminders.length) L.push(`Reminders set (push at): ${ctx.reminders.map((r) => `${r.text} — ${require('./reminders').whenLabel(Number(r.due_at))}`).join('; ')}`);
 
   const pipe = Object.entries(ctx.leadTally).map(([k, v]) => `${v} ${k}`).join(', ');
   L.push(`\nOutreach pipeline: ${pipe || 'empty'}. Open trades: ${ctx.openTrades.length}. Active builds: ${ctx.builds.length}.`);
@@ -287,7 +289,8 @@ const ARA_TOOLS = `[WHAT YOU CAN DO FROM HERE — emit the tag in your reply; th
  - [ADD_TASK: title | notes | YYYY-MM-DD] (app list) / [CREATE_TASK: title | notes | YYYY-MM-DD] (app + Google Tasks) / [COMPLETE_TASK: name] / [TASK_EDIT: name | new title] / [DELETE_TASK: name] / [READ_TASKS] (app + Google Tasks).
  - [ADD_EXPENSE: amount | category | note] / [EXPENSE_SUMMARY] (this month by category).
  - [ADD_REVENUE: business | amount | income or expense | note] / [SET_TARGET: business | monthly | weekly].
- - [ADD_DATE: label | YYYY-MM-DD | note] / [SET_REMINDER: text | YYYY-MM-DD].
+ - [ADD_DATE: label | YYYY-MM-DD | note] / [SET_REMINDER: text | YYYY-MM-DD] (a dated entry on the HUD — no alert).
+ - [REMIND_ME: what to remind him | YYYY-MM-DD HH:MM] — a real push notification to his phone (plus a ping here) at that Eastern time, 24h clock; "+20m" / "+2h" also work. Use this whenever he says "remind me…". Work out the absolute time from the current time in your context.
  THE HUD (edits land in the app on its next sync):
  - [UPDATE_SCORE: 0-100] / [SET_WORD: word | phonetic | definition] / [SET_VERSE: text | reference] / [SET_FACT: text]
  - [ROUTINE_DONE: item, item] / [ROUTINE_ADD: item] / [ROUTINE_REMOVE: item] / [ROUTINE_RENAME: item | new label]
