@@ -56,9 +56,11 @@
   "private": true,
   "//tar": "Replit publishing uses npm and needs firewall-safe tar 7 via overrides. GitHub/EAS uses Yarn and must keep tar 6.2.1 via resolutions because Expo 51 prebuild depends on its older export shape.",
   "overrides": {
-    "tar": "7.5.22"
+    "tar": "7.5.22",
+    "uuid": "11.1.1"
   },
   "resolutions": {
-    "tar": "6.2.1"
+    "tar": "6.2.1",
+    "uuid": "11.1.1"
   }
 }
