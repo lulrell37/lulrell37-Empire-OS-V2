@@ -5,6 +5,7 @@ const db = require('./db');
 const auth = require('./auth');
 const { runNudgeCycle } = require('./pushSender');
 const { runDailyBriefing } = require('./dailyBriefing');
+const morningBrief = require('./morningBrief');
 const { runCouncilMeeting, endCouncilLive } = require('./councilMeeting');
 const { runScoutSignalCycle } = require('./autoScout');
 const telegram = require('./telegram');
@@ -50,6 +51,8 @@ db.init()
     startNudgeCron();
     startReminderCron();
     startDailyBriefingCron();
+    startMorningBriefCron();
+    startWordReminderCron();
     startCouncilCron();
     startScoutSignalCron();
     startTalonAutoTradeCron();
@@ -96,6 +99,35 @@ function startDailyBriefingCron() {
   }, { timezone: 'America/New_York' });
   runDailyBriefing().then((r) => console.log('daily briefing (startup):', JSON.stringify(r))).catch(() => {});
   console.log('daily briefing cron scheduled (05:10 ET)');
+}
+
+// A.R.A.'s morning brief to the owner on Telegram — date, hourly weather,
+// today's calendar, unread mail, news, then the HUD's Word / Verse / Fact.
+// 06:00 ET, once a day; a boot between 6 and 11 sends a missed one.
+// MORNING_BRIEF=off disables this instance's cron.
+function startMorningBriefCron() {
+  if (process.env.MORNING_BRIEF === 'off') return console.log('morning brief cron disabled (MORNING_BRIEF=off)');
+  if (!telegram.botFor('ara') || !telegram.botFor('ara').isConfigured()) return console.log("morning brief cron off (A.R.A.'s Telegram bot not configured)");
+  cron.schedule('0 6 * * *', () => {
+    morningBrief.runMorningBrief()
+      .then((r) => console.log('morning brief:', JSON.stringify(r)))
+      .catch((e) => console.error('morning brief failed:', e.message));
+  }, { timezone: 'America/New_York' });
+  morningBrief.catchUp().then((r) => console.log('morning brief (startup):', JSON.stringify(r))).catch((e) => console.error('morning brief (startup) failed:', e.message));
+  console.log('morning brief cron scheduled (06:00 ET)');
+}
+
+// A.R.A. re-sends the Word of the Day (definition + used in a sentence) every
+// 3 hours after the brief: 9 AM, noon, 3, 6 and 9 PM ET. WORD_REMINDER=off stops it.
+function startWordReminderCron() {
+  if (process.env.WORD_REMINDER === 'off') return console.log('word reminder cron disabled (WORD_REMINDER=off)');
+  if (!telegram.botFor('ara') || !telegram.botFor('ara').isConfigured()) return console.log("word reminder cron off (A.R.A.'s Telegram bot not configured)");
+  cron.schedule('0 9,12,15,18,21 * * *', () => {
+    morningBrief.runWordReminder()
+      .then((r) => console.log('word reminder:', JSON.stringify(r)))
+      .catch((e) => console.error('word reminder failed:', e.message));
+  }, { timezone: 'America/New_York' });
+  console.log('word reminder cron scheduled (9a/12p/3p/6p/9p ET)');
 }
 
 // The nightly Empire Council — A.R.A. + the council discuss the businesses (with

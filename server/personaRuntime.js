@@ -275,7 +275,7 @@ const TG_FRAME = `[TELEGRAM: you are talking to Mr. Burrus over Telegram (text),
 // A.R.A. runs the day, so she gets the full tool set — the same one she has in
 // the app, minus what physically needs the phone. The other personas get a
 // leaner set focused on their lane (plus Google, which every persona has).
-const ARA_TOOLS = `[WHAT YOU CAN DO FROM HERE — emit the tag in your reply; the tag is what acts, not saying you'll do it. No literal ] inside a tag. Read tags come back with results before you answer; write tags run after your reply and Mr. Burrus gets a receipt for each, so never claim something happened that a tag didn't do.
+const ARA_TOOLS = `[WHAT YOU CAN DO FROM HERE — emit the tag in your reply; the tag is what acts, not saying you'll do it. No literal ] inside a tag. Read tags come back with results before you answer — when he asks for several things at once ("weather, my calendar and my email"), put ALL the read tags in the same reply so they run together, then cover every one in your answer; write tags run after your reply and Mr. Burrus gets a receipt for each, so never claim something happened that a tag didn't do.
  WEB & RESEARCH:
  - [SEARCH_WEB: query] — one live web lookup. Use it for anything that turns on something current — including weather/forecast for a place; never guess that from memory.
  - [DEEP_RESEARCH: topic] — ONLY when he explicitly asks for "deep research" / "a deep dive". Runs in the background (several minutes, ~12 searches, cited); the brief comes back here and is saved as a Note. Tell him it's running.
@@ -400,38 +400,43 @@ function stripTags(text) {
 // knows what's being talked about; `depth` > 0 means we're already inside a
 // relay (one hop further is allowed — A.T.L.A.S. → T.A.L.O.N. — not a chain).
 async function runInjections(text, persona = 'ara', { convo = '', depth = 0 } = {}) {
-  const parts = [];
-  for (const { name, arg } of findTags(text)) {
+  // Run in parallel — "weather, my calendar and my email" is three lookups, and
+  // one at a time (a web search alone is 10-20s) made combined asks crawl.
+  const one = async ({ name, arg }) => {
     try {
-      if (name === 'TRADE_SCAN') {
-        parts.push(await tradeScan(arg));
-      } else if (name === 'SEARCH_WEB' && arg) {
-        parts.push(`SEARCH_WEB "${arg}":\n${(await webResearch(arg)) || '(nothing found)'}`);
-      } else if (tools.READ_TAGS.has(name)) {
+      if (name === 'TRADE_SCAN') return await tradeScan(arg);
+      if (name === 'SEARCH_WEB' && arg) return `SEARCH_WEB "${arg}":\n${(await webResearch(arg)) || '(nothing found)'}`;
+      if (tools.READ_TAGS.has(name)) {
         const out = await tools.readTag({ name, arg }, persona);
-        if (out) parts.push(`${name}${arg ? ` "${arg}"` : ''}:\n${out}`);
-      } else if (name === 'DELEGATE' && arg && persona === 'ara') {
-        parts.push(await delegate(arg));
-      } else if (name === 'MEMORY_QUERY' && arg) {
-        parts.push(`MEMORY_QUERY "${arg}":\n${await memoryQuery(arg, persona)}`);
-      } else if (name === 'READ_HUD') {
-        parts.push(`HUD:\n${await readHud()}`);
-      } else if (name === 'BUILD_STATUS') {
-        parts.push(`BUILD PIPELINE:\n${await buildStatus()}`);
-      } else if (name === 'RELAY_TO' && arg) {
+        return out ? `${name}${arg ? ` "${arg}"` : ''}:\n${out}` : '';
+      }
+      if (name === 'DELEGATE' && arg && persona === 'ara') return await delegate(arg);
+      if (name === 'MEMORY_QUERY' && arg) return `MEMORY_QUERY "${arg}":\n${await memoryQuery(arg, persona)}`;
+      if (name === 'READ_HUD') return `HUD:\n${await readHud()}`;
+      if (name === 'BUILD_STATUS') return `BUILD PIPELINE:\n${await buildStatus()}`;
+      if (name === 'RELAY_TO' && arg) {
         const [ref, ...rest] = arg.split('|');
         const msg = rest.join('|').trim();
         const id = resolvePersonaId(ref);
-        if (!id || !msg) { parts.push(`RELAY_TO "${arg}": couldn't route that.`); continue; }
-        if (id === persona) { parts.push(`RELAY_TO "${ref}": that's you — just answer him directly.`); continue; }
-        if (depth > 1) { parts.push(`RELAY_TO "${ref}": not from inside a relay — answer with what you have.`); continue; }
-        parts.push(`YOU ASKED ${ROSTER[id].name}: "${msg}"\n${ROSTER[id].name} REPLIED:\n${await relayToPersona(id, msg, { from: persona, convo, depth: depth + 1 })}`);
+        if (!id || !msg) return `RELAY_TO "${arg}": couldn't route that.`;
+        if (id === persona) return `RELAY_TO "${ref}": that's you — just answer him directly.`;
+        if (depth > 1) return `RELAY_TO "${ref}": not from inside a relay — answer with what you have.`;
+        return `YOU ASKED ${ROSTER[id].name}: "${msg}"\n${ROSTER[id].name} REPLIED:\n${await relayToPersona(id, msg, { from: persona, convo, depth: depth + 1 })}`;
       }
+      return '';
     } catch (e) {
-      parts.push(`${name}: failed — ${e.message}`);
+      return `${name}: failed — ${e.message}`;
     }
-  }
-  return parts.join('\n\n');
+  };
+  // The same tag twice in one reply is one lookup.
+  const seen = new Set();
+  const tags = findTags(text).filter((t) => {
+    const k = `${t.name}|${t.arg}`;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+  return (await Promise.all(tags.map(one))).filter(Boolean).join('\n\n');
 }
 
 // [TRADE_SCAN: SYMBOL, SYMBOL] — the same read-only market snapshot T.A.L.O.N.
@@ -760,12 +765,15 @@ async function runPersonaTurn(personaId, userText, deliver) {
   const replies = [reply];
   const looked = [];
 
-  for (let round = 0; round < 2; round++) {
+  // Up to 3 lookup rounds. The follow-up must leave room for more: "weather,
+  // calendar and email" often comes back as one tag at a time, and telling her
+  // "now reply, no more tags" after the first one answered just the weather.
+  for (let round = 0; round < 3; round++) {
     const inj = await runInjections(reply, persona, { convo });
     if (!inj) break;
     looked.push(inj);
     messages.push({ role: 'assistant', content: reply });
-    messages.push({ role: 'user', content: `[tool results — now reply to Mr. Burrus using these; do not repeat the tool tags]\n\n${inj}` });
+    messages.push({ role: 'user', content: `[tool results]\n\n${inj}\n\n[If something Mr. Burrus asked for still needs a lookup you haven't done, emit every remaining read tag now, together, and nothing else. Otherwise reply to him covering everything he asked, using these results — don't re-run a lookup that's already above.]` });
     reply = await chatAs(p.api, p.model, sys, messages, { maxTokens: 1200 });
     replies.push(reply);
   }

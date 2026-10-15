@@ -216,4 +216,4 @@ async function transcribe(buffer, filename = 'voice.ogg') {
   return (d.text || '').trim();
 }
 
-module.exports = { CLAUDE_MODEL, keyFor, claudeText, creditStatus, subscriptionStatus, openaiCompatText, geminiText, chatAs, webResearch, transcribe };
+module.exports = { CLAUDE_MODEL, keyFor, WEB_SEARCH_TOOL, claudeText, creditStatus, subscriptionStatus, openaiCompatText, geminiText, chatAs, webResearch, transcribe };

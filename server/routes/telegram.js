@@ -85,6 +85,14 @@ async function handleUpdate(personaId, bot, update) {
     return;
   }
 
+  // /brief — A.R.A.'s morning brief on demand (the 6 AM one, re-run now).
+  if (personaId === 'ara' && text === '/brief') {
+    await bot.sendChatAction(chatId, 'typing');
+    try { await require('../morningBrief').runMorningBrief({ force: true }); }
+    catch (e) { await deliver(`Couldn't build the brief: ${e.message}`); }
+    return;
+  }
+
   // Every reply goes out as both a voice note and text, however he wrote in.
   await bot.sendChatAction(chatId, 'record_voice');
   const keepTyping = setInterval(() => bot.sendChatAction(chatId, 'record_voice').catch(() => {}), 6000);

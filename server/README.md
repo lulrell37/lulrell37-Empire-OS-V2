@@ -33,6 +33,23 @@ Without it tokens still register but pushes silently fail.
 Fact + Verse of the day via Claude and writes them into `sync_rows`. Idempotent
 per day. Needs `ANTHROPIC_API_KEY`; set `DAILY_BRIEFING=off` to disable.
 
+## A.R.A.'s morning brief (Telegram)
+
+`morningBrief.js` sends A.R.A.'s brief to the owner on her Telegram bot at
+**06:00 ET**: the date, today's hourly weather (Open-Meteo, for the app's
+`weather_place` setting), today's calendar, unread email from the last 24h, news
+(AP World + U.S. and Ground News World + U.S. via Claude web search, FOX 5 DC via
+its RSS feed), then the HUD Word / Verse / Fact. It sends once a day
+(`app_settings.morning_brief_date`). If the server boots between 6 and 11 AM and
+that day's brief hasn't gone out, it sends it then. Send `/brief` to A.R.A.'s bot
+to get one on demand. Needs `TELEGRAM_BOT_TOKEN` + `TELEGRAM_OWNER_ID`; set
+`MORNING_BRIEF=off` to disable.
+
+The same module re-sends the **Word of the Day** (word, definition, and an example
+sentence) at 9 AM, noon, 3, 6 and 9 PM ET. The example sentence is generated once
+per word and cached in `app_settings.word_example`. The morning brief carries it
+too. Set `WORD_REMINDER=off` to stop the reminders.
+
 ## Nightly Empire Council
 
 `councilMeeting.js` runs at **05:00 ET** every day (`node-cron`, no boot run).
