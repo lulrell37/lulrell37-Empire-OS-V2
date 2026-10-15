@@ -14,12 +14,22 @@ const { personaVoiceId } = require('./personas');
 
 const EL_MODEL = 'eleven_turbo_v2_5';
 
+// The app's voice-speed slider (app_settings `voice_speed`, synced) -> ffmpeg
+// args. atempo speeds speech up without raising the pitch.
+async function tempoArgs() {
+  const raw = await require('./syncStore').getSetting('voice_speed', '1').catch(() => '1');
+  const r = Math.min(2, Math.max(0.75, parseFloat(raw) || 1));
+  return Math.abs(r - 1) < 0.01 ? [] : ['-filter:a', `atempo=${r.toFixed(2)}`];
+}
+
 // Any audio ffmpeg can read on stdin -> OGG/Opus Buffer for a Telegram voice note.
-function toOgg(inputBuffer) {
+async function toOgg(inputBuffer) {
+  const tempo = await tempoArgs();
   return new Promise((resolve, reject) => {
     const ff = spawn(ffmpegPath, [
       '-hide_banner', '-loglevel', 'error',
       '-i', 'pipe:0',
+      ...tempo,
       '-c:a', 'libopus', '-b:a', '32k', '-application', 'voip',
       '-f', 'ogg', 'pipe:1',
     ]);
@@ -61,4 +71,4 @@ async function synthesizePersonaVoice(personaId, replyText, { userText = '' } = 
   }
 }
 
-module.exports = { synthesizePersonaVoice };
+module.exports = { synthesizePersonaVoice, tempoArgs };

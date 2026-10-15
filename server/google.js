@@ -342,6 +342,19 @@ function sliceDoc(header, full, page, ref) {
   return `${header}${pages > 1 ? ` — page ${p}/${pages}` : ''}:\n${body}${foot}`;
 }
 
+// A Drive file's metadata by id.
+async function driveFile(fileId) {
+  return gapi(`/drive/v3/files/${encodeURIComponent(fileId)}`, { query: { fields: 'id,name,mimeType' } });
+}
+
+// A Drive file's full text (plain/markdown file, or a Google Doc exported).
+async function driveRawText(file) {
+  const text = file.mimeType === 'application/vnd.google-apps.document'
+    ? await gapi(`/drive/v3/files/${file.id}/export`, { query: { mimeType: 'text/plain' }, raw: true })
+    : await gapi(`/drive/v3/files/${file.id}`, { query: { alt: 'media' }, raw: true });
+  return String(text || '');
+}
+
 async function driveRead({ name, fileId, page = 1 }) {
   let file;
   if (fileId) file = await gapi(`/drive/v3/files/${encodeURIComponent(fileId)}`, { query: { fields: 'id,name,mimeType' } });
@@ -421,6 +434,6 @@ async function gTaskDelete(title) {
 module.exports = {
   accessToken, googleLinked, googleStatus, readDriveNote, saveDriveNote, gmailSend,
   gmailList, gmailRead, calendarList, calendarCreate, calendarDelete,
-  driveList, driveSearch, driveRead, driveUpdate, driveTrash, sheetCreate,
+  driveList, driveSearch, driveRead, driveFindByName, driveFile, driveRawText, driveUpdate, driveTrash, sheetCreate,
   gTasksList, gTaskCreate, gTaskComplete, gTaskDelete, zonedDate,
 };

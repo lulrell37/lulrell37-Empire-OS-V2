@@ -22,6 +22,7 @@
 // in chat" if he needs one mid-call; wiring more tools here is a follow-up,
 // not a v1 requirement.
 import LiveAudioStream from 'react-native-live-audio-stream';
+import{playOpts,speechRate}from './voiceSpeed';
 import{Audio}from 'expo-av';
 import*as FileSystem from 'expo-file-system';
 import{loadKeys}from './keyStore';
@@ -83,7 +84,7 @@ async function playResponseAudio(chunks,onStateChange,onDone){
   const uri=FileSystem.cacheDirectory+'ara_live_'+Date.now()+'.wav';
   await FileSystem.writeAsStringAsync(uri,base64,{encoding:FileSystem.EncodingType.Base64});
   await Audio.setAudioModeAsync({playsInSilentModeIOS:true,allowsRecordingIOS:true});
-  const{sound:snd}=await Audio.Sound.createAsync({uri},{shouldPlay:true});
+  const{sound:snd}=await Audio.Sound.createAsync({uri},playOpts({shouldPlay:true}));
   sound=snd;
   onStateChange?.('speaking');
   snd.setOnPlaybackStatusUpdate(st=>{

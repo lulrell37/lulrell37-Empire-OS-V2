@@ -16,6 +16,7 @@
 // goes straight to the metered API; the first call after the reset tries the
 // subscription again. Any other CLI failure falls back to the API for that one
 // call only.
+const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
@@ -110,10 +111,26 @@ function claudeSubRun(system, messages, { model = 'claude-sonnet-5', search = fa
   return new Promise((resolve, reject) => {
     const p = toCliPrompt(system, messages);
     if (!p) return reject(new Error('claude cli: request has non-text content'));
+    // Linux caps one argv string at 128 KiB (MAX_ARG_STRLEN), and a persona's
+    // system prompt + chat history can pass that — the spawn then failed with
+    // E2BIG and the turn quietly went to the metered API. The conversation goes
+    // in on stdin; a system prompt that's too big for argv goes via a temp file.
+    let sysFile = null;
+    let sysArgs = ['--system-prompt', p.system];
+    if (Buffer.byteLength(p.system) > 100 * 1024) {
+      try {
+        sysFile = path.join(os.tmpdir(), `persona-sys-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`);
+        fs.writeFileSync(sysFile, p.system, { mode: 0o600 });
+        sysArgs = ['--system-prompt-file', sysFile];
+      } catch (e) {
+        return reject(new Error(`claude cli: couldn't stage the system prompt (${e.message})`));
+      }
+    }
+    const cleanup = () => { if (sysFile) { try { fs.unlinkSync(sysFile); } catch {} sysFile = null; } };
     const args = [
-      '-p', p.prompt,
+      '-p',
       '--model', model,
-      '--system-prompt', p.system,
+      ...sysArgs,
       '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
       '--tools', search ? 'WebSearch' : '',
       '--strict-mcp-config',
@@ -128,7 +145,11 @@ function claudeSubRun(system, messages, { model = 'claude-sonnet-5', search = fa
     delete env.ANTHROPIC_AUTH_TOKEN;
 
     // Neutral cwd so no CLAUDE.md or project settings leak into the persona.
-    const child = spawn(resolveCli(), args, { env, cwd: os.tmpdir(), stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(resolveCli(), args, { env, cwd: os.tmpdir(), stdio: ['pipe', 'pipe', 'pipe'] });
+    child.on('close', cleanup);
+    child.on('error', cleanup);
+    child.stdin.on('error', () => {}); // EPIPE if the CLI exits before reading it all
+    child.stdin.end(p.prompt);
     let text = '';
     let buf = '';
     let stderr = '';

@@ -107,11 +107,8 @@ export async function googleWriteCommands(text,{onConfirm}={}){
   for(const m of t.matchAll(/\[CREATE_EVENT:\s*([^|\]]+)\|([^|\]]+)(?:\|([^\]]+))?\]/ig))
     await run(()=>g.calendarCreate({title:m[1].trim(),startISO:m[2].trim(),minutes:parseInt(m[3],10)||60}));
 
-  for(const m of t.matchAll(/\[CREATE_NOTE:\s*([^|\]]+)\|([^\]]*)\]/ig))
-    await run(()=>g.driveCreate({title:m[1].trim(),content:(m[2]||'').trim()}));
-
-  for(const m of t.matchAll(/\[EDIT_NOTE:\s*([^|\]]+)\|([^\]]*)\]/ig))
-    await run(()=>g.driveUpdate({fileId:m[1].trim(),content:(m[2]||'').trim()}));
+  // [CREATE_NOTE] / [EDIT_NOTE] (and [SAVE_NOTE] / [APPEND_NOTE]) are run by
+  // handleCommands via noteCommands.js — one path, with receipts, for every persona.
 
   if(/\[SYNC_NOTES\]/i.test(t))
     await run(()=>g.driveSyncNotesFolder());

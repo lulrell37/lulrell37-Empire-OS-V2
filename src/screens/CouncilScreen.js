@@ -1,4 +1,5 @@
 import React,{useState,useRef,useEffect}from 'react';
+import{playOpts,speechRate}from '../services/voiceSpeed';
 import{View,Text,StyleSheet,TextInput,TouchableOpacity,FlatList,KeyboardAvoidingView,Platform,ActivityIndicator,Modal,ScrollView}from 'react-native';
 import{SafeAreaView}from 'react-native-safe-area-context';
 import*as Speech from 'expo-speech';
@@ -45,7 +46,7 @@ export default function CouncilScreen({navigation}){
         await saveMessage(pid,'assistant',display||response,mode);
         replies.push({name:p.name,text:display||response});
         await handleCommands(response,pid,{onRelay:({target,message})=>addRelay(target,`[From ${p.name}]: ${message}`)});
-        if(voiceOn&&display){Speech.speak(display.substring(0,400),{language:'en-US',rate:0.95});}
+        if(voiceOn&&display){Speech.speak(display.substring(0,400),{language:'en-US',rate:speechRate(0.95)});}
       }
     }catch(e){if(e.name!=='AbortError'){setMessages(prev=>[...prev,{id:Date.now().toString(),role:'system',content:`Error: ${e.message}`,persona:'system'}]);}}
     finally{setLoading(false);setTimeout(()=>flatRef.current?.scrollToEnd({animated:true}),100);}

@@ -73,11 +73,14 @@ function grokVoicePCM(key, replyText, userText) {
 }
 
 // PCM (s16le 24kHz mono) -> OGG/Opus Buffer, the format Telegram voice notes want.
-function pcmToOgg(pcm) {
+async function pcmToOgg(pcm) {
+  // The app's voice-speed slider (lazy require — personaVoice requires this file).
+  const tempo = await require('./personaVoice').tempoArgs();
   return new Promise((resolve, reject) => {
     const ff = spawn(ffmpegPath, [
       '-hide_banner', '-loglevel', 'error',
       '-f', 's16le', '-ar', '24000', '-ac', '1', '-i', 'pipe:0',
+      ...tempo,
       '-c:a', 'libopus', '-b:a', '32k', '-application', 'voip',
       '-f', 'ogg', 'pipe:1',
     ]);

@@ -591,6 +591,7 @@ export async function getUpcomingDates(days=30){
   return out.sort((a,b)=>a.daysOut-b.daysOut);
 }
 export async function saveNote(title,content,persona=null){const now=Date.now();const ex=await db.getFirstAsync('SELECT * FROM notes WHERE title=?',[title]);if(ex){await db.runAsync('UPDATE notes SET content=?,updated_at=? WHERE id=?',[content,now,ex.id]);return ex.id;}const r=await db.runAsync('INSERT INTO notes(title,content,persona,created_at,updated_at) VALUES(?,?,?,?,?)',[title,content,persona,now,now]);return r.lastInsertRowId;}
+export async function updateNoteContent(id,content){await db.runAsync('UPDATE notes SET content=?,updated_at=? WHERE id=?',[content,Date.now(),id]);}
 export async function getNote(title){return await db.getFirstAsync('SELECT * FROM notes WHERE title LIKE ?',['%'+title+'%']);}
 export async function getAllNotes(){return await db.getAllAsync('SELECT * FROM notes ORDER BY updated_at DESC');}
 export async function deleteNote(id){await db.runAsync('DELETE FROM notes WHERE id=?',[id]);}

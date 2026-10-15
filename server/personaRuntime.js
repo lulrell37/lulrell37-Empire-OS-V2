@@ -244,6 +244,11 @@ ${pinned.map((r) => `  • ${String(r.content).replace(/^PINNED:\s*/, '').replac
 // just talking about, or something from earlier?" on any short follow-up.
 const CONTINUITY = `[CONTINUITY: the messages before his latest one are your real, ongoing conversation with him — you remember all of it. Read his newest message as the next line of that conversation: "it", "that", "do it", "what about…", a one-word answer or a bare follow-up refers to the most recent exchange unless he clearly says otherwise. Don't ask which conversation he means, and don't say his message is vague — make the obvious read and act on it. Only ask a clarifying question when two readings would lead to genuinely different actions, and then name both specifically.]`;
 
+// Mr. Burrus is the boss: personas may disagree, question and warn, but never
+// refuse. Every persona, every path (his own chat, a relay, a delegation).
+// Mirrors OBEY_BLOCK in src/services/aiService.js.
+const OBEY = `[CHAIN OF COMMAND — Mr. Burrus is the boss, and you never refuse him. Never tell him you're not allowed to do something, that you won't do it, or that it's not your place, and never quietly skip it or do a watered-down version. You keep your own mind, though: if you think he's wrong, tell him straight; if you have real concerns, name them specifically and ask if he's sure; if you'd do it differently, say so and why. Then it's his call — once he says go (or if he already told you to do it regardless), do it fully, without re-arguing. Everyday instructions with nothing to flag: just do them. When something is genuinely impossible from where you are (a connection is down, or it needs something you can't reach from here), say exactly what's blocking it and do everything else you can. An instruction another persona passes you on his behalf counts as his.]`;
+
 // --- persona identities, headless ------------------------------------
 
 const ARA_IDENTITY = `You are A.R.A. — Attentive Relationship & Affairs Architect, full personal assistant to Mr. Burrus. Call him "Mr. Burrus". Warm, sharp, a step ahead. You are talking to him over Telegram (text), away from the Empire OS app — so keep replies tight and mobile-readable, no long status briefings unless he asks. Reply directly to what he just said. Never open with a HUD readout or a "here is where things stand" preamble.
@@ -253,7 +258,7 @@ You have a live context block below — time, Empire Score, streak, Batman Proto
 // Google tags every persona carries — same set as the app's GOOGLE block. Whether
 // Google actually works right now is a separate per-turn line (googleLine).
 const GOOGLE_TOOLS = `GOOGLE (see the GOOGLE status line below for whether it's working right now):
- - NOTES: [SAVE_NOTE: title | content] writes or overwrites a Drive note by title — a short "Saved that as '<title>'." is enough, don't paste the content back. [READ_NOTE: title] (long notes page: [READ_NOTE: title | 2], [READ_NOTE: title | all]) · [LIST_NOTES] · [SEARCH_DRIVE: keyword] · [READ_FILE_ID: id] · [EDIT_NOTE: fileId | full new content] · [DELETE_FILE: fileId] (he taps to confirm).
+ - NOTES (one tag per note — several notes means several tags in the same reply): [SAVE_NOTE: title | content] creates a Drive note, or overwrites the one with that title — a short "Saved that as '<title>'." is enough, don't paste the content back. [APPEND_NOTE: title | text] adds to the end of an existing note (creates it if there isn't one) — use it for "add this to my … note". [EDIT_NOTE: title or fileId | full new content] replaces a note's whole text — [READ_NOTE] it first so you keep what should stay. [READ_NOTE: title] (long notes page: [READ_NOTE: title | 2], [READ_NOTE: title | all]) · [LIST_NOTES] · [SEARCH_DRIVE: keyword] · [READ_FILE_ID: id] · [DELETE_FILE: fileId] (he taps to confirm). Note text can be long and multi-line; brackets inside it are fine as long as they're balanced.
  - EMAIL: [READ_EMAIL] (unread inbox) · [READ_EMAIL: any Gmail search, e.g. from:bank newer_than:7d] · [READ_EMAIL_ID: id] (one full message) · [SEND_EMAIL: to | subject | body] — he gets a Confirm button before it sends; tell him it's ready to send, not that it's sent.
  - CALENDAR: [READ_CALENDAR] (next 7 days) · [READ_CALENDAR: 30] · [READ_CALENDAR: 2026-08-01 | 30] · [CREATE_EVENT: title | 2026-06-01T14:00 | minutes] (his Eastern time) · [DELETE_EVENT: id] (confirmed).
  - SHEETS: [CREATE_SHEET: title | col1,col2 | val1,val2].`;
@@ -351,6 +356,7 @@ function systemPrompt(ctx, gs, custom, mem) {
   return [
     custom ? `${custom}\n\n${TG_FRAME}` : ARA_IDENTITY,
     genderLine('ara'),
+    OBEY,
     CONTINUITY,
     mem,
     ARA_TOOLS,
@@ -367,6 +373,7 @@ function personaSystemPrompt(personaId, ctx, gs, custom, mem) {
   return [
     custom ? `${custom}\n\n${TG_FRAME}` : `${personaTgIdentity(personaId)}\n\nYou are talking to Mr. Burrus over Telegram (text), away from the Empire OS app — keep replies tight and mobile-readable. Reply directly to what he just said; no status-briefing preamble. There is a live context block below — read from it, don't invent numbers.`,
     custom ? genderLine(personaId) : '', // the built-in identity already carries it
+    OBEY,
     CONTINUITY,
     mem,
     genericTools(personaId),
@@ -380,17 +387,49 @@ function personaSystemPrompt(personaId, ctx, gs, custom, mem) {
 
 // --- tag handling ------------------------------------------------------
 
-const TAG_RE = /\[([A-Z][A-Z0-9_]*)\s*(?::\s*([^\]]*))?\]/g;
+// [NAME] or [NAME: arg]. The arg may hold brackets of its own — a note with a
+// "[ ]" checklist or a markdown link, or a relay carrying a note — so a tag
+// closes at the ] that balances its opening [, not the first ] (which used to
+// cut such a note off mid-way, or drop it). If the brackets never balance, the
+// first ] closes it, as before.
+const TAG_HEAD = /\[([A-Z][A-Z0-9_]*)\s*(:)?/g;
 
-function findTags(text) {
+function scanTags(text) {
+  const s = String(text || '');
   const out = [];
+  TAG_HEAD.lastIndex = 0;
   let m;
-  TAG_RE.lastIndex = 0;
-  while ((m = TAG_RE.exec(text))) out.push({ name: m[1], arg: (m[2] || '').trim() });
+  while ((m = TAG_HEAD.exec(s))) {
+    const from = TAG_HEAD.lastIndex;
+    if (!m[2]) {
+      if (s[from] === ']') { out.push({ name: m[1], arg: '', start: m.index, end: from + 1 }); TAG_HEAD.lastIndex = from + 1; }
+      continue;
+    }
+    let depth = 0;
+    let end = -1;
+    let first = -1;
+    for (let j = from; j < s.length; j++) {
+      if (s[j] === '[') depth++;
+      else if (s[j] === ']') {
+        if (first < 0) first = j;
+        if (depth === 0) { end = j; break; }
+        depth--;
+      }
+    }
+    if (end < 0) end = first;
+    if (end < 0) continue;
+    out.push({ name: m[1], arg: s.slice(from, end).trim(), start: m.index, end: end + 1 });
+    TAG_HEAD.lastIndex = end + 1;
+  }
   return out;
 }
+const findTags = (text) => scanTags(text).map(({ name, arg }) => ({ name, arg }));
 function stripTags(text) {
-  return String(text || '').replace(TAG_RE, '').replace(/\n{3,}/g, '\n\n').trim();
+  const s = String(text || '');
+  let out = '';
+  let at = 0;
+  for (const t of scanTags(s)) { out += s.slice(at, t.start); at = t.end; }
+  return (out + s.slice(at)).replace(/\n{3,}/g, '\n\n').trim();
 }
 
 // Synchronous tags — run them, return text to feed back so the persona can
@@ -399,7 +438,9 @@ function stripTags(text) {
 // `convo` is the recent Telegram exchange, handed to a relayed persona so it
 // knows what's being talked about; `depth` > 0 means we're already inside a
 // relay (one hop further is allowed — A.T.L.A.S. → T.A.L.O.N. — not a chain).
-async function runInjections(text, persona = 'ara', { convo = '', depth = 0 } = {}) {
+// `sink` ({ notes, warnings, confirms, deliver }) collects what a relayed
+// persona's own write tags actually did, so the turn's receipt shows it.
+async function runInjections(text, persona = 'ara', { convo = '', depth = 0, sink = null } = {}) {
   // Run in parallel — "weather, my calendar and my email" is three lookups, and
   // one at a time (a web search alone is 10-20s) made combined asks crawl.
   const one = async ({ name, arg }) => {
@@ -421,7 +462,7 @@ async function runInjections(text, persona = 'ara', { convo = '', depth = 0 } = 
         if (!id || !msg) return `RELAY_TO "${arg}": couldn't route that.`;
         if (id === persona) return `RELAY_TO "${ref}": that's you — just answer him directly.`;
         if (depth > 1) return `RELAY_TO "${ref}": not from inside a relay — answer with what you have.`;
-        return `YOU ASKED ${ROSTER[id].name}: "${msg}"\n${ROSTER[id].name} REPLIED:\n${await relayToPersona(id, msg, { from: persona, convo, depth: depth + 1 })}`;
+        return `YOU ASKED ${ROSTER[id].name}: "${msg}"\n${ROSTER[id].name} REPLIED:\n${await relayToPersona(id, msg, { from: persona, convo, depth: depth + 1, sink })}`;
       }
       return '';
     } catch (e) {
@@ -478,7 +519,7 @@ async function buildStatus() {
 
 // Google write tags every persona may use; the rest of personaTools' writes
 // (HUD, money, leads, THE FIRM) are A.R.A.'s.
-const GOOGLE_WRITES = new Set(['CREATE_EVENT', 'CREATE_NOTE', 'EDIT_NOTE', 'CREATE_SHEET', 'SEND_EMAIL', 'DELETE_EVENT', 'DELETE_FILE']);
+const GOOGLE_WRITES = new Set(['CREATE_EVENT', 'CREATE_NOTE', 'EDIT_NOTE', 'APPEND_NOTE', 'CREATE_SHEET', 'SEND_EMAIL', 'DELETE_EVENT', 'DELETE_FILE']);
 
 // Side-effect tags — apply after the persona's final reply. Returns
 // { notes, warnings, confirms }: receipts for what happened, what failed or
@@ -499,13 +540,11 @@ async function applyEffects(text, deliver, persona = 'ara') {
         const title = arg.slice(0, i).trim();
         const content = arg.slice(i + 1).trim();
         if (title && content) {
-          try {
-            const r = await saveDriveNote(title, content);
-            notes.push(`Drive note ${r.created ? 'created' : 'updated'}: ${r.name}`);
-          } catch (e) {
-            await upsertSyncRow('notes', newId(), { title, content, persona, created_at: now, updated_at: now });
-            warnings.push(`"${title}" is NOT in Drive (${e.message}) — saved to the app's Notes instead`);
-          }
+          const r = await tools.saveNote(title, content, persona);
+          if (r.ok) notes.push(r.ok);
+          if (r.warn) warnings.push(r.warn);
+        } else {
+          warnings.push(`SAVE_NOTE "${title || '?'}" had no ${title ? 'content' : 'title'} — nothing saved`);
         }
       } else if (name === 'ADD_TASK' && arg) {
         const [title, taskNote, due] = arg.split('|').map((s) => s.trim());
@@ -596,40 +635,64 @@ async function relaySystem(id, from = 'ara') {
   return `${custom}${genderLine(id) ? `\n\n${genderLine(id)}` : ''}\n\n[THE EMPIRE:\n${rosterLines()}\n]\n\n[${who} is passing you a question on his behalf, over Telegram. Answer it directly from your lane — concrete and specific, no greeting and no sign-off, a few sentences to a short paragraph. If it needs something only Mr. Burrus can decide or the app open, say so plainly.]`;
 }
 
-// What a relayed persona can actually use from here. Its app prompt lists app
-// tags too; only these do anything server-side, and a trade tag it writes does
-// NOT execute — without saying so it would claim a trade it never placed.
-const RELAY_TOOLS = `[TOOLS ON THIS RELAY — emit the tag and the result comes back before you answer: [SEARCH_WEB: query] · [TRADE_SCAN: SYMBOL] (live price/structure read, read-only) · [READ_HUD] · [MEMORY_QUERY: question] · [RELAY_TO: persona-id | complete question] (to hand off something outside your lane). Nothing you write here places, closes or modifies a trade — if that's what's called for, say what you'd do and that it needs T.A.L.O.N.'s desk in the app. Never claim you did something a tag didn't.]`;
+// What a relayed persona can use from here: its full Telegram tool block (so a
+// handed-off "make these notes in Drive" really makes them — before this, a
+// relayed persona had no write tags at all and its "done" was just words), plus
+// these. A trade tag still does NOT execute server-side.
+const RELAY_TOOLS = `[ON THIS RELAY — read tags ([SEARCH_WEB], [TRADE_SCAN: SYMBOL], [READ_HUD], [MEMORY_QUERY], [READ_NOTE], [RELAY_TO], …) come back with results before you answer. Write tags ([SAVE_NOTE], [APPEND_NOTE], [EDIT_NOTE], tasks, calendar, …) run right after your answer, and their receipts go back to whoever handed this to you and to Mr. Burrus. When you're handed something to DO — create notes, add tasks, put something on the calendar — do it: emit one tag per item, with the full content inside the tag. Never say something is done, saved or created unless you emitted the tag for it. Nothing you write here places, closes or modifies a trade — that needs T.A.L.O.N.'s desk in the app.]`;
 
 // Ask persona `id` a question on another persona's behalf and return its answer
 // as plain text. It gets the live context and the recent conversation (so a
 // relay like "ask Atlas about gold" carries what was actually being discussed),
 // and one round of its own lookups before it answers — without that, a reply
 // that was just "[TRADE_SCAN: XAUUSD]" came back as the whole answer.
-async function relayToPersona(id, message, { from = 'ara', convo = '', depth = 1 } = {}) {
+async function relayToPersona(id, message, { from = 'ara', convo = '', depth = 1, sink = null } = {}) {
   const p = ROSTER[id];
-  const ctx = await gatherContext().catch(() => null);
+  const [ctx, gs] = await Promise.all([
+    gatherContext().catch(() => null),
+    googleStatus().catch((e) => ({ ok: false, error: e.message })),
+  ]);
   const sys = [
     await relaySystem(id, from),
+    OBEY,
+    id === 'ara' ? ARA_TOOLS : genericTools(id),
     RELAY_TOOLS,
+    googleLine(gs),
     ctx ? `[EMPIRE CONTEXT:\n${contextBlock(ctx)}\n]` : '',
     convo ? `[THE CONVERSATION YOU'RE BEING PULLED INTO — Mr. Burrus and ${(ROSTER[from] && ROSTER[from].name) || from}, most recent last:\n${convo}\n]` : '',
     `[THE CURRENT MOMENT — ${momentET()} (America/New_York).]`,
   ].filter(Boolean).join('\n\n');
   const messages = [{ role: 'user', content: message }];
-  let reply = await chatAs(p.api, p.model, sys, messages, { maxTokens: 900 });
-  const inj = await runInjections(reply, id, { convo, depth });
+  // Room for a long note or several in one go.
+  let reply = await chatAs(p.api, p.model, sys, messages, { maxTokens: 2500 });
+  const replies = [reply];
+  const inj = await runInjections(reply, id, { convo, depth, sink });
   if (inj) {
     messages.push({ role: 'assistant', content: reply });
-    messages.push({ role: 'user', content: `[tool results — now answer the question using these; do not repeat the tool tags]\n\n${inj}` });
-    reply = await chatAs(p.api, p.model, sys, messages, { maxTokens: 900 });
+    messages.push({ role: 'user', content: `[tool results — now answer using these. Don't repeat the read tags; write tags you already emitted will run — emit only ones you still need.]\n\n${inj}` });
+    reply = await chatAs(p.api, p.model, sys, messages, { maxTokens: 2500 });
+    replies.push(reply);
   }
+  // The relayed persona's writes run here, under its own name — then the result
+  // is reported back with the real receipts, so whoever asked can't repeat a
+  // "done" that didn't happen.
+  const fx = await applyEffects(replies.join('\n'), (sink && sink.deliver) || (async () => {}), id)
+    .catch((e) => ({ notes: [], warnings: [`actions failed: ${e.message}`], confirms: [] }));
+  if (sink) {
+    sink.notes.push(...fx.notes.map((n) => `${p.name}: ${n}`));
+    sink.warnings.push(...fx.warnings.map((w) => `${p.name}: ${w}`));
+    sink.confirms.push(...fx.confirms);
+  }
+  const receipts = [...fx.notes.map((n) => `✓ ${n}`), ...fx.warnings.map((w) => `⚠️ ${w}`), ...fx.confirms.map((c) => `⏳ waiting on his Confirm tap: ${c.label}`)];
   const clean = stripTags(reply);
   upsertSyncRow('persona_memory', newId(), {
     persona: id, content: `[relayed from ${(ROSTER[from] && ROSTER[from].name) || from} on Telegram] ${message}\n${p.name}: ${clean}`,
     category: 'general', keywords: '[]', date: todayET(), created_at: Date.now(),
   }).catch(() => {});
-  return clean || `(${p.name} came back empty)`;
+  const said = clean || `(${p.name} came back empty)`;
+  return receipts.length
+    ? `${said}\n\nWHAT ${p.name.toUpperCase()}'S ACTIONS ACTUALLY DID (authoritative — report these, not the words above):\n${receipts.join('\n')}`
+    : `${said}\n\n(${p.name} ran no actions — if they said something was saved or created, it wasn't.)`;
 }
 
 // THE FIRM — A.R.A.'s [DELEGATE: name | task]. Each specialist gets the project
@@ -646,7 +709,7 @@ async function delegate(arg) {
   const prior = ((proj && proj.contributions) || []).map((c) => `${c.persona}: ${String(c.text || '').slice(0, 600)}`).join('\n\n');
   const brief = `You are contributing to a client project A.R.A. is coordinating for Mr. Burrus.${proj ? `\n\nPROJECT: ${proj.name}\nBRIEF: ${proj.brief || '(none written)'}` : ''}${prior ? `\n\nALREADY IN FROM THE TEAM:\n${prior}` : ''}\n\nYOUR ASSIGNMENT (${tools.PROJECT_ROLES[id]}): ${task}\n\nDeliver only your part — concrete and specific, ready for the team to build on. No preamble, don't restate the brief. If you see a problem outside your lane, end with a line starting "FLAG:".`;
   const p = ROSTER[id];
-  const out = stripTags(await chatAs(p.api, p.model, await relaySystem(id), brief, { maxTokens: 1100 }));
+  const out = stripTags(await chatAs(p.api, p.model, `${await relaySystem(id)}\n\n${OBEY}`, brief, { maxTokens: 1100 }));
   if (proj && proj.name) {
     const next = { ...proj, contributions: [...(proj.contributions || []), { persona: id, task, text: out, at: Date.now() }] };
     await setSetting('active_project', JSON.stringify(next)).catch(() => {});
@@ -760,6 +823,7 @@ async function runPersonaTurn(personaId, userText, deliver) {
   const history = await loadHistory(persona);
   const messages = [...history, { role: 'user', content: `[${momentET()}] ${userText}` }];
   const convo = convoLines(history, userText, persona);
+  const sink = { notes: [], warnings: [], confirms: [], deliver };
 
   let reply = await chatAs(p.api, p.model, sys, messages, { maxTokens: 1200 });
   const replies = [reply];
@@ -769,11 +833,11 @@ async function runPersonaTurn(personaId, userText, deliver) {
   // calendar and email" often comes back as one tag at a time, and telling her
   // "now reply, no more tags" after the first one answered just the weather.
   for (let round = 0; round < 3; round++) {
-    const inj = await runInjections(reply, persona, { convo });
+    const inj = await runInjections(reply, persona, { convo, sink });
     if (!inj) break;
     looked.push(inj);
     messages.push({ role: 'assistant', content: reply });
-    messages.push({ role: 'user', content: `[tool results]\n\n${inj}\n\n[If something Mr. Burrus asked for still needs a lookup you haven't done, emit every remaining read tag now, together, and nothing else. Otherwise reply to him covering everything he asked, using these results — don't re-run a lookup that's already above.]` });
+    messages.push({ role: 'user', content: `[tool results — where a persona's actions are listed, those receipts are what really happened: report them, never "done" for something that failed or never ran]\n\n${inj}\n\n[If something Mr. Burrus asked for still needs a lookup you haven't done, emit every remaining read tag now, together, and nothing else. Otherwise reply to him covering everything he asked, using these results — don't re-run a lookup that's already above.]` });
     reply = await chatAs(p.api, p.model, sys, messages, { maxTokens: 1200 });
     replies.push(reply);
   }
@@ -781,6 +845,9 @@ async function runPersonaTurn(personaId, userText, deliver) {
   // Side-effect tags fire once, from anywhere across the rounds (deduped).
   const fx = await applyEffects(replies.join('\n'), deliver, persona)
     .catch((e) => ({ notes: [], warnings: [`actions failed: ${e.message}`], confirms: [] }));
+  fx.notes.push(...sink.notes);
+  fx.warnings.push(...sink.warnings);
+  fx.confirms.push(...sink.confirms);
   let clean = stripTags(reply);
   if (!clean) clean = fx.notes.length ? `Done — ${fx.notes.join('; ')}.` : 'On it.';
   // A receipt under the reply for every write — the reply is written before the

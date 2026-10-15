@@ -13,6 +13,8 @@ import{refreshAutoAtlas,startAutoAtlas,stopAutoAtlas}from '../services/autoAtlas
 import{refreshNewsWire,startNewsWire,stopNewsWire}from '../services/newsWire';
 import{createLeadsSheet,unlinkLeadsSheet,leadsSheetUrl}from '../services/leadsSheet';
 import{resetWeather}from '../services/weather';
+import{voiceRate,loadVoiceSpeed,setVoiceSpeed,VOICE_SPEED_MIN,VOICE_SPEED_MAX}from '../services/voiceSpeed';
+import SpeedSlider from '../components/SpeedSlider';
 import{ghVerify}from '../services/buildAgent';
 import{saveCustomPrompt,getCustomPrompt,getApiUsage,getAllPersonaPics,savePersonaPic,getSetting,setSetting}from '../services/database';
 import{getCrashLog,clearCrashLog}from '../services/crashLog';
@@ -42,6 +44,7 @@ export default function SettingsScreen({navigation}){
   const[autoEvery,setAutoEvery]=useState('60');
   const[autoMaxOpen,setAutoMaxOpen]=useState('5'); // risk cap — how many positions T.A.L.O.N. may run at once; applies to every trade, auto or confirmed
   const[weatherPlace,setWeatherPlace]=useState('Waldorf, MD');
+  const[voiceSpeed,setVoiceSpeedUi]=useState(voiceRate());
   const[inboundSheet,setInboundSheet]=useState('');
   const[autoScout,setAutoScout]=useState(false);
   const[scoutEvery,setScoutEvery]=useState('30');
@@ -89,6 +92,7 @@ export default function SettingsScreen({navigation}){
     setAutoEvery(await getSetting('auto_trade_interval_min','60'));
     setAutoMaxOpen(await getSetting('auto_trade_max_open','5'));
     setWeatherPlace(await getSetting('weather_place','Waldorf, MD'));
+    setVoiceSpeedUi(await loadVoiceSpeed());
     setInboundSheet(await getSetting('inbound_sheet_id',''));
     setAutoScout((await getSetting('auto_scout','0'))==='1');
     setScoutEvery(await getSetting('auto_scout_interval_min','30'));
@@ -589,6 +593,13 @@ export default function SettingsScreen({navigation}){
             <Text style={[s.secSub,{marginTop:20,marginBottom:0}]}>The token must match the server's SYNC_TOKEN secret exactly. Every device you connect with the same URL and token shares one dataset, last write wins. Nudges (morning briefing, routine and streak reminders, build-pipeline alerts) are sent by the server on a schedule.</Text>
           </View>}
           {tab==='AI'&&<View>
+            <Text style={s.secTitle}>VOICE SPEED</Text>
+            <Text style={s.secSub}>How fast every persona talks — in the app (voice replies, A.R.A. LIVE) and in their Telegram voice notes. Pitch stays natural. 1.00x is normal.</Text>
+            <View style={{marginBottom:24}}>
+              <SpeedSlider value={voiceSpeed} min={VOICE_SPEED_MIN} max={VOICE_SPEED_MAX}
+                onChange={(v)=>{setVoiceSpeedUi(v);setVoiceSpeed(v).catch(()=>{});}}
+                onDone={()=>runSync().catch(()=>{})}/>
+            </View>
             <Text style={s.secTitle}>AI BEHAVIOR</Text>
             <Text style={s.secSub}>Controls for the memory and research subsystems. Calls bill to your own API keys.</Text>
             <TouchableOpacity style={s.toggleRow} onPress={toggleMemoryRecall} activeOpacity={0.7}>

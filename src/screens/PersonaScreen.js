@@ -1,4 +1,5 @@
 import React,{useState,useEffect,useRef}from 'react';
+import{playOpts,speechRate}from '../services/voiceSpeed';
 import{View,Text,StyleSheet,TextInput,TouchableOpacity,FlatList,KeyboardAvoidingView,Platform,ActivityIndicator}from 'react-native';
 import{SafeAreaView}from 'react-native-safe-area-context';
 import*as Speech from 'expo-speech';
@@ -34,7 +35,7 @@ export default function PersonaScreen({route,navigation}){
       setMessages(prev=>[...prev,aiMsg]);
       await saveMessage(personaId,'assistant',display||response,'direct');
       await handleCommands(response,personaId,{onRelay:({target,message})=>addRelay(target,`[From ${persona.name}]: ${message}`)});
-      if(voiceOn&&display){Speech.speak(display.substring(0,500),{language:'en-US',rate:0.95});}
+      if(voiceOn&&display){Speech.speak(display.substring(0,500),{language:'en-US',rate:speechRate(0.95)});}
     }catch(e){
       if(e.name!=='AbortError'){setMessages(prev=>[...prev,{id:(Date.now()+1).toString(),role:'system',content:`Error: ${e.message}`}]);}
     }finally{setLoading(false);}

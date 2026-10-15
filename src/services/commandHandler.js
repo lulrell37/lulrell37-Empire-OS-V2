@@ -8,6 +8,7 @@ async function findContentByRef(ref){
   return all.find(x=>x.id===raw)||all.find(x=>x.id.startsWith(raw))||null;
 }
 import*as gtask from './googleClient';
+import{noteCommands,stripNoteTags}from './noteCommands';
 import{scheduleReminder}from './reminders';
 import{openApp,openWebpage}from './appLauncher';
 import useEmpireStore from '../store/useEmpireStore';
@@ -80,21 +81,12 @@ export async function handleCommands(response,personaId,callbacks={}){
     const task=tasks.find(t=>t.title.toLowerCase().includes(m[1].trim().toLowerCase()));
     if(task){await updateTask(task.id,m[2].trim(),task.notes||'');callbacks.onTaskEdited?.(task);}
   }
-  // Every persona's own instructions teach [SAVE_NOTE], not the Drive-specific
-  // [CREATE_NOTE]/[EDIT_NOTE] tags that only live in the generic GOOGLE block —
-  // so a note "saved" was always landing in the app's local table, never in
-  // Drive, no matter who asked or which persona wrote it. driveSaveNote writes
-  // to Drive and edits an existing note in place (by title) rather than
-  // duplicating it, so this one tag covers both create and edit for every
-  // persona; fall back to the local note only when Drive isn't connected or
-  // the write fails — mirrors [READ_NOTE]'s Drive-first/local-fallback in
-  // googleCommands.js.
-  for(const m of response.matchAll(/\[SAVE_NOTE:\s*([^|\]]+)\|([^\]]+)\]/gi)){
-    const title=m[1]?.trim(),content=m[2]?.trim();
-    if(!title||!content)continue;
-    try{await gtask.driveSaveNote({title,content});}
-    catch{await saveNote(title,content,personaId);}
-  }
+  // Notes — [SAVE_NOTE] / [CREATE_NOTE] / [EDIT_NOTE] / [APPEND_NOTE], Drive
+  // first with the local table as the fallback, for every persona. Each one
+  // reports a receipt through onNotes so the chat shows what really landed
+  // where (see noteCommands.js).
+  const noteReceipts=await noteCommands(response,personaId);
+  if(noteReceipts.length)callbacks.onNotes?.(noteReceipts);
   // S.C.R.I.B.E. and H.O.O.K. get dedicated create/edit verbs for their
   // deliverables — a script, a hook set — so the work is a first-class artifact
   // rather than a generic note. Both map to the same Drive create-or-edit path
@@ -401,7 +393,9 @@ export async function handleCommands(response,personaId,callbacks={}){
   }
 }
 export function stripCommands(text){
-  return text
+  // Note tags first, whole — their content can hold brackets the regexes below
+  // would stop at, leaving half a note in the visible reply.
+  return stripNoteTags(text)
     .replace(/\[ADD_TASK:[^\]]*\]/gi,'').replace(/\[COMPLETE_TASK:[^\]]*\]/gi,'')
     .replace(/\[DELETE_TASK:[^\]]*\]/gi,'').replace(/\[TASK_EDIT:[^\]]*\]/gi,'')
     .replace(/\[SAVE_NOTE:[^\]]*\]/gi,'').replace(/\[OPEN_APP:[^\]]*\]/gi,'').replace(/\[OPEN_WEBPAGE:[^\]]*\]/gi,'')
