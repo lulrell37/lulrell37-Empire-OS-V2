@@ -17,6 +17,8 @@ const useEmpireStore=create((set,get)=>({
   addRelay:(personaId,message)=>set(s=>({relayInbox:{...s.relayInbox,[personaId]:[...(s.relayInbox[personaId]||[]),message]}})),
   clearRelay:(personaId)=>set(s=>({relayInbox:{...s.relayInbox,[personaId]:[]}})),
   diagramPrompt:'',setDiagramPrompt:(p)=>set({diagramPrompt:p||''}),
+  // A finished model from the Laboratory's photo -> 3D ({buf,subject,textured}); DiagramPanel loads it.
+  diagramModel:null,setDiagramModel:(m)=>set({diagramModel:m||null}),
   // Live problems surfaced in the top notification bar (NudgeBar). Keyed so the
   // same issue can't stack; cleared when the matching thing succeeds.
   firmIssues:{}, // {key:{text,detail,severity,at,expiresAt}}

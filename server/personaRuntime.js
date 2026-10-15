@@ -860,8 +860,11 @@ async function runPersonaTurn(personaId, userText, deliver) {
   const lookedUp = looked.join('\n\n').slice(0, 2500);
   await saveMessage(persona, 'user', lookedUp ? `${userText}\n\n[what you looked up / were told while answering this:\n${lookedUp}\n]` : userText);
   await saveMessage(persona, 'assistant', footer ? `${clean}\n\n${footer}` : clean);
+  // "[on Telegram]" lets the app pick these out (its local table has no
+  // `source` column) for its RECENT ON TELEGRAM block — the mirror of the
+  // RECENT CONVERSATIONS IN THE APP block in memoryBlock above.
   await upsertSyncRow('persona_memory', newId(), {
-    persona, content: `YOU: ${userText}\n${p.name}: ${clean}`, source: 'telegram',
+    persona, content: `[on Telegram] YOU: ${userText}\n${p.name}: ${clean}`, source: 'telegram',
     category: 'general', keywords: '[]', date: todayET(), created_at: Date.now(),
   }).catch(() => {});
   mem0Remember(persona, `YOU: ${userText}\n${p.name}: ${clean}`, { source: 'telegram' });

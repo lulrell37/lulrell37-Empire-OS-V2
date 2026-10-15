@@ -252,6 +252,31 @@ async function buildBrief() {
   return [`Good morning, Mr. Burrus. Here's your brief.\n\n🗓 ${dateLine}`, weather, cal, mail, news, hud].join('\n\n━━━━━━━━━━\n\n');
 }
 
+// A.R.A. reads it to him too, like every other Telegram reply. The text brief is
+// a reference sheet (hour-by-hour table, five news desks) — read verbatim it's a
+// ten-minute recital, so the voice note is her spoken version of the same brief:
+// every section, in order, summarized the way she'd say it out loud.
+async function spokenScript(text) {
+  return require('./llm').claudeText(
+    'You are A.R.A., Mr. Burrus\'s personal assistant, turning his written morning brief into what you\'ll say out loud as a voice note. Plain spoken sentences only — no lists, symbols, emoji or headings. About 2 to 3 minutes (350-450 words). Keep the brief\'s order and cover every section: the date; the weather as a story of the day (high and low, how it changes morning to evening, when rain is most likely) rather than every hour; each calendar event with its time; how many unread emails and the ones that matter; the top one or two stories from each news desk; then the word of the day with its meaning and the example sentence, the verse read in full with its reference, and the fact. Use only what is in the brief — never add facts. Warm and brisk, the way you\'d actually talk to him.',
+    text,
+    { maxTokens: 1200 },
+  );
+}
+
+async function sendVoice(ara, ownerId, script, userText) {
+  try {
+    const { synthesizeAraVoice } = require('./araVoice');
+    const ogg = await synthesizeAraVoice(String(script || '').trim(), { userText });
+    if (!ogg) return false;
+    await ara.sendVoice(ownerId, ogg);
+    return true;
+  } catch (e) {
+    console.error('morning brief voice failed:', e.message);
+    return false;
+  }
+}
+
 // Build and send. `force` skips the once-a-day guard (manual /brief).
 async function runMorningBrief({ force = false } = {}) {
   const telegram = require('./telegram');
@@ -264,12 +289,16 @@ async function runMorningBrief({ force = false } = {}) {
     await setSetting('morning_brief_date', today);
   }
   const text = await buildBrief();
+  // Voice note first, then the full text — same order as her normal replies.
+  // A voice failure never holds up the text.
+  const script = await spokenScript(text).catch((e) => { console.error('morning brief script failed:', e.message); return ''; });
+  const voiced = script ? await sendVoice(ara, telegram.OWNER_ID, script, 'Give me my morning brief.') : false;
   await ara.sendMessage(telegram.OWNER_ID, text);
   // Into A.R.A.'s Telegram history, so a reply ("tell me more about the 2nd AP
   // story") has the brief in context.
   await query('INSERT INTO tg_messages (persona, role, content, ts) VALUES ($1, $2, $3, $4)', ['ara', 'assistant', text, Date.now()])
     .catch((e) => console.error('morning brief history save failed:', e.message));
-  return { sent: true, today, chars: text.length };
+  return { sent: true, voiced, today, chars: text.length };
 }
 
 // Word-of-the-day reminder through the day (word, definition, a sentence).
@@ -280,6 +309,8 @@ async function runWordReminder() {
   const hud = await freshHud();
   if (!hud.word_of_day) return { skipped: 'no word of the day' };
   const text = await wordBlock(hud, '📖 Word of the day reminder, Mr. Burrus — work it in today.');
+  const spoken = text.replace(/📖\s*/, '').replace(/\/[^/\n]+\//, '').replace(/In a sentence:/, 'Used in a sentence:');
+  await sendVoice(ara, telegram.OWNER_ID, spoken, 'Remind me of the word of the day.');
   await ara.sendMessage(telegram.OWNER_ID, text);
   await query('INSERT INTO tg_messages (persona, role, content, ts) VALUES ($1, $2, $3, $4)', ['ara', 'assistant', text, Date.now()])
     .catch(() => {});
