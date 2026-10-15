@@ -55,6 +55,21 @@ export default function DiagramPanel(){
     }
   },[requestPrompt,status]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // A model made from a photo in the Laboratory's IMAGE tab. Shown in REAL mode
+  // when it came back colored, so the photo's colors are what you see.
+  const requestModel=useEmpireStore(s=>s.diagramModel);
+  const setDiagramModel=useEmpireStore(s=>s.setDiagramModel);
+  React.useEffect(()=>{
+    if(!requestModel||status!=='ready'||!engine.loadBuffer)return;
+    const m=requestModel;
+    setDiagramModel(null);
+    clearFocus();
+    engine.loadBuffer(m.buf).then(()=>{
+      setSubject(m.subject||'the photo');
+      if(m.textured&&engine.mode!=='real'){engine.mode='real';setMode('real');engine.applyMode?.('real');}
+    }).catch(e=>setGen({state:'idle',pct:0,err:'Could not load the 3D model: '+String(e?.message||e).slice(0,140)}));
+  },[requestModel,status]); // eslint-disable-line react-hooks/exhaustive-deps
+
   function clearFocus(){
     if(engine.uniforms)engine.uniforms.uFocusActive.value=0;
     engine.focusActive=false;

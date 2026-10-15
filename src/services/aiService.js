@@ -244,6 +244,20 @@ Only when seeing or editing the thing is the point — not for a passing mention
     }).join('\n\n');
     parts.push((mem0Facts.length?'RECENT & PINNED:\n':'')+localBody);
   }
+  // The last few days on Telegram, always — the mirror of the server's "recent
+  // conversations in the app" block, so a thread started on Telegram carries
+  // straight into the app. Synced persona_memory rows the server tags
+  // "[on Telegram]".
+  try{
+    const cut=now-3*86400000;
+    const tg=(await getMemoriesByPersona(personaId))
+      .filter(m=>String(m.content||'').startsWith('[on Telegram]')&&(m.created_at||0)>=cut)
+      .slice(0,10).reverse();
+    if(tg.length){
+      parts.push(`RECENT ON TELEGRAM (oldest first) — the same you, he just talked to you there. If he refers to something not in this chat, it's probably here:\n`
+        +tg.map(m=>`(${new Date(m.created_at).toLocaleString('en-US',{weekday:'short',hour:'numeric',minute:'2-digit'})}) ${String(m.content).replace(/^\[on Telegram\]\s*/,'').replace(/\s+/g,' ').slice(0,600)}`).join('\n'));
+    }
+  }catch{}
   if(parts.length){
     sys+=`\n\n[MEMORY — what you know about the topic at hand, plus anything pinned and the last few exchanges. Reference naturally; never claim you don't remember. If something specific isn't here, emit [MEMORY_QUERY: your precise question] before replying:\n${parts.join('\n\n').substring(0,40000)}\n]`;
   }
