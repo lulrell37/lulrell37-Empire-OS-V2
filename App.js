@@ -22,6 +22,7 @@ import LaboratoryScreen from './src/screens/LaboratoryScreen';
 import AnalyticsScreen from './src/screens/AnalyticsScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
 import{initDatabase}from './src/services/database';
+import{loadVoiceSpeed}from './src/services/voiceSpeed';
 import{loadKeys,loadBackend}from './src/services/keyStore';
 import{runSync,initSyncStatus}from './src/services/sync';
 import{registerPushToken}from './src/services/push';
@@ -52,7 +53,7 @@ export default function App(){
     async function prepare(){
       try{
         await Font.loadAsync(FONT_MAP).catch(e=>{console.warn('Font load failed, using fallback:',e.message);});
-        await initDatabase();const keys=await loadKeys();setHasKeys(!!(keys?.claude));const pics=await getAllPersonaPics();setPersonaPics(pics);
+        await initDatabase();await loadVoiceSpeed().catch(()=>{});const keys=await loadKeys();setHasKeys(!!(keys?.claude));const pics=await getAllPersonaPics();setPersonaPics(pics);
         tlInit().catch(()=>{}); // learn the TradeLocker login state + warm the session
         await initSyncStatus().catch(()=>{});
         runSync().catch(()=>{}); // no-op unless a backend is configured

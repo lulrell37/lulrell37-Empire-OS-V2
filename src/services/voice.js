@@ -3,6 +3,7 @@
 // TTS otherwise. Item 2 builds the streaming voice-synced pipeline; this is the
 // simple fire-and-forget path.
 import{Audio}from 'expo-av';
+import{playOpts,speechRate}from './voiceSpeed';
 import*as Speech from 'expo-speech';
 import{textToSpeech}from './aiService';
 import{loadKeys}from './keyStore';
@@ -29,11 +30,11 @@ export async function speak(text,voiceId,personaName){
   if(uri){
     try{
       await Audio.setAudioModeAsync({playsInSilentModeIOS:true,allowsRecordingIOS:false});
-      const{sound}=await Audio.Sound.createAsync({uri},{shouldPlay:true});
+      const{sound}=await Audio.Sound.createAsync({uri},playOpts({shouldPlay:true}));
       current=sound;
       sound.setOnPlaybackStatusUpdate(s=>{if(s.didJustFinish){current=null;}});
       return;
     }catch{}
   }
-  try{Speech.speak(clean.slice(0,600),{language:'en-US',rate:0.96});}catch{}
+  try{Speech.speak(clean.slice(0,600),{language:'en-US',rate:speechRate(0.96)});}catch{}
 }

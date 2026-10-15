@@ -358,7 +358,7 @@ export async function driveSearch(kw){
   return `Drive matches for "${kw}":\n`+files.map(f=>`• ${f.name}  [id:${f.id}]`).join('\n');
 }
 
-async function driveFindByName(name){
+export async function driveFindByName(name){
   const clean=baseName(name);
   const esc=clean.replace(/'/g,"\\'");
   const data=await gapi('/drive/v3/files',{query:{

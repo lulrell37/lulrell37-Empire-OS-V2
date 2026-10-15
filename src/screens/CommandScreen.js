@@ -19,6 +19,9 @@ import{autoAtlasBusy}from '../services/autoAtlas';
 import{handleCommands,stripCommands}from '../services/commandHandler';
 import{reportIssue,clearIssueKey,notify}from '../services/report';
 import{googleReadInjections,googleWriteCommands}from '../services/googleCommands';
+import{scanTags}from '../services/noteCommands';
+import{playOpts,speechRate,applyRate,onVoiceSpeedChange,voiceRate,setVoiceSpeed,VOICE_SPEED_MIN,VOICE_SPEED_MAX}from '../services/voiceSpeed';
+import SpeedSlider from '../components/SpeedSlider';
 import{driveUploadFile,googleConnected}from '../services/googleClient';
 import{getMessages,saveMessage,getAllPersonaPics,savePersonaMemory,getSetting,setSetting,getExpenseSummary,addBuildJob,updateBuildJob,getBuildJob,getBuildJobByIssue,getBuildJobs,deleteBuildJob,buildJobRepo,DEFAULT_BUILD_REPO,getCustomPrompt,getAllLeads,addClipJob,addWatchJob,getActiveWatchJobs,getActiveClipJobs,getActiveBuildJobs,getClipJobs,getWatchJobs,getGeneratingContentItems,getUnreadPersonas,getUnreadMessages,markPersonaRead,getContentItems,getContentTally,getContentPages,updateContentItem,getHudState}from '../services/database';
 import{compileBatch,publishContent,contentStatusLine}from '../services/socialPublish';
@@ -166,6 +169,30 @@ export default function CommandScreen({navigation,route}){
   const textInputRef=useRef(null);
   const flatRef=useRef(null);
   const atBottomRef=useRef(true);   // is the chat scrolled to (near) the bottom?
+  // Only HIS scrolling decides whether the chat follows new text. The list's own
+  // animated scrollToEnd fires onScroll too, and mid-animation it looks "not at
+  // the bottom" — that used to switch following off by itself. So: while his
+  // finger is on it, his position counts (scroll up and it stops following);
+  // anything else — a fling coasting, a programmatic scroll — can only turn
+  // following back on, by reaching the bottom.
+  const userScrollRef=useRef(false);
+  const NEAR_BOTTOM=80;
+  const nearBottom=(e)=>{const{contentOffset,contentSize,layoutMeasurement}=e.nativeEvent;return(contentSize.height-contentOffset.y-layoutMeasurement.height)<NEAR_BOTTOM;};
+  const followToEnd=(animated=true)=>{if(atBottomRef.current)flatRef.current?.scrollToEnd({animated});};
+  // Voice speed slider moved — re-rate whatever is playing right now.
+  // The SPEED chip's slider and the one in Settings → AI are the same setting.
+  const[speedOpen,setSpeedOpen]=useState(false);
+  const[voiceSpeedUi,setVoiceSpeedUi]=useState(voiceRate());
+  useEffect(()=>onVoiceSpeedChange((r)=>{setVoiceSpeedUi(r);applyRate(soundRef.current);}),[]);
+  // Opening a chat (or switching persona / direct↔group) lands on the latest
+  // message — twice, since long histories finish measuring after first paint.
+  useEffect(()=>{
+    if(view==='viz'||view==='activity')return;
+    atBottomRef.current=true;
+    const t1=setTimeout(()=>followToEnd(false),60);
+    const t2=setTimeout(()=>followToEnd(false),400);
+    return()=>{clearTimeout(t1);clearTimeout(t2);};
+  },[view,activePersona,mode]);
   const abortRef=useRef(null);
   const contRef=useRef(false);
   const soundRef=useRef(null);
@@ -588,7 +615,7 @@ export default function CommandScreen({navigation,route}){
     const uri=FileSystem.cacheDirectory+'ara_'+Date.now()+'.wav';
     await FileSystem.writeAsStringAsync(uri,base64,{encoding:FileSystem.EncodingType.Base64});
     await Audio.setAudioModeAsync({playsInSilentModeIOS:true,allowsRecordingIOS:false});
-    const{sound}=await Audio.Sound.createAsync({uri},{shouldPlay:true,progressUpdateIntervalMillis:80});
+    const{sound}=await Audio.Sound.createAsync({uri},playOpts({shouldPlay:true,progressUpdateIntervalMillis:80}));
     return sound;
   }
 
@@ -702,18 +729,18 @@ export default function CommandScreen({navigation,route}){
         const uri=await textToSpeech(text,persona.elevenlabsVoiceId,persona.name);
         if(uri){
           await audioModeForPlayback();
-          const{sound}=await Audio.Sound.createAsync({uri},{shouldPlay:true});
+          const{sound}=await Audio.Sound.createAsync({uri},playOpts({shouldPlay:true}));
           soundRef.current=sound;
           sound.setOnPlaybackStatusUpdate(st=>{if(st.didJustFinish){clearSound();maybeAutoListen();}});
         }else{
           warnVoiceFallback();
-          Speech.speak(text.substring(0,500),{language:'en-US',rate:0.95,onDone:()=>maybeAutoListen(),onStopped:()=>maybeAutoListen()});
+          Speech.speak(text.substring(0,500),{language:'en-US',rate:speechRate(0.95),onDone:()=>maybeAutoListen(),onStopped:()=>maybeAutoListen()});
         }
       }else{
-        Speech.speak(text.substring(0,500),{language:'en-US',rate:0.95,onDone:()=>maybeAutoListen(),onStopped:()=>maybeAutoListen()});
+        Speech.speak(text.substring(0,500),{language:'en-US',rate:speechRate(0.95),onDone:()=>maybeAutoListen(),onStopped:()=>maybeAutoListen()});
       }
     }catch(err){
-      Speech.speak(text.substring(0,500),{language:'en-US',rate:0.95,onDone:()=>maybeAutoListen(),onStopped:()=>maybeAutoListen()});
+      Speech.speak(text.substring(0,500),{language:'en-US',rate:speechRate(0.95),onDone:()=>maybeAutoListen(),onStopped:()=>maybeAutoListen()});
     }
   }
 
@@ -812,7 +839,7 @@ export default function CommandScreen({navigation,route}){
       };
       const nativeFallback=()=>{
         warnVoiceFallback();
-        try{Speech.speak(fullText.slice(0,700),{language:'en-US',rate:0.95,onDone:()=>done(true),onStopped:()=>{if(!nativePaused)done(false);}});}catch{done(false);return;}
+        try{Speech.speak(fullText.slice(0,700),{language:'en-US',rate:speechRate(0.95),onDone:()=>done(true),onStopped:()=>{if(!nativePaused)done(false);}});}catch{done(false);return;}
         safety=setTimeout(()=>done(true),Math.min(60000,(fullText.length/11)*1000+4000));
         nativeRevealTimer();
         voiceControlRef.current={
@@ -836,7 +863,7 @@ export default function CommandScreen({navigation,route}){
             }
             const remaining=fullText.slice(lastRevealed,lastRevealed+700);
             if(!remaining){done(true);return;}
-            try{Speech.speak(remaining,{language:'en-US',rate:0.95,onDone:()=>done(true),onStopped:()=>{if(!nativePaused)done(false);}});}
+            try{Speech.speak(remaining,{language:'en-US',rate:speechRate(0.95),onDone:()=>done(true),onStopped:()=>{if(!nativePaused)done(false);}});}
             catch{done(false);return;}
             safety=setTimeout(()=>done(true),Math.min(60000,(remaining.length/11)*1000+4000));
             nativeRevealTimer();
@@ -863,7 +890,7 @@ export default function CommandScreen({navigation,route}){
           }else if(persona.elevenlabsVoiceId){
             const uri=await textToSpeech(fullText,persona.elevenlabsVoiceId,persona.name);
             if(uri){
-              const created=await Audio.Sound.createAsync({uri},{shouldPlay:false,progressUpdateIntervalMillis:80});
+              const created=await Audio.Sound.createAsync({uri},playOpts({shouldPlay:false,progressUpdateIntervalMillis:80}));
               sound=created.sound;
               try{
                 await sound.playAsync();
@@ -978,7 +1005,7 @@ export default function CommandScreen({navigation,route}){
           const sep=ttsSpokenRef.current?' ':'';
           if(item.uri){
             try{
-              const created=await Audio.Sound.createAsync({uri:item.uri},{shouldPlay:false,progressUpdateIntervalMillis:80});
+              const created=await Audio.Sound.createAsync({uri:item.uri},playOpts({shouldPlay:false,progressUpdateIntervalMillis:80}));
               soundRef.current=created.sound;
               await created.sound.playAsync();
               ttsPlayedCountRef.current+=1;
@@ -1023,7 +1050,7 @@ export default function CommandScreen({navigation,route}){
     // Every segment failed to synthesize (e.g. ElevenLabs down) — rather than
     // leave the reply silent, read it once with the native voice.
     if(ttsPlayedCountRef.current===0&&!ttsCancelRef.current&&!abortRef.current?.signal.aborted){
-      try{await new Promise(res=>{Speech.speak(display.slice(0,700),{language:'en-US',rate:0.95,onDone:res,onStopped:res});setTimeout(res,Math.min(60000,display.length*70+4000));});}catch{}
+      try{await new Promise(res=>{Speech.speak(display.slice(0,700),{language:'en-US',rate:speechRate(0.95),onDone:res,onStopped:res});setTimeout(res,Math.min(60000,display.length*70+4000));});}catch{}
     }
     streamSpeakActiveRef.current=false;
     ttsCancelRef.current=false;
@@ -1642,10 +1669,15 @@ export default function CommandScreen({navigation,route}){
           if(gReads.length){toolLabel='◇ checking Google…';injections.push(...gReads);}
         }catch(e){/* never let a Google read break the turn */}
         // [RELAY_TO: id | message] — actually ask that persona and wait for their
-        // real answer before this persona answers Mr. Burrus. Same one-shot
-        // pattern as A.R.A.'s delegation below: no history, no side commands run
-        // on their reply, just the answer fed back in as a tool result.
-        const relayTags=[...response.matchAll(/\[RELAY_TO:\s*([^|\]]+)\|([^\]]+)\]/gi)];
+        // real answer before this persona answers Mr. Burrus. One-shot, no
+        // history. Their own command tags DO run (notes, tasks, calendar, … —
+        // anything that doesn't need this screen's UI callbacks), and the
+        // receipts go back with the answer: before, a "make these notes in
+        // Drive" handed to another persona ran nothing, and both personas
+        // reported it done. Balanced-bracket scan so a relay carrying a note
+        // with [ ] in it isn't cut short.
+        const relayTags=scanTags(response).filter(t=>t.name==='RELAY_TO'&&t.arg.includes('|'))
+          .map(t=>{const i=t.arg.indexOf('|');return[null,t.arg.slice(0,i),t.arg.slice(i+1)];});
         if(relayTags.length&&!myAbort.signal.aborted){
           for(const rm of relayTags.slice(0,2)){
             const targetId=rm[1].trim().toLowerCase();
@@ -1656,10 +1688,22 @@ export default function CommandScreen({navigation,route}){
             setRelayBusy(s=>{const n=new Set(s);n.add(targetId);return n;});
             try{
               const rResp=await callPersona(targetId,[{role:'user',content:
-                `${p.name} is relaying a question from Mr. Burrus while talking to him — your answer goes straight back into that conversation, so answer directly and concretely.\n\n${ask}`}],
-                myAbort.signal,null,{skipSave:true,maxTokens:700});
+                `${p.name} is passing you this from Mr. Burrus while talking to him — treat it as his instruction. Your answer goes straight back into that conversation, so answer directly and concretely. If it asks you to DO something (save or edit notes, add tasks, put something on the calendar…), do it with your command tags — one tag per item, full content inside the tag, e.g. [SAVE_NOTE:title|content]. They run right after your answer. Never say something is saved or done unless you emitted the tag for it.\n\n${ask}`}],
+                myAbort.signal,null,{skipSave:true,maxTokens:2500});
               const rClean=(stripCommands(rResp)||rResp||'').trim();
-              injections.push(`YOU ASKED ${target.name.toUpperCase()}: "${ask}"\n${target.name} REPLIED: ${rClean}`);
+              // Run the target's own writes under its id. UI-bound tags (trades,
+              // canvas, builds) have no callbacks here, so they no-op.
+              const receipts=[];
+              await handleCommands(rResp,targetId,{onNotes:(lines)=>receipts.push(...lines)}).catch(e=>receipts.push(`⚠️ ${target.name}'s actions failed: ${e.message}`));
+              try{const gw=await googleWriteCommands(rResp,{onConfirm:queueGoogleAction});receipts.push(...gw.immediate);}
+              catch(e){receipts.push(`⚠️ ${target.name}'s Google actions failed: ${e.message}`);}
+              const ran=[...new Set(scanTags(rResp).map(t=>t.name))].filter(n=>!/^(RELAY_TO|SEARCH_WEB|READ_|MEMORY_QUERY|LIST_NOTES|SEARCH_DRIVE)/.test(n));
+              for(const line of receipts)pushSystemMsg(`${target.name}: ${line}`);
+              const what=receipts.length
+                ?`\nWHAT ${target.name.toUpperCase()}'S ACTIONS ACTUALLY DID (authoritative — report these, not their words):\n${receipts.join('\n')}`
+                :ran.length?`\n(${target.name} ran: ${ran.join(', ')})`
+                :`\n(${target.name} ran no actions — if they said something was saved or created, it wasn't.)`;
+              injections.push(`YOU ASKED ${target.name.toUpperCase()}: "${ask}"\n${target.name} REPLIED: ${rClean}${what}`);
               savePersonaMemory(targetId,`[relayed from ${p.name}] ${ask}\n${target.name}: ${rClean}`).catch(()=>{});
             }catch(e){
               if(e.name==='AbortError')break;
@@ -1670,6 +1714,7 @@ export default function CommandScreen({navigation,route}){
           }
         }
         const cmdCallbacks={
+          onNotes:(lines)=>{for(const line of lines)pushSystemMsg(line);},
           onTradePropose:(prop)=>sendTrade({...prop,pid}),
           onTradeClose:(id)=>closePosition(id),
           onTradeBreakeven:({id,offset})=>moveToBreakeven(id,offset),
@@ -1701,6 +1746,7 @@ export default function CommandScreen({navigation,route}){
             pushLeadsToSheet().catch(()=>{});
           },
           onMemoryPinned:(e)=>pushSystemMsg(`— pinned for ${e.days}d: ${e.text} —`),
+          onReminderSet:(e)=>pushSystemMsg(e.error?`— ⚠️ reminder NOT set (${e.error}): ${e.text} —`:`— ⏰ reminder set for ${e.at.toLocaleString([],{weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}: ${e.text} —`),
           onCouncilIdea:({text})=>pushSystemMsg(`— COUNCIL · on the agenda for the 5am meeting: ${text} —`),
           onCouncilNote:({text})=>pushSystemMsg(`— COUNCIL · brief noted for the next meeting: ${text} —`),
           onContentQueued:({page,slot,kind})=>pushSystemMsg(`— CONTENT · ${page} queued a ${kind}${slot?` (${slot})`:''} — review it in the Content screen —`),
@@ -2532,11 +2578,18 @@ export default function CommandScreen({navigation,route}){
       ):(
         <FlatList ref={flatRef} data={displayMessages} keyExtractor={i=>i.id} renderItem={renderMsg} contentContainerStyle={s.msgList} style={{flex:1}}
           scrollEventThrottle={16}
+          onScrollBeginDrag={()=>{userScrollRef.current=true;}}
+          onScrollEndDrag={e=>{atBottomRef.current=nearBottom(e);userScrollRef.current=false;}}
+          onMomentumScrollEnd={e=>{if(nearBottom(e))atBottomRef.current=true;}}
           onScroll={e=>{
-            const{contentOffset,contentSize,layoutMeasurement}=e.nativeEvent;
-            atBottomRef.current=(contentSize.height-contentOffset.y-layoutMeasurement.height)<120;
+            const near=nearBottom(e);
+            if(userScrollRef.current)atBottomRef.current=near;
+            else if(near)atBottomRef.current=true;
           }}
-          onContentSizeChange={()=>{if(atBottomRef.current)flatRef.current?.scrollToEnd({animated:true});}}/>
+          // The list shrinks when the "is responding…" / "Listening…" bar or
+          // the keyboard appears — re-pin the last line above it.
+          onLayout={()=>followToEnd(false)}
+          onContentSizeChange={()=>followToEnd(true)}/>
       )}
 
       {loading&&(<View style={s.thinking}>
@@ -2574,6 +2627,13 @@ export default function CommandScreen({navigation,route}){
               <Text style={s.sendT}>SEND</Text>
             </TouchableOpacity>
           </View>
+          {speedOpen&&(
+            <View style={s.speedRow}>
+              <Text style={s.speedLabel}>VOICE SPEED</Text>
+              <SpeedSlider value={voiceSpeedUi} min={VOICE_SPEED_MIN} max={VOICE_SPEED_MAX} color={mode==='direct'?cp.color:'#E8C98A'}
+                onChange={(v)=>{setVoiceSpeedUi(v);setVoiceSpeed(v).catch(()=>{});}}/>
+            </View>
+          )}
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.inputActions}>
             <TouchableOpacity style={[s.iact,recording&&{borderColor:'#E05555',backgroundColor:'#E0555511'}]} onPress={()=>recording?stopRecording():startRecording({manual:true})}>
               <View style={[s.iactDot,recording&&{backgroundColor:'#E05555'}]}/>
@@ -2594,6 +2654,10 @@ export default function CommandScreen({navigation,route}){
             <TouchableOpacity style={[s.iact,voiceOn&&!voiceMuted&&{borderColor:'#E8C98A',backgroundColor:'#E8C98A11'}]} onPress={()=>{if(voiceOn)stopAudio();setVoiceOn(v=>!v);setVoicePaused(false);}}>
               <View style={[s.iactDot,voiceOn&&!voiceMuted&&{backgroundColor:'#E8C98A'}]}/>
               <Text style={[s.iactT,voiceOn&&!voiceMuted&&{color:'#E8C98A'}]}>{voiceOn?'VOICE ON':'VOICE OFF'}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[s.iact,speedOpen&&{borderColor:'#E8C98A',backgroundColor:'#E8C98A11'}]} onPress={()=>setSpeedOpen(o=>!o)}>
+              <View style={[s.iactDot,(speedOpen||Math.abs(voiceSpeedUi-1)>0.01)&&{backgroundColor:'#E8C98A'}]}/>
+              <Text style={[s.iactT,(speedOpen||Math.abs(voiceSpeedUi-1)>0.01)&&{color:'#E8C98A'}]}>{`SPEED ${voiceSpeedUi.toFixed(2)}x`}</Text>
             </TouchableOpacity>
             {voiceOn&&<>
               <TouchableOpacity style={[s.iact,voicePaused&&{borderColor:'#FFB300',backgroundColor:'#FFB30011'}]} onPress={()=>{voicePaused?resumeAudio():pauseAudio();}}>
@@ -2723,7 +2787,7 @@ const s=StyleSheet.create({
   memBar:{flexDirection:'row',alignItems:'center',gap:8,paddingHorizontal:14,paddingVertical:4,borderTopWidth:1,borderTopColor:'#0A0A0A'},
   memLabel:{fontFamily:'monospace',fontSize:7,color:'#555',letterSpacing:2},
   memStatus:{fontFamily:'monospace',fontSize:7,color:'#333',flex:1},
-  msgList:{padding:10,gap:10,paddingBottom:4},
+  msgList:{padding:10,gap:10,paddingBottom:28},
   userBubble:{alignSelf:'flex-end',backgroundColor:'#111',borderRadius:14,borderBottomRightRadius:4,padding:12,maxWidth:'82%',borderWidth:1,borderColor:'#1A1A1A'},
   userText:{color:'#DDD',fontSize:14,lineHeight:21},
   aiBubble:{alignSelf:'flex-start',backgroundColor:'#080808',borderRadius:10,padding:12,maxWidth:'96%',borderWidth:1,borderColor:'#111'},
@@ -2748,6 +2812,8 @@ const s=StyleSheet.create({
   firmSub:{fontFamily:'monospace',fontSize:8,color:'#4a7d7d',letterSpacing:1,marginTop:2},
   firmX:{color:'#4a7d7d',fontSize:14,paddingHorizontal:4},
   inputArea:{borderTopWidth:1,borderTopColor:'#111'},
+  speedRow:{paddingHorizontal:14,paddingTop:6},
+  speedLabel:{fontFamily:'monospace',fontSize:7,color:'#444',letterSpacing:2},
   stagedTray:{flexDirection:'row',gap:8,paddingHorizontal:10,paddingTop:8,alignItems:'center'},
   stagedItem:{width:56,height:56},
   stagedThumb:{width:56,height:56,borderRadius:6,borderWidth:1,borderColor:'#222'},

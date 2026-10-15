@@ -1,0 +1,1 @@
+- [Dependency compatibility](dependency-compatibility.md) — legacy UUID consumers need CommonJS; preserve the mobile Yarn install path during security fixes.

@@ -1,0 +1,296 @@
+// A.R.A.'s 6 AM morning brief, pushed to the owner on Telegram (A.R.A.'s bot).
+//
+// In order: the date, today's weather hour by hour, today's calendar, unread
+// email, news (AP World + U.S., Ground News World + U.S., FOX 5 DC), then the
+// HUD's Word / Verse / Fact of the Day.
+//
+// Data sections are assembled straight from their sources (Open-Meteo, Google,
+// the FOX 5 DC RSS feed, hud_state) so nothing in them is paraphrased or
+// invented; only the AP / Ground News headline pulls go through a web-search
+// model call, since neither site publishes a usable feed. Each section fails on
+// its own — a dead source prints a one-line "unavailable" and the brief still
+// goes out.
+//
+// Once per day (app_settings `morning_brief_date`), so a restart can't double
+// it. MORNING_BRIEF=off disables this instance's cron.
+//
+// Also: the Word of the Day reminder (word, definition, used in a sentence)
+// A.R.A. re-sends every few hours through the day — WORD_REMINDER=off to stop.
+const { query } = require('./db');
+
+const TZ = 'America/New_York';
+const DEFAULT_PLACE = 'Waldorf, MD';
+
+const todayET = () => new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+const hourET = () => +new Intl.DateTimeFormat('en-US', { timeZone: TZ, hour: 'numeric', hourCycle: 'h23' }).format(new Date());
+
+async function syncedRow(table, syncId) {
+  const { rows } = await query(
+    'SELECT data FROM sync_rows WHERE table_name = $1 AND sync_id = $2 AND deleted = false',
+    [table, syncId],
+  );
+  return rows[0] ? rows[0].data || {} : null;
+}
+async function getSetting(key) {
+  const d = await syncedRow('app_settings', key);
+  return d ? d.value : undefined;
+}
+async function setSetting(key, value) {
+  await query(
+    `INSERT INTO sync_rows (table_name, sync_id, data, updated_at, deleted, server_seq)
+       VALUES ('app_settings', $1, $2, $3, false, nextval('sync_seq'))
+     ON CONFLICT (table_name, sync_id) DO UPDATE
+       SET data = EXCLUDED.data, updated_at = EXCLUDED.updated_at,
+           deleted = false, server_seq = nextval('sync_seq')`,
+    [key, JSON.stringify({ key, value: String(value) }), Date.now()],
+  );
+}
+
+async function fetchText(url) {
+  const res = await fetch(url, { headers: { 'user-agent': 'Mozilla/5.0 (EmpireOS morning brief)' }, signal: AbortSignal.timeout(15000) });
+  if (!res.ok) throw new Error(`${res.status} from ${new URL(url).host}`);
+  return res.text();
+}
+
+// --- Weather (Open-Meteo, no key) ---
+const WMO = {
+  0: ['Clear', '☀️'], 1: ['Mostly clear', '🌤️'], 2: ['Partly cloudy', '⛅'], 3: ['Overcast', '☁️'],
+  45: ['Fog', '🌫️'], 48: ['Rime fog', '🌫️'],
+  51: ['Light drizzle', '🌦️'], 53: ['Drizzle', '🌦️'], 55: ['Heavy drizzle', '🌧️'],
+  56: ['Freezing drizzle', '🌧️'], 57: ['Freezing drizzle', '🌧️'],
+  61: ['Light rain', '🌦️'], 63: ['Rain', '🌧️'], 65: ['Heavy rain', '🌧️'],
+  66: ['Freezing rain', '🌧️'], 67: ['Freezing rain', '🌧️'],
+  71: ['Light snow', '🌨️'], 73: ['Snow', '🌨️'], 75: ['Heavy snow', '❄️'], 77: ['Snow grains', '🌨️'],
+  80: ['Showers', '🌦️'], 81: ['Showers', '🌧️'], 82: ['Violent showers', '⛈️'],
+  85: ['Snow showers', '🌨️'], 86: ['Snow showers', '❄️'],
+  95: ['Thunderstorm', '⛈️'], 96: ['Thunderstorm', '⛈️'], 99: ['Severe thunderstorm', '⛈️'],
+};
+const STATES = {
+  AL: 'Alabama', AK: 'Alaska', AZ: 'Arizona', AR: 'Arkansas', CA: 'California', CO: 'Colorado', CT: 'Connecticut',
+  DE: 'Delaware', DC: 'District of Columbia', FL: 'Florida', GA: 'Georgia', HI: 'Hawaii', ID: 'Idaho', IL: 'Illinois',
+  IN: 'Indiana', IA: 'Iowa', KS: 'Kansas', KY: 'Kentucky', LA: 'Louisiana', ME: 'Maine', MD: 'Maryland',
+  MA: 'Massachusetts', MI: 'Michigan', MN: 'Minnesota', MS: 'Mississippi', MO: 'Missouri', MT: 'Montana',
+  NE: 'Nebraska', NV: 'Nevada', NH: 'New Hampshire', NJ: 'New Jersey', NM: 'New Mexico', NY: 'New York',
+  NC: 'North Carolina', ND: 'North Dakota', OH: 'Ohio', OK: 'Oklahoma', OR: 'Oregon', PA: 'Pennsylvania',
+  RI: 'Rhode Island', SC: 'South Carolina', SD: 'South Dakota', TN: 'Tennessee', TX: 'Texas', UT: 'Utah',
+  VT: 'Vermont', VA: 'Virginia', WA: 'Washington', WV: 'West Virginia', WI: 'Wisconsin', WY: 'Wyoming',
+};
+
+// Open-Meteo's geocoder only matches a bare place name ("Waldorf, MD" finds
+// nothing), so search the name and pick the result in the given state.
+async function geocode(place) {
+  const [name, region = ''] = place.split(',').map((s) => s.trim());
+  const d = JSON.parse(await fetchText(`https://geocoding-api.open-meteo.com/v1/search?count=10&name=${encodeURIComponent(name)}`));
+  const results = d.results || [];
+  if (!results.length) throw new Error(`place not found: ${place}`);
+  const want = (STATES[region.toUpperCase()] || region).toLowerCase();
+  const g = (want && results.find((r) => String(r.admin1 || '').toLowerCase() === want || String(r.country || '').toLowerCase() === want)) || results[0];
+  return { label: [g.name, g.admin1].filter(Boolean).join(', '), lat: g.latitude, lon: g.longitude };
+}
+
+async function weatherSection() {
+  const place = String((await getSetting('weather_place')) || DEFAULT_PLACE).trim() || DEFAULT_PLACE;
+  const g = await geocode(place);
+  const d = JSON.parse(await fetchText(
+    `https://api.open-meteo.com/v1/forecast?latitude=${g.lat}&longitude=${g.lon}`
+    + '&hourly=temperature_2m,apparent_temperature,weather_code,precipitation_probability,wind_speed_10m'
+    + '&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max,sunrise,sunset'
+    + `&temperature_unit=fahrenheit&wind_speed_unit=mph&timezone=${encodeURIComponent(TZ)}&forecast_days=1`,
+  ));
+  const h = d.hourly || {};
+  const day = d.daily || {};
+  const clock = (iso) => new Date(`${iso}:00Z`).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'UTC' });
+  const lines = [];
+  (h.time || []).forEach((t, i) => {
+    const hr = +t.slice(11, 13);
+    if (hr < 6) return; // brief lands at 6 — start there, run to 11 PM
+    const [desc, icon] = WMO[h.weather_code[i]] || ['—', '🌡️'];
+    const label = new Date(`${t}:00Z`).toLocaleTimeString('en-US', { hour: 'numeric', timeZone: 'UTC' }).padStart(5);
+    const rain = h.precipitation_probability[i];
+    lines.push(`${label}  ${icon} ${Math.round(h.temperature_2m[i])}° (feels ${Math.round(h.apparent_temperature[i])}°) ${desc}${rain ? ` · ${rain}% rain` : ''} · ${Math.round(h.wind_speed_10m[i])} mph`);
+  });
+  const hi = Math.round((day.temperature_2m_max || [])[0]);
+  const lo = Math.round((day.temperature_2m_min || [])[0]);
+  const rainMax = (day.precipitation_probability_max || [])[0];
+  const sun = day.sunrise && day.sunset ? ` · ☀ ${clock(day.sunrise[0])} – ${clock(day.sunset[0])}` : '';
+  return `🌦 WEATHER — ${g.label}\nHigh ${hi}° / Low ${lo}°${rainMax != null ? ` · rain up to ${rainMax}%` : ''}${sun}\n${lines.join('\n')}`;
+}
+
+// --- Google: today's calendar + unread mail ---
+const stripIds = (s) => String(s).replace(/\s*\[id:[^\]]*\]/g, '');
+
+async function calendarSection(google) {
+  const out = await google.calendarList({ startISO: todayET(), days: 1 });
+  const body = stripIds(out).replace(/^Calendar[^\n]*\n?/, '').trim();
+  return `📅 CALENDAR — TODAY\n${body && !/nothing scheduled/i.test(out) ? body : 'Nothing on the calendar today.'}`;
+}
+
+async function emailSection(google) {
+  const out = await google.gmailList({ q: 'is:unread in:inbox newer_than:1d', max: 10 });
+  if (/no unread|nothing matches/i.test(out)) return '📧 EMAIL\nNo new unread email since yesterday morning.';
+  const body = stripIds(out).replace(/^Gmail[^\n]*\n?/, '').trim();
+  return `📧 EMAIL — unread, last 24h\n${body}`;
+}
+
+// --- News ---
+const decode = (s) => String(s)
+  .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
+  .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+  .replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&#(\d+);/g, (_, n) => String.fromCharCode(+n))
+  .trim();
+
+function rssTitles(xml, max) {
+  const out = [];
+  for (const m of xml.matchAll(/<item\b[\s\S]*?<title>([\s\S]*?)<\/title>/g)) {
+    const t = decode(m[1]);
+    if (t && !out.includes(t)) out.push(t);
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
+async function foxDmv() {
+  const titles = rssTitles(await fetchText('https://www.fox5dc.com/rss/category/news'), 6);
+  if (!titles.length) throw new Error('feed was empty');
+  return titles.map((t) => `• ${t}`).join('\n');
+}
+
+// AP and Ground News have no public feed — a live web-search pull per desk.
+async function headlines(desc) {
+  const { claudeText, WEB_SEARCH_TOOL } = require('./llm');
+  const out = await claudeText(
+    'You pull current headlines for a morning news brief. Search the live web. Reply with ONLY 5 bullet lines, each "• Headline — one short sentence of context". No intro, no outro, no links, no citations. If you cannot find that outlet\'s current stories, reply with exactly: UNAVAILABLE',
+    `Today is ${new Date().toLocaleDateString('en-US', { timeZone: TZ, weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}. The top 5 stories right now on ${desc}.`,
+    { maxTokens: 700, tools: WEB_SEARCH_TOOL },
+  );
+  const lines = String(out || '').split('\n').map((l) => l.trim()).filter((l) => /^[•\-*]/.test(l)).map((l) => `• ${l.replace(/^[•\-*]\s*/, '')}`);
+  if (!lines.length) throw new Error('no headlines found');
+  return lines.slice(0, 5).join('\n');
+}
+
+const NEWS_DESKS = [
+  ['AP — World', () => headlines('AP News, World News section (apnews.com/world-news)')],
+  ['AP — U.S.', () => headlines('AP News, U.S. News section (apnews.com/us-news)')],
+  ['Ground News — World', () => headlines('Ground News (ground.news), top World stories')],
+  ['Ground News — U.S.', () => headlines('Ground News (ground.news), top U.S. stories')],
+  ['FOX 5 DC — DMV', foxDmv],
+];
+
+async function newsSection() {
+  const parts = await Promise.all(NEWS_DESKS.map(async ([label, fn]) => {
+    try { return `${label}\n${await fn()}`; }
+    catch (e) { return `${label}\n(unavailable — ${e.message})`; }
+  }));
+  return `📰 NEWS\n\n${parts.join('\n\n')}`;
+}
+
+// --- HUD: Word / Verse / Fact ---
+// The HUD stores the word + definition but no example, so the "used in a
+// sentence" line is generated once per word and kept in app_settings
+// (`word_example`, {word, sentence}). Kept out of hud_state so the app's own
+// HUD row isn't carrying a field it doesn't know.
+async function wordExample(word, def) {
+  try {
+    const c = JSON.parse((await getSetting('word_example')) || '{}');
+    if (c.word === word && c.sentence) return c.sentence;
+  } catch {}
+  const out = await require('./llm').claudeText(
+    'Write ONE natural example sentence using the given word correctly, the way a sharp businessman might actually say it. Reply with only the sentence.',
+    `Word: ${word}${def ? `\nMeaning: ${def}` : ''}`,
+    { maxTokens: 120 },
+  );
+  const sentence = String(out || '').trim().replace(/^["“]|["”]$/g, '');
+  if (sentence) await setSetting('word_example', JSON.stringify({ word, sentence }));
+  return sentence;
+}
+
+async function wordBlock(hud, heading) {
+  if (!hud.word_of_day) return `${heading}\n(not set)`;
+  const sentence = await wordExample(hud.word_of_day, hud.word_def)
+    .catch((e) => { console.error('word example failed:', e.message); return ''; });
+  return `${heading}\n${hud.word_of_day}${hud.word_phonetic ? ` ${hud.word_phonetic}` : ''}`
+    + `${hud.word_def ? `\n${hud.word_def}` : ''}`
+    + `${sentence ? `\n\nIn a sentence: "${sentence}"` : ''}`;
+}
+
+async function freshHud() {
+  // Make sure today's are generated (no-op if the 05:10 cron already ran).
+  try { await require('./dailyBriefing').runDailyBriefing(); } catch (e) { console.error('daily HUD refresh failed:', e.message); }
+  return (await syncedRow('hud_state', 'singleton')) || {};
+}
+
+async function hudSection() {
+  const hud = await freshHud();
+  const word = await wordBlock(hud, '📖 WORD OF THE DAY');
+  const verse = hud.verse_of_day
+    ? `✝️ VERSE OF THE DAY\n"${hud.verse_of_day}"${hud.verse_ref ? `\n— ${hud.verse_ref}` : ''}`
+    : '✝️ VERSE OF THE DAY\n(not set)';
+  const fact = `💡 FACT OF THE DAY\n${hud.fact_of_day || '(not set)'}`;
+  return [word, verse, fact].join('\n\n');
+}
+
+async function section(label, fn) {
+  try { return await fn(); }
+  catch (e) {
+    console.error(`morning brief ${label} failed:`, e.message);
+    return `${label}\n(unavailable — ${e.message})`;
+  }
+}
+
+async function buildBrief() {
+  const google = require('./google');
+  const linked = await google.googleLinked().catch(() => false);
+  const noGoogle = (label) => async () => `${label}\n(Google isn't linked on the server — connect it in the app's Settings.)`;
+  const dateLine = new Date().toLocaleDateString('en-US', { timeZone: TZ, weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+  const [weather, cal, mail, news, hud] = await Promise.all([
+    section('🌦 WEATHER', weatherSection),
+    section('📅 CALENDAR — TODAY', linked ? () => calendarSection(google) : noGoogle('📅 CALENDAR — TODAY')),
+    section('📧 EMAIL', linked ? () => emailSection(google) : noGoogle('📧 EMAIL')),
+    section('📰 NEWS', newsSection),
+    section('📖 WORD / VERSE / FACT', hudSection),
+  ]);
+  return [`Good morning, Mr. Burrus. Here's your brief.\n\n🗓 ${dateLine}`, weather, cal, mail, news, hud].join('\n\n━━━━━━━━━━\n\n');
+}
+
+// Build and send. `force` skips the once-a-day guard (manual /brief).
+async function runMorningBrief({ force = false } = {}) {
+  const telegram = require('./telegram');
+  const ara = telegram.botFor('ara');
+  if (!ara || !ara.isConfigured()) return { skipped: "A.R.A.'s Telegram bot isn't configured" };
+  const today = todayET();
+  if (!force) {
+    if ((await getSetting('morning_brief_date')) === today) return { skipped: 'already sent today' };
+    // Claim the day before the slow build so an overlapping run can't double it.
+    await setSetting('morning_brief_date', today);
+  }
+  const text = await buildBrief();
+  await ara.sendMessage(telegram.OWNER_ID, text);
+  // Into A.R.A.'s Telegram history, so a reply ("tell me more about the 2nd AP
+  // story") has the brief in context.
+  await query('INSERT INTO tg_messages (persona, role, content, ts) VALUES ($1, $2, $3, $4)', ['ara', 'assistant', text, Date.now()])
+    .catch((e) => console.error('morning brief history save failed:', e.message));
+  return { sent: true, today, chars: text.length };
+}
+
+// Word-of-the-day reminder through the day (word, definition, a sentence).
+async function runWordReminder() {
+  const telegram = require('./telegram');
+  const ara = telegram.botFor('ara');
+  if (!ara || !ara.isConfigured()) return { skipped: "A.R.A.'s Telegram bot isn't configured" };
+  const hud = await freshHud();
+  if (!hud.word_of_day) return { skipped: 'no word of the day' };
+  const text = await wordBlock(hud, '📖 Word of the day reminder, Mr. Burrus — work it in today.');
+  await ara.sendMessage(telegram.OWNER_ID, text);
+  await query('INSERT INTO tg_messages (persona, role, content, ts) VALUES ($1, $2, $3, $4)', ['ara', 'assistant', text, Date.now()])
+    .catch(() => {});
+  return { sent: true, word: hud.word_of_day };
+}
+
+// On boot: if the server was down at 6 and it's still morning, send the missed one.
+async function catchUp() {
+  const h = hourET();
+  if (h < 6 || h >= 11) return { skipped: 'outside catch-up window' };
+  return runMorningBrief();
+}
+
+module.exports = { runMorningBrief, runWordReminder, catchUp, buildBrief };

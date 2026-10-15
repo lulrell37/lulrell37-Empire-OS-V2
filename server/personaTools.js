@@ -187,6 +187,102 @@ async function propose(persona, kind, label, detail, payload) {
   return { confirm: { id, label, detail } };
 }
 
+// ---------------------------------------------------------------------------
+// Notes — one create / edit / append path for every persona, every tag.
+// Drive first; when Google is down, the app's own synced `notes` table (edited
+// in place by title, never duplicated). Every result says where it landed, so a
+// receipt can never claim Drive when it was the app.
+// ---------------------------------------------------------------------------
+
+// A Drive file id is one long run of [A-Za-z0-9_-]; a title has spaces or is short.
+const looksLikeFileId = (s) => /^[A-Za-z0-9_-]{20,}$/.test(String(s || '').trim());
+
+async function appNote(ref) {
+  const q = String(ref || '').trim().toLowerCase();
+  if (!q) return null;
+  const rows = await syncedRows('notes');
+  return rows.find((n) => String(n.title || '').trim().toLowerCase() === q)
+    || rows.find((n) => String(n.title || '').toLowerCase().includes(q))
+    || null;
+}
+
+async function saveAppNote(title, content, persona) {
+  const now = Date.now();
+  const hit = await appNote(title);
+  if (hit && String(hit.title || '').trim().toLowerCase() === title.trim().toLowerCase()) {
+    const { sync_id: id, ...data } = hit;
+    await upsertSyncRow('notes', id, { ...data, content, updated_at: now });
+    return false;
+  }
+  await upsertSyncRow('notes', newId(), { title, content, persona, created_at: now, updated_at: now });
+  return true;
+}
+
+// Create-or-overwrite by title. -> { ok } or { warn } (landed in app notes).
+async function saveNote(title, content, persona) {
+  const t = String(title || '').trim();
+  if (!t) return { warn: 'a note needs a title' };
+  try {
+    const r = await g.saveDriveNote(t, content || '');
+    return { ok: `Drive note ${r.created ? 'created' : 'updated'}: ${r.name}` };
+  } catch (e) {
+    const created = await saveAppNote(t, content || '', persona);
+    return { warn: `"${t}" is NOT in Drive (${e.message}) — ${created ? 'created' : 'updated'} in the app's Notes instead` };
+  }
+}
+
+// Find a note by Drive file id or by title -> { kind: 'drive', file } | { kind: 'app', row } | null.
+async function findNote(ref) {
+  const r = String(ref || '').trim();
+  if (!r) return null;
+  try {
+    if (looksLikeFileId(r)) return { kind: 'drive', file: await g.driveFile(r) };
+    const file = await g.driveFindByName(r);
+    if (file) return { kind: 'drive', file };
+  } catch { /* Drive down — try the app's notes */ }
+  const row = await appNote(r);
+  return row ? { kind: 'app', row } : null;
+}
+
+// Replace a note's whole content. Unknown title -> created, so an "edit" of a
+// note that doesn't exist yet still lands somewhere instead of vanishing.
+async function editNote(ref, content, persona) {
+  const hit = await findNote(ref);
+  if (!hit) {
+    if (looksLikeFileId(ref)) return { warn: `no note with id ${ref}` };
+    const r = await saveNote(ref, content, persona);
+    return r.ok ? { ok: `${r.ok} (there was no note named "${ref}", so it's new)` } : r;
+  }
+  if (hit.kind === 'drive') {
+    await g.driveUpdate({ fileId: hit.file.id, content: content || '' });
+    return { ok: `Drive note updated: ${hit.file.name || hit.file.id}` };
+  }
+  const { sync_id: id, ...data } = hit.row;
+  await upsertSyncRow('notes', id, { ...data, content: content || '', updated_at: Date.now() });
+  return { ok: `app note updated: ${data.title}` };
+}
+
+// Add text to the end of a note (created if it doesn't exist).
+async function appendNote(ref, text, persona) {
+  const add = String(text || '').trim();
+  if (!add) return { warn: 'APPEND_NOTE needs text to add' };
+  const hit = await findNote(ref);
+  if (!hit) {
+    const r = await saveNote(ref, add, persona);
+    return r.ok ? { ok: `${r.ok} (new — there was no note named "${ref}" to add to)` } : r;
+  }
+  if (hit.kind === 'drive') {
+    const { file } = hit;
+    const cur = (await g.driveRawText(file)).replace(/\s+$/, '');
+    await g.driveUpdate({ fileId: file.id, content: cur ? `${cur}\n\n${add}` : add });
+    return { ok: `added to Drive note: ${file.name || file.id}` };
+  }
+  const { sync_id: id, ...data } = hit.row;
+  const cur = String(data.content || '').replace(/\s+$/, '');
+  await upsertSyncRow('notes', id, { ...data, content: cur ? `${cur}\n\n${add}` : add, updated_at: Date.now() });
+  return { ok: `added to app note: ${data.title}` };
+}
+
 async function writeTag({ name, arg }, persona) {
   const p = parts(arg);
   const now = Date.now();
@@ -195,14 +291,16 @@ async function writeTag({ name, arg }, persona) {
     case 'CREATE_EVENT':
       if (!p[0] || !p[1]) return { warn: 'CREATE_EVENT needs a title and a start time' };
       return { ok: await g.calendarCreate({ title: p[0], startISO: p[1], minutes: parseInt(p[2], 10) || 60 }) };
-    case 'CREATE_NOTE': {
+    case 'SAVE_NOTE':
+    case 'CREATE_NOTE':
       if (!p[0]) return null;
-      const r = await g.saveDriveNote(p[0], rest(arg, 1));
-      return { ok: `Drive note ${r.created ? 'created' : 'updated'}: ${r.name}` };
-    }
+      return saveNote(p[0], rest(arg, 1), persona);
     case 'EDIT_NOTE':
       if (!p[0]) return null;
-      return { ok: await g.driveUpdate({ fileId: p[0], content: rest(arg, 1) }) };
+      return editNote(p[0], rest(arg, 1), persona);
+    case 'APPEND_NOTE':
+      if (!p[0]) return null;
+      return appendNote(p[0], rest(arg, 1), persona);
     case 'CREATE_SHEET':
       if (!p[0]) return null;
       return {
@@ -216,6 +314,9 @@ async function writeTag({ name, arg }, persona) {
       if (!p[0] || !p[1]) return null;
       await upsertSyncRow('important_dates', newId(), { label: p[0], date: p[1], note: '', created_at: now, updated_at: now });
       return { ok: `reminder saved: ${p[0]} — ${p[1]}` };
+    case 'REMIND_ME':
+      if (!p[0] || !p[1]) return { warn: 'REMIND_ME needs what | YYYY-MM-DD HH:MM' };
+      return require('./reminders').addReminder(p[0], p[1], persona);
     case 'SEND_EMAIL': {
       const [to, subject] = p;
       const body = rest(arg, 2);
@@ -467,4 +568,4 @@ async function cancelPending(id) {
 // Tags readTag / writeTag own, for the caller's routing.
 const READ_TAGS = new Set(['READ_EMAIL', 'READ_EMAIL_ID', 'READ_CALENDAR', 'LIST_NOTES', 'SEARCH_DRIVE', 'READ_FILE_ID', 'READ_NOTE', 'READ_TASKS', 'LEADS', 'LEAD_LIST', 'EXPENSE_SUMMARY']);
 
-module.exports = { readTag, writeTag, runPending, cancelPending, READ_TAGS, PROJECT_ROLES, activeProject, deleteSyncRow };
+module.exports = { readTag, writeTag, saveNote, editNote, appendNote, runPending, cancelPending, READ_TAGS, PROJECT_ROLES, activeProject, deleteSyncRow };

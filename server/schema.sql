@@ -100,3 +100,16 @@ CREATE TABLE IF NOT EXISTS tg_pending (
   created_at bigint NOT NULL,
   resolved   text                    -- null while waiting; 'done' | 'cancelled' | 'failed'
 );
+
+-- Timed reminders A.R.A. sets from Telegram ([REMIND_ME: what | YYYY-MM-DD HH:MM]).
+-- The reminder cron pushes each one to the phone (and A.R.A.'s Telegram bot)
+-- once due_at passes, then stamps sent_at.
+CREATE TABLE IF NOT EXISTS reminders (
+  id         text   PRIMARY KEY,
+  persona    text   NOT NULL DEFAULT 'ara',
+  text       text   NOT NULL,
+  due_at     bigint NOT NULL,
+  created_at bigint NOT NULL,
+  sent_at    bigint
+);
+CREATE INDEX IF NOT EXISTS reminders_due_idx ON reminders (due_at) WHERE sent_at IS NULL;
