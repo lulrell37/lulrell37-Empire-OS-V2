@@ -123,7 +123,7 @@ async function grokVoiceUri(text,signal){
     signal?.addEventListener?.('abort',()=>{clearTimeout(timer);end(null);});
     ws.onopen=()=>ws.send(JSON.stringify({type:'session.update',session:{
       voice:'ara',turn_detection:null,
-      instructions:'You are A.R.A. speaking out loud. Say the text you are given in your own natural voice — same words and meaning, nothing added.',
+      instructions:'You are A.R.A. speaking out loud. Say the text you are given in your own natural voice — same words and meaning, nothing added — with real feeling, the way you would say it to someone you care about, never a flat read.',
       audio:{input:{format:{type:'audio/pcm',rate:24000}},output:{format:{type:'audio/pcm',rate:24000}}},
     }}));
     ws.onerror=()=>{clearTimeout(timer);end(null);};

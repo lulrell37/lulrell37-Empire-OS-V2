@@ -17,6 +17,7 @@ import{autoTraderBusy}from '../services/autoTrader';
 import{autoScoutBusy}from '../services/autoScout';
 import{autoAtlasBusy}from '../services/autoAtlas';
 import{handleCommands,stripCommands}from '../services/commandHandler';
+import{cuedFor}from '../services/voiceCues';
 import{reportIssue,clearIssueKey,notify}from '../services/report';
 import{googleReadInjections,googleWriteCommands}from '../services/googleCommands';
 import{scanTags}from '../services/noteCommands';
@@ -643,14 +644,15 @@ export default function CommandScreen({navigation,route}){
     let base=getPersona('ara').system;
     try{base=(await getCustomPrompt('ara'))||base;}catch{}
     const araInstructions=base
-      +`\n\n[VOICE MODE: You are speaking out loud — everything you say is heard, not read. Below is the recent conversation, what Mr. Burrus just said, and the reply you are giving him. Deliver that reply in your own natural spoken voice: same meaning, same stance, your phrasing. Stay strictly on that reply — do not answer with anything new, do not add topics or information, do not read it back word for word. Keep it conversational and tight.]`;
+      +`\n\n[VOICE MODE: You are speaking out loud — everything you say is heard, not read. Below is the recent conversation, what Mr. Burrus just said, and the reply you are giving him. Deliver that reply in your own natural spoken voice: same meaning, same stance, your phrasing. Stay strictly on that reply — do not answer with anything new, do not add topics or information, do not read it back word for word. Keep it conversational and tight.]`
+      +`\n\n[DELIVERY: say it with real feeling, like you're talking to someone you care about — never like you're reading it off a page. Let your voice move: warmth, a smile you can hear, excitement when it's good news, a softer, slower tone when it's heavy, a real laugh or sigh where it fits. Vary your pace and pitch; lean on the words that matter. Lowercase cues in square brackets ([laughs], [sighs], [softly]) are stage directions — perform them, never say the word.]`;
     const userText=(ctx?.userText||'').trim();
     const turns=(ctx?.turns||[]).filter(t=>t&&t.content&&t.content!==text&&t.content!==userText).slice(-6);
     const convoBits=turns.map(t=>`${t.role==='assistant'?'A.R.A.':'Mr. Burrus'}: ${String(t.content).slice(0,1500)}`).join('\n');
     const voicePrompt=
       (convoBits?`Recent conversation:\n${convoBits}\n\n`:'')
       +(userText?`Mr. Burrus just said: "${userText}"\n\n`:'')
-      +`Deliver this reply out loud now, in your own spoken voice — same meaning and stance, your phrasing, on this and nothing else:\n"${text}"`;
+      +`Deliver this reply out loud now, in your own spoken voice — same meaning and stance, your phrasing, on this and nothing else:\n"${cuedFor(text)}"`;
     return new Promise((resolve,reject)=>{
       const ws=new WebSocket(
         'wss://api.x.ai/v1/realtime?model=grok-voice-latest',
