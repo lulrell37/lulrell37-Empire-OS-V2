@@ -12,7 +12,7 @@ const ffmpegPath = require('ffmpeg-static');
 const { synthesizeAraVoice } = require('./araVoice');
 const { personaVoiceId } = require('./personas');
 
-const { stripCues } = require('./voiceCues');
+const { isFlat, stripCues } = require('./voiceCues');
 
 // Voice ladder, same as the app's textToSpeech: ElevenLabs' expressive real-time
 // v4 first — it performs the [laughs]/[sighs] cues personas write and runs at
@@ -23,6 +23,7 @@ const EL_LADDER = [
   { model: 'eleven_v4_turbo', cues: true, settings: { stability: 0.3, similarity_boost: 0.75 } },
   { model: 'eleven_flash_v2_5', cues: false, settings: { stability: 0.35, similarity_boost: 0.8, style: 0.4, use_speaker_boost: true } },
 ];
+const FLAT_SETTINGS = { stability: 0.8, similarity_boost: 0.8, style: 0, use_speaker_boost: true }; // isFlat personas: even, no cues
 const elRejected = new Set();
 
 // The app's voice-speed slider (app_settings `voice_speed`, synced) -> ffmpeg
@@ -55,10 +56,11 @@ async function toOgg(inputBuffer) {
   });
 }
 
-async function elevenLabsOgg(voiceId, text) {
+async function elevenLabsOgg(voiceId, text, { flat = false } = {}) {
   const key = process.env.ELEVENLABS_API_KEY;
   if (!key || !voiceId) return null;
-  const tiers = EL_LADDER.filter((t, i) => i === EL_LADDER.length - 1 || !elRejected.has(t.model));
+  const tiers = EL_LADDER.filter((t, i) => i === EL_LADDER.length - 1 || !elRejected.has(t.model))
+    .map((t) => (flat ? { ...t, cues: false, settings: FLAT_SETTINGS } : t));
   for (const tier of tiers) {
     const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
       method: 'POST',
@@ -71,7 +73,7 @@ async function elevenLabsOgg(voiceId, text) {
     });
     if (!res.ok) {
       const detail = (await res.text()).slice(0, 160);
-      if ((res.status === 400 || res.status === 422) && tier !== tiers[tiers.length - 1]) {
+      if ((res.status === 400 || res.status === 422) && tier.model !== tiers[tiers.length - 1].model) {
         console.warn(`elevenlabs: ${tier.model} rejected (${res.status}: ${detail}) — falling back`);
         elRejected.add(tier.model);
         continue;
@@ -91,7 +93,7 @@ async function synthesizePersonaVoice(personaId, replyText, { userText = '' } = 
   if (!text) return null;
   if (personaId === 'ara') return synthesizeAraVoice(text, { userText });
   try {
-    return await elevenLabsOgg(personaVoiceId(personaId), text);
+    return await elevenLabsOgg(personaVoiceId(personaId), text, { flat: isFlat(personaId) });
   } catch (e) {
     console.error(`${personaId} voice failed:`, e.message);
     return null;

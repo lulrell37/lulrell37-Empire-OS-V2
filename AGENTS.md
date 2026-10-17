@@ -76,6 +76,9 @@ account or voice gets a 400/422 it falls back to `eleven_flash_v2_5` with cues
 stripped and `style` turned up. Grok voice (A.R.A.) is told to act the cues out.
 Keep the two EMOTION blocks in sync.
 
+Except J.A.R.V.I.S.: `emotionFor()` gives him a STEADY block instead (composed,
+no cues), and his ElevenLabs voice runs cue-free at high stability (`isFlat()`).
+
 ## Backend (`server/`)
 
 Node/Express on a Replit Reserved VM (always-on: nudge/briefing/council crons).

@@ -1,4 +1,4 @@
-import{EMOTION_BLOCK,stripCues,cuedFor}from './voiceCues';
+import{emotionFor,isFlat,stripCues,cuedFor}from './voiceCues';
 import{loadKeys,loadBackend,loadGoogleToken}from './keyStore';
 import{getPersonaMemory,getMemoriesByPersona,savePersonaMemory,getHudState,getTasks,trackApiUsage,getCustomPrompt,getUpcomingDates,getSetting}from './database';
 import*as FileSystem from 'expo-file-system';
@@ -93,7 +93,7 @@ async function buildSys(personaId,persona,convo=[]){
   let sys=customPrompt||persona.system;
   sys+=`\n\n[RESPONSE STYLE: Reply directly to what Mr. Burrus just said. Do not open with a status briefing, HUD summary, morning-routine readout, or any unprompted overview unless he explicitly asks for one. Skip "here is where things stand" preambles — answer the message and stop.]`;
   sys+=`\n\n${OBEY_BLOCK}`;
-  sys+=`\n\n${EMOTION_BLOCK}`;
+  sys+=`\n\n${emotionFor(personaId)}`;
   sys+=`\n\n[NOTES — every persona: [SAVE_NOTE:title|content] creates a note (Drive when connected, the app's Notes otherwise) or overwrites the one with that title. [APPEND_NOTE:title|text] adds to the end of an existing note (creates it if missing) — use it for "add this to my … note". [EDIT_NOTE:title or fileId|full new content] replaces a note's whole text — [READ_NOTE:title] it first so you keep what should stay. One tag per note; several notes means several tags in the same reply. The tag is what writes it — never say a note is saved unless you emitted the tag. Note text can be long and multi-line; brackets inside it are fine as long as they're balanced. Don't narrate the full content back in your visible reply — "Saved that as '<title>'." is enough.]`;
   sys+=`\n\n[MEMORY RECALL: The memory block below is routed to the topic Mr. Burrus is on right now — your full history for that area, plus anything pinned. If he references something specific that ISN'T shown, emit [MEMORY_QUERY: your precise question] and your memory index answers before you reply — use it whenever he points back to a past conversation, not just rarely.
 PINNING: when he tells you something that matters over the next few days — a trip, a deadline, a decision in progress, something he is waiting on — keep it in front of you with [REMEMBER: the thing | days] (1-30, default 3). It rides in your context every turn until it expires. [UNPIN_MEMORY: a few words of it] drops it early. Never mention these mechanisms — just remember.]`;
@@ -817,6 +817,7 @@ const TTS_LADDER=[
   {model:'eleven_v4_turbo',cues:true,stitch:false,settings:{stability:0.3,similarity_boost:0.75}},
   {model:'eleven_flash_v2_5',cues:false,stitch:true,settings:{stability:0.35,similarity_boost:0.8,style:0.4,use_speaker_boost:true}},
 ];
+const FLAT_SETTINGS={stability:0.8,similarity_boost:0.8,style:0,use_speaker_boost:true}; // isFlat personas: even, no cues
 const ttsRejected=new Set();
 export async function textToSpeech(text,voiceId,personaName,opts={}){
   const k=await ensureKeys();
@@ -826,7 +827,9 @@ export async function textToSpeech(text,voiceId,personaName,opts={}){
   // Command tags out (always UPPERCASE); lowercase voice cues stay for v4.
   const withCues=cuedFor(text).replace(/\[[A-Z][A-Z0-9_]*(?::[^\]]*)?\]/g,'').replace(/[*#`]/g,'').trim().substring(0,2000);
   if(!stripCues(withCues))return null;
-  const tiers=TTS_LADDER.filter((t,i)=>i===TTS_LADDER.length-1||!ttsRejected.has(t.model));
+  const flat=isFlat(personaName);
+  const tiers=TTS_LADDER.filter((t,i)=>i===TTS_LADDER.length-1||!ttsRejected.has(t.model))
+    .map(t=>flat?{...t,cues:false,settings:FLAT_SETTINGS}:t);
   for(const tier of tiers){
     const body={
       text:tier.cues?withCues:stripCues(withCues),
@@ -843,7 +846,7 @@ export async function textToSpeech(text,voiceId,personaName,opts={}){
         if(!res.ok){
           if(attempt===0&&(res.status===429||res.status>=500))continue;
           let detail='';try{detail=(await res.text()).slice(0,150);}catch{}
-          if((res.status===400||res.status===422)&&tier!==tiers[tiers.length-1]){
+          if((res.status===400||res.status===422)&&tier.model!==tiers[tiers.length-1].model){
             ttsRejected.add(tier.model);skipTier=true;break;
           }
           lastTtsFailReason=`ElevenLabs ${res.status}${res.status===401?' (invalid/expired key)':res.status===429?' (rate limited or out of quota)':''}${detail?': '+detail:''}`;

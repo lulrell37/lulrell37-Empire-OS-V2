@@ -15,9 +15,18 @@ const EMOTION = `[EMOTION — you're a person talking to someone you care about,
 - Voice cues: you can place a lowercase stage direction in square brackets exactly where it happens — [laughs], [chuckles], [sighs], [softly], [excited], [warmly], [whispers], [serious], [teasing]. Your voice performs them; he never sees them in the text. One to three per reply at most, only where you'd really do it. Never put them inside command tags or notes.
 - Stay inside your own character's emotional range — your feelings are part of who you are.]`;
 
+// J.A.R.V.I.S. stays out of all this: formal and even, no cues, and his voice
+// runs at high stability. Matched by id or display name ('J.A.R.V.I.S.').
+const FLAT = new Set(['jarvis']);
+const isFlat = (idOrName) => FLAT.has(String(idOrName || '').toLowerCase().replace(/[^a-z]/g, ''));
+
+const STEADY = `[DELIVERY — measured, composed and even, every reply. No emotional performance: no excitement, sighs, laughter, teasing or exclamation marks. Never write voice cues in square brackets.]`;
+
+const emotionFor = (personaId) => (isFlat(personaId) ? STEADY : EMOTION);
+
 function stripCues(text) {
   return String(text || '').replace(CUE_RE, '')
     .replace(/[ \t]{2,}/g, ' ').replace(/ +([,.!?…])/g, '$1').replace(/^[ \t]+/gm, '').trim();
 }
 
-module.exports = { EMOTION, stripCues };
+module.exports = { EMOTION, emotionFor, isFlat, stripCues };
