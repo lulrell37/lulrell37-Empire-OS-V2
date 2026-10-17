@@ -79,6 +79,10 @@ Keep the two EMOTION blocks in sync.
 Except J.A.R.V.I.S.: `emotionFor()` gives him a STEADY block instead (composed,
 no cues), and his ElevenLabs voice runs cue-free at high stability (`isFlat()`).
 
+A.R.A.'s Grok voice gets `ARA_VOICE` (warm, soft, seductive) as the FIRST block of
+every Grok voice session: reply voicing in `CommandScreen.js`, GO LIVE, and Telegram
+(`server/araVoice.js`, its twin). Keep the two in sync.
+
 ## Backend (`server/`)
 
 Node/Express on a Replit Reserved VM (always-on: nudge/briefing/council crons).
