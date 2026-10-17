@@ -17,11 +17,12 @@ const { runPersonaTurn } = require('../personaRuntime');
 const { runPending, cancelPending } = require('../personaTools');
 const { transcribe } = require('../llm');
 const { synthesizePersonaVoice } = require('../personaVoice');
+const { describePhotos, describeVideo } = require('../vision');
 
 const r = express.Router();
 
 const GREETINGS = {
-  ara: "A.R.A. here, Mr. Burrus — same me, on Telegram now, away from the app. Type or send a voice note. Hand me a task, ask what's on your plate, say \"convene the council\". A few things still need the app open (the Lab, HUD panels, trades) and I'll tell you when.",
+  ara: "A.R.A. here, Mr. Burrus — same me, on Telegram now, away from the app. Type, send a voice note, or send me a photo or video. Hand me a task, ask what's on your plate, say \"convene the council\". A few things still need the app open (the Lab, HUD panels, trades) and I'll tell you when.",
   stephanie: "S.T.E.P.H.A.N.I.E. — your personal university, on Telegram now. Ask me anything you want to actually understand. I can page through the \"Learning Everything\" curriculum, save notes, and pull in S.A.G.E. for deep research.",
   haven: "H.A.V.E.N. here — doctor and wellness, on Telegram. Training, recovery, sleep, stress, nutrition. I read the Batman Protocol live from the HUD. Not for emergencies — if it's urgent, get real care.",
   jarvis: "J.A.R.V.I.S., sir — on Telegram, away from the app. Operations, execution, systems, the build pipeline. I can check build status and read the HUD; editing it and filing builds still needs the app.",
@@ -62,13 +63,82 @@ async function handleUpdate(personaId, bot, update) {
   if (!ins.rowCount) return;
 
   if (cb) return handleConfirmTap(personaId, bot, cb);
+  // An album arrives as one update per photo/video — gather them into one turn.
+  if (msg.media_group_id && mediaOf(msg)) return queueAlbum(personaId, bot, msg);
+  return handleMessages(personaId, bot, [msg]);
+}
 
+// What a message carries to look at: { kind: 'photo'|'video', file_id, mime, size }.
+function mediaOf(msg) {
+  if (msg.photo && msg.photo.length) {
+    const big = msg.photo[msg.photo.length - 1]; // sizes ascend; last is the original
+    return { kind: 'photo', file_id: big.file_id, mime: 'image/jpeg', size: big.file_size };
+  }
+  const vid = msg.video || msg.animation || msg.video_note;
+  if (vid) return { kind: 'video', file_id: vid.file_id, mime: vid.mime_type || 'video/mp4', size: vid.file_size };
+  const doc = msg.document; // sent "as a file" — uncompressed
+  if (doc && /^image\//.test(doc.mime_type || '')) return { kind: 'photo', file_id: doc.file_id, mime: doc.mime_type, size: doc.file_size };
+  if (doc && /^video\//.test(doc.mime_type || '')) return { kind: 'video', file_id: doc.file_id, mime: doc.mime_type, size: doc.file_size };
+  return null;
+}
+
+const albums = new Map(); // `${persona}:${media_group_id}` -> [msg]
+function queueAlbum(personaId, bot, msg) {
+  const key = `${personaId}:${msg.media_group_id}`;
+  if (albums.has(key)) { albums.get(key).push(msg); return; }
+  albums.set(key, [msg]);
+  setTimeout(() => {
+    const msgs = albums.get(key) || [msg];
+    albums.delete(key);
+    handleMessages(personaId, bot, msgs).catch((e) => console.error(`telegram ${personaId} album failed:`, e.message));
+  }, 2000);
+}
+
+// Telegram's Bot API only lets a bot download files up to 20 MB.
+const TG_MAX_DOWNLOAD = 20 * 1024 * 1024;
+
+// Look at the photos/videos in `msgs` and return the bracketed account that
+// rides into the turn (and history) ahead of his caption.
+async function seeMedia(bot, msgs) {
+  const items = msgs.map(mediaOf).filter(Boolean);
+  const caption = msgs.map((m) => (m.caption || '').trim()).filter(Boolean).join('\n');
+  if (items.some((it) => it.size > TG_MAX_DOWNLOAD)) {
+    throw new Error("that's over Telegram's 20 MB limit for bots — send a shorter clip, or a compressed one (not \"as a file\")");
+  }
+  const photos = items.filter((it) => it.kind === 'photo');
+  const videos = items.filter((it) => it.kind === 'video');
+  const parts = [];
+  if (photos.length) {
+    const imgs = [];
+    for (const it of photos) imgs.push({ mime: it.mime, data: await bot.downloadFile(it.file_id) });
+    const desc = await describePhotos(imgs, caption);
+    parts.push(`[He sent ${photos.length > 1 ? `${photos.length} photos` : 'a photo'} — what's in ${photos.length > 1 ? 'them' : 'it'} (you're seeing it through this description; treat it as having looked yourself):\n${desc}\n]`);
+  }
+  for (const [i, it] of videos.entries()) {
+    const desc = await describeVideo(await bot.downloadFile(it.file_id), it.mime, caption);
+    parts.push(`[He sent a video${videos.length > 1 ? ` (${i + 1} of ${videos.length})` : ''} — what's in it (you watched it through this description; treat it as having seen it yourself):\n${desc}\n]`);
+  }
+  return { seen: parts.join('\n\n'), caption };
+}
+
+async function handleMessages(personaId, bot, msgs) {
+  const msg = msgs[0];
   const chatId = msg.chat.id;
   const deliver = (t) => bot.sendMessage(chatId, t).catch((e) => console.error(`tg ${personaId} send:`, e.message));
 
-  const voice = msg.voice || msg.audio || msg.video_note;
+  const voice = msg.voice || msg.audio;
   let text = typeof msg.text === 'string' ? msg.text.trim() : '';
-  if (voice) {
+  if (msgs.some(mediaOf)) {
+    await bot.sendChatAction(chatId, msgs.some((m) => (mediaOf(m) || {}).kind === 'video') ? 'upload_video' : 'upload_photo');
+    try {
+      const { seen, caption } = await seeMedia(bot, msgs);
+      text = caption ? `${seen}\n\n${caption}` : `${seen}\n\n(no message with it — react to what he sent)`;
+    } catch (e) {
+      console.error(`tg ${personaId} vision:`, e.message);
+      await deliver(`Couldn't get a look at that: ${e.message}`);
+      return;
+    }
+  } else if (voice) {
     await bot.sendChatAction(chatId, 'typing');
     try {
       text = await transcribe(await bot.downloadFile(voice.file_id), 'voice.ogg');
@@ -81,7 +151,7 @@ async function handleUpdate(personaId, bot, update) {
   if (!text) return;
 
   if (text === '/start' || text === '/help') {
-    await deliver(GREETINGS[personaId] || `${(ROSTER[personaId] || {}).name || personaId} here, Mr. Burrus — on Telegram now. Type or send a voice note.`);
+    await deliver(GREETINGS[personaId] || `${(ROSTER[personaId] || {}).name || personaId} here, Mr. Burrus — on Telegram now. Type, send a voice note, or send a photo or video.`);
     return;
   }
 

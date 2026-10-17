@@ -310,7 +310,7 @@ const ARA_TOOLS = `[WHAT YOU CAN DO FROM HERE — emit the tag in your reply; th
 Everything in LIVE CONTEXT below is pulled fresh for every message — it IS the HUD; you're looking at it. Never tell him to open the app to check something already in front of you, and never say you "can't" do anything listed above — you can.
 
 NOT AVAILABLE over Telegram — ONLY these genuinely need the phone in hand. Say so plainly and offer the nearest thing you can do:
- opening an app on his phone or a webpage on it, the 3D Laboratory, detaching/docking HUD panels, the Canvas (charts, the notes/tasks board, analytics board), placing or closing trades (that's T.A.L.O.N.'s desk — relay to him), editing clips or watching a video, filing a build to GitHub.]`;
+ opening an app on his phone or a webpage on it, the 3D Laboratory, detaching/docking HUD panels, the Canvas (charts, the notes/tasks board, analytics board), placing or closing trades (that's T.A.L.O.N.'s desk — relay to him), editing clips (though you CAN see photos and videos he sends you right here), filing a build to GitHub.]`;
 
 // Extra per-persona tag lines folded into GENERIC_TOOLS.
 const PERSONA_EXTRA_TOOLS = {
