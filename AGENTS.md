@@ -63,6 +63,19 @@ before trusting it hands-free with speaker output.
 Toggled per-persona ("GO LIVE" in A.R.A.'s direct chat) — every other persona
 still uses the turn-based loop.
 
+## Emotion in every voice (`src/services/voiceCues.js`, `server/voiceCues.js`)
+
+Every persona prompt, app and Telegram, carries an EMOTION block telling them
+to talk like a person, not read a script. It also lets them write lowercase
+voice cues (`[laughs]`, `[sighs]`, `[softly]`). Command tags are always
+UPPERCASE, which is how the two are told apart. Cues are stripped from all
+displayed or saved text (`stripCommands` in the app calls `rememberCued`;
+`runPersonaTurn` on the server returns `text` plus `spoken`) but reach the
+voice. ElevenLabs runs on `eleven_v4_turbo`, which performs the cues. If the
+account or voice gets a 400/422 it falls back to `eleven_flash_v2_5` with cues
+stripped and `style` turned up. Grok voice (A.R.A.) is told to act the cues out.
+Keep the two EMOTION blocks in sync.
+
 ## Backend (`server/`)
 
 Node/Express on a Replit Reserved VM (always-on: nudge/briefing/council crons).

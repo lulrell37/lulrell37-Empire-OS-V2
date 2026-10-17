@@ -167,8 +167,8 @@ async function handleMessages(personaId, bot, msgs) {
   await bot.sendChatAction(chatId, 'record_voice');
   const keepTyping = setInterval(() => bot.sendChatAction(chatId, 'record_voice').catch(() => {}), 6000);
   try {
-    const { text: reply, footer, confirms } = await runPersonaTurn(personaId, text, deliver);
-    const ogg = await synthesizePersonaVoice(personaId, reply, { userText: text })
+    const { text: reply, spoken, footer, confirms } = await runPersonaTurn(personaId, text, deliver);
+    const ogg = await synthesizePersonaVoice(personaId, spoken || reply, { userText: text })
       .catch((e) => { console.error(`tg ${personaId} voice synth:`, e.message); return null; });
     if (ogg) await bot.sendVoice(chatId, ogg).catch((e) => console.error(`tg ${personaId} sendVoice:`, e.message));
     await deliver(footer ? `${reply}\n\n${footer}` : reply);

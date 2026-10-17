@@ -1,3 +1,4 @@
+import{EMOTION_BLOCK,stripCues,cuedFor}from './voiceCues';
 import{loadKeys,loadBackend,loadGoogleToken}from './keyStore';
 import{getPersonaMemory,getMemoriesByPersona,savePersonaMemory,getHudState,getTasks,trackApiUsage,getCustomPrompt,getUpcomingDates,getSetting}from './database';
 import*as FileSystem from 'expo-file-system';
@@ -92,6 +93,7 @@ async function buildSys(personaId,persona,convo=[]){
   let sys=customPrompt||persona.system;
   sys+=`\n\n[RESPONSE STYLE: Reply directly to what Mr. Burrus just said. Do not open with a status briefing, HUD summary, morning-routine readout, or any unprompted overview unless he explicitly asks for one. Skip "here is where things stand" preambles — answer the message and stop.]`;
   sys+=`\n\n${OBEY_BLOCK}`;
+  sys+=`\n\n${EMOTION_BLOCK}`;
   sys+=`\n\n[NOTES — every persona: [SAVE_NOTE:title|content] creates a note (Drive when connected, the app's Notes otherwise) or overwrites the one with that title. [APPEND_NOTE:title|text] adds to the end of an existing note (creates it if missing) — use it for "add this to my … note". [EDIT_NOTE:title or fileId|full new content] replaces a note's whole text — [READ_NOTE:title] it first so you keep what should stay. One tag per note; several notes means several tags in the same reply. The tag is what writes it — never say a note is saved unless you emitted the tag. Note text can be long and multi-line; brackets inside it are fine as long as they're balanced. Don't narrate the full content back in your visible reply — "Saved that as '<title>'." is enough.]`;
   sys+=`\n\n[MEMORY RECALL: The memory block below is routed to the topic Mr. Burrus is on right now — your full history for that area, plus anything pinned. If he references something specific that ISN'T shown, emit [MEMORY_QUERY: your precise question] and your memory index answers before you reply — use it whenever he points back to a past conversation, not just rarely.
 PINNING: when he tells you something that matters over the next few days — a trip, a deadline, a decision in progress, something he is waiting on — keep it in front of you with [REMEMBER: the thing | days] (1-30, default 3). It rides in your context every turn until it expires. [UNPIN_MEMORY: a few words of it] drops it early. Never mention these mechanisms — just remember.]`;
@@ -806,45 +808,64 @@ export async function deepResearchPoll(id){
 let lastTtsFailReason=null;
 export function getLastTtsFailReason(){return lastTtsFailReason;}
 
+// Voice ladder: ElevenLabs' expressive real-time v4 first — it performs the
+// [laughs]/[sighs] cues personas write (voiceCues.js) and runs at lower
+// stability for more emotional range. If the account or voice can't use it
+// (400/422), it's skipped for the session and flash takes over with the cues
+// stripped and style turned up, plus request stitching for the sentence pump.
+const TTS_LADDER=[
+  {model:'eleven_v4_turbo',cues:true,stitch:false,settings:{stability:0.3,similarity_boost:0.75}},
+  {model:'eleven_flash_v2_5',cues:false,stitch:true,settings:{stability:0.35,similarity_boost:0.8,style:0.4,use_speaker_boost:true}},
+];
+const ttsRejected=new Set();
 export async function textToSpeech(text,voiceId,personaName,opts={}){
   const k=await ensureKeys();
   const be=await loadBackend();
   if(!be&&!k?.elevenlabs){lastTtsFailReason='no ElevenLabs key set (Settings → API Keys → ELEVENLABS)';return null;}
   if(!voiceId){lastTtsFailReason='persona has no voice id configured';return null;}
-  const clean=text.replace(/\[[^\]]*\]/g,'').replace(/[*#`]/g,'').trim().substring(0,2000);
-  if(!clean)return null;
-  const body={
-    text:clean,
-    model_id:'eleven_flash_v2_5',
-    voice_settings:{stability:0.5,similarity_boost:0.8},
-  };
-  if(opts.previousText)body.previous_text=String(opts.previousText).slice(-500);
-  if(opts.nextText)body.next_text=String(opts.nextText).slice(0,500);
-  for(let attempt=0;attempt<2;attempt++){
-    try{
-      const{base,auth}=await aiRoute('elevenlabs',k?.elevenlabs,'ElevenLabs');
-      const res=await fetch(`${base}/v1/text-to-speech/${voiceId}`,{method:'POST',headers:{'Content-Type':'application/json',...auth},body:JSON.stringify(body),signal:opts.signal});
-      if(!res.ok){
-        if(attempt===0&&(res.status===429||res.status>=500))continue;
-        let detail='';try{detail=(await res.text()).slice(0,150);}catch{}
-        lastTtsFailReason=`ElevenLabs ${res.status}${res.status===401?' (invalid/expired key)':res.status===429?' (rate limited or out of quota)':''}${detail?': '+detail:''}`;
+  // Command tags out (always UPPERCASE); lowercase voice cues stay for v4.
+  const withCues=cuedFor(text).replace(/\[[A-Z][A-Z0-9_]*(?::[^\]]*)?\]/g,'').replace(/[*#`]/g,'').trim().substring(0,2000);
+  if(!stripCues(withCues))return null;
+  const tiers=TTS_LADDER.filter((t,i)=>i===TTS_LADDER.length-1||!ttsRejected.has(t.model));
+  for(const tier of tiers){
+    const body={
+      text:tier.cues?withCues:stripCues(withCues),
+      model_id:tier.model,
+      voice_settings:tier.settings,
+    };
+    if(tier.stitch&&opts.previousText)body.previous_text=stripCues(opts.previousText).slice(-500);
+    if(tier.stitch&&opts.nextText)body.next_text=stripCues(opts.nextText).slice(0,500);
+    let skipTier=false;
+    for(let attempt=0;attempt<2;attempt++){
+      try{
+        const{base,auth}=await aiRoute('elevenlabs',k?.elevenlabs,'ElevenLabs');
+        const res=await fetch(`${base}/v1/text-to-speech/${voiceId}`,{method:'POST',headers:{'Content-Type':'application/json',...auth},body:JSON.stringify(body),signal:opts.signal});
+        if(!res.ok){
+          if(attempt===0&&(res.status===429||res.status>=500))continue;
+          let detail='';try{detail=(await res.text()).slice(0,150);}catch{}
+          if((res.status===400||res.status===422)&&tier!==tiers[tiers.length-1]){
+            ttsRejected.add(tier.model);skipTier=true;break;
+          }
+          lastTtsFailReason=`ElevenLabs ${res.status}${res.status===401?' (invalid/expired key)':res.status===429?' (rate limited or out of quota)':''}${detail?': '+detail:''}`;
+          return null;
+        }
+        const arrayBuffer=await res.arrayBuffer();
+        const bytes=new Uint8Array(arrayBuffer);
+        let binary='';
+        for(let i=0;i<bytes.length;i+=8192)binary+=String.fromCharCode.apply(null,bytes.subarray(i,i+8192));
+        const base64=btoa(binary);
+        const uri=FileSystem.cacheDirectory+'tts_'+Date.now()+'_'+Math.random().toString(36).slice(2,7)+'.mp3';
+        await FileSystem.writeAsStringAsync(uri,base64,{encoding:FileSystem.EncodingType.Base64});
+        lastTtsFailReason=null;
+        return uri;
+      }catch(err){
+        if(err?.name==='AbortError')return null;
+        if(attempt===0)continue;
+        lastTtsFailReason='ElevenLabs request failed: '+(err?.message||err);
         return null;
       }
-      const arrayBuffer=await res.arrayBuffer();
-      const bytes=new Uint8Array(arrayBuffer);
-      let binary='';
-      for(let i=0;i<bytes.length;i+=8192)binary+=String.fromCharCode.apply(null,bytes.subarray(i,i+8192));
-      const base64=btoa(binary);
-      const uri=FileSystem.cacheDirectory+'tts_'+Date.now()+'_'+Math.random().toString(36).slice(2,7)+'.mp3';
-      await FileSystem.writeAsStringAsync(uri,base64,{encoding:FileSystem.EncodingType.Base64});
-      lastTtsFailReason=null;
-      return uri;
-    }catch(err){
-      if(err?.name==='AbortError')return null;
-      if(attempt===0)continue;
-      lastTtsFailReason='ElevenLabs request failed: '+(err?.message||err);
-      return null;
     }
+    if(!skipTier)return null;
   }
   return null;
 }

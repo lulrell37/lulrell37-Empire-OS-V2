@@ -12,7 +12,18 @@ const ffmpegPath = require('ffmpeg-static');
 const { synthesizeAraVoice } = require('./araVoice');
 const { personaVoiceId } = require('./personas');
 
-const EL_MODEL = 'eleven_turbo_v2_5';
+const { stripCues } = require('./voiceCues');
+
+// Voice ladder, same as the app's textToSpeech: ElevenLabs' expressive real-time
+// v4 first — it performs the [laughs]/[sighs] cues personas write and runs at
+// lower stability for more emotional range. If the account or voice can't use
+// it (400/422) it's skipped until restart and flash takes over, cues stripped,
+// style turned up.
+const EL_LADDER = [
+  { model: 'eleven_v4_turbo', cues: true, settings: { stability: 0.3, similarity_boost: 0.75 } },
+  { model: 'eleven_flash_v2_5', cues: false, settings: { stability: 0.35, similarity_boost: 0.8, style: 0.4, use_speaker_boost: true } },
+];
+const elRejected = new Set();
 
 // The app's voice-speed slider (app_settings `voice_speed`, synced) -> ffmpeg
 // args. atempo speeds speech up without raising the pitch.
@@ -47,15 +58,31 @@ async function toOgg(inputBuffer) {
 async function elevenLabsOgg(voiceId, text) {
   const key = process.env.ELEVENLABS_API_KEY;
   if (!key || !voiceId) return null;
-  const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
-    method: 'POST',
-    headers: { 'xi-api-key': key, 'content-type': 'application/json', accept: 'audio/mpeg' },
-    body: JSON.stringify({ text: String(text).slice(0, 4000), model_id: EL_MODEL }),
-  });
-  if (!res.ok) throw new Error(`elevenlabs ${res.status}: ${(await res.text()).slice(0, 160)}`);
-  const mp3 = Buffer.from(await res.arrayBuffer());
-  if (mp3.length < 1500) return null;
-  return toOgg(mp3);
+  const tiers = EL_LADDER.filter((t, i) => i === EL_LADDER.length - 1 || !elRejected.has(t.model));
+  for (const tier of tiers) {
+    const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
+      method: 'POST',
+      headers: { 'xi-api-key': key, 'content-type': 'application/json', accept: 'audio/mpeg' },
+      body: JSON.stringify({
+        text: (tier.cues ? String(text) : stripCues(text)).slice(0, 4000),
+        model_id: tier.model,
+        voice_settings: tier.settings,
+      }),
+    });
+    if (!res.ok) {
+      const detail = (await res.text()).slice(0, 160);
+      if ((res.status === 400 || res.status === 422) && tier !== tiers[tiers.length - 1]) {
+        console.warn(`elevenlabs: ${tier.model} rejected (${res.status}: ${detail}) — falling back`);
+        elRejected.add(tier.model);
+        continue;
+      }
+      throw new Error(`elevenlabs ${res.status}: ${detail}`);
+    }
+    const mp3 = Buffer.from(await res.arrayBuffer());
+    if (mp3.length < 1500) return null;
+    return toOgg(mp3);
+  }
+  return null;
 }
 
 // personaId + reply text -> OGG/Opus voice-note Buffer, or null (text-only).

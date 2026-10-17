@@ -24,6 +24,7 @@ const tools = require('./personaTools');
 const { mem0Remember, mem0Search } = require('./mem0');
 const { tlSnapshot, tlFormatSnapshot } = require('./tradeLocker');
 const { formatTradeRecord } = require('./tradeJournal');
+const { EMOTION, stripCues } = require('./voiceCues');
 
 const TZ = 'America/New_York';
 // Telegram messages loaded per turn (both roles) — ~20 exchanges. 16 left her
@@ -357,6 +358,7 @@ function systemPrompt(ctx, gs, custom, mem) {
     custom ? `${custom}\n\n${TG_FRAME}` : ARA_IDENTITY,
     genderLine('ara'),
     OBEY,
+    EMOTION,
     CONTINUITY,
     mem,
     ARA_TOOLS,
@@ -374,6 +376,7 @@ function personaSystemPrompt(personaId, ctx, gs, custom, mem) {
     custom ? `${custom}\n\n${TG_FRAME}` : `${personaTgIdentity(personaId)}\n\nYou are talking to Mr. Burrus over Telegram (text), away from the Empire OS app — keep replies tight and mobile-readable. Reply directly to what he just said; no status-briefing preamble. There is a live context block below — read from it, don't invent numbers.`,
     custom ? genderLine(personaId) : '', // the built-in identity already carries it
     OBEY,
+    EMOTION,
     CONTINUITY,
     mem,
     genericTools(personaId),
@@ -655,6 +658,7 @@ async function relayToPersona(id, message, { from = 'ara', convo = '', depth = 1
   const sys = [
     await relaySystem(id, from),
     OBEY,
+    EMOTION,
     id === 'ara' ? ARA_TOOLS : genericTools(id),
     RELAY_TOOLS,
     googleLine(gs),
@@ -684,7 +688,7 @@ async function relayToPersona(id, message, { from = 'ara', convo = '', depth = 1
     sink.confirms.push(...fx.confirms);
   }
   const receipts = [...fx.notes.map((n) => `✓ ${n}`), ...fx.warnings.map((w) => `⚠️ ${w}`), ...fx.confirms.map((c) => `⏳ waiting on his Confirm tap: ${c.label}`)];
-  const clean = stripTags(reply);
+  const clean = stripCues(stripTags(reply));
   upsertSyncRow('persona_memory', newId(), {
     persona: id, content: `[relayed from ${(ROSTER[from] && ROSTER[from].name) || from} on Telegram] ${message}\n${p.name}: ${clean}`,
     category: 'general', keywords: '[]', date: todayET(), created_at: Date.now(),
@@ -848,8 +852,11 @@ async function runPersonaTurn(personaId, userText, deliver) {
   fx.notes.push(...sink.notes);
   fx.warnings.push(...sink.warnings);
   fx.confirms.push(...sink.confirms);
-  let clean = stripTags(reply);
-  if (!clean) clean = fx.notes.length ? `Done — ${fx.notes.join('; ')}.` : 'On it.';
+  // `spoken` keeps the lowercase voice cues ([laughs]) for the voice note;
+  // `clean` is what he reads and what history keeps.
+  let spoken = stripTags(reply);
+  let clean = stripCues(spoken);
+  if (!clean) spoken = clean = fx.notes.length ? `Done — ${fx.notes.join('; ')}.` : 'On it.';
   // A receipt under the reply for every write — the reply is written before the
   // writes run, so this is the only part guaranteed to say what really happened.
   const footer = [...fx.notes.map((n) => `✓ ${n}`), ...fx.warnings.map((w) => `⚠️ ${w}`)].join('\n');
@@ -869,7 +876,7 @@ async function runPersonaTurn(personaId, userText, deliver) {
   }).catch(() => {});
   mem0Remember(persona, `YOU: ${userText}\n${p.name}: ${clean}`, { source: 'telegram' });
 
-  return { text: clean, footer, confirms: fx.confirms };
+  return { text: clean, spoken, footer, confirms: fx.confirms };
 }
 
 // Back-compat: A.R.A.'s turn.

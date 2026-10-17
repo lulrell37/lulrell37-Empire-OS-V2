@@ -1,3 +1,4 @@
+import{rememberCued}from './voiceCues';
 import{addTask,updateTask,completeTask,deleteTask,saveNote,getNote,addRevenue,getTasks,getHudState,updateHudState,setRoutineDone,addRoutineItem,removeRoutineItem,renameRoutineItem,setBatmanDay,getBusinessTargets,setBusinessTarget,setPanelLayout,addExpense,addImportantDate,addLead,updateLead,appendLeadLog,findLead,leadHasContact,pinMemory,unpinMemory,getPinnedMemories,getSetting,setSetting,addContentItem,updateContentItem,deleteContentItem,getContentItems}from './database';
 
 // Resolve a content-item reference — full id or an 8-char prefix from a listing.
@@ -395,7 +396,9 @@ export async function handleCommands(response,personaId,callbacks={}){
 export function stripCommands(text){
   // Note tags first, whole — their content can hold brackets the regexes below
   // would stop at, leaving half a note in the visible reply.
-  return stripNoteTags(text)
+  // Lowercase voice cues ([laughs]) come off the display text too, and are
+  // remembered for the voice (voiceCues.js).
+  return rememberCued(stripNoteTags(text)
     .replace(/\[ADD_TASK:[^\]]*\]/gi,'').replace(/\[COMPLETE_TASK:[^\]]*\]/gi,'')
     .replace(/\[DELETE_TASK:[^\]]*\]/gi,'').replace(/\[TASK_EDIT:[^\]]*\]/gi,'')
     .replace(/\[SAVE_NOTE:[^\]]*\]/gi,'').replace(/\[OPEN_APP:[^\]]*\]/gi,'').replace(/\[OPEN_WEBPAGE:[^\]]*\]/gi,'')
@@ -443,5 +446,5 @@ export function stripCommands(text){
     .replace(/\[READ_TASKS\]/gi,'').replace(/\[CREATE_TASK:[^\]]*\]/gi,'')
     .replace(/\[SET_REMINDER:[^\]]*\]/gi,'').replace(/\[SYNC_AND_SAVE\]/gi,'')
     .replace(/\[READ_CALENDAR(?::[^\]]*)?\]/gi,'').replace(/\[LIST_NOTES\]/gi,'')
-    .trim();
+    .trim());
 }
