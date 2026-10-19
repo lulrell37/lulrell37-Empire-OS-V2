@@ -33,6 +33,21 @@ app.use('/push', auth, json, require('./routes/push'));
 app.use('/google', auth, json, require('./routes/google'));
 app.use('/trade', auth, json, require('./routes/trade'));
 app.use('/council', auth, json, require('./routes/council'));
+// Is Mem0 (persona memory) actually answering from the server — a live probe,
+// plus how many memories each persona has there.
+app.get('/mem0/status', auth, async (req, res) => {
+  const { mem0Search, mem0All, mem0Health } = require('./mem0');
+  await mem0Search('ara', 'status check', { topK: 1 });
+  const health = mem0Health();
+  const counts = {};
+  if (health.ok) {
+    for (const id of String(req.query.personas || 'ara,stephanie,haven,jarvis,selene').split(',')) {
+      const all = await mem0All(id.trim(), { max: 5000 });
+      counts[id.trim()] = { memories: all.length, newest: all[0] ? require('./mem0').mem0Line(all[0]).slice(1, 11) : null, oldest: all.length ? require('./mem0').mem0Line(all[all.length - 1]).slice(1, 11) : null };
+    }
+  }
+  res.json({ ...health, counts });
+});
 
 // Telegram bots — one headless front door per persona. Each webhook is guarded
 // by its own persona-namespaced secret path + header + owner-id check (no bearer).

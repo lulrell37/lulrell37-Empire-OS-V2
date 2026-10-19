@@ -121,7 +121,7 @@ async function readTag({ name, arg }, persona) {
       return g.calendarList({ startISO: p[0] });
     }
     case 'LIST_NOTES':
-      return g.driveList(parseInt(arg, 10) || 30);
+      return g.driveList(arg || 30);
     case 'SEARCH_DRIVE':
       return arg ? g.driveSearch(arg) : null;
     case 'READ_FILE_ID': {

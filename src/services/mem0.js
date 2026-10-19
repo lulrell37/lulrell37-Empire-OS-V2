@@ -38,6 +38,19 @@ async function key(){
 }
 export async function mem0Enabled(){return!!(await key());}
 
+// YYYY-MM-DD local — stamped on every memory so recall can date it.
+const today=()=>new Date().toLocaleDateString('en-CA');
+
+// One fact as a prompt line, dated: "(2026-07-17) He wants …". Prefers the
+// original date (metadata.date — set on every add and by the backfill) over
+// Mem0's created_at, which for imported history is the import day.
+export function mem0Line(f){
+  const t=String(f?.memory||'').replace(/\s+/g,' ').trim();
+  const md=/^\d{4}-\d{2}-\d{2}/.test(String(f?.metadata?.date||''))?String(f.metadata.date).slice(0,10):'';
+  const d=md||String(f?.created_at||f?.updated_at||'').slice(0,10);
+  return d?`(${d}) ${t}`:t;
+}
+
 const headers=k=>({Authorization:'Token '+k,'Content-Type':'application/json',Accept:'application/json'});
 
 // Store one exchange (or any text) as a persona's memory. Mem0 does the fact
@@ -50,7 +63,7 @@ export async function mem0Remember(personaId,text,meta={}){
   try{
     const r=await fetch(BASE+'/v3/memories/add/',{
       method:'POST',headers:headers(k),
-      body:JSON.stringify({user_id:personaId,messages:[{role:'user',content:t.slice(0,12000)}],metadata:{app:'empire-os',...meta}}),
+      body:JSON.stringify({user_id:personaId,messages:[{role:'user',content:t.slice(0,12000)}],metadata:{app:'empire-os',date:today(),...meta}}),
     });
     // Only escalate the persistent, actionable failures from the write path —
     // the read path (mem0Search, once per turn) is the reliable health signal.
@@ -74,6 +87,30 @@ export async function mem0Search(personaId,query,{topK=16,threshold=0.05}={}){
     report(true);
     return Array.isArray(d?.results)?d.results:[];
   }catch{report(false,0);return[];}
+}
+
+// Every memory Mem0 holds for this persona, newest first by the date it was
+// made — the whole history, for recall questions a top-k search can't answer
+// ("what did we talk about in August", "when did I …"). [] on failure.
+export async function mem0All(personaId,{max=2000}={}){
+  const k=await key();
+  if(!k||!personaId)return[];
+  const out=[];
+  try{
+    for(let page=1;out.length<max&&page<=40;page++){
+      const r=await fetch(BASE+'/v2/memories/',{
+        method:'POST',headers:headers(k),
+        body:JSON.stringify({filters:{user_id:personaId},page,page_size:100}),
+      });
+      if(!r.ok){report(false,r.status);break;}
+      const d=await r.json();
+      const batch=Array.isArray(d)?d:(d?.results||[]);
+      out.push(...batch);
+      if(batch.length<100||(!Array.isArray(d)&&!d?.next))break;
+    }
+  }catch{report(false,0);}
+  const when=f=>(mem0Line(f).match(/^\((\d{4}-\d{2}-\d{2})\)/)||[])[1]||'';
+  return out.slice(0,max).sort((a,b)=>when(b).localeCompare(when(a)));
 }
 
 // One-time import of the existing local persona_memory rows into Mem0. Throttled.

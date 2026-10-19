@@ -289,24 +289,34 @@ async function calendarDelete(eventId) {
 // --- Drive ---
 const NOTE_MIME_Q = "(mimeType='text/plain' or mimeType='text/markdown' or mimeType='application/vnd.google-apps.document')";
 
-async function driveList(max = 30) {
+const noteDate = (f) => (f.modifiedTime ? String(f.modifiedTime).slice(0, 10) : '');
+
+// arg: a count ("50"), or a start date ("2026-07-01" / "since 2026-07-01") for
+// every note modified from then on — newest first, each with its date, so a
+// persona can tell how far back a listing actually reaches.
+async function driveList(arg = 30) {
+  const since = String(arg || '').match(/(\d{4}-\d{2}-\d{2})/);
+  const max = since ? 300 : Math.max(1, Math.min(300, parseInt(arg, 10) || 30));
+  const q = `trashed=false and ${NOTE_MIME_Q}` + (since ? ` and modifiedTime >= '${since[1]}T00:00:00'` : '');
   const data = await gapi('/drive/v3/files', {
-    query: { q: `trashed=false and ${NOTE_MIME_Q}`, orderBy: 'modifiedTime desc', pageSize: max, fields: 'files(id,name,modifiedTime)' },
+    query: { q, orderBy: 'modifiedTime desc', pageSize: max, fields: 'files(id,name,modifiedTime)' },
   });
   const files = (data && data.files) || [];
-  if (!files.length) return 'Drive: no notes found.';
-  return `Drive notes (${files.length}):\n` + files.map((f) => `• ${f.name}  [id:${f.id}]`).join('\n');
+  if (!files.length) return since ? `Drive: no notes modified since ${since[1]}.` : 'Drive: no notes found.';
+  const span = `${noteDate(files[files.length - 1])} → ${noteDate(files[0])}`;
+  const more = files.length >= max ? ` — only the ${max} newest; older notes exist: [LIST_NOTES: 200] lists more, [LIST_NOTES: 2026-06-01] everything since a date, [SEARCH_DRIVE: keyword] searches all of Drive` : '';
+  return `Drive notes (${files.length}, modified ${span}${more}):\n` + files.map((f) => `• ${noteDate(f)}  ${f.name}  [id:${f.id}]`).join('\n');
 }
 
 async function driveSearch(kw) {
   if (!kw) throw new Error('no search term');
   const esc = String(kw).replace(/'/g, "\\'");
   const data = await gapi('/drive/v3/files', {
-    query: { q: `trashed=false and (name contains '${esc}' or fullText contains '${esc}')`, pageSize: 20, fields: 'files(id,name)' },
+    query: { q: `trashed=false and (name contains '${esc}' or fullText contains '${esc}')`, pageSize: 40, fields: 'files(id,name,modifiedTime)' },
   });
   const files = (data && data.files) || [];
   if (!files.length) return `Drive: nothing matches "${kw}".`;
-  return `Drive matches for "${kw}":\n` + files.map((f) => `• ${f.name}  [id:${f.id}]`).join('\n');
+  return `Drive matches for "${kw}":\n` + files.map((f) => `• ${noteDate(f)}  ${f.name}  [id:${f.id}]`).join('\n');
 }
 
 async function driveFindByName(name) {

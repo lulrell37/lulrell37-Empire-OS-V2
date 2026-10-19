@@ -43,9 +43,9 @@ export async function googleReadInjections(text){
     await push('GOOGLE CALENDAR',()=>g.calendarList(opts));
   }
 
-  for(const m of t.matchAll(/\[LIST_NOTES(?::\s*(\d+))?\]/ig)){
-    const n=m[1]?parseInt(m[1],10):30;
-    await push('DRIVE',()=>g.driveList(n));
+  for(const m of t.matchAll(/\[LIST_NOTES(?::\s*([^\]]+))?\]/ig)){
+    const arg=m[1]?m[1].trim():30;
+    await push('DRIVE',()=>g.driveList(arg));
   }
   for(const m of t.matchAll(/\[SEARCH_DRIVE:\s*([^\]]+)\]/ig))
     await push('DRIVE SEARCH',()=>g.driveSearch(m[1].trim()));

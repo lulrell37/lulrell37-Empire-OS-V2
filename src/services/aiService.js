@@ -95,7 +95,7 @@ async function buildSys(personaId,persona,convo=[]){
   sys+=`\n\n${OBEY_BLOCK}`;
   sys+=`\n\n${emotionFor(personaId)}`;
   sys+=`\n\n[NOTES — every persona: [SAVE_NOTE:title|content] creates a note (Drive when connected, the app's Notes otherwise) or overwrites the one with that title. [APPEND_NOTE:title|text] adds to the end of an existing note (creates it if missing) — use it for "add this to my … note". [EDIT_NOTE:title or fileId|full new content] replaces a note's whole text — [READ_NOTE:title] it first so you keep what should stay. One tag per note; several notes means several tags in the same reply. The tag is what writes it — never say a note is saved unless you emitted the tag. Note text can be long and multi-line; brackets inside it are fine as long as they're balanced. Don't narrate the full content back in your visible reply — "Saved that as '<title>'." is enough.]`;
-  sys+=`\n\n[MEMORY RECALL: The memory block below is routed to the topic Mr. Burrus is on right now — your full history for that area, plus anything pinned. If he references something specific that ISN'T shown, emit [MEMORY_QUERY: your precise question] and your memory index answers before you reply — use it whenever he points back to a past conversation, not just rarely.
+  sys+=`\n\n[MEMORY RECALL: your memory is Mem0 — every conversation you've had with Mr. Burrus, in the app and on Telegram, dated. The memory block below is routed to the topic Mr. Burrus is on right now, plus anything pinned. If he references something specific that ISN'T shown — or asks what you remember, what you talked about, what happened or when — emit [MEMORY_QUERY: your precise question] and your memory index searches your whole Mem0 history (any date) before you reply. Use it whenever he points back to a past conversation, not just rarely. NEVER use [LIST_NOTES], [SEARCH_DRIVE] or [READ_NOTE] to recall a conversation — Drive holds notes and documents he asked you to write, not your memory; only go there when he asks about a note or document.
 PINNING: when he tells you something that matters over the next few days — a trip, a deadline, a decision in progress, something he is waiting on — keep it in front of you with [REMEMBER: the thing | days] (1-30, default 3). It rides in your context every turn until it expires. [UNPIN_MEMORY: a few words of it] drops it early. Never mention these mechanisms — just remember.]`;
   sys+=`\n\n[THE CANVAS — the orb screen Mr. Burrus is looking at can become an interactive surface. When he asks to SEE or WORK WITH something rather than just hear it, emit the matching tag in the same reply as your answer and the orb transforms into it; he takes it from there and closes it himself.
 - [SHOW_NOTES] — his notes as a list he can open and edit. [SHOW_NOTE: exact title] opens one straight away.
@@ -124,7 +124,7 @@ Only when seeing or editing the thing is the point — not for a passing mention
       sys+=`\n\n[GOOGLE — connected. Use these when they genuinely help; results come back before you answer; never mention the mechanism:
  EMAIL: [READ_EMAIL] | [SEND_EMAIL: to | subject | body] (Mr. Burrus taps to confirm before it sends)
  CALENDAR: [READ_CALENDAR] | [READ_CALENDAR: 30] | [READ_CALENDAR: 2026-08-01 | 30] | [CREATE_EVENT: Title | 2026-06-01T14:00 | 60] | [DELETE_EVENT: id] (confirmed)
- DRIVE NOTES: [LIST_NOTES] | [LIST_NOTES: 50] | [SEARCH_DRIVE: keyword] | [READ_NOTE: name] | [READ_FILE_ID: fileId] | [CREATE_NOTE: title | content] | [EDIT_NOTE: title or fileId | full new content] | [APPEND_NOTE: title | text] | [DELETE_FILE: fileId] (confirmed)
+ DRIVE NOTES: [LIST_NOTES] (30 newest, dated) | [LIST_NOTES: 200] | [LIST_NOTES: 2026-07-01] (every note since that date) | [SEARCH_DRIVE: keyword] (all of Drive, any age) | [READ_NOTE: name] | [READ_FILE_ID: fileId] | [CREATE_NOTE: title | content] | [EDIT_NOTE: title or fileId | full new content] | [APPEND_NOTE: title | text] | [DELETE_FILE: fileId] (confirmed)
    Long docs come back one page at a time and the result says so — get the next page with [READ_NOTE: name | 2] (then | 3, …) or pull the whole thing with [READ_NOTE: name | all]. Same | 2 / | all works on [READ_FILE_ID: id | 2].
    Notes live as .md files in a Drive folder called "Empire OS Notes" so an Obsidian vault can sync to them. [SYNC_NOTES] pulls any older loose notes into that folder — offer it if Mr. Burrus mentions Obsidian or organizing his notes.
  SHEETS: [CREATE_SHEET: title | col1,col2 | val1,val2]
@@ -237,7 +237,8 @@ Only when seeing or editing the thing is the point — not for a passing mention
   const now=Date.now();
   const parts=[];
   if(mem0Facts.length){
-    parts.push('WHAT YOU KNOW (most relevant first):\n'+mem0Facts.map(f=>`- ${String(f.memory||'').trim()}`).filter(s=>s.length>2).join('\n'));
+    const{mem0Line}=await import('./mem0');
+    parts.push('WHAT YOU KNOW (most relevant first, each dated YYYY-MM-DD with when it came up — use the date when he asks when):\n'+mem0Facts.filter(f=>String(f.memory||'').trim().length>2).map(f=>`- ${mem0Line(f)}`).join('\n'));
   }
   if(mem?.length){
     const localBody=mem.map(m=>{
@@ -525,9 +526,20 @@ export async function queryMemory(personaId,question,signal=null){
   let rows=[];
   try{rows=await getPersonaMemory(personaId,{query:question,charBudget:60000});}catch{}
   if(!rows.length){try{rows=(await getMemoriesByPersona(personaId)).slice(0,150);}catch{}}
-  let m0='';
-  try{const{mem0Search}=await import('./mem0');const hits=await mem0Search(personaId,question,{topK:40});if(hits.length)m0=hits.map(h=>`- ${String(h.memory||'').trim()}`).join('\n');}catch{}
-  const corpus=(m0?`EXTRACTED FACTS (semantic match):\n${m0}\n\nRAW EXCHANGES:\n`:'')+rows.map(r=>`[${r.date}${r.category?' · '+r.category:''}]\n${r.content}`).join('\n\n').slice(0,55000);
+  // Mem0 is the memory: its semantic matches, then its WHOLE dated history for
+  // this persona so date questions can be answered; local rows fill in behind.
+  let m0='',history='',n=0;
+  try{
+    const{mem0Search,mem0All,mem0Line}=await import('./mem0');
+    const[hits,everything]=await Promise.all([mem0Search(personaId,question,{topK:60,threshold:0.01}),mem0All(personaId)]);
+    if(hits.length)m0=hits.map(h=>`- ${mem0Line(h)}`).join('\n');
+    n=everything.length;
+    if(n)history=everything.map(h=>`- ${mem0Line(h)}`).join('\n').slice(0,60000);
+  }catch{}
+  if(n)rows=rows.slice(0,40);
+  const corpus=((m0?`MEM0 — BEST MATCHES FOR THE QUESTION (dated):\n${m0}\n\n`:'')
+    +(history?`MEM0 — EVERYTHING YOU KNOW, newest first (${n} memories):\n${history}\n\n`:'')
+    +(rows.length?'RAW EXCHANGES (on this device):\n'+rows.map(r=>`[${r.date}${r.category?' · '+r.category:''}]\n${r.content}`).join('\n\n'):'')).slice(0,90000);
   const sys=`You are the private memory index for ${persona.name}, the assistant to Mr. Burrus. Below are stored exchanges between Mr. Burrus and ${persona.name}, newest first. Answer the recall question using ONLY what is in these memories. Be specific — quote dates and details. If the memories do not cover it, say so in one sentence. No preamble.\n\n=== STORED MEMORIES ===\n${corpus||'(none)'}\n=== END ===`;
   const res=await fetch(base+'/v1/messages',{method:'POST',headers:{'Content-Type':'application/json',...auth},body:JSON.stringify({model:'claude-sonnet-5',max_tokens:700,system:sys,messages:[{role:'user',content:question}]}),signal});
   if(!res.ok){const e=await res.text();throw new Error(`memory recall: ${e.substring(0,80)}`);}
