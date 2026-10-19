@@ -21,7 +21,7 @@ const { chatAs, claudeText, webResearch } = require('./llm');
 const { ROSTER, resolvePersonaId, rosterLines, personaSystem, personaTgIdentity, genderLine } = require('./personas');
 const { saveDriveNote, googleStatus, gTaskComplete } = require('./google');
 const tools = require('./personaTools');
-const { mem0Remember, mem0Search } = require('./mem0');
+const { mem0Remember, mem0Search, mem0All, mem0Line, mem0Health } = require('./mem0');
 const { tlSnapshot, tlFormatSnapshot } = require('./tradeLocker');
 const { formatTradeRecord } = require('./tradeJournal');
 const { EMOTION, emotionFor, stripCues } = require('./voiceCues');
@@ -216,7 +216,7 @@ async function memoryBlock(persona, userText = '') {
   // Mem0's extracted facts relevant to what he just said — the same store the
   // app reads, so anything learned in either place shows up here.
   const facts = (await mem0Search(persona, userText, { topK: 18 }))
-    .map((f) => String(f.memory || '').trim()).filter((m) => m.length > 2);
+    .filter((f) => String(f.memory || '').trim().length > 2).map(mem0Line);
   const rows = (await syncedRows('persona_memory').catch(() => []))
     .filter((r) => r.persona === persona)
     .sort((a, b) => (Number(b.created_at) || 0) - (Number(a.created_at) || 0));
@@ -229,7 +229,7 @@ async function memoryBlock(persona, userText = '') {
     .reverse();
   const L = [];
   if (facts.length) {
-    L.push(`[WHAT YOU KNOW about what he's raising (long-term memory, most relevant first) — reference it naturally, never claim you don't remember:\n${facts.map((f) => `  - ${f.replace(/\s+/g, ' ').slice(0, 400)}`).join('\n')}\n]`);
+    L.push(`[WHAT YOU KNOW about what he's raising (long-term memory, most relevant first, each dated (YYYY-MM-DD) with when it came up) — reference it naturally, never claim you don't remember; when he asks when, use the date:\n${facts.map((f) => `  - ${f.replace(/\s+/g, ' ').slice(0, 400)}`).join('\n')}\n]`);
   }
   if (pinned.length) {
     L.push(`[PINNED — things you were asked to keep in front of you:
@@ -259,7 +259,7 @@ You have a live context block below — time, Empire Score, streak, Batman Proto
 // Google tags every persona carries — same set as the app's GOOGLE block. Whether
 // Google actually works right now is a separate per-turn line (googleLine).
 const GOOGLE_TOOLS = `GOOGLE (see the GOOGLE status line below for whether it's working right now):
- - NOTES (one tag per note — several notes means several tags in the same reply): [SAVE_NOTE: title | content] creates a Drive note, or overwrites the one with that title — a short "Saved that as '<title>'." is enough, don't paste the content back. [APPEND_NOTE: title | text] adds to the end of an existing note (creates it if there isn't one) — use it for "add this to my … note". [EDIT_NOTE: title or fileId | full new content] replaces a note's whole text — [READ_NOTE] it first so you keep what should stay. [READ_NOTE: title] (long notes page: [READ_NOTE: title | 2], [READ_NOTE: title | all]) · [LIST_NOTES] · [SEARCH_DRIVE: keyword] · [READ_FILE_ID: id] · [DELETE_FILE: fileId] (he taps to confirm). Note text can be long and multi-line; brackets inside it are fine as long as they're balanced.
+ - NOTES (one tag per note — several notes means several tags in the same reply): [SAVE_NOTE: title | content] creates a Drive note, or overwrites the one with that title — a short "Saved that as '<title>'." is enough, don't paste the content back. [APPEND_NOTE: title | text] adds to the end of an existing note (creates it if there isn't one) — use it for "add this to my … note". [EDIT_NOTE: title or fileId | full new content] replaces a note's whole text — [READ_NOTE] it first so you keep what should stay. [READ_NOTE: title] (long notes page: [READ_NOTE: title | 2], [READ_NOTE: title | all]) · [LIST_NOTES] (30 newest, dated) · [LIST_NOTES: 200] · [LIST_NOTES: 2026-07-01] (every note since that date) · [SEARCH_DRIVE: keyword] (all of Drive, any age) · [READ_FILE_ID: id] · [DELETE_FILE: fileId] (he taps to confirm). Note text can be long and multi-line; brackets inside it are fine as long as they're balanced.
  - EMAIL: [READ_EMAIL] (unread inbox) · [READ_EMAIL: any Gmail search, e.g. from:bank newer_than:7d] · [READ_EMAIL_ID: id] (one full message) · [SEND_EMAIL: to | subject | body] — he gets a Confirm button before it sends; tell him it's ready to send, not that it's sent.
  - CALENDAR: [READ_CALENDAR] (next 7 days) · [READ_CALENDAR: 30] · [READ_CALENDAR: 2026-08-01 | 30] · [CREATE_EVENT: title | 2026-06-01T14:00 | minutes] (his Eastern time) · [DELETE_EVENT: id] (confirmed).
  - SHEETS: [CREATE_SHEET: title | col1,col2 | val1,val2].`;
@@ -344,6 +344,17 @@ function googleLine(gs) {
   return `[GOOGLE: NOT WORKING right now (${why}). Email, calendar, sheets and Google Tasks will fail, and [SAVE_NOTE] lands in the app's own Notes list, NOT Drive — so say "saved to your app notes", never "saved to Drive". If he asks for anything Google, tell him plainly it's disconnected and that reconnecting Google in the app (Settings → GOOGLE, with the backend linked) fixes it.]`;
 }
 
+// Where a persona's memory lives. Without this, when the facts block came up
+// thin she'd go looking through Drive notes for "what we talked about" —
+// Drive is documents he asked for, not her memory. Mirrors MEMORY_SOURCE in
+// src/services/aiService.js.
+function memoryLine() {
+  const h = mem0Health();
+  const src = `[YOUR MEMORY is Mem0 — every conversation you've had with Mr. Burrus, in the app and here, dated. The WHAT YOU KNOW block above is the part relevant right now. Whenever he asks what you remember, what you talked about, what happened or when — or points back to anything not in view — emit [MEMORY_QUERY: precise question]: it searches your whole Mem0 history, any date. NEVER use [LIST_NOTES], [SEARCH_DRIVE] or [READ_NOTE] to recall a conversation: Drive holds notes and documents he asked you to write, not your memory — only go there when he asks about a note or document.`;
+  if (h.ok) return `${src}]`;
+  return `${src}\nMEM0 IS NOT WORKING right now (${h.error}) — you only have the recent exchanges synced from the app. If he asks you to remember something older, tell him plainly your long-term memory is offline and why, instead of guessing or searching Drive.]`;
+}
+
 // Shared with every persona (A.R.A. and the rest) — see the matching block in
 // src/services/aiService.js's buildSys for the app-side path.
 function faithBlock(personaId) {
@@ -361,6 +372,7 @@ function systemPrompt(ctx, gs, custom, mem) {
     EMOTION,
     CONTINUITY,
     mem,
+    memoryLine(),
     ARA_TOOLS,
     googleLine(gs),
     `[THE EMPIRE — the other personas who serve Mr. Burrus. Hand anything outside your lane to one with [RELAY_TO: id | ...]:\n${rosterLines()}\n]`,
@@ -379,6 +391,7 @@ function personaSystemPrompt(personaId, ctx, gs, custom, mem) {
     emotionFor(personaId),
     CONTINUITY,
     mem,
+    memoryLine(),
     genericTools(personaId),
     googleLine(gs),
     `[THE EMPIRE — the other personas. Hand anything outside your lane to one with [RELAY_TO: id | ...]:\n${rosterLines()}\n]`,
@@ -732,16 +745,52 @@ async function delegate(arg) {
 
 // The Claude-backed memory index over a persona's stored exchanges
 // (persona_memory rows tagged with its id), same idea as aiService.queryMemory.
+const MONTHS = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
+const RECALL_STOP = new Set('what when where which about that this with from have your were they them then than there their said tell remember talk talked know does dont didnt just like into over more some also back time last week month year ever been would could should'.split(' '));
+
+// Pick the rows a recall question is about from ALL of a persona's history,
+// not just the newest few: the 30 newest for continuity, then rows matching
+// the question's words or the month/date it names, oldest history included.
+function recallRows(rows, question) {
+  const q = String(question || '').toLowerCase();
+  const words = [...new Set(q.match(/[a-z0-9]{4,}/g) || [])].filter((w) => !RECALL_STOP.has(w) && !MONTHS.includes(w));
+  const months = MONTHS.map((m, i) => (q.includes(m) ? String(i + 1).padStart(2, '0') : null)).filter(Boolean);
+  const isoDates = q.match(/\d{4}-\d{2}-\d{2}/g) || [];
+  const score = (r) => {
+    const c = String(r.content || '').toLowerCase();
+    const d = String(r.date || '');
+    let s = words.reduce((n, w) => n + (c.includes(w) ? 1 : 0), 0);
+    if (months.some((m) => d.slice(5, 7) === m)) s += 2;
+    if (isoDates.some((x) => d === x)) s += 4;
+    return s;
+  };
+  const picked = new Map();
+  rows.slice(0, 30).forEach((r) => picked.set(r, true));
+  rows.map((r) => [r, score(r)]).filter(([, s]) => s > 0)
+    .sort((a, b) => b[1] - a[1] || (b[0].created_at || 0) - (a[0].created_at || 0))
+    .slice(0, 150).forEach(([r]) => picked.set(r, true));
+  return [...picked.keys()].sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
+}
+
 async function memoryQuery(question, persona = 'ara') {
-  const rows = (await syncedRows('persona_memory').catch(() => []))
+  const all = (await syncedRows('persona_memory').catch(() => []))
     .filter((r) => r.persona === persona)
-    .sort((a, b) => (b.created_at || 0) - (a.created_at || 0))
-    .slice(0, 120);
-  const hits = await mem0Search(persona, question, { topK: 40 });
-  if (!rows.length && !hits.length) return 'No stored memories yet.';
-  const m0 = hits.map((h) => `- ${String(h.memory || '').trim()}`).join('\n');
-  const corpus = ((m0 ? `EXTRACTED FACTS (semantic match):\n${m0}\n\nRAW EXCHANGES:\n` : '')
-    + rows.map((r) => `[${r.date || ''}${r.category ? ' · ' + r.category : ''}]\n${r.content}`).join('\n\n')).slice(0, 55000);
+    .sort((a, b) => (Number(b.created_at) || 0) - (Number(a.created_at) || 0));
+  // Mem0 is the memory: its semantic matches first, then its WHOLE dated
+  // history for this persona so date questions ("in August", "when did I")
+  // can be answered. The synced raw exchanges only fill in behind it.
+  const [hits, everything] = await Promise.all([
+    mem0Search(persona, question, { topK: 60, threshold: 0.01 }),
+    mem0All(persona),
+  ]);
+  const rows = recallRows(all, question).slice(0, everything.length ? 40 : 200);
+  if (!rows.length && !hits.length && !everything.length) return 'No stored memories yet.';
+  const m0 = hits.map((h) => `- ${mem0Line(h)}`).join('\n');
+  const span = (xs) => (xs.length ? `${mem0Line(xs[xs.length - 1]).slice(1, 11)} → ${mem0Line(xs[0]).slice(1, 11)}` : 'none');
+  const history = everything.map((h) => `- ${mem0Line(h)}`).join('\n');
+  const corpus = ((m0 ? `MEM0 — BEST MATCHES FOR THE QUESTION (dated):\n${m0}\n\n` : '')
+    + (history ? `MEM0 — EVERYTHING YOU KNOW, newest first (${everything.length} memories, ${span(everything)}):\n${history.slice(0, 60000)}\n\n` : '')
+    + (rows.length ? `RAW EXCHANGES (synced from the app):\n` + rows.map((r) => `[${r.created_at ? shortMomentET(Number(r.created_at)) : r.date || ''}${r.category ? ' · ' + r.category : ''}]\n${r.content}`).join('\n\n') : '')).slice(0, 90000);
   const who = (ROSTER[persona] && ROSTER[persona].name) || persona;
   return claudeText(
     `You are the private memory index for ${who}, one of Mr. Burrus's personas. Below are stored exchanges, newest first. Answer the recall question using ONLY what's here. Be specific — quote dates and details. If it's not covered, say so in one sentence. No preamble.\n\n=== MEMORIES ===\n${corpus}\n=== END ===`,
