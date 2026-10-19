@@ -56,6 +56,8 @@ async function saveMemory(persona, content) {
   await upsertSyncRow('persona_memory', newId(), {
     persona, content: text, category: 'general', keywords: '[]', date: todayET(), created_at: Date.now(),
   });
+  // Same as the app's savePersonaMemory: every memory row also goes to Mem0.
+  require('./mem0').mem0Remember(persona, text, { source: 'server' });
 }
 
 module.exports = { syncedRow, syncedRows, upsertSyncRow, getSetting, setSetting, saveMemory, newId, todayET };

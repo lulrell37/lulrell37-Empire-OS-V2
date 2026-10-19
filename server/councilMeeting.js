@@ -471,14 +471,16 @@ async function runCouncilMeeting(opts = {}) {
   // A normal business-category memory for medium-term recall ("what did the
   // council decide about X"). The always-in-context surfacing is the
   // `council_last` digest in src/services/empireStatus.js, not a pin.
+  const councilMem = `[Empire Council ${date}] Business / revenue / empire strategy — the council's recommendations and the calls for Mr. Burrus.\n${headline}\n${synthesis.slice(0, 3500)}`;
   await upsertSyncRow('persona_memory', crypto.randomBytes(16).toString('hex'), {
     persona: 'ara',
-    content: `[Empire Council ${date}] Business / revenue / empire strategy — the council's recommendations and the calls for Mr. Burrus.\n${headline}\n${synthesis.slice(0, 3500)}`,
+    content: councilMem,
     category: 'business',
     keywords: JSON.stringify(['empire', 'revenue', 'business', 'council', 'strategy', 'recommendation', 'decision']),
     date,
     created_at: now,
   });
+  require('./mem0').mem0Remember('ara', councilMem, { source: 'council' });
 
   // Drop ideas the council actually addressed (matched loosely against section titles).
   if (ctx.ideas.length) {

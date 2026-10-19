@@ -592,6 +592,7 @@ async function applyEffects(text, deliver, persona = 'ara') {
           persona, content: 'PINNED: ' + thing, category: 'general', keywords: '[]',
           date: todayET(), created_at: now, pinned_until: now + d * 86400000,
         });
+        mem0Remember(persona, thing, { pinned: true, source: 'telegram' });
         notes.push(`pinned for ${d}d: ${thing}`);
       } else if (name === 'UNPIN_MEMORY' && arg) {
         const rows = await query("SELECT sync_id, data FROM sync_rows WHERE table_name = 'persona_memory' AND deleted = false");
@@ -689,10 +690,12 @@ async function relayToPersona(id, message, { from = 'ara', convo = '', depth = 1
   }
   const receipts = [...fx.notes.map((n) => `✓ ${n}`), ...fx.warnings.map((w) => `⚠️ ${w}`), ...fx.confirms.map((c) => `⏳ waiting on his Confirm tap: ${c.label}`)];
   const clean = stripCues(stripTags(reply));
+  const relayMem = `[relayed from ${(ROSTER[from] && ROSTER[from].name) || from} on Telegram] ${message}\n${p.name}: ${clean}`;
   upsertSyncRow('persona_memory', newId(), {
-    persona: id, content: `[relayed from ${(ROSTER[from] && ROSTER[from].name) || from} on Telegram] ${message}\n${p.name}: ${clean}`,
+    persona: id, content: relayMem,
     category: 'general', keywords: '[]', date: todayET(), created_at: Date.now(),
   }).catch(() => {});
+  mem0Remember(id, relayMem, { source: 'telegram' });
   const said = clean || `(${p.name} came back empty)`;
   return receipts.length
     ? `${said}\n\nWHAT ${p.name.toUpperCase()}'S ACTIONS ACTUALLY DID (authoritative — report these, not the words above):\n${receipts.join('\n')}`
@@ -718,10 +721,12 @@ async function delegate(arg) {
     const next = { ...proj, contributions: [...(proj.contributions || []), { persona: id, task, text: out, at: Date.now() }] };
     await setSetting('active_project', JSON.stringify(next)).catch(() => {});
   }
+  const delegMem = `CLIENT PROJECT${proj ? ` — ${proj.name}` : ''}. A.R.A. delegated: ${task}\n\n${p.name}: ${out}`;
   await upsertSyncRow('persona_memory', newId(), {
-    persona: id, content: `CLIENT PROJECT${proj ? ` — ${proj.name}` : ''}. A.R.A. delegated: ${task}\n\n${p.name}: ${out}`,
+    persona: id, content: delegMem,
     category: 'general', keywords: '[]', date: todayET(), created_at: Date.now(),
   }).catch(() => {});
+  mem0Remember(id, delegMem, { source: 'telegram' });
   return `${p.name} (${tools.PROJECT_ROLES[id]}) delivered — synthesize this for Mr. Burrus:\n${out}`;
 }
 
