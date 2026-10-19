@@ -1088,6 +1088,7 @@ export default function CommandScreen({navigation,route}){
     if(recordingRef.current)stopRecording();
     await clearSound();
     setAraLiveOn(true);setAraLiveState('connecting');
+    let liveUserText=''; // his last finished line, paired with her reply into memory
     try{
       await startAraLive({
         onState:(st)=>setAraLiveState(st),
@@ -1104,6 +1105,7 @@ export default function CommandScreen({navigation,route}){
           }
           if(final){
             saveMessage('ara','user',content,'direct').catch(()=>{});
+            liveUserText=content;
             araLiveUserMsgIdRef.current=null;
             araLiveMsgIdRef.current=null; // her reply to this turn starts a fresh bubble
           }
@@ -1120,6 +1122,9 @@ export default function CommandScreen({navigation,route}){
           }
           if(final){
             saveMessage('ara','assistant',text,'direct').catch(()=>{});
+            // Into persona_memory (and Mem0) like every text turn, so a live call isn't forgotten.
+            savePersonaMemory('ara',`YOU: [live call] ${liveUserText}\nA.R.A.: ${text}`).catch(()=>{});
+            liveUserText='';
             araLiveMsgIdRef.current=null;
           }
         },

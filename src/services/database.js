@@ -497,6 +497,7 @@ export async function pinMemory(persona,text,days=3){
   const{category,keywords}=classifyMemory(t);
   const r=await db.runAsync('INSERT INTO persona_memory(persona,content,category,keywords,date,created_at,pinned_until) VALUES(?,?,?,?,?,?,?)',
     [persona,'PINNED: '+t,category,JSON.stringify(keywords),getTodayStr(),Date.now(),until]);
+  try{const{mem0Remember}=await import('./mem0');mem0Remember(persona,t,{pinned:true});}catch{}
   return{id:r.lastInsertRowId,until,days:d};
 }
 export async function unpinMemory(id){await db.runAsync('UPDATE persona_memory SET pinned_until=NULL WHERE id=?',[id]);}
