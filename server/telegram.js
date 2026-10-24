@@ -10,6 +10,7 @@
 //   selene    -> TELEGRAM_BOT_TOKEN_SELENE
 // TELEGRAM_OWNER_ID is shared across all of them.
 const crypto = require('crypto');
+const { toTelegramHtml } = require('./telegramMedia');
 
 const OWNER_ID = String(process.env.TELEGRAM_OWNER_ID || '').trim();
 const SYNC_TOKEN = process.env.SYNC_TOKEN || '';
@@ -35,8 +36,9 @@ function secretFor(personaId) {
     : 'unset';
 }
 
-// Telegram caps a message at 4096 chars. Send plain text (no parse_mode) so
-// nothing in a reply can break the send; split on line boundaries when long.
+// Telegram caps a message at 4096 chars; split on line boundaries when long.
+// Each chunk goes out as HTML (links, bold…) and falls back to plain text if
+// Telegram rejects the markup, so nothing in a reply can break the send.
 function chunk(text, max = 3900) {
   const s = String(text || '').trim();
   if (s.length <= max) return s ? [s] : [];
@@ -79,8 +81,47 @@ function makeBot(personaId, token) {
   }
 
   async function sendMessage(chatId, text, opts = {}) {
+    const { plain, ...rest } = opts;
     for (const part of chunk(text)) {
-      await tg('sendMessage', { chat_id: chatId, text: part, disable_web_page_preview: true, ...opts });
+      if (plain) { await tg('sendMessage', { chat_id: chatId, text: part, ...rest }); continue; }
+      try {
+        await tg('sendMessage', { chat_id: chatId, text: toTelegramHtml(part), parse_mode: 'HTML', ...rest });
+      } catch (e) {
+        if (!/parse|entit|tag/i.test(e.message)) throw e;
+        await tg('sendMessage', { chat_id: chatId, text: part, ...rest });
+      }
+    }
+  }
+
+  // Photo / document / video / audio. `src` is a URL or a Buffer. A URL Telegram
+  // can't fetch itself (or won't take as that type) is downloaded here and
+  // uploaded; a photo Telegram rejects (too big, odd format) goes as a document.
+  async function sendFile(chatId, kind, src, opts = {}) {
+    if (!API) throw new Error(`telegram bot "${personaId}" has no token`);
+    const method = { photo: 'sendPhoto', video: 'sendVideo', audio: 'sendAudio', document: 'sendDocument' }[kind] || 'sendDocument';
+    const field = method === 'sendDocument' ? 'document' : kind;
+    const caption = opts.caption ? String(opts.caption).slice(0, 1000) : undefined;
+    if (typeof src === 'string') {
+      try { return await tg(method, { chat_id: chatId, [field]: src, caption }); } catch (e) {
+        const res = await fetch(src, { headers: { 'user-agent': 'Mozilla/5.0 (EmpireOS bot)' } });
+        if (!res.ok) throw new Error(`${e.message}; download ${res.status}`);
+        const name = decodeURIComponent((new URL(src).pathname.split('/').pop() || '')) || `${kind}`;
+        return sendFile(chatId, kind, Buffer.from(await res.arrayBuffer()), { ...opts, filename: opts.filename || name });
+      }
+    }
+    const upload = async (m, f) => {
+      const form = new FormData();
+      form.append('chat_id', String(chatId));
+      form.append(f, new Blob([src]), opts.filename || `${kind}${kind === 'photo' ? '.png' : ''}`);
+      if (caption) form.append('caption', caption);
+      const res = await fetch(`${API}/${m}`, { method: 'POST', body: form });
+      const d = await res.json().catch(() => ({}));
+      if (!d.ok) throw new Error(`telegram ${m}: ${d.description || res.status}`);
+      return d.result;
+    };
+    try { return await upload(method, field); } catch (e) {
+      if (method === 'sendDocument') throw e;
+      return upload('sendDocument', 'document');
     }
   }
 
@@ -116,7 +157,7 @@ function makeBot(personaId, token) {
   return {
     personaId, token, secret,
     isConfigured: () => !!(API && OWNER_ID),
-    tg, sendMessage, sendVoice, sendChatAction, downloadFile, setWebhook,
+    tg, sendMessage, sendFile, sendVoice, sendChatAction, downloadFile, setWebhook,
     getMe: () => tg('getMe'),
     getWebhookInfo: () => tg('getWebhookInfo'),
   };
