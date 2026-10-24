@@ -142,6 +142,9 @@ async function openaiCompatText(provider, model, messages, maxTokens) {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${keyFor(provider)}` },
     body: JSON.stringify({ model, [tokKey]: maxTokens, messages }),
+    // A stalled provider used to hang the turn for minutes (no reply at all);
+    // give up and fall back to Claude instead.
+    signal: AbortSignal.timeout(75000),
   });
   if (!res.ok) throw new Error(`${provider} ${res.status}: ${(await res.text()).slice(0, 200)}`);
   const d = await res.json();
@@ -159,6 +162,7 @@ async function geminiText(model, system, messages, maxTokens) {
       contents,
       generationConfig: { maxOutputTokens: Math.max(maxTokens, 2048) },
     }),
+    signal: AbortSignal.timeout(75000),
   });
   if (!res.ok) throw new Error(`google ${res.status}: ${(await res.text()).slice(0, 200)}`);
   const d = await res.json();
@@ -182,7 +186,7 @@ async function chatAs(api, model, system, messages, { maxTokens = 900 } = {}) {
       }
     } catch (e) {
       if (isCreditError(api, e.message)) markOutOfCredit(api, e.message);
-      console.error(`llm: ${api} failed (${e.message}) — falling back to claude`);
+      console.error(`llm: ${api} ${model} failed (${e.name === 'TimeoutError' ? 'timed out after 75s' : e.message}) — falling back to claude`);
     }
   }
   return claudeText(system, msgs, { maxTokens });

@@ -197,7 +197,7 @@ function claudeSubRun(system, messages, { model = 'claude-sonnet-5', search = fa
       if (signal.aborted) return onAbort();
       signal.addEventListener('abort', onAbort);
     }
-    const timer = setTimeout(() => { child.kill('SIGTERM'); finish(() => reject(new Error('claude cli: timed out'))); }, timeoutMs || (search ? 240000 : 150000));
+    const timer = setTimeout(() => { child.kill('SIGTERM'); finish(() => reject(new Error('claude cli: timed out'))); }, timeoutMs || (search ? 180000 : 90000));
 
     const handle = (line) => {
       let ev;

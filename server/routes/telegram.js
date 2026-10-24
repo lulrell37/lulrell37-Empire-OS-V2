@@ -167,8 +167,13 @@ async function handleMessages(personaId, bot, msgs) {
   // Every reply goes out as both a voice note and text, however he wrote in.
   await bot.sendChatAction(chatId, 'record_voice');
   const keepTyping = setInterval(() => bot.sendChatAction(chatId, 'record_voice').catch(() => {}), 6000);
+  // A slow turn (a stalled provider, several lookups) used to look like being
+  // ignored — say so once if nothing's gone out after 45s.
+  const started = Date.now();
+  const slowNote = setTimeout(() => bot.sendMessage(chatId, 'Still on it…', { plain: true }).catch(() => {}), 45000);
   try {
     const { text: reply, spoken, footer, confirms, media } = await runPersonaTurn(personaId, text, deliver);
+    console.log(`tg ${personaId}: reply ready in ${Math.round((Date.now() - started) / 1000)}s`);
     const voice = await voiceNote(personaId, spoken || reply, { userText: text })
       .catch((e) => ({ ogg: null, error: e.message }));
     let voiceErr = voice.ogg ? '' : voice.error;
@@ -200,6 +205,7 @@ async function handleMessages(personaId, bot, msgs) {
     await deliver(`Something went wrong on my end: ${e.message}`);
   } finally {
     clearInterval(keepTyping);
+    clearTimeout(slowNote);
   }
 }
 

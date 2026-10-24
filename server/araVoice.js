@@ -39,7 +39,7 @@ function grokVoicePCM(key, replyText, userText) {
     const chunks = [];
     let ready = false;
     const done = (fn) => { try { ws.close(); } catch {} clearTimeout(timer); fn(); };
-    const timer = setTimeout(() => done(() => reject(new Error('grok voice timed out'))), 90000);
+    const timer = setTimeout(() => done(() => reject(new Error('grok voice timed out'))), 50000);
 
     ws.on('open', () => {
       ws.send(JSON.stringify({
