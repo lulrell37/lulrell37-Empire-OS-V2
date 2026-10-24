@@ -18,6 +18,10 @@ const app = express();
 app.disable('x-powered-by');
 app.set('trust proxy', true);
 
+// Replit's deployment healthcheck hits / — answer it, or the deployment is
+// reported unhealthy (it was getting a 500).
+app.get('/', (req, res) => res.status(200).send('ok'));
+
 app.get('/health', (req, res) => {
   const { subscriptionStatus, creditStatus } = require('./llm');
   res.json({ ok: true, service: 'empire-os-backend', ts: Date.now(), ai: { claudeSubscription: subscriptionStatus(), credits: creditStatus() } });

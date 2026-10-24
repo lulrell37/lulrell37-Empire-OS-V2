@@ -174,8 +174,25 @@ async function geminiText(model, system, messages, maxTokens) {
 async function chatAs(api, model, system, messages, { maxTokens = 900, fallback = true } = {}) {
   const msgs = typeof messages === 'string' ? [{ role: 'user', content: messages }] : messages;
   if (!fallback && api && api !== 'anthropic') {
-    if (api === 'google') return geminiText(model, system, msgs, maxTokens);
-    return openaiCompatText(api, model, [{ role: 'system', content: system }, ...msgs], maxTokens);
+    // No fallback means a stalled provider would leave him with nothing at all —
+    // after 2 minutes, fail with a message he sees instead.
+    const t0 = Date.now();
+    let timer;
+    const call = api === 'google'
+      ? geminiText(model, system, msgs, maxTokens)
+      : openaiCompatText(api, model, [{ role: 'system', content: system }, ...msgs], maxTokens);
+    const limit = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`${api} ${model} didn't answer within 2 minutes`)), 120000); });
+    try {
+      const out = await Promise.race([call, limit]);
+      console.log(`llm: ${api} ${model} answered in ${Math.round((Date.now() - t0) / 1000)}s`);
+      if (!out) throw new Error(`${api} ${model} returned an empty reply`);
+      return out;
+    } catch (e) {
+      console.error(`llm: ${api} ${model} failed after ${Math.round((Date.now() - t0) / 1000)}s: ${e.message}`);
+      throw e;
+    } finally {
+      clearTimeout(timer);
+    }
   }
   if (api && api !== 'anthropic' && creditOk(api)) {
     try {
