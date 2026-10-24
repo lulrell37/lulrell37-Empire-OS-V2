@@ -18,7 +18,6 @@ const { runPending, cancelPending } = require('../personaTools');
 const { transcribe } = require('../llm');
 const { voiceNote } = require('../personaVoice');
 const { describePhotos, describeVideo } = require('../vision');
-const { sendMedia } = require('../telegramMedia');
 
 const r = express.Router();
 
@@ -167,31 +166,14 @@ async function handleMessages(personaId, bot, msgs) {
   // Every reply goes out as both a voice note and text, however he wrote in.
   await bot.sendChatAction(chatId, 'record_voice');
   const keepTyping = setInterval(() => bot.sendChatAction(chatId, 'record_voice').catch(() => {}), 6000);
-  // A slow turn (a stalled provider, several lookups) used to look like being
-  // ignored — say so once if nothing's gone out after 45s.
   const started = Date.now();
-  const slowNote = setTimeout(() => bot.sendMessage(chatId, 'Still on it…', { plain: true }).catch(() => {}), 45000);
   try {
-    const { text: reply, spoken, footer, confirms, media } = await runPersonaTurn(personaId, text, deliver);
+    const { text: reply, spoken, footer, confirms } = await runPersonaTurn(personaId, text, deliver);
     console.log(`tg ${personaId}: reply ready in ${Math.round((Date.now() - started) / 1000)}s`);
-    const voice = await voiceNote(personaId, spoken || reply, { userText: text })
-      .catch((e) => ({ ogg: null, error: e.message }));
-    let voiceErr = voice.ogg ? '' : voice.error;
-    if (voice.ogg) {
-      // One retry — a Telegram upload hiccup shouldn't cost him the note.
-      await bot.sendVoice(chatId, voice.ogg)
-        .catch(() => bot.sendVoice(chatId, voice.ogg))
-        .catch((e) => { console.error(`tg ${personaId} sendVoice:`, e.message); voiceErr = `upload failed: ${e.message}`; });
-    }
-    // Say so when the voice note didn't make it, instead of it just not showing up.
-    const voiceLine = voiceErr ? `🔇 voice note didn't go through — ${String(voiceErr).slice(0, 160)}`
-      : voice.fallback ? `🔈 backup voice — her own voice failed (${String(voice.error || '').slice(0, 120)})` : '';
-    const tail = [footer, voiceLine].filter(Boolean).join('\n');
-    await deliver(tail ? `${reply}\n\n${tail}` : reply);
-    if (media && media.length) {
-      const failed = await sendMedia(bot, chatId, media);
-      if (failed.length) await bot.sendMessage(chatId, failed.map((w) => `⚠️ ${w}`).join('\n'), { plain: true }).catch(() => {});
-    }
+    const { ogg } = await voiceNote(personaId, spoken || reply, { userText: text })
+      .catch((e) => { console.error(`tg ${personaId} voice synth:`, e.message); return { ogg: null }; });
+    if (ogg) await bot.sendVoice(chatId, ogg).catch((e) => console.error(`tg ${personaId} sendVoice:`, e.message));
+    await deliver(footer ? `${reply}\n\n${footer}` : reply);
     for (const c of confirms || []) {
       await bot.sendMessage(chatId, `${c.label}?\n\n${c.detail}`, {
         reply_markup: { inline_keyboard: [[
@@ -205,7 +187,6 @@ async function handleMessages(personaId, bot, msgs) {
     await deliver(`Something went wrong on my end: ${e.message}`);
   } finally {
     clearInterval(keepTyping);
-    clearTimeout(slowNote);
   }
 }
 

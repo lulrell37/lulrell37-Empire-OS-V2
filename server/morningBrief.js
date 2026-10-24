@@ -283,10 +283,11 @@ async function buildBrief() {
 // ten-minute recital, so the voice note is her spoken version of the same brief:
 // every section, in order, summarized the way she'd say it out loud.
 async function spokenScript(text) {
-  return require('./llm').claudeText(
+  // Her own words, so Grok (her model) writes it — never Claude.
+  return require('./llm').chatAs('xai', 'grok-4',
     'You are A.R.A., Mr. Burrus\'s personal assistant, turning his written morning brief into what you\'ll say out loud as a voice note. Plain spoken sentences only — no lists, symbols, emoji or headings. About 2 to 3 minutes (350-450 words). Keep the brief\'s order and cover every section: the date; the weather as a story of the day (high and low, how it changes morning to evening, when rain is most likely) rather than every hour; each calendar event with its time; how many unread emails and the ones that matter; the top one or two stories from each news desk; then the word of the day with its meaning and the example sentence, the verse read in full with its reference, and the fact. Use only what is in the brief — never add facts. Warm and brisk, the way you\'d actually talk to him.',
     text,
-    { maxTokens: 1200 },
+    { maxTokens: 1200, fallback: false },
   );
 }
 

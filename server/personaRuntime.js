@@ -689,13 +689,13 @@ async function relayToPersona(id, message, { from = 'ara', convo = '', depth = 1
   ].filter(Boolean).join('\n\n');
   const messages = [{ role: 'user', content: message }];
   // Room for a long note or several in one go.
-  let reply = await chatAs(p.api, p.model, sys, messages, { maxTokens: 2500 });
+  let reply = await chatAs(p.api, p.model, sys, messages, { maxTokens: 2500, fallback: id !== 'ara' });
   const replies = [reply];
   const inj = await runInjections(reply, id, { convo, depth, sink });
   if (inj) {
     messages.push({ role: 'assistant', content: reply });
     messages.push({ role: 'user', content: `[tool results — now answer using these. Don't repeat the read tags; write tags you already emitted will run — emit only ones you still need.]\n\n${inj}` });
-    reply = await chatAs(p.api, p.model, sys, messages, { maxTokens: 2500 });
+    reply = await chatAs(p.api, p.model, sys, messages, { maxTokens: 2500, fallback: id !== 'ara' });
     replies.push(reply);
   }
   // The relayed persona's writes run here, under its own name — then the result
@@ -890,7 +890,7 @@ async function runPersonaTurn(personaId, userText, deliver) {
   const convo = convoLines(history, userText, persona);
   const sink = { notes: [], warnings: [], confirms: [], deliver };
 
-  let reply = await chatAs(p.api, p.model, sys, messages, { maxTokens: 1200 });
+  let reply = await chatAs(p.api, p.model, sys, messages, { maxTokens: 1200, fallback: persona !== 'ara' });
   const replies = [reply];
   const looked = [];
 
@@ -903,7 +903,7 @@ async function runPersonaTurn(personaId, userText, deliver) {
     looked.push(inj);
     messages.push({ role: 'assistant', content: reply });
     messages.push({ role: 'user', content: `[tool results — where a persona's actions are listed, those receipts are what really happened: report them, never "done" for something that failed or never ran]\n\n${inj}\n\n[If something Mr. Burrus asked for still needs a lookup you haven't done, emit every remaining read tag now, together, and nothing else. Otherwise reply to him covering everything he asked, using these results — don't re-run a lookup that's already above.]` });
-    reply = await chatAs(p.api, p.model, sys, messages, { maxTokens: 1200 });
+    reply = await chatAs(p.api, p.model, sys, messages, { maxTokens: 1200, fallback: persona !== 'ara' });
     replies.push(reply);
   }
 
