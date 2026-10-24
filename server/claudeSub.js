@@ -52,7 +52,7 @@ function markLimited(resetsAtMs) {
 // A rejected login (expired / revoked CLAUDE_CODE_OAUTH_TOKEN) used to look
 // like any one-off CLI failure: every single call quietly fell through to the
 // metered API, forever, with nothing but a log line. Now it parks the
-// subscription for an hour, logs it loudly, and shows in
+// subscription for an hour, tells the owner on Telegram once, and shows in
 // GET /health until a call succeeds again.
 const AUTH_COOLDOWN_MS = 60 * 60000;
 let authFailedUntil = 0;
@@ -63,6 +63,12 @@ function markAuthFailed(msg) {
   authFailedUntil = Date.now() + AUTH_COOLDOWN_MS;
   lastError = { at: Date.now(), kind: 'auth', message: String(msg).slice(0, 300) };
   console.error(`claude subscription: LOGIN REJECTED (${lastError.message}) — every Claude call is on the metered API until CLAUDE_CODE_OAUTH_TOKEN is fixed. Retrying in 1h.`);
+  if (!ownerTold) {
+    ownerTold = true;
+    require('./telegram').notifyOwner(
+      `⚠️ Claude subscription login was rejected, so the server is billing the Anthropic API key instead.\n\n${lastError.message}\n\nFix: run \`claude setup-token\` on a machine logged into your Pro/Max account and put the new token in the deployment's CLAUDE_CODE_OAUTH_TOKEN secret, then republish.`,
+    ).catch(() => {});
+  }
 }
 
 function status() {
@@ -191,7 +197,7 @@ function claudeSubRun(system, messages, { model = 'claude-sonnet-5', search = fa
       if (signal.aborted) return onAbort();
       signal.addEventListener('abort', onAbort);
     }
-    const timer = setTimeout(() => { child.kill('SIGTERM'); finish(() => reject(new Error('claude cli: timed out'))); }, timeoutMs || (search ? 180000 : 90000));
+    const timer = setTimeout(() => { child.kill('SIGTERM'); finish(() => reject(new Error('claude cli: timed out'))); }, timeoutMs || (search ? 240000 : 150000));
 
     const handle = (line) => {
       let ev;

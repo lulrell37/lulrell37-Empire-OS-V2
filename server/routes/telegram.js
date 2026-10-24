@@ -121,18 +121,6 @@ async function seeMedia(bot, msgs) {
   return { seen: parts.join('\n\n'), caption };
 }
 
-// Telegram's upload gateway sometimes times out (504) on a voice note; the note
-// was simply lost. Try up to 3 times, backing off.
-async function sendVoiceRetry(bot, chatId, ogg, personaId) {
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    try { await bot.sendVoice(chatId, ogg); return true; } catch (e) {
-      console.error(`tg ${personaId} sendVoice attempt ${attempt}/3 (${Math.round(ogg.length / 1024)} KB): ${e.message}`);
-      if (attempt < 3) await new Promise((r) => setTimeout(r, attempt * 3000));
-    }
-  }
-  return false;
-}
-
 async function handleMessages(personaId, bot, msgs) {
   const msg = msgs[0];
   const chatId = msg.chat.id;
@@ -184,7 +172,7 @@ async function handleMessages(personaId, bot, msgs) {
     console.log(`tg ${personaId}: reply ready in ${Math.round((Date.now() - started) / 1000)}s`);
     const { ogg } = await voiceNote(personaId, spoken || reply, { userText: text })
       .catch((e) => { console.error(`tg ${personaId} voice synth:`, e.message); return { ogg: null }; });
-    if (ogg) await sendVoiceRetry(bot, chatId, ogg, personaId);
+    if (ogg) await bot.sendVoice(chatId, ogg).catch((e) => console.error(`tg ${personaId} sendVoice:`, e.message));
     await deliver(footer ? `${reply}\n\n${footer}` : reply);
     for (const c of confirms || []) {
       await bot.sendMessage(chatId, `${c.label}?\n\n${c.detail}`, {

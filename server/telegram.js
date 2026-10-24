@@ -83,7 +83,6 @@ function makeBot(personaId, token) {
   async function sendMessage(chatId, text, opts = {}) {
     const { plain, ...rest } = opts;
     for (const part of chunk(text)) {
-      if (personaId === 'ara') { await tg('sendMessage', { chat_id: chatId, text: part, disable_web_page_preview: true, ...rest }); continue; }
       if (plain) { await tg('sendMessage', { chat_id: chatId, text: part, ...rest }); continue; }
       try {
         await tg('sendMessage', { chat_id: chatId, text: toTelegramHtml(part), parse_mode: 'HTML', ...rest });

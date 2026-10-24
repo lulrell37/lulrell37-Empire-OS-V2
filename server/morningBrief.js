@@ -46,10 +46,22 @@ async function setSetting(key, value) {
   );
 }
 
-async function fetchText(url) {
-  const res = await fetch(url, { headers: { 'user-agent': 'Mozilla/5.0 (EmpireOS morning brief)' }, signal: AbortSignal.timeout(15000) });
-  if (!res.ok) throw new Error(`${res.status} from ${new URL(url).host}`);
-  return res.text();
+// Three tries with a short backoff — Open-Meteo occasionally times out or 5xxs
+// for a moment, which used to print the whole weather section as unavailable.
+async function fetchText(url, tries = 3) {
+  let last;
+  for (let i = 0; i < tries; i++) {
+    try {
+      const res = await fetch(url, { headers: { 'user-agent': 'Mozilla/5.0 (EmpireOS morning brief)' }, signal: AbortSignal.timeout(15000) });
+      if (res.ok) return res.text();
+      last = new Error(`${res.status} from ${new URL(url).host}`);
+      if (res.status < 500 && res.status !== 429) break;
+    } catch (e) {
+      last = new Error(`${new URL(url).host}: ${e.name === 'TimeoutError' ? 'timed out' : e.message}`);
+    }
+    if (i < tries - 1) await new Promise((r) => setTimeout(r, 2000 * (i + 1)));
+  }
+  throw last;
 }
 
 // --- Weather (Open-Meteo, no key) ---
@@ -78,17 +90,30 @@ const STATES = {
 
 // Open-Meteo's geocoder only matches a bare place name ("Waldorf, MD" finds
 // nothing), so search the name and pick the result in the given state.
+// The last good lookup is kept (per place) so a geocoder outage doesn't take
+// the forecast down with it.
+const geoCache = {};
 async function geocode(place) {
   const [name, region = ''] = place.split(',').map((s) => s.trim());
-  const d = JSON.parse(await fetchText(`https://geocoding-api.open-meteo.com/v1/search?count=10&name=${encodeURIComponent(name)}`));
+  let d;
+  try {
+    d = JSON.parse(await fetchText(`https://geocoding-api.open-meteo.com/v1/search?count=10&name=${encodeURIComponent(name)}`));
+  } catch (e) {
+    if (geoCache[place]) return geoCache[place];
+    const saved = await getSetting(`weather_geo:${place}`).catch(() => null);
+    if (saved) { try { return (geoCache[place] = JSON.parse(saved)); } catch {} }
+    throw e;
+  }
   const results = d.results || [];
   if (!results.length) throw new Error(`place not found: ${place}`);
   const want = (STATES[region.toUpperCase()] || region).toLowerCase();
   const g = (want && results.find((r) => String(r.admin1 || '').toLowerCase() === want || String(r.country || '').toLowerCase() === want)) || results[0];
-  return { label: [g.name, g.admin1].filter(Boolean).join(', '), lat: g.latitude, lon: g.longitude };
+  const out = { label: [g.name, g.admin1].filter(Boolean).join(', '), lat: g.latitude, lon: g.longitude };
+  if (!geoCache[place]) setSetting(`weather_geo:${place}`, JSON.stringify(out)).catch(() => {});
+  return (geoCache[place] = out);
 }
 
-// `where` overrides the saved place (the other personas' [WEATHER: place] lookup).
+// `where` overrides the saved place (the personas' [WEATHER: place] lookup).
 async function weatherSection(where) {
   const place = String(where || (await getSetting('weather_place')) || DEFAULT_PLACE).trim() || DEFAULT_PLACE;
   const g = await geocode(place);
@@ -266,17 +291,36 @@ async function spokenScript(text) {
   );
 }
 
+// Voice note (with retry + backup voice); returns false — and says why in the
+// chat — when none went out.
 async function sendVoice(ara, ownerId, script, userText) {
+  let why;
   try {
-    const { synthesizeAraVoice } = require('./araVoice');
-    const ogg = await synthesizeAraVoice(String(script || '').trim(), { userText });
-    if (!ogg) return false;
-    await ara.sendVoice(ownerId, ogg);
-    return true;
+    const { ogg, error } = await require('./personaVoice').voiceNote('ara', String(script || '').trim(), { userText });
+    if (ogg) {
+      await ara.sendVoice(ownerId, ogg).catch(() => ara.sendVoice(ownerId, ogg));
+      return true;
+    }
+    why = error || 'no audio';
   } catch (e) {
-    console.error('morning brief voice failed:', e.message);
-    return false;
+    why = e.message;
   }
+  console.error('morning brief voice failed:', why);
+  await ara.sendMessage(ownerId, `🔇 voice note didn't go through — ${String(why).slice(0, 160)}`, { plain: true }).catch(() => {});
+  return false;
+}
+
+// If the spoken script can't be written (no AI provider available), read a
+// trimmed version of the brief itself instead of skipping the voice note:
+// headline lines only, no hour-by-hour table or symbols.
+function fallbackScript(text) {
+  return String(text)
+    .split('\n')
+    .filter((l) => !/^\s*\d{1,2}\s?(AM|PM)\s/.test(l) && !/^━/.test(l))
+    .join('\n')
+    .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}]/gu, '')
+    .replace(/\n{2,}/g, '\n')
+    .slice(0, 3500);
 }
 
 // Build and send. `force` skips the once-a-day guard (manual /brief).
@@ -294,8 +338,8 @@ async function runMorningBrief({ force = false } = {}) {
   // Voice note first, then the full text — same order as her normal replies.
   // A voice failure never holds up the text.
   const script = await spokenScript(text).catch((e) => { console.error('morning brief script failed:', e.message); return ''; });
-  const voiced = script ? await sendVoice(ara, telegram.OWNER_ID, script, 'Give me my morning brief.') : false;
-  await ara.sendMessage(telegram.OWNER_ID, text);
+  const voiced = await sendVoice(ara, telegram.OWNER_ID, script || fallbackScript(text), 'Give me my morning brief.');
+  await ara.sendMessage(telegram.OWNER_ID, text, { plain: true });
   // Into A.R.A.'s Telegram history, so a reply ("tell me more about the 2nd AP
   // story") has the brief in context.
   await query('INSERT INTO tg_messages (persona, role, content, ts) VALUES ($1, $2, $3, $4)', ['ara', 'assistant', text, Date.now()])
