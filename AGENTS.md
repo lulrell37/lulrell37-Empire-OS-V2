@@ -109,9 +109,10 @@ Drive save that fell back to the app's notes. Replies go out as Telegram HTML (m
 persona can send media (`server/telegramMedia.js`): `[SEND_PHOTO]`,
 `[GENERATE_IMAGE]` (OpenAI, xAI fallback), `[DIAGRAM]` (Mermaid via Kroki),
 `[CHART]` (Chart.js via QuickChart), `[SEND_FILE]`/`[SEND_VIDEO]`/`[SEND_AUDIO]`,
-`[SEND_LOCATION]`; `[WEATHER]` is a keyless Open-Meteo read. Voice notes retry,
-fall back to OpenAI TTS, and say so in the chat when none went out
-(`voiceNote()` in `server/personaVoice.js`). Still app-only: opening apps on
+`[SEND_LOCATION]`; `[WEATHER]` is a keyless Open-Meteo read. ElevenLabs voice
+notes retry, fall back to OpenAI TTS, and say so in the chat when none went out
+(`voiceNote()` in `server/personaVoice.js`). A.R.A.'s Grok voice is deliberately
+left at one try with no backup voice — retries held her text back for minutes. Still app-only: opening apps on
 the phone, 3D Lab, HUD panel layout, the Canvas, trades, clips/video watch, and
 filing GitHub builds (the token lives on the device — `[BUILD_REQUEST]` saves
 the spec as a note instead). Each

@@ -39,7 +39,7 @@ function grokVoicePCM(key, replyText, userText) {
     const chunks = [];
     let ready = false;
     const done = (fn) => { try { ws.close(); } catch {} clearTimeout(timer); fn(); };
-    const timer = setTimeout(() => done(() => reject(new Error('grok voice timed out'))), 50000);
+    const timer = setTimeout(() => done(() => reject(new Error('grok voice timed out'))), 90000);
 
     ws.on('open', () => {
       ws.send(JSON.stringify({
@@ -68,21 +68,12 @@ function grokVoicePCM(key, replyText, userText) {
       } else if (ev.type === 'response.output_audio.delta' && ev.delta) {
         chunks.push(Buffer.from(ev.delta, 'base64'));
       } else if (ev.type === 'response.done') {
-        const r = ev.response || {};
-        if (!chunks.length && r.status && r.status !== 'completed') {
-          const why = (r.status_details && (r.status_details.reason || (r.status_details.error || {}).message)) || r.status;
-          done(() => reject(new Error(`grok voice ${why}`)));
-        } else done(() => resolve(Buffer.concat(chunks)));
+        done(() => resolve(Buffer.concat(chunks)));
       } else if (ev.type === 'error') {
         done(() => reject(new Error(ev.error && ev.error.message || ev.message || 'grok voice error')));
       }
     });
     ws.on('error', (e) => done(() => reject(e)));
-    // A socket the server drops mid-answer used to sit until the 90s timeout,
-    // holding the text reply back the whole time, and then send no voice.
-    ws.on('close', (code, reason) => done(() => (chunks.length
-      ? resolve(Buffer.concat(chunks))
-      : reject(new Error(`grok voice socket closed (${code}${reason && reason.length ? ` ${reason}` : ''})`)))));
   });
 }
 
@@ -109,31 +100,19 @@ async function pcmToOgg(pcm) {
   });
 }
 
-// Reply text -> OGG/Opus voice-note Buffer in A.R.A.'s voice. Throws with the
-// reason on failure; tries the socket twice, since a dropped or empty realtime
-// response is usually a one-off.
-async function araVoiceOgg(replyText, { userText = '' } = {}) {
+// Reply text -> OGG/Opus voice-note Buffer in A.R.A.'s voice, or null on any failure.
+async function synthesizeAraVoice(replyText, { userText = '' } = {}) {
   const key = process.env.XAI_API_KEY;
   const text = String(replyText || '').trim();
-  if (!key) throw new Error('XAI_API_KEY not set');
-  if (!text) return null;
-  let last;
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const pcm = await grokVoicePCM(key, text.slice(0, 4000), userText);
-      if (!pcm || pcm.length < 2000) throw new Error('grok voice returned no audio');
-      return await pcmToOgg(pcm);
-    } catch (e) {
-      last = e;
-      console.error(`ara voice attempt ${attempt + 1} failed:`, e.message);
-    }
+  if (!key || !text) return null;
+  try {
+    const pcm = await grokVoicePCM(key, text.slice(0, 4000), userText);
+    if (!pcm || pcm.length < 2000) return null;
+    return await pcmToOgg(pcm);
+  } catch (e) {
+    console.error('ara voice failed:', e.message);
+    return null;
   }
-  throw last;
 }
 
-// Same, but null on any failure.
-async function synthesizeAraVoice(replyText, opts = {}) {
-  try { return await araVoiceOgg(replyText, opts); } catch { return null; }
-}
-
-module.exports = { synthesizeAraVoice, araVoiceOgg };
+module.exports = { synthesizeAraVoice };
