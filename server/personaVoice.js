@@ -5,11 +5,12 @@
 //   else         ELEVENLABS_API_KEY is set. No key (or no voice id) -> null and
 //                the bot replies text-only.
 //
-// Best-effort throughout: any failure returns null. The encode uses the bundled
-// ffmpeg-static binary (same as araVoice.js).
+// If the persona's own voice fails (after a retry) the note falls back to OpenAI
+// TTS rather than silently going text-only; voiceNote() reports why. The encode
+// uses the bundled ffmpeg-static binary (same as araVoice.js).
 const { spawn } = require('child_process');
 const ffmpegPath = require('ffmpeg-static');
-const { synthesizeAraVoice } = require('./araVoice');
+const { araVoiceOgg } = require('./araVoice');
 const { personaVoiceId } = require('./personas');
 
 const { isFlat, stripCues } = require('./voiceCues');
@@ -65,6 +66,7 @@ async function elevenLabsOgg(voiceId, text, { flat = false } = {}) {
     const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
       method: 'POST',
       headers: { 'xi-api-key': key, 'content-type': 'application/json', accept: 'audio/mpeg' },
+      signal: AbortSignal.timeout(60000),
       body: JSON.stringify({
         text: (tier.cues ? String(text) : stripCues(text)).slice(0, 4000),
         model_id: tier.model,
@@ -87,17 +89,61 @@ async function elevenLabsOgg(voiceId, text, { flat = false } = {}) {
   return null;
 }
 
-// personaId + reply text -> OGG/Opus voice-note Buffer, or null (text-only).
-async function synthesizePersonaVoice(personaId, replyText, { userText = '' } = {}) {
+// Last-resort voice when the persona's own engine is down: OpenAI TTS (the
+// key is already here for Whisper). Not her voice, but he still gets a note.
+const OPENAI_FALLBACK_VOICE = { ara: 'shimmer', selene: 'nova', stephanie: 'coral', haven: 'sage', jarvis: 'onyx' };
+async function openaiOgg(personaId, text) {
+  const key = process.env.OPENAI_API_KEY;
+  if (!key) throw new Error('OPENAI_API_KEY not set');
+  const res = await fetch('https://api.openai.com/v1/audio/speech', {
+    method: 'POST',
+    headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'gpt-4o-mini-tts', voice: OPENAI_FALLBACK_VOICE[personaId] || 'alloy', input: stripCues(text).slice(0, 4000), response_format: 'mp3' }),
+    signal: AbortSignal.timeout(60000),
+  });
+  if (!res.ok) throw new Error(`openai tts ${res.status}: ${(await res.text()).slice(0, 160)}`);
+  return toOgg(Buffer.from(await res.arrayBuffer()));
+}
+
+async function primaryOgg(personaId, text, userText) {
+  if (personaId === 'ara') return araVoiceOgg(text, { userText });
+  if (!process.env.ELEVENLABS_API_KEY) throw new Error('ELEVENLABS_API_KEY not set');
+  if (!personaVoiceId(personaId)) throw new Error('no ElevenLabs voice id for this persona');
+  let last;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const ogg = await elevenLabsOgg(personaVoiceId(personaId), text, { flat: isFlat(personaId) });
+      if (ogg) return ogg;
+      throw new Error('elevenlabs returned no audio');
+    } catch (e) { last = e; }
+  }
+  throw last;
+}
+
+// personaId + reply text -> { ogg, error, fallback }. `ogg` is null only when
+// every engine failed; `error` says why the persona's own voice didn't work.
+async function voiceNote(personaId, replyText, { userText = '' } = {}) {
   const text = String(replyText || '').trim();
-  if (!text) return null;
-  if (personaId === 'ara') return synthesizeAraVoice(text, { userText });
+  if (!text) return { ogg: null };
+  let error;
   try {
-    return await elevenLabsOgg(personaVoiceId(personaId), text, { flat: isFlat(personaId) });
+    const ogg = await primaryOgg(personaId, text, userText);
+    if (ogg) return { ogg };
   } catch (e) {
+    error = e.message;
     console.error(`${personaId} voice failed:`, e.message);
-    return null;
+  }
+  try {
+    return { ogg: await openaiOgg(personaId, text), error, fallback: true };
+  } catch (e) {
+    console.error(`${personaId} fallback voice failed:`, e.message);
+    return { ogg: null, error: error || e.message };
   }
 }
 
-module.exports = { synthesizePersonaVoice, tempoArgs };
+// Back-compat: Buffer or null.
+async function synthesizePersonaVoice(personaId, replyText, opts = {}) {
+  return (await voiceNote(personaId, replyText, opts)).ogg;
+}
+
+module.exports = { synthesizePersonaVoice, voiceNote, tempoArgs };

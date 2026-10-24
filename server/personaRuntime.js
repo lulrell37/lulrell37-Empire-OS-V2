@@ -25,6 +25,7 @@ const { mem0Remember, mem0Search, mem0All, mem0Line, mem0Health } = require('./m
 const { tlSnapshot, tlFormatSnapshot } = require('./tradeLocker');
 const { formatTradeRecord } = require('./tradeJournal');
 const { EMOTION, emotionFor, stripCues } = require('./voiceCues');
+const { MEDIA_TOOLS, forSpeech, pullMarkdownImages, mediaFromTags } = require('./telegramMedia');
 
 const TZ = 'America/New_York';
 // Telegram messages loaded per turn (both roles) — ~20 exchanges. 16 left her
@@ -283,7 +284,8 @@ const TG_FRAME = `[TELEGRAM: you are talking to Mr. Burrus over Telegram (text),
 // leaner set focused on their lane (plus Google, which every persona has).
 const ARA_TOOLS = `[WHAT YOU CAN DO FROM HERE — emit the tag in your reply; the tag is what acts, not saying you'll do it. No literal ] inside a tag. Read tags come back with results before you answer — when he asks for several things at once ("weather, my calendar and my email"), put ALL the read tags in the same reply so they run together, then cover every one in your answer; write tags run after your reply and Mr. Burrus gets a receipt for each, so never claim something happened that a tag didn't do.
  WEB & RESEARCH:
- - [SEARCH_WEB: query] — one live web lookup. Use it for anything that turns on something current — including weather/forecast for a place; never guess that from memory.
+ - [WEATHER] or [WEATHER: city, ST] — today's live forecast, hour by hour (his home by default). Always use this for weather, never guess it.
+ - [SEARCH_WEB: query] — one live web lookup. Use it for anything that turns on something current; never guess that from memory.
  - [DEEP_RESEARCH: topic] — ONLY when he explicitly asks for "deep research" / "a deep dive". Runs in the background (several minutes, ~12 searches, cited); the brief comes back here and is saved as a Note. Tell him it's running.
  THE EMPIRE:
  - [RELAY_TO: persona-id | a complete, specific question] — synchronous: you get their real answer back this turn. Never guess their answer.
@@ -308,10 +310,12 @@ const ARA_TOOLS = `[WHAT YOU CAN DO FROM HERE — emit the tag in your reply; th
  - [DELEGATE: name | the specific scoped task] — one or several in a reply. Each specialist's work comes back to you this turn; then synthesize for him: what each delivered, how it fits, what's decided, what still needs his call. Roles: Selene = brand & visual; Rogue = copy & content; J.A.R.V.I.S. = architecture & build feasibility; Atlas = pricing & payments; Asia = legal & compliance; Stephanie = training content; Haven = health & wellness content; Sage = research.
  - [BUILD_REQUEST: full spec] — saves the spec (Drive, or the app's Notes); filing it to GitHub still needs the app open, so tell him that.
 
+${MEDIA_TOOLS}
+
 Everything in LIVE CONTEXT below is pulled fresh for every message — it IS the HUD; you're looking at it. Never tell him to open the app to check something already in front of you, and never say you "can't" do anything listed above — you can.
 
 NOT AVAILABLE over Telegram — ONLY these genuinely need the phone in hand. Say so plainly and offer the nearest thing you can do:
- opening an app on his phone or a webpage on it, the 3D Laboratory, detaching/docking HUD panels, the Canvas (charts, the notes/tasks board, analytics board), placing or closing trades (that's T.A.L.O.N.'s desk — relay to him), editing clips (though you CAN see photos and videos he sends you right here), filing a build to GitHub.]`;
+ opening an app on his phone or a webpage on it, the 3D Laboratory, detaching/docking HUD panels, the app's Canvas board itself (but charts and diagrams you CAN send here as images — [CHART] / [DIAGRAM]), placing or closing trades (that's T.A.L.O.N.'s desk — relay to him), editing clips (though you CAN see photos and videos he sends you right here), filing a build to GitHub.]`;
 
 // Extra per-persona tag lines folded into GENERIC_TOOLS.
 const PERSONA_EXTRA_TOOLS = {
@@ -322,11 +326,13 @@ const PERSONA_EXTRA_TOOLS = {
 function genericTools(personaId) {
   const extra = PERSONA_EXTRA_TOOLS[personaId] ? '\n' + PERSONA_EXTRA_TOOLS[personaId] : '';
   return `[WHAT YOU CAN DO FROM HERE — emit the tag in your reply; the tag is what acts, not saying you'll do it. No literal ] inside a tag.
- - [SEARCH_WEB: query] — one live web lookup; the result comes back before you answer. Use it for anything that turns on something current — including weather/forecast for a place; never guess that from memory.
+ - [WEATHER] or [WEATHER: city, ST] — today's live forecast, hour by hour (his home by default). Always use this for weather, never guess it.
+ - [SEARCH_WEB: query] — one live web lookup; the result comes back before you answer. Use it for anything that turns on something current; never guess that from memory.
  - [DEEP_RESEARCH: topic] — ONLY when he explicitly asks for "deep research" / "a deep dive". Runs in the background (several minutes, cited); you'll get the finished brief and it's saved as a Note. Tell him it's running.
  - [RELAY_TO: persona-id | a complete, specific question] — hand something outside your lane to another persona. Synchronous: you get their real answer back this turn. Ask a full question; never guess their answer.
  - [MEMORY_QUERY: precise question] — search your own history with Mr. Burrus when he points back to something not in view.
  ${GOOGLE_TOOLS}${extra}
+${MEDIA_TOOLS}
 
 Write tags run after your reply and Mr. Burrus gets a receipt for each — never claim something happened that a tag didn't do.
 
@@ -462,6 +468,7 @@ async function runInjections(text, persona = 'ara', { convo = '', depth = 0, sin
   const one = async ({ name, arg }) => {
     try {
       if (name === 'TRADE_SCAN') return await tradeScan(arg);
+      if (name === 'WEATHER') return `WEATHER${arg ? ` "${arg}"` : ''}:\n${await require('./morningBrief').weatherSection(arg || undefined)}`;
       if (name === 'SEARCH_WEB' && arg) return `SEARCH_WEB "${arg}":\n${(await webResearch(arg)) || '(nothing found)'}`;
       if (tools.READ_TAGS.has(name)) {
         const out = await tools.readTag({ name, arg }, persona);
@@ -908,9 +915,14 @@ async function runPersonaTurn(personaId, userText, deliver) {
   fx.confirms.push(...sink.confirms);
   // `spoken` keeps the lowercase voice cues ([laughs]) for the voice note;
   // `clean` is what he reads and what history keeps.
-  let spoken = stripTags(reply);
+  // Media (photos, generated images, diagrams, charts, files) from any round's
+  // tags plus markdown images in the reply — the route sends them after the text.
+  const pulled = pullMarkdownImages(stripTags(reply));
+  const media = [...mediaFromTags(findTags(replies.join('\n'))), ...pulled.media];
+  let spoken = pulled.text;
   let clean = stripCues(spoken);
-  if (!clean) spoken = clean = fx.notes.length ? `Done — ${fx.notes.join('; ')}.` : 'On it.';
+  if (!clean) spoken = clean = fx.notes.length ? `Done — ${fx.notes.join('; ')}.` : media.length ? 'Here you go.' : 'On it.';
+  spoken = forSpeech(spoken);
   // A receipt under the reply for every write — the reply is written before the
   // writes run, so this is the only part guaranteed to say what really happened.
   const footer = [...fx.notes.map((n) => `✓ ${n}`), ...fx.warnings.map((w) => `⚠️ ${w}`)].join('\n');
@@ -930,7 +942,7 @@ async function runPersonaTurn(personaId, userText, deliver) {
   }).catch(() => {});
   mem0Remember(persona, `YOU: ${userText}\n${p.name}: ${clean}`, { source: 'telegram' });
 
-  return { text: clean, spoken, footer, confirms: fx.confirms };
+  return { text: clean, spoken, footer, confirms: fx.confirms, media };
 }
 
 // Back-compat: A.R.A.'s turn.

@@ -105,7 +105,13 @@ runs the specialists server-side). Send-email and deletes become `tg_pending`
 rows and need a Confirm tap (inline buttons → `callback_query`). Each reply
 carries a ✓/⚠️ receipt per write, and the prompt carries a live Google status
 line (`googleStatus()`, also `GET /google/status`) so a persona never claims a
-Drive save that fell back to the app's notes. Still app-only: opening apps on
+Drive save that fell back to the app's notes. Replies go out as Telegram HTML (markdown links are tappable), and every
+persona can send media (`server/telegramMedia.js`): `[SEND_PHOTO]`,
+`[GENERATE_IMAGE]` (OpenAI, xAI fallback), `[DIAGRAM]` (Mermaid via Kroki),
+`[CHART]` (Chart.js via QuickChart), `[SEND_FILE]`/`[SEND_VIDEO]`/`[SEND_AUDIO]`,
+`[SEND_LOCATION]`; `[WEATHER]` is a keyless Open-Meteo read. Voice notes retry,
+fall back to OpenAI TTS, and say so in the chat when none went out
+(`voiceNote()` in `server/personaVoice.js`). Still app-only: opening apps on
 the phone, 3D Lab, HUD panel layout, the Canvas, trades, clips/video watch, and
 filing GitHub builds (the token lives on the device — `[BUILD_REQUEST]` saves
 the spec as a note instead). Each

@@ -37,7 +37,8 @@ function subscriptionAvailable() {
     console.log('claude subscription: usage window reset — back on the subscription');
     limitedUntil = 0;
   }
-  return !limitedUntil;
+  if (authFailedUntil && Date.now() >= authFailedUntil) authFailedUntil = 0;
+  return !limitedUntil && !authFailedUntil;
 }
 
 function markLimited(resetsAtMs) {
@@ -48,8 +49,35 @@ function markLimited(resetsAtMs) {
   }
 }
 
+// A rejected login (expired / revoked CLAUDE_CODE_OAUTH_TOKEN) used to look
+// like any one-off CLI failure: every single call quietly fell through to the
+// metered API, forever, with nothing but a log line. Now it parks the
+// subscription for an hour, tells the owner on Telegram once, and shows in
+// GET /health until a call succeeds again.
+const AUTH_COOLDOWN_MS = 60 * 60000;
+let authFailedUntil = 0;
+let lastError = null;
+let ownerTold = false;
+const AUTH_RE = /authentication_failed|invalid.{0,20}(api key|token|bearer)|oauth token|\b401\b|not logged in|please run \/login|token (has )?expired|revoked/i;
+function markAuthFailed(msg) {
+  authFailedUntil = Date.now() + AUTH_COOLDOWN_MS;
+  lastError = { at: Date.now(), kind: 'auth', message: String(msg).slice(0, 300) };
+  console.error(`claude subscription: LOGIN REJECTED (${lastError.message}) — every Claude call is on the metered API until CLAUDE_CODE_OAUTH_TOKEN is fixed. Retrying in 1h.`);
+  if (!ownerTold) {
+    ownerTold = true;
+    require('./telegram').notifyOwner(
+      `⚠️ Claude subscription login was rejected, so the server is billing the Anthropic API key instead.\n\n${lastError.message}\n\nFix: run \`claude setup-token\` on a machine logged into your Pro/Max account and put the new token in the deployment's CLAUDE_CODE_OAUTH_TOKEN secret, then republish.`,
+    ).catch(() => {});
+  }
+}
+
 function status() {
-  return { enabled: enabled(), limited: !!limitedUntil && Date.now() < limitedUntil, limitedUntil: limitedUntil || null };
+  return {
+    enabled: enabled(),
+    tokenSet: !!process.env.CLAUDE_CODE_OAUTH_TOKEN,
+    limited: !!limitedUntil && Date.now() < limitedUntil, limitedUntil: limitedUntil || null,
+    authFailed: authFailedUntil > Date.now(), lastError,
+  };
 }
 
 // Locate the `claude` executable: explicit override, then the installed
@@ -155,6 +183,7 @@ function claudeSubRun(system, messages, { model = 'claude-sonnet-5', search = fa
     let stderr = '';
     let result = null;
     let rejected = false;   // the CLI reported the usage limit (with its reset time)
+    let authRejected = false; // Anthropic rejected the OAuth token
     let settled = false;
     const finish = (fn) => {
       if (settled) return;
@@ -183,6 +212,10 @@ function claudeSubRun(system, messages, { model = 'claude-sonnet-5', search = fa
           text += '\n\n';
           if (onText) onText('\n\n');
         }
+      } else if (ev.type === 'system' && ev.subtype === 'api_retry' && ev.error_status === 401) {
+        // Don't sit through the CLI's ten retries of a rejected login.
+        authRejected = true;
+        child.kill('SIGTERM');
       } else if (ev.type === 'rate_limit_event') {
         const info = ev.rate_limit_info || {};
         if (info.status === 'rejected') { rejected = true; markLimited(info.resetsAt ? info.resetsAt * 1000 : 0); }
@@ -201,10 +234,14 @@ function claudeSubRun(system, messages, { model = 'claude-sonnet-5', search = fa
       if (buf.trim()) handle(buf);
       finish(() => {
         if (result && !result.is_error && result.subtype === 'success') {
+          ownerTold = false;
           return resolve(String(text || result.result || '').trim());
         }
-        const msg = (result && (result.result || (result.errors || []).join('; ') || result.subtype)) || stderr.slice(0, 200) || `exit ${code}`;
-        if (!rejected && LIMIT_RE.test(msg)) markLimited(0);
+        const msg = authRejected ? 'Anthropic rejected the subscription login (401 authentication_failed)'
+          : (result && (result.result || (result.errors || []).join('; ') || result.subtype)) || stderr.slice(0, 200) || `exit ${code}`;
+        if (authRejected || AUTH_RE.test(msg)) markAuthFailed(msg);
+        else if (!rejected && LIMIT_RE.test(msg)) markLimited(0);
+        else lastError = { at: Date.now(), kind: 'other', message: String(msg).slice(0, 300) };
         reject(Object.assign(new Error(`claude cli: ${String(msg).slice(0, 240)}`), { partial: text }));
       });
     });
