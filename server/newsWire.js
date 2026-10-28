@@ -11,7 +11,8 @@ const { webResearch, chatAs } = require('./llm');
 const { getSetting, setSetting, upsertSyncRow, syncedRow, syncedRows, saveMemory, todayET } = require('./syncStore');
 const { tlStatus, tlConnect, tlSnapshot, tlFormatSnapshot, tlPositions, tlInstrumentsById, tlPlaceOrder, MAX_QTY, MAX_OPEN_POSITIONS } = require('./tradeLocker');
 const { recordTradeOpen, TRADER_ID } = require('./tradeJournal');
-const { newsTradeLevels } = require('./talonBrain');
+const { newsTradeLevels, SYMBOLS } = require('./talonBrain');
+const { orderRejected } = require('./talonAlerts');
 const { pushAlert } = require('./pushSender');
 
 const TZ = 'America/New_York';
@@ -173,7 +174,8 @@ async function pollHeadlines() {
 
 // --- News -> T.A.L.O.N. trade hand-off (demo account only) ---
 async function newsTradeHandoff(impacts) {
-  const highs = impacts.filter((i) => /^high/.test(i.confidence));
+  // T.A.L.O.N. only trades gold and Bitcoin, news calls included.
+  const highs = impacts.filter((i) => /^high/.test(i.confidence) && SYMBOLS.includes(i.symbol));
   if (!highs.length) return;
   if ((await getSetting('news_wire_trades', '1')) !== '1') {
     console.log('newswire: high-confidence calls but news trades are off —', highs.map((i) => `${i.side} ${i.symbol}`).join(', '));
@@ -209,8 +211,50 @@ async function newsTradeHandoff(impacts) {
       await saveMemory('wire', note);
     } catch (e) {
       console.error(`newswire->talon: ${imp.symbol} order rejected —`, e.message);
+      orderRejected({ symbol: imp.symbol, side: imp.side, error: e.message });
     }
   }
+}
+
+// --- 8:30 AM data desk -> gold trade ---
+// The U.S. economic releases (CPI, PPI, the jobs report, jobless claims, retail
+// sales, GDP, PCE…) all drop at 8:30 AM ET, and gold reacts hard to the surprise
+// vs. forecast. Weekdays at 8:32 / 8:36 / 8:42 / 8:50 ET (server/index.js) W.I.R.E.
+// reads what came out; a clear surprise becomes a BUY/SELL hand-off to T.A.L.O.N.
+// on XAUUSD through the same newsTradeHandoff as any other news call (demo only,
+// `news_wire_trades` toggle respected). A.R.A. tells Mr. Burrus what the number
+// was and what was done. Once a day (`wire_830_date`); "not out yet" retries on
+// the next slot. ECON_DESK=off disables the cron.
+async function runEconDesk() {
+  if ((await getSetting('news_wire', '1')) !== '1') return { skipped: 'news wire off' };
+  const today = todayET();
+  if ((await getSetting('wire_830_date', '')) === today) return { skipped: 'already handled today' };
+  const { claudeText, WEB_SEARCH_TOOL } = require('./llm');
+  const dateLine = new Date().toLocaleDateString('en-US', { timeZone: TZ, weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+  const out = await claudeText(
+    `You are W.I.R.E., the news desk, reading the 8:30 AM ET U.S. economic data release for the gold trading desk. Search the live web for the reports released at 8:30 AM ET TODAY (CPI / core CPI, PPI, nonfarm payrolls + unemployment rate + wages, initial jobless claims, retail sales, GDP, PCE / core PCE, durable goods, and similar). Use only numbers actually published today, never last month's.
+How gold reacts: a HOT surprise (inflation above forecast, payrolls/wages/growth/retail stronger than forecast, jobless claims lower than forecast) lifts the dollar and yields -> gold falls -> "sell". A SOFT surprise (the reverse) -> gold rises -> "buy". In line with forecast (CPI/PCE within 0.1 pt, payrolls within ~50k, claims within ~10k) or mixed signals with no clear lead -> "none". When several reports come out, the inflation and jobs numbers outrank the rest.
+Reply with exactly ONE line, nothing else:
+RELEASED | <report names> | <actual vs forecast, key numbers> | buy|sell|none | high|medium|low | <one-sentence reason>
+or NOT_YET (today has an 8:30 release but the numbers aren't published yet), or NONE (no 8:30 release today).`,
+    `Today is ${dateLine}. What came out at 8:30 AM ET today and what does it mean for gold?`,
+    { maxTokens: 900, tools: WEB_SEARCH_TOOL },
+  );
+  const line = String(out || '').split('\n').map((l) => l.trim()).find((l) => /^(RELEASED|NOT_YET|NONE)\b/i.test(l)) || '';
+  if (!line || /^NOT_YET/i.test(line)) return { pending: true };
+  await setSetting('wire_830_date', today);
+  if (/^NONE/i.test(line)) return { release: false };
+
+  const [, reports = '', numbers = '', side = '', conviction = '', reason = ''] = line.split('|').map((x) => x.trim());
+  const dir = side.toLowerCase();
+  const trade = (dir === 'buy' || dir === 'sell') && /^(high|medium)/i.test(conviction);
+  const thesis = `8:30 data — ${reports}: ${numbers}. ${reason}`.slice(0, 400);
+  await saveMemory('wire', `[8:30 data] ${thesis} -> gold ${trade ? dir : 'no trade'}`);
+  const { araNote } = require('./talonAlerts');
+  araNote(`📊 **W.I.R.E. — 8:30 data**, Mr. Burrus: ${reports}\n${numbers}\n${reason}\n`
+    + (trade ? `→ Gold **${dir.toUpperCase()}** — handed to T.A.L.O.N. to put through.` : `→ No gold trade (${dir === 'none' ? 'in line / mixed' : `${conviction || 'low'} conviction`}).`));
+  if (trade) await newsTradeHandoff([{ symbol: 'XAUUSD', side: dir, confidence: 'high', thesis }]);
+  return { release: true, side: dir, conviction, traded: trade };
 }
 
 // --- loop ---
@@ -224,4 +268,4 @@ async function tick() {
   }
 }
 
-module.exports = { tick, refreshNewsBrief };
+module.exports = { tick, refreshNewsBrief, runEconDesk };

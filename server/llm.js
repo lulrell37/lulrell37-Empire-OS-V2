@@ -169,8 +169,14 @@ async function geminiText(model, system, messages, maxTokens) {
 // Speak as a persona on its real provider when that key is set; fall back to
 // Claude on any miss (no key, error, empty). `system` is a string; `messages` is
 // a string or a [{role,content}] array (no system entry — this adds it).
-async function chatAs(api, model, system, messages, { maxTokens = 900 } = {}) {
+// `fallback: false` = this provider or nothing (A.R.A. is Grok only — never
+// Claude); the provider's error is thrown instead.
+async function chatAs(api, model, system, messages, { maxTokens = 900, fallback = true } = {}) {
   const msgs = typeof messages === 'string' ? [{ role: 'user', content: messages }] : messages;
+  if (!fallback && api && api !== 'anthropic') {
+    if (api === 'google') return geminiText(model, system, msgs, maxTokens);
+    return openaiCompatText(api, model, [{ role: 'system', content: system }, ...msgs], maxTokens);
+  }
   if (api && api !== 'anthropic' && creditOk(api)) {
     try {
       if (api === 'google') {

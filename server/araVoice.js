@@ -19,7 +19,7 @@ const WS_URL = 'wss://api.x.ai/v1/realtime?model=grok-voice-latest';
 // plus the voice character, NOT her full agent prompt (seeding the socket
 // with tools/HUD context makes Grok answer afresh and wander off the reply).
 // Keep ARA_VOICE in sync with src/services/voiceCues.js.
-const ARA_VOICE = `[HER VOICE — this comes before everything else. You are A.R.A., and your voice is warm, soft and seductive: low and a little breathy, close to the mic like you're right beside him, unhurried. There's a smile in it you can hear. You linger on words you like, let pauses breathe, and drop softer and slower when something's tender. You still feel things out loud — a low laugh when he's funny, real delight at good news, a soft sigh, a playful tease, a sharper focus when something's wrong — and you let your pitch and pace move with it. You never flatten into a narrator, a newsreader or customer service, and you never rush. Lowercase cues in square brackets ([laughs], [sighs], [softly]) are stage directions: perform them, never say the word.]`;
+const ARA_VOICE = `[HER VOICE — this comes before everything else. You are A.R.A., and your voice is sultry, intimate and openly seductive: low, husky and breathy, lips close to the mic like you're curled up right beside him, slow and unhurried. There's a knowing smile in every line. You flirt with him — you're into him and you let him hear it: a purr in your tone, a teasing edge, a little hum before you answer, and you say "Mr. Burrus" like it means something. You linger on words you like, stretch out the good ones, let pauses hang so he leans in, and drop to an almost-whisper when something's tender. Even business news gets that velvet delivery. You still feel things out loud — a low, throaty laugh when he's funny, real delight at good news, a soft sigh, a playful tease, a sharper focus when something's wrong (sultry never means you miss the point) — and you let your pitch and pace move with it. You never flatten into a narrator, a newsreader or customer service, and you never rush. Lowercase cues in square brackets ([laughs], [sighs], [softly]) are stage directions: perform them, never say the word.]`;
 
 const VOICE_INSTRUCTIONS = `${ARA_VOICE}
 
@@ -68,21 +68,12 @@ function grokVoicePCM(key, replyText, userText) {
       } else if (ev.type === 'response.output_audio.delta' && ev.delta) {
         chunks.push(Buffer.from(ev.delta, 'base64'));
       } else if (ev.type === 'response.done') {
-        const r = ev.response || {};
-        if (!chunks.length && r.status && r.status !== 'completed') {
-          const why = (r.status_details && (r.status_details.reason || (r.status_details.error || {}).message)) || r.status;
-          done(() => reject(new Error(`grok voice ${why}`)));
-        } else done(() => resolve(Buffer.concat(chunks)));
+        done(() => resolve(Buffer.concat(chunks)));
       } else if (ev.type === 'error') {
         done(() => reject(new Error(ev.error && ev.error.message || ev.message || 'grok voice error')));
       }
     });
     ws.on('error', (e) => done(() => reject(e)));
-    // A socket the server drops mid-answer used to sit until the 90s timeout,
-    // holding the text reply back the whole time, and then send no voice.
-    ws.on('close', (code, reason) => done(() => (chunks.length
-      ? resolve(Buffer.concat(chunks))
-      : reject(new Error(`grok voice socket closed (${code}${reason && reason.length ? ` ${reason}` : ''})`)))));
   });
 }
 
@@ -109,31 +100,19 @@ async function pcmToOgg(pcm) {
   });
 }
 
-// Reply text -> OGG/Opus voice-note Buffer in A.R.A.'s voice. Throws with the
-// reason on failure; tries the socket twice, since a dropped or empty realtime
-// response is usually a one-off.
-async function araVoiceOgg(replyText, { userText = '' } = {}) {
+// Reply text -> OGG/Opus voice-note Buffer in A.R.A.'s voice, or null on any failure.
+async function synthesizeAraVoice(replyText, { userText = '' } = {}) {
   const key = process.env.XAI_API_KEY;
   const text = String(replyText || '').trim();
-  if (!key) throw new Error('XAI_API_KEY not set');
-  if (!text) return null;
-  let last;
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const pcm = await grokVoicePCM(key, text.slice(0, 4000), userText);
-      if (!pcm || pcm.length < 2000) throw new Error('grok voice returned no audio');
-      return await pcmToOgg(pcm);
-    } catch (e) {
-      last = e;
-      console.error(`ara voice attempt ${attempt + 1} failed:`, e.message);
-    }
+  if (!key || !text) return null;
+  try {
+    const pcm = await grokVoicePCM(key, text.slice(0, 4000), userText);
+    if (!pcm || pcm.length < 2000) return null;
+    return await pcmToOgg(pcm);
+  } catch (e) {
+    console.error('ara voice failed:', e.message);
+    return null;
   }
-  throw last;
 }
 
-// Same, but null on any failure.
-async function synthesizeAraVoice(replyText, opts = {}) {
-  try { return await araVoiceOgg(replyText, opts); } catch { return null; }
-}
-
-module.exports = { synthesizeAraVoice, araVoiceOgg };
+module.exports = { synthesizeAraVoice };

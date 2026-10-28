@@ -10,7 +10,7 @@
 //   [SEND_PHOTO: url | caption]        an image from the web
 //   [SEND_FILE: url | caption]         any file (PDF, CSV, zip…) as a document
 //   [SEND_VIDEO: url | caption] / [SEND_AUDIO: url | caption]
-//   [GENERATE_IMAGE: prompt]           AI image (OpenAI gpt-image-1, xAI fallback)
+//   [GENERATE_IMAGE: prompt]           AI image (Pollinations — free, no key; xAI / OpenAI as backups)
 //   [DIAGRAM: mermaid source]          flowchart / sequence / mind map… as a PNG
 //   [CHART: Chart.js config JSON]      bar / line / pie… as a PNG (QuickChart)
 //   [SEND_LOCATION: lat | lon]         a map pin
@@ -91,23 +91,41 @@ function mediaFromTags(tags) {
   return out;
 }
 
+// Pollinations is free and keyless, so it goes first; the paid providers only
+// run if it's down and their keys are set. Keyless use is capped at one image
+// per ~45s per IP — a 402 FREE_LIMIT says how long to wait, so wait it out
+// (several images in one reply go out one after another). POLLINATIONS_KEY
+// (optional) lifts the cap.
+async function pollinationsImage(prompt) {
+  const key = process.env.POLLINATIONS_KEY;
+  const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(String(prompt).slice(0, 1500))}`
+    + `?width=1024&height=1024&nologo=true&seed=${Math.floor(Math.random() * 1e9)}`;
+  const headers = key ? { authorization: `Bearer ${key}` } : {};
+  let last;
+  for (let i = 0; i < 3; i++) {
+    let wait = 3000;
+    try {
+      const res = await fetch(url, { headers, signal: AbortSignal.timeout(120000) });
+      if (res.ok && /^image\//.test(res.headers.get('content-type') || '')) {
+        const buf = Buffer.from(await res.arrayBuffer());
+        if (buf.length > 1000) return buf;
+        throw new Error('pollinations: empty image');
+      }
+      const body = await res.text().catch(() => '');
+      const after = body.match(/retry after (\d+)s/i);
+      if (after) wait = (Math.min(60, +after[1]) + 2) * 1000;
+      throw new Error(`pollinations ${res.status}: ${body.slice(0, 140)}`);
+    } catch (e) {
+      last = e.name === 'TimeoutError' ? new Error('pollinations: timed out') : e;
+    }
+    if (i < 2) await new Promise((r) => setTimeout(r, wait));
+  }
+  throw last;
+}
+
 async function generateImage(prompt) {
   const errs = [];
-  if (process.env.OPENAI_API_KEY) {
-    try {
-      const res = await fetch('https://api.openai.com/v1/images/generations', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
-        body: JSON.stringify({ model: 'gpt-image-1', prompt, size: '1024x1024', n: 1 }),
-      });
-      if (!res.ok) throw new Error(`openai ${res.status}: ${(await res.text()).slice(0, 160)}`);
-      const d = await res.json();
-      const img = (d.data || [])[0] || {};
-      if (img.b64_json) return Buffer.from(img.b64_json, 'base64');
-      if (img.url) return img.url;
-      throw new Error('openai: no image returned');
-    } catch (e) { errs.push(e.message); }
-  }
+  try { return await pollinationsImage(prompt); } catch (e) { errs.push(e.message); }
   if (process.env.XAI_API_KEY) {
     try {
       const res = await fetch('https://api.x.ai/v1/images/generations', {
@@ -123,7 +141,22 @@ async function generateImage(prompt) {
       throw new Error('xai: no image returned');
     } catch (e) { errs.push(e.message); }
   }
-  throw new Error(errs.length ? errs.join(' | ') : 'no image provider (set OPENAI_API_KEY or XAI_API_KEY)');
+  if (process.env.OPENAI_API_KEY) {
+    try {
+      const res = await fetch('https://api.openai.com/v1/images/generations', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
+        body: JSON.stringify({ model: 'gpt-image-1', prompt, size: '1024x1024', n: 1 }),
+      });
+      if (!res.ok) throw new Error(`openai ${res.status}: ${(await res.text()).slice(0, 160)}`);
+      const d = await res.json();
+      const img = (d.data || [])[0] || {};
+      if (img.b64_json) return Buffer.from(img.b64_json, 'base64');
+      if (img.url) return img.url;
+      throw new Error('openai: no image returned');
+    } catch (e) { errs.push(e.message); }
+  }
+  throw new Error(errs.join(' | '));
 }
 
 // Mermaid -> PNG. Kroki first, mermaid.ink as the fallback.

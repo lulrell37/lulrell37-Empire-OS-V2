@@ -9,6 +9,7 @@
 const crypto = require('crypto');
 const { syncedRows, upsertSyncRow } = require('./syncStore');
 const { tlPositions, tlOrdersHistory, tlInstrumentsById } = require('./tradeLocker');
+const alerts = require('./talonAlerts');
 
 const TRADER_ID = 'talon';
 const STRATEGY_TITLE = 'T.A.L.O.N. — Winning Strategy';
@@ -48,6 +49,7 @@ async function recordTradeOpen({ symbol, side, qty, entry, stopLoss, takeProfit,
     status: 'open', order_id: orderId != null ? String(orderId) : null, opened_at: now,
     auto: auto ? 1 : 0, updated_at: now,
   });
+  alerts.tradeOpened({ symbol: String(symbol || '').toUpperCase(), side, qty, entry, stopLoss, takeProfit, rationale, setup });
   return syncId;
 }
 
@@ -97,6 +99,7 @@ async function reconcileOpenTrades() {
       if (misses >= 8 || Date.now() - t.opened_at > 20 * 60e3) {
         await upsertSyncRow('trades', t.sync_id, { ...t, status: 'unknown', outcome: 'unknown', closed_at: now,
           review: t.review || 'never appeared as an open position — order may have been rejected or filled and closed while unwatched', updated_at: now });
+        alerts.tradeLost(t, 'the order may have been rejected, or it filled and closed between checks.');
       } else {
         await upsertSyncRow('trades', t.sync_id, { ...t, misses, updated_at: now });
       }
@@ -157,10 +160,12 @@ async function reconcileOpenTrades() {
       const reward = t.side === 'buy' ? exit - entry : entry - exit;
       if (risk > 0) r_multiple = +(reward / risk).toFixed(2);
     }
-    await upsertSyncRow('trades', t.sync_id, {
+    const done = {
       ...t, status: 'closed', closed_at: now, exit_price: exit,
       realized_pl: realized, pl_estimated: estimated, outcome, r_multiple, updated_at: now,
-    });
+    };
+    await upsertSyncRow('trades', t.sync_id, done);
+    alerts.tradeClosed(done);
     closed++;
   }
   return { checked: open.length, closed };

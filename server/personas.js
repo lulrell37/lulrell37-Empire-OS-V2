@@ -99,7 +99,7 @@ const ROSTER = {
   },
   talon: {
     name: 'T.A.L.O.N.', role: 'Trader', api: 'anthropic', model: CLAUDE,
-    blurb: 'The Empire\'s trading desk — assisted execution via TradeLocker, 0.01 lot max, only while the app is open. Patience is the edge.',
+    blurb: 'The Empire\'s trading desk — trades gold (XAUUSD) and Bitcoin (BTCUSD) only, on a fixed trend-pullback playbook, 0.01 lot, demo account. Every trade he takes is reported to Mr. Burrus by A.R.A.',
   },
   haven: {
     name: 'H.A.V.E.N.', role: 'Doctor & Wellness', api: 'anthropic', model: CLAUDE,
@@ -155,8 +155,23 @@ const ALIASES = {
   stephanie: 'stephanie', steph: 'stephanie', sage: 'sage', wire: 'wire', rogue: 'rogue',
   scout: 'scout', nova: 'nova', pulse: 'pulse', atlas: 'atlas', talon: 'talon',
   haven: 'haven', aisha: 'aisha', asia: 'aisha', abraham: 'abraham', batman: 'batman',
-  andrew: 'andrew', pen: 'pen', forge: 'forge', herald: 'herald',
+  andrew: 'andrew', pen: 'pen', forge: 'forge', herald: 'herald', aura: 'ara',
 };
+
+// Personas only consult each other when Mr. Burrus asks them to: his message
+// names the target ("ask T.A.L.O.N.", "what does Atlas think") or plainly asks
+// for a hand-off ("check with", "run it by", "loop in", "relay"…). Otherwise
+// the persona answers from its own lane. Mirrors relayAllowed() in
+// src/screens/CommandScreen.js.
+const NAMES_FOR = (id) => [id, ...Object.keys(ALIASES).filter((k) => ALIASES[k] === id),
+  String((ROSTER[id] && ROSTER[id].name) || '').toLowerCase().replace(/\./g, '')].filter(Boolean);
+const HANDOFF_ASK = /\b(check with|run (it|this|that) by|loop in|relay|pass (it|this|that) (on|to|along)|hand (it|this|that) (off|to)|ask (him|her|them|the (team|desk|others)|someone|around|whoever)|get (a|their|his|her) (take|input|read|opinion)|consult|have (him|her|them) )/i;
+function relayAllowed(userText, id) {
+  const said = String(userText || '').toLowerCase().replace(/\./g, '');
+  if (!said) return false;
+  if (NAMES_FOR(id).some((n) => n.length > 2 && new RegExp(`\\b${n}\\b`).test(said))) return true;
+  return HANDOFF_ASK.test(said);
+}
 
 function resolvePersonaId(ref) {
   const s = String(ref || '').toLowerCase().replace(/[.\s]/g, '').trim();
@@ -195,6 +210,6 @@ function personaVoiceId(id) {
 }
 
 module.exports = {
-  ROSTER, resolvePersonaId, rosterLines, personaSystem, genderLine, pronouns,
+  ROSTER, resolvePersonaId, relayAllowed, rosterLines, personaSystem, genderLine, pronouns,
   personaTgIdentity, personaVoiceId,
 };

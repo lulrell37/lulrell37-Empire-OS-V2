@@ -107,11 +107,12 @@ carries a ✓/⚠️ receipt per write, and the prompt carries a live Google sta
 line (`googleStatus()`, also `GET /google/status`) so a persona never claims a
 Drive save that fell back to the app's notes. Replies go out as Telegram HTML (markdown links are tappable), and every
 persona can send media (`server/telegramMedia.js`): `[SEND_PHOTO]`,
-`[GENERATE_IMAGE]` (OpenAI, xAI fallback), `[DIAGRAM]` (Mermaid via Kroki),
+`[GENERATE_IMAGE]` (Pollinations, free/keyless, ~1 per 45s; xAI then OpenAI as backups), `[DIAGRAM]` (Mermaid via Kroki),
 `[CHART]` (Chart.js via QuickChart), `[SEND_FILE]`/`[SEND_VIDEO]`/`[SEND_AUDIO]`,
-`[SEND_LOCATION]`; `[WEATHER]` is a keyless Open-Meteo read. Voice notes retry,
-fall back to OpenAI TTS, and say so in the chat when none went out
-(`voiceNote()` in `server/personaVoice.js`). Still app-only: opening apps on
+`[SEND_LOCATION]`; `[WEATHER]` is a keyless Open-Meteo read. ElevenLabs voice
+notes retry, fall back to OpenAI TTS, and say so in the chat when none went out
+(`voiceNote()` in `server/personaVoice.js`). A.R.A.'s Grok voice is deliberately
+left at one try with no backup voice — retries held her text back for minutes. Still app-only: opening apps on
 the phone, 3D Lab, HUD panel layout, the Canvas, trades, clips/video watch, and
 filing GitHub builds (the token lives on the device — `[BUILD_REQUEST]` saves
 the spec as a note instead). Each
@@ -154,6 +155,20 @@ token does (`POST /trade/creds`, `server/routes/trade.js`, table
 `trade_creds`) — pushed on TradeLocker connect, backend connect, and app
 start (`syncTradeCredsToBackend()` in `src/services/tradeLocker.js`).
 
+**T.A.L.O.N. trades gold (XAUUSD) and Bitcoin (BTCUSD) only**, on a fixed
+playbook in `server/talonBrain.js` (`STRATEGY`, `SYMBOLS`). The "Winning
+Strategy" note, the `auto_trade_symbols` setting and his custom persona prompt
+(`custom_prompts`, blocked in both `personaRuntime.customPrompt` and the app's
+`buildSys`) are deliberately ignored. W.I.R.E.'s news hand-offs are filtered to
+the same two symbols. Every open, close (stop/target hit, checked every 5 min),
+rejected order and a 9 PM ET recap go to the owner from A.R.A.'s Telegram bot
+(`server/talonAlerts.js`, also logged in her `tg_messages` history). W.I.R.E.'s
+8:30 AM ET data desk (`runEconDesk` in `server/newsWire.js`, `ECON_DESK=off` to
+stop) reads CPI/jobs/claims/etc. vs forecast and hands a gold BUY/SELL to
+T.A.L.O.N. on a clear surprise. The morning brief's GOLD WATCH section
+(`goldWatchSection` in `server/morningBrief.js`) lists that day's gold-moving
+events with forecasts.
+
 One real gap this surfaced: the app's own per-persona chat table (`messages`
 in `src/services/database.js`) is **not** part of the synced dataset, so a
 server-side write can't land "in her chat" the way the on-device loops do.
@@ -163,6 +178,16 @@ chat — is delivered as a push notification instead when run server-side
 carries into her next real conversation. W.I.R.E.'s brief and T.A.L.O.N.'s
 trades don't have this problem: they land in `hud_state` and `trades`, both
 already synced and already what the NEWS panel and Trade Journal UI read.
+
+## Persona hand-offs only on request
+
+A persona's `[RELAY_TO]` only goes through when the owner's message asks for it:
+it names the target persona or plainly asks for a hand-off ("check with", "run
+it by", "loop in"…). `relayAllowed()` in `server/personas.js` and
+`src/personas/personas.js` (keep in sync) gates it on both the server (Telegram)
+and in the app; a blocked relay tells the persona to answer it herself. Code-level
+hand-offs he set up (W.I.R.E.'s 8:30 desk → T.A.L.O.N., `[DELEGATE]`, the
+council) aren't affected.
 
 ## Builds
 

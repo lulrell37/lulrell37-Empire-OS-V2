@@ -10,7 +10,7 @@
 // uses the bundled ffmpeg-static binary (same as araVoice.js).
 const { spawn } = require('child_process');
 const ffmpegPath = require('ffmpeg-static');
-const { araVoiceOgg } = require('./araVoice');
+const { synthesizeAraVoice } = require('./araVoice');
 const { personaVoiceId } = require('./personas');
 
 const { isFlat, stripCues } = require('./voiceCues');
@@ -91,7 +91,7 @@ async function elevenLabsOgg(voiceId, text, { flat = false } = {}) {
 
 // Last-resort voice when the persona's own engine is down: OpenAI TTS (the
 // key is already here for Whisper). Not her voice, but he still gets a note.
-const OPENAI_FALLBACK_VOICE = { ara: 'shimmer', selene: 'nova', stephanie: 'coral', haven: 'sage', jarvis: 'onyx' };
+const OPENAI_FALLBACK_VOICE = { selene: 'nova', stephanie: 'coral', haven: 'sage', jarvis: 'onyx' };
 async function openaiOgg(personaId, text) {
   const key = process.env.OPENAI_API_KEY;
   if (!key) throw new Error('OPENAI_API_KEY not set');
@@ -106,7 +106,6 @@ async function openaiOgg(personaId, text) {
 }
 
 async function primaryOgg(personaId, text, userText) {
-  if (personaId === 'ara') return araVoiceOgg(text, { userText });
   if (!process.env.ELEVENLABS_API_KEY) throw new Error('ELEVENLABS_API_KEY not set');
   if (!personaVoiceId(personaId)) throw new Error('no ElevenLabs voice id for this persona');
   let last;
@@ -125,6 +124,12 @@ async function primaryOgg(personaId, text, userText) {
 async function voiceNote(personaId, replyText, { userText = '' } = {}) {
   const text = String(replyText || '').trim();
   if (!text) return { ogg: null };
+  // A.R.A.: her Grok voice exactly as before — one try, no backup voice, text
+  // goes out either way.
+  if (personaId === 'ara') {
+    const ogg = await synthesizeAraVoice(text, { userText });
+    return ogg ? { ogg } : { ogg: null, error: 'grok voice failed' };
+  }
   let error;
   try {
     const ogg = await primaryOgg(personaId, text, userText);
