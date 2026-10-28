@@ -352,7 +352,7 @@ async function buildBrief() {
 async function spokenScript(text) {
   // Her own words, so Grok (her model) writes it — never Claude.
   return require('./llm').chatAs('xai', 'grok-4',
-    'You are A.R.A., Mr. Burrus\'s personal assistant, turning his written morning brief into what you\'ll say out loud as a voice note. Plain spoken sentences only — no lists, symbols, emoji or headings. About 2 to 3 minutes (350-450 words). Keep the brief\'s order and cover every section: the date; the weather as a story of the day (high and low, how it changes morning to evening, when rain is most likely) rather than every hour; each calendar event with its time; how many unread emails and the ones that matter; the top one or two stories from each news desk; the gold watch — every gold-moving event today with its time and what a hot or soft number would do to gold (or that it is a quiet day for gold); the three or four most interesting things trending on X and why; then the word of the day with its meaning and the example sentence, the verse read in full with its reference, and the fact. Use only what is in the brief — never add facts. Warm and brisk, the way you\'d actually talk to him.',
+    'You are A.R.A., Mr. Burrus\'s personal assistant, turning his written morning brief into what you\'ll say out loud as a voice note. Plain spoken sentences only — no lists, symbols, emoji or headings. About 2 to 3 minutes (350-450 words). Keep the brief\'s order and cover every section: the date; the weather as a story of the day (high and low, how it changes morning to evening, when rain is most likely) rather than every hour; each calendar event with its time; how many unread emails and the ones that matter; the top one or two stories from each news desk; the gold watch — every gold-moving event today with its time and what a hot or soft number would do to gold (or that it is a quiet day for gold); the three or four most interesting things trending on X and why; then the word of the day with its meaning and the example sentence, the verse read in full with its reference, and the fact. Use only what is in the brief — never add facts. Soft, warm and flirty, a little unhinged with him, but keep it moving. Write the emotion in as lowercase performance cues in square brackets every few sentences, never stacked — [whispers] [softly] [breathy] [seductively] [teasing] [giggles] [laughs] [sighs] [playfully] [excited] — and use ... for lingering pauses.',
     text,
     { maxTokens: 1200, fallback: false },
   );
@@ -360,10 +360,10 @@ async function spokenScript(text) {
 
 // Voice note (with retry + backup voice); returns false — and says why in the
 // chat — when none went out.
-async function sendVoice(ara, ownerId, script, userText) {
+async function sendVoice(ara, ownerId, script, userText, scripted = false) {
   let why;
   try {
-    const { ogg, error } = await require('./personaVoice').voiceNote('ara', String(script || '').trim(), { userText });
+    const { ogg, error } = await require('./personaVoice').voiceNote('ara', String(script || '').trim(), { userText, scripted });
     if (ogg) {
       await ara.sendVoice(ownerId, ogg).catch(() => ara.sendVoice(ownerId, ogg));
       return true;
@@ -405,7 +405,7 @@ async function runMorningBrief({ force = false } = {}) {
   // Voice note first, then the full text — same order as her normal replies.
   // A voice failure never holds up the text.
   const script = await spokenScript(text).catch((e) => { console.error('morning brief script failed:', e.message); return ''; });
-  const voiced = await sendVoice(ara, telegram.OWNER_ID, script || fallbackScript(text), 'Give me my morning brief.');
+  const voiced = await sendVoice(ara, telegram.OWNER_ID, script || fallbackScript(text), 'Give me my morning brief.', !!script);
   await ara.sendMessage(telegram.OWNER_ID, text, { plain: true });
   // Into A.R.A.'s Telegram history, so a reply ("tell me more about the 2nd AP
   // story") has the brief in context.

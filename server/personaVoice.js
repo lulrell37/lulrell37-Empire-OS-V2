@@ -1,6 +1,10 @@
 // Spoken voice for the Telegram bots.
 //
-//   ara       -> xAI realtime "ara" voice (server/araVoice.js), unchanged.
+//   ara       -> Grok writes her spoken script (flirty, emotion cues in), then
+//                ElevenLabs performs it in her voice at low stability. The
+//                app's Settings › Voice switch (app_settings `ara_voice` =
+//                'grok') puts her back on the old xAI realtime "ara" voice
+//                (server/araVoice.js), untouched.
 //   everyone  -> ElevenLabs, keyed by the persona's elevenlabsVoiceId, when
 //   else         ELEVENLABS_API_KEY is set. No key (or no voice id) -> null and
 //                the bot replies text-only.
@@ -10,7 +14,7 @@
 // uses the bundled ffmpeg-static binary (same as araVoice.js).
 const { spawn } = require('child_process');
 const ffmpegPath = require('ffmpeg-static');
-const { synthesizeAraVoice } = require('./araVoice');
+const { ARA_VOICE, ARA_SCRIPT, synthesizeAraVoice } = require('./araVoice');
 const { personaVoiceId } = require('./personas');
 
 const { isFlat, stripCues } = require('./voiceCues');
@@ -25,6 +29,11 @@ const EL_LADDER = [
   { model: 'eleven_flash_v2_5', cues: false, settings: { stability: 0.35, similarity_boost: 0.8, style: 0.4, use_speaker_boost: true } },
 ];
 const FLAT_SETTINGS = { stability: 0.8, similarity_boost: 0.8, style: 0, use_speaker_boost: true }; // isFlat personas: even, no cues
+// A.R.A.: looser than the rest so the seductive / playful range comes through.
+const ARA_SETTINGS = {
+  eleven_v4_turbo: { stability: 0.2, similarity_boost: 0.8 },
+  eleven_flash_v2_5: { stability: 0.25, similarity_boost: 0.8, style: 0.7, use_speaker_boost: true },
+};
 const elRejected = new Set();
 
 // The app's voice-speed slider (app_settings `voice_speed`, synced) -> ffmpeg
@@ -57,11 +66,12 @@ async function toOgg(inputBuffer) {
   });
 }
 
-async function elevenLabsOgg(voiceId, text, { flat = false } = {}) {
+async function elevenLabsOgg(voiceId, text, { flat = false, personaId = '' } = {}) {
   const key = process.env.ELEVENLABS_API_KEY;
   if (!key || !voiceId) return null;
   const tiers = EL_LADDER.filter((t, i) => i === EL_LADDER.length - 1 || !elRejected.has(t.model))
-    .map((t) => (flat ? { ...t, cues: false, settings: FLAT_SETTINGS } : t));
+    .map((t) => (flat ? { ...t, cues: false, settings: FLAT_SETTINGS }
+      : personaId === 'ara' ? { ...t, settings: ARA_SETTINGS[t.model] || t.settings } : t));
   for (const tier of tiers) {
     const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
       method: 'POST',
@@ -91,7 +101,7 @@ async function elevenLabsOgg(voiceId, text, { flat = false } = {}) {
 
 // Last-resort voice when the persona's own engine is down: OpenAI TTS (the
 // key is already here for Whisper). Not her voice, but he still gets a note.
-const OPENAI_FALLBACK_VOICE = { selene: 'nova', stephanie: 'coral', haven: 'sage', jarvis: 'onyx' };
+const OPENAI_FALLBACK_VOICE = { ara: 'shimmer', selene: 'nova', stephanie: 'coral', haven: 'sage', jarvis: 'onyx' };
 async function openaiOgg(personaId, text) {
   const key = process.env.OPENAI_API_KEY;
   if (!key) throw new Error('OPENAI_API_KEY not set');
@@ -111,7 +121,7 @@ async function primaryOgg(personaId, text, userText) {
   let last;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const ogg = await elevenLabsOgg(personaVoiceId(personaId), text, { flat: isFlat(personaId) });
+      const ogg = await elevenLabsOgg(personaVoiceId(personaId), text, { flat: isFlat(personaId), personaId });
       if (ogg) return ogg;
       throw new Error('elevenlabs returned no audio');
     } catch (e) { last = e; }
@@ -119,16 +129,36 @@ async function primaryOgg(personaId, text, userText) {
   throw last;
 }
 
+// A.R.A.'s reply -> what she'll actually say (her Grok brain, her voice
+// direction, cues written in). Falls back to the reply itself.
+async function araScript(text, userText) {
+  try {
+    // Capped: Telegram sends her text after the voice note, so a slow script
+    // mustn't hold the reply up — past 25s she just voices the reply as written.
+    const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('script timed out')), 25000));
+    const out = await Promise.race([timeout, require('./llm').chatAs('xai', 'grok-4',
+      `${ARA_VOICE}\n\nYou are A.R.A. — full personal assistant to Mr. Burrus, sharp and a step ahead; you call him "Mr. Burrus".\n\n${ARA_SCRIPT}`,
+      [{ role: 'user', content: `${userText ? `Mr. Burrus just said: "${String(userText).slice(0, 1500)}"\n\n` : ''}What you want to get across (notes, not a script):\n${text}` }],
+      { maxTokens: 1200, fallback: false })]);
+    const script = String(out || '').replace(/\[[A-Z][A-Z0-9_]*(?::[^\]]*)?\]/g, '').replace(/[*#`_]/g, '').trim();
+    if (script) return script;
+  } catch (e) { console.error('ara script failed:', e.message); }
+  return text;
+}
+
 // personaId + reply text -> { ogg, error, fallback }. `ogg` is null only when
 // every engine failed; `error` says why the persona's own voice didn't work.
-async function voiceNote(personaId, replyText, { userText = '' } = {}) {
-  const text = String(replyText || '').trim();
+// `scripted`: the text is already A.R.A.'s spoken script (the morning brief).
+async function voiceNote(personaId, replyText, { userText = '', scripted = false } = {}) {
+  let text = String(replyText || '').trim();
   if (!text) return { ogg: null };
-  // A.R.A.: her Grok voice exactly as before — one try, no backup voice, text
-  // goes out either way.
   if (personaId === 'ara') {
-    const ogg = await synthesizeAraVoice(text, { userText });
-    return ogg ? { ogg } : { ogg: null, error: 'grok voice failed' };
+    // The old voice, exactly as it was — one try, no backup voice.
+    if ((await require('./syncStore').getSetting('ara_voice', 'elevenlabs').catch(() => 'elevenlabs')) === 'grok') {
+      const ogg = await synthesizeAraVoice(text, { userText });
+      return ogg ? { ogg } : { ogg: null, error: 'grok voice failed' };
+    }
+    if (!scripted) text = await araScript(text, userText);
   }
   let error;
   try {

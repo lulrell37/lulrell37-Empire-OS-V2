@@ -1,4 +1,4 @@
-import{emotionFor,isFlat,stripCues,cuedFor}from './voiceCues';
+import{emotionFor,isFlat,stripCues,cuedFor,ARA_VOICE,ARA_SCRIPT}from './voiceCues';
 import{loadKeys,loadBackend,loadGoogleToken}from './keyStore';
 import{getPersonaMemory,getMemoriesByPersona,savePersonaMemory,getHudState,getTasks,trackApiUsage,getCustomPrompt,getUpcomingDates,getSetting}from './database';
 import*as FileSystem from 'expo-file-system';
@@ -821,6 +821,31 @@ export async function deepResearchPoll(id){
 let lastTtsFailReason=null;
 export function getLastTtsFailReason(){return lastTtsFailReason;}
 
+// A.R.A.'s reply -> what she'll actually say out loud: her Grok brain writes it
+// in her voice (flirty, emotion cues in) for ElevenLabs to perform. Falls back
+// to the reply itself. Server twin: araScript() in server/personaVoice.js.
+export async function araSpokenScript(text,{userText='',convo=''}={},signal=null){
+  try{
+    const k=await ensureKeys();
+    const{getPersona}=await import('../personas/personas');
+    let base=getPersona('ara').system;
+    try{base=(await getCustomPrompt('ara'))||base;}catch{}
+    const sys=`${ARA_VOICE}\n\n${base}\n\n${ARA_SCRIPT}`;
+    const user=(convo?`Recent conversation:\n${convo}\n\n`:'')+(userText?`Mr. Burrus just said: "${userText}"\n\n`:'')+`What you want to get across (notes, not a script):\n${cuedFor(text)}`;
+    const out=await withGrokRoutes(k?.grok,async({base:url,auth})=>{
+      const res=await fetch(url+'/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json',...auth},signal,
+        body:JSON.stringify({model:'grok-4',max_tokens:1200,messages:[{role:'system',content:sys},{role:'user',content:user}]})});
+      if(!res.ok)throw new Error(`Grok error: ${(await res.text()).substring(0,100)}`);
+      const d=await res.json();
+      if(d.usage)trackApiUsage('grok',d.usage.prompt_tokens||0,d.usage.completion_tokens||0).catch(()=>{});
+      return d.choices?.[0]?.message?.content||'';
+    });
+    const script=String(out||'').replace(/\[[A-Z][A-Z0-9_]*(?::[^\]]*)?\]/g,'').replace(/[*#`_]/g,'').trim();
+    if(script)return script;
+  }catch(e){if(e?.name==='AbortError')throw e;console.warn('ara script failed:',e?.message);}
+  return text;
+}
+
 // Voice ladder: ElevenLabs' expressive real-time v4 first — it performs the
 // [laughs]/[sighs] cues personas write (voiceCues.js) and runs at lower
 // stability for more emotional range. If the account or voice can't use it
@@ -831,6 +856,8 @@ const TTS_LADDER=[
   {model:'eleven_flash_v2_5',cues:false,stitch:true,settings:{stability:0.35,similarity_boost:0.8,style:0.4,use_speaker_boost:true}},
 ];
 const FLAT_SETTINGS={stability:0.8,similarity_boost:0.8,style:0,use_speaker_boost:true}; // isFlat personas: even, no cues
+// A.R.A.: looser than the rest so the seductive / playful range comes through. Twin: server/personaVoice.js.
+const ARA_SETTINGS={eleven_v4_turbo:{stability:0.2,similarity_boost:0.8},eleven_flash_v2_5:{stability:0.25,similarity_boost:0.8,style:0.7,use_speaker_boost:true}};
 const ttsRejected=new Set();
 export async function textToSpeech(text,voiceId,personaName,opts={}){
   const k=await ensureKeys();
@@ -842,7 +869,7 @@ export async function textToSpeech(text,voiceId,personaName,opts={}){
   if(!stripCues(withCues))return null;
   const flat=isFlat(personaName);
   const tiers=TTS_LADDER.filter((t,i)=>i===TTS_LADDER.length-1||!ttsRejected.has(t.model))
-    .map(t=>flat?{...t,cues:false,settings:FLAT_SETTINGS}:t);
+    .map(t=>flat?{...t,cues:false,settings:FLAT_SETTINGS}:/^a\.?r\.?a\.?$/i.test(String(personaName||''))?{...t,settings:ARA_SETTINGS[t.model]||t.settings}:t);
   for(const tier of tiers){
     const body={
       text:tier.cues?withCues:stripCues(withCues),

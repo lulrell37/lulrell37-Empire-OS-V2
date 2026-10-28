@@ -9,7 +9,7 @@ import*as VideoThumbnails from 'expo-video-thumbnails';
 import{Camera}from 'expo-camera';
 import*as FileSystem from 'expo-file-system';
 import{PERSONA_LIST,getPersona,resolveSpecialist,relayAllowed}from '../personas/personas';
-import{callPersona,textToSpeech,transcribeAudio,queryMemory,webSearch,getLastTtsFailReason}from '../services/aiService';
+import{callPersona,textToSpeech,transcribeAudio,queryMemory,webSearch,getLastTtsFailReason,araSpokenScript}from '../services/aiService';
 import{startAraLive,stopAraLive}from '../services/realtimeVoice';
 import{reportError}from '../../ErrorBanner';
 import{drStart,drGetActive,drTick,drDismiss,drDeliverPending,DR_POLL_MS}from '../services/deepResearch';
@@ -631,7 +631,17 @@ export default function CommandScreen({navigation,route}){
     return{turns,userText};
   }
 
+  // A.R.A.'s voice. Settings › Voice switch (app_settings `ara_voice`, synced so
+  // Telegram follows): 'elevenlabs' (default) or 'grok' — the old voice.
   async function araGrokVoice(text,ctx){
+    let engine='elevenlabs';
+    try{engine=await getSetting('ara_voice','elevenlabs');}catch{}
+    return engine==='grok'?araGrokRealtimeVoice(text,ctx):araElevenVoice(text,ctx);
+  }
+
+  // The old voice, kept whole: Grok's realtime "ara" voice delivers the reply
+  // itself. Used when Settings › Voice › A.R.A.'s voice is set to Grok.
+  async function araGrokRealtimeVoice(text,ctx){
     const keys=await loadKeys();
     if(!keys?.grok)throw new Error('Grok API key needed for Ara voice. Add in Settings.');
     araChunksRef.current=[];
@@ -710,6 +720,21 @@ export default function CommandScreen({navigation,route}){
       };
       ws.onerror=()=>{araWsRef.current=null;reject(new Error('Ara voice: connection failed'));};
     });
+  }
+
+  // Her Grok brain writes what she'll actually say — flirty, emotion cues in
+  // (araSpokenScript) — and ElevenLabs performs it in her voice. Bubble stays
+  // the drafted reply. GO LIVE runs on Grok's realtime voice either way.
+  async function araElevenVoice(text,ctx){
+    const userText=(ctx?.userText||'').trim();
+    const turns=(ctx?.turns||[]).filter(t=>t&&t.content&&t.content!==text&&t.content!==userText).slice(-6);
+    const convo=turns.map(t=>`${t.role==='assistant'?'A.R.A.':'Mr. Burrus'}: ${String(t.content).slice(0,1500)}`).join('\n');
+    const script=await araSpokenScript(text,{userText,convo});
+    const uri=await textToSpeech(script,getPersona('ara').elevenlabsVoiceId,'A.R.A.');
+    if(!uri)throw new Error(getLastTtsFailReason()||'Ara voice failed');
+    await audioModeForPlayback();
+    const{sound}=await Audio.Sound.createAsync({uri},playOpts({shouldPlay:true}));
+    return{sound,transcript:script,timeline:null};
   }
 
   async function speakResponse(text,persona){
