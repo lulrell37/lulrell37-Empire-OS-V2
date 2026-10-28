@@ -81,7 +81,7 @@ no cues), and his ElevenLabs voice runs cue-free at high stability (`isFlat()`).
 
 A.R.A.'s voice is ElevenLabs voice `rtx7URANE3SCNaOJwq5w` (looser `ARA_SETTINGS`
 for range). Every voiced reply goes through a script pass first: her Grok brain,
-with `ARA_VOICE` (soft, warm, seductive, flirty, a little unhinged) + `ARA_SCRIPT`,
+with `ARA_VOICE` (soft, warm, seductive, playful, slightly flirty, a touch unhinged) + `ARA_SCRIPT`,
 rewrites the reply as what she'd say out loud with lowercase emotion cues, and
 ElevenLabs performs that (`araSpokenScript` in `src/services/aiService.js`,
 `araScript` in `server/personaVoice.js`; the morning brief's own spoken script
