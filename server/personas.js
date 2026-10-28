@@ -40,6 +40,7 @@ Now that's where you make your decision. Do you want to continue to be the versi
 const ROSTER = {
   ara: {
     name: 'A.R.A.', role: 'Personal Assistant & Oracle', api: 'xai', model: 'grok-4',
+    voiceId: 'rtx7URANE3SCNaOJwq5w',
     blurb: 'Full personal assistant to Mr. Burrus. Warm, sharp, always a step ahead. Runs the day, holds the whole picture of the Empire, coordinates the other personas and the nightly council.',
   },
   jarvis: {

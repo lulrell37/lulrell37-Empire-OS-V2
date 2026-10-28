@@ -54,6 +54,7 @@ export default function SettingsScreen({navigation}){
   const[atlasEvery,setAtlasEvery]=useState('24');
   const[newsWire,setNewsWire]=useState(true);
   const[newsTrades,setNewsTrades]=useState(true);
+  const[araGrok,setAraGrok]=useState(false);
   const[leadsSheetId,setLeadsSheetId]=useState('');
   const[sheetBusy,setSheetBusy]=useState(false);
   const[ghToken,setGhToken]=useState('');
@@ -102,6 +103,7 @@ export default function SettingsScreen({navigation}){
     setAtlasEvery(await getSetting('auto_atlas_interval_hours','24'));
     setNewsWire((await getSetting('news_wire','1'))==='1');
     setNewsTrades((await getSetting('news_wire_trades','1'))==='1');
+    setAraGrok((await getSetting('ara_voice','elevenlabs'))==='grok');
     setLeadsSheetId(await getSetting('leads_sheet_id',''));
     const gt=await loadGitHubToken();if(gt){setGhToken(gt);ghVerify().then(setGhStatus);}
     const be=await loadBackend();if(be){setBeUrl(be.url);setBeToken(be.token);setBeConfigured(true);}
@@ -213,6 +215,13 @@ export default function SettingsScreen({navigation}){
     setNewsWire(nv);
     await setSetting('news_wire',nv?'1':'0');
     await refreshNewsWire().catch(()=>{});
+  }
+  // A.R.A.'s voice engine — synced, so her Telegram voice notes follow.
+  async function toggleAraVoice(){
+    const nv=!araGrok;
+    setAraGrok(nv);
+    await setSetting('ara_voice',nv?'grok':'elevenlabs');
+    runSync().catch(()=>{});
   }
   async function toggleNewsTrades(){
     const nv=!newsTrades;
@@ -600,6 +609,15 @@ export default function SettingsScreen({navigation}){
                 onChange={(v)=>{setVoiceSpeedUi(v);setVoiceSpeed(v).catch(()=>{});}}
                 onDone={()=>runSync().catch(()=>{})}/>
             </View>
+            <Text style={s.secTitle}>A.R.A.'S VOICE</Text>
+            <Text style={s.secSub}>Which voice she speaks in — in the app and in her Telegram voice notes. A.R.A. LIVE always uses Grok's live voice.</Text>
+            <TouchableOpacity style={[s.toggleRow,{marginBottom:24}]} onPress={toggleAraVoice} activeOpacity={0.7}>
+              <View style={{flex:1,paddingRight:12}}>
+                <Text style={s.toggleLabel}>{araGrok?'GROK (ORIGINAL VOICE)':'ELEVENLABS (NEW VOICE)'}</Text>
+                <Text style={s.toggleSub}>{araGrok?'On — her original Grok "ara" voice. Tap for the new ElevenLabs voice.':'Her new ElevenLabs voice, with emotion. Tap to switch back to her original Grok voice.'}</Text>
+              </View>
+              <View style={[s.switch,araGrok&&s.switchOn]}><View style={[s.knob,araGrok&&s.knobOn]}/></View>
+            </TouchableOpacity>
             <Text style={s.secTitle}>AI BEHAVIOR</Text>
             <Text style={s.secSub}>Controls for the memory and research subsystems. Calls bill to your own API keys.</Text>
             <TouchableOpacity style={s.toggleRow} onPress={toggleMemoryRecall} activeOpacity={0.7}>

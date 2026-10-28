@@ -79,9 +79,19 @@ Keep the two EMOTION blocks in sync.
 Except J.A.R.V.I.S.: `emotionFor()` gives him a STEADY block instead (composed,
 no cues), and his ElevenLabs voice runs cue-free at high stability (`isFlat()`).
 
-A.R.A.'s Grok voice gets `ARA_VOICE` (warm, soft, seductive) as the FIRST block of
-every Grok voice session: reply voicing in `CommandScreen.js`, GO LIVE, and Telegram
-(`server/araVoice.js`, its twin). Keep the two in sync.
+A.R.A.'s voice is ElevenLabs voice `rtx7URANE3SCNaOJwq5w` (looser `ARA_SETTINGS`
+for range). Every voiced reply goes through a script pass first: her Grok brain,
+with `ARA_VOICE` (soft, warm, seductive, flirty, a little unhinged) + `ARA_SCRIPT`,
+rewrites the reply as what she'd say out loud with lowercase emotion cues, and
+ElevenLabs performs that (`araSpokenScript` in `src/services/aiService.js`,
+`araScript` in `server/personaVoice.js`; the morning brief's own spoken script
+skips it). GO LIVE still uses Grok's realtime `ara` voice with `ARA_VOICE`. The old
+Grok-voice path is kept whole and one switch away: Settings › AI › A.R.A.'s
+Voice writes `app_settings.ara_voice` = `grok` (synced), which puts the app
+(`araGrokRealtimeVoice` in `CommandScreen.js`, `grokVoiceUri` in `labVoice.js`)
+and Telegram (`synthesizeAraVoice` in `server/araVoice.js`) back on it. Keep
+`ARA_VOICE` / `ARA_SCRIPT` in sync between `src/services/voiceCues.js` and
+`server/araVoice.js`.
 
 ## Backend (`server/`)
 
@@ -111,15 +121,13 @@ persona can send media (`server/telegramMedia.js`): `[SEND_PHOTO]`,
 `[CHART]` (Chart.js via QuickChart), `[SEND_FILE]`/`[SEND_VIDEO]`/`[SEND_AUDIO]`,
 `[SEND_LOCATION]`; `[WEATHER]` is a keyless Open-Meteo read. ElevenLabs voice
 notes retry, fall back to OpenAI TTS, and say so in the chat when none went out
-(`voiceNote()` in `server/personaVoice.js`). A.R.A.'s Grok voice is deliberately
-left at one try with no backup voice — retries held her text back for minutes. Still app-only: opening apps on
+(`voiceNote()` in `server/personaVoice.js`). Still app-only: opening apps on
 the phone, 3D Lab, HUD panel layout, the Canvas, trades, clips/video watch, and
 filing GitHub builds (the token lives on the device — `[BUILD_REQUEST]` saves
 the spec as a note instead). Each
 bot's token is `TELEGRAM_BOT_TOKEN[_PERSONA]`; all locked to `TELEGRAM_OWNER_ID`;
 webhook at `/telegram/webhook/:persona/:secret`. Voice notes both ways: Whisper
-in (`OPENAI_API_KEY`); out is xAI `grok-voice` for A.R.A. (`server/araVoice.js`,
-`XAI_API_KEY`) and ElevenLabs for the rest (`server/personaVoice.js`,
+in (`OPENAI_API_KEY`); out is ElevenLabs for everyone, A.R.A. scripted by Grok first (`server/personaVoice.js`,
 `ELEVENLABS_API_KEY`), OGG/Opus via bundled `ffmpeg-static`. See `server/README.md`.
 
 **S.C.O.U.T. signals** — `server/autoScout.js` + `server/scoutSignals.js` are an

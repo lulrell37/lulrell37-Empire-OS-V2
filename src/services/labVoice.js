@@ -14,6 +14,7 @@ import{transcribeAudio,textToSpeech}from './aiService';
 import{loadKeys}from './keyStore';
 import{playOpts,speechRate}from './voiceSpeed';
 import{getPersona}from '../personas/personas';
+import{getSetting}from './database';
 
 const VOICE_DB=-47;          // metering above this counts as talking
 const SILENCE_MS=1100;       // quiet this long after a real utterance -> done
@@ -162,7 +163,9 @@ export async function speakAs(personaId,text,{signal}={}){
   const p=getPersona(personaId);
   let uri=null;
   try{
-    if(p?.useGrokVoice)uri=await grokVoiceUri(clean,signal);
+    let araGrok=false;
+    if(personaId==='ara'){try{araGrok=(await getSetting('ara_voice','elevenlabs'))==='grok';}catch{}}
+    if(araGrok)uri=await grokVoiceUri(clean,signal);
     else if(p?.elevenlabsVoiceId)uri=await textToSpeech(clean,p.elevenlabsVoiceId,p.name,{signal});
   }catch{}
   if(signal?.aborted)return;
