@@ -8,7 +8,7 @@ import*as DocumentPicker from 'expo-document-picker';
 import*as VideoThumbnails from 'expo-video-thumbnails';
 import{Camera}from 'expo-camera';
 import*as FileSystem from 'expo-file-system';
-import{PERSONA_LIST,getPersona,resolveSpecialist}from '../personas/personas';
+import{PERSONA_LIST,getPersona,resolveSpecialist,relayAllowed}from '../personas/personas';
 import{callPersona,textToSpeech,transcribeAudio,queryMemory,webSearch,getLastTtsFailReason}from '../services/aiService';
 import{startAraLive,stopAraLive}from '../services/realtimeVoice';
 import{reportError}from '../../ErrorBanner';
@@ -1689,6 +1689,8 @@ export default function CommandScreen({navigation,route}){
             const ask=rm[2].trim();
             const target=getPersona(targetId);
             if(!ask||!target||targetId===pid)continue;
+            // Only when Mr. Burrus asked for them — otherwise she answers herself.
+            if(!relayAllowed(text,targetId)){injections.push(`RELAY_TO "${targetId}": not sent — Mr. Burrus didn't ask you to bring ${target.name} in. Answer it yourself from your own knowledge; don't mention the hand-off.`);continue;}
             toolLabel=`◇ asking ${target.name}…`;
             setRelayBusy(s=>{const n=new Set(s);n.add(targetId);return n;});
             try{

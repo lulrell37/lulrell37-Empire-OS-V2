@@ -18,7 +18,7 @@
 const crypto = require('crypto');
 const { query } = require('./db');
 const { chatAs, claudeText, webResearch } = require('./llm');
-const { ROSTER, resolvePersonaId, rosterLines, personaSystem, personaTgIdentity, genderLine } = require('./personas');
+const { ROSTER, resolvePersonaId, relayAllowed, rosterLines, personaSystem, personaTgIdentity, genderLine } = require('./personas');
 const { saveDriveNote, googleStatus, gTaskComplete } = require('./google');
 const tools = require('./personaTools');
 const { mem0Remember, mem0Search, mem0All, mem0Line, mem0Health } = require('./mem0');
@@ -270,6 +270,7 @@ const GOOGLE_TOOLS = `GOOGLE (see the GOOGLE status line below for whether it's 
 // personality outright, so it does here too — otherwise edits made in Settings
 // never reach the Telegram bot. null when he hasn't set one.
 async function customPrompt(personaId) {
+  if (personaId === 'talon') return null; // T.A.L.O.N. runs on his built-in gold + Bitcoin playbook only
   const row = await syncedRow('custom_prompts', personaId).catch(() => null);
   const text = row && String(row.prompt || '').trim();
   return text || null;
@@ -288,7 +289,7 @@ const ARA_TOOLS = `[WHAT YOU CAN DO FROM HERE — emit the tag in your reply; th
  - [SEARCH_WEB: query] — one live web lookup. Use it for anything that turns on something current; never guess that from memory.
  - [DEEP_RESEARCH: topic] — ONLY when he explicitly asks for "deep research" / "a deep dive". Runs in the background (several minutes, ~12 searches, cited); the brief comes back here and is saved as a Note. Tell him it's running.
  THE EMPIRE:
- - [RELAY_TO: persona-id | a complete, specific question] — synchronous: you get their real answer back this turn. Never guess their answer.
+ - [RELAY_TO: persona-id | a complete, specific question] — ONLY when he asks you to bring that persona in. Synchronous: you get their real answer back this turn. Never guess their answer.
  - [MEMORY_QUERY: precise question] — search your full history with Mr. Burrus.
  - [REMEMBER: the thing | days] (1-30) / [UNPIN_MEMORY: a few words] — keep something time-sensitive in front of you.
  - [COUNCIL_IDEA: text] / [COUNCIL_NOTE: text] / [COUNCIL_CONVENE] — the nightly Empire Council's agenda, brief, or run it now.
@@ -329,7 +330,7 @@ function genericTools(personaId) {
  - [WEATHER] or [WEATHER: city, ST] — today's live forecast, hour by hour (his home by default). Always use this for weather, never guess it.
  - [SEARCH_WEB: query] — one live web lookup; the result comes back before you answer. Use it for anything that turns on something current; never guess that from memory.
  - [DEEP_RESEARCH: topic] — ONLY when he explicitly asks for "deep research" / "a deep dive". Runs in the background (several minutes, cited); you'll get the finished brief and it's saved as a Note. Tell him it's running.
- - [RELAY_TO: persona-id | a complete, specific question] — hand something outside your lane to another persona. Synchronous: you get their real answer back this turn. Ask a full question; never guess their answer.
+ - [RELAY_TO: persona-id | a complete, specific question] — ONLY when he asks you to bring that persona in. Synchronous: you get their real answer back this turn. Ask a full question; never guess their answer.
  - [MEMORY_QUERY: precise question] — search your own history with Mr. Burrus when he points back to something not in view.
  ${GOOGLE_TOOLS}${extra}
 ${MEDIA_TOOLS}
@@ -381,7 +382,7 @@ function systemPrompt(ctx, gs, custom, mem) {
     memoryLine(),
     ARA_TOOLS,
     googleLine(gs),
-    `[THE EMPIRE — the other personas who serve Mr. Burrus. Hand anything outside your lane to one with [RELAY_TO: id | ...]:\n${rosterLines()}\n]`,
+    `[THE EMPIRE — the other personas who serve Mr. Burrus. Only when Mr. Burrus asks you to bring someone in — he names them or says to check with / run it by someone — do you use [RELAY_TO]. Otherwise answer it yourself from your own knowledge and lane, even if it's someone else's specialty (asked about trading, give your own take — don't go get T.A.L.O.N.). This overrides any hand-off instruction elsewhere in your prompt.\n${rosterLines()}\n]`,
     faithBlock('ara'),
     `[LIVE CONTEXT:\n${contextBlock(ctx)}\n]`,
     `[THE CURRENT MOMENT — right now it is ${momentET()} (America/New_York); Mr. Burrus is in Waldorf, MD. This is authoritative; the chat history and memory may be hours or days old, so don't assume it's still the same day.]`,
@@ -400,7 +401,7 @@ function personaSystemPrompt(personaId, ctx, gs, custom, mem) {
     memoryLine(),
     genericTools(personaId),
     googleLine(gs),
-    `[THE EMPIRE — the other personas. Hand anything outside your lane to one with [RELAY_TO: id | ...]:\n${rosterLines()}\n]`,
+    `[THE EMPIRE — the other personas. Only when Mr. Burrus asks you to bring someone in — he names them or says to check with / run it by someone — do you use [RELAY_TO]. Otherwise answer it yourself from your own knowledge and lane, even if it's someone else's specialty (asked about trading, give your own take — don't go get T.A.L.O.N.). This overrides any hand-off instruction elsewhere in your prompt.\n${rosterLines()}\n]`,
     faithBlock(personaId),
     `[LIVE CONTEXT:\n${contextBlock(ctx)}\n]`,
     `[THE CURRENT MOMENT — right now it is ${momentET()} (America/New_York); Mr. Burrus is in Waldorf, MD. This is authoritative; chat history and memory may be hours or days old.]`,
@@ -462,7 +463,7 @@ function stripTags(text) {
 // relay (one hop further is allowed — A.T.L.A.S. → T.A.L.O.N. — not a chain).
 // `sink` ({ notes, warnings, confirms, deliver }) collects what a relayed
 // persona's own write tags actually did, so the turn's receipt shows it.
-async function runInjections(text, persona = 'ara', { convo = '', depth = 0, sink = null } = {}) {
+async function runInjections(text, persona = 'ara', { convo = '', depth = 0, sink = null, asked = '' } = {}) {
   // Run in parallel — "weather, my calendar and my email" is three lookups, and
   // one at a time (a web search alone is 10-20s) made combined asks crawl.
   const one = async ({ name, arg }) => {
@@ -485,7 +486,9 @@ async function runInjections(text, persona = 'ara', { convo = '', depth = 0, sin
         if (!id || !msg) return `RELAY_TO "${arg}": couldn't route that.`;
         if (id === persona) return `RELAY_TO "${ref}": that's you — just answer him directly.`;
         if (depth > 1) return `RELAY_TO "${ref}": not from inside a relay — answer with what you have.`;
-        return `YOU ASKED ${ROSTER[id].name}: "${msg}"\n${ROSTER[id].name} REPLIED:\n${await relayToPersona(id, msg, { from: persona, convo, depth: depth + 1, sink })}`;
+        // Mr. Burrus didn't ask for them — answer it yourself.
+        if (!relayAllowed(asked, id)) return `RELAY_TO "${ref}": not sent — Mr. Burrus didn't ask you to bring ${ROSTER[id].name} in. Answer it yourself from your own knowledge; don't mention the hand-off.`;
+        return `YOU ASKED ${ROSTER[id].name}: "${msg}"\n${ROSTER[id].name} REPLIED:\n${await relayToPersona(id, msg, { from: persona, convo, depth: depth + 1, sink, asked })}`;
       }
       return '';
     } catch (e) {
@@ -670,7 +673,7 @@ const RELAY_TOOLS = `[ON THIS RELAY — read tags ([SEARCH_WEB], [TRADE_SCAN: SY
 // relay like "ask Atlas about gold" carries what was actually being discussed),
 // and one round of its own lookups before it answers — without that, a reply
 // that was just "[TRADE_SCAN: XAUUSD]" came back as the whole answer.
-async function relayToPersona(id, message, { from = 'ara', convo = '', depth = 1, sink = null } = {}) {
+async function relayToPersona(id, message, { from = 'ara', convo = '', depth = 1, sink = null, asked = '' } = {}) {
   const p = ROSTER[id];
   const [ctx, gs] = await Promise.all([
     gatherContext().catch(() => null),
@@ -691,7 +694,7 @@ async function relayToPersona(id, message, { from = 'ara', convo = '', depth = 1
   // Room for a long note or several in one go.
   let reply = await chatAs(p.api, p.model, sys, messages, { maxTokens: 2500, fallback: id !== 'ara' });
   const replies = [reply];
-  const inj = await runInjections(reply, id, { convo, depth, sink });
+  const inj = await runInjections(reply, id, { convo, depth, sink, asked });
   if (inj) {
     messages.push({ role: 'assistant', content: reply });
     messages.push({ role: 'user', content: `[tool results — now answer using these. Don't repeat the read tags; write tags you already emitted will run — emit only ones you still need.]\n\n${inj}` });
@@ -898,7 +901,7 @@ async function runPersonaTurn(personaId, userText, deliver) {
   // calendar and email" often comes back as one tag at a time, and telling her
   // "now reply, no more tags" after the first one answered just the weather.
   for (let round = 0; round < 3; round++) {
-    const inj = await runInjections(reply, persona, { convo, sink });
+    const inj = await runInjections(reply, persona, { convo, sink, asked: userText });
     if (!inj) break;
     looked.push(inj);
     messages.push({ role: 'assistant', content: reply });

@@ -1,8 +1,9 @@
 // A.R.A.'s 6 AM morning brief, pushed to the owner on Telegram (A.R.A.'s bot).
 //
 // In order: the date, today's weather hour by hour, today's calendar, unread
-// email, news (AP World + U.S., Ground News World + U.S., FOX 5 DC), then the
-// HUD's Word / Verse / Fact of the Day.
+// email, news (AP World + U.S., Ground News World + U.S., FOX 5 DC), what's
+// trending on X (Twitter) in the U.S., today's gold-moving events (Gold Watch),
+// then the HUD's Word / Verse / Fact of the Day.
 //
 // Data sections are assembled straight from their sources (Open-Meteo, Google,
 // the FOX 5 DC RSS feed, hud_state) so nothing in them is paraphrased or
@@ -210,6 +211,70 @@ async function newsSection() {
   return `📰 NEWS\n\n${parts.join('\n\n')}`;
 }
 
+// --- X (Twitter) trending, U.S. ---
+// X's own trends API is paid, so the list is scraped from trends24.in (the most
+// recent hour's top trends), getdaytrends.com as the backup. Bare trend names
+// ("Shirley", "#dwts") mean little at 6 AM, so one web-search call adds a short
+// "why" to each — if that fails the bare list still goes out.
+async function trendNames() {
+  const errs = [];
+  try {
+    const html = await fetchText('https://trends24.in/united-states/');
+    const first = html.split('<ol class=trend-card__list>')[1] || '';
+    const names = [...first.split('</ol>')[0].matchAll(/class=trend-link>([^<]+)</g)].map((m) => decode(m[1]));
+    if (names.length) return names;
+    throw new Error('trends24: no trends found');
+  } catch (e) { errs.push(e.message); }
+  try {
+    const html = await fetchText('https://getdaytrends.com/united-states/');
+    const names = [...html.matchAll(/href="\/united-states\/trend\/[^"]*"[^>]*>([^<]+)</g)].map((m) => decode(m[1]));
+    if (names.length) return [...new Set(names)];
+    throw new Error('getdaytrends: no trends found');
+  } catch (e) { errs.push(e.message); }
+  throw new Error(errs.join(' | '));
+}
+
+async function trendingSection() {
+  const names = (await trendNames()).slice(0, 10);
+  let lines = names.map((n) => `• ${n}`);
+  try {
+    const { claudeText, WEB_SEARCH_TOOL } = require('./llm');
+    const out = await claudeText(
+      'You explain why topics are trending on X (Twitter) right now, for a morning brief. Search the live web. Reply with ONLY one line per topic, in the order given, each "• Topic — why it\'s trending in under 15 words". If you can\'t tell why, write "• Topic — unclear". No intro, no outro, no links.',
+      `Today is ${new Date().toLocaleDateString('en-US', { timeZone: TZ, weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}. Trending on X in the U.S.:\n${names.join('\n')}`,
+      { maxTokens: 900, tools: WEB_SEARCH_TOOL },
+    );
+    const why = String(out || '').split('\n').map((l) => l.trim()).filter((l) => /^[•\-*]/.test(l)).map((l) => `• ${l.replace(/^[•\-*]\s*/, '')}`);
+    if (why.length >= Math.ceil(names.length / 2)) lines = why.slice(0, names.length);
+  } catch (e) { console.error('trending context failed:', e.message); }
+  return `🔥 TRENDING ON X — U.S.\n${lines.join('\n')}`;
+}
+
+// --- Gold Watch: today's scheduled gold-moving events ---
+// The U.S. data releases (8:30 AM ET: CPI, PPI, jobs, claims, retail sales, GDP,
+// PCE; 10 AM: ISM, JOLTS, sentiment), Fed decisions / minutes / Powell, and any
+// big scheduled geopolitical or Treasury event. One web-search call against the
+// economic calendar; a quiet day says so in one line. W.I.R.E.'s 8:30 desk
+// (newsWire.runEconDesk) trades the 8:30 ones, so the brief says that too.
+async function goldWatchSection() {
+  const { claudeText, WEB_SEARCH_TOOL } = require('./llm');
+  const dateLine = new Date().toLocaleDateString('en-US', { timeZone: TZ, weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+  const out = await claudeText(
+    `You prepare the "Gold Watch" for a gold trader's morning brief. Search the live web (economic calendars: Forex Factory, Investing.com, MarketWatch, the BLS / BEA / Fed release schedules) for events SCHEDULED FOR TODAY ONLY that typically move gold: U.S. CPI / PPI / PCE, the jobs report, jobless claims, retail sales, GDP, ISM, JOLTS, consumer sentiment, FOMC decisions / minutes / Fed chair or governor speeches, Treasury auctions that matter, and any major scheduled geopolitical event. Skip low-impact releases.
+Reply with ONLY one line per event, earliest first: "• <time> ET — <event> — forecast <x>, previous <y> — hotter than forecast: <gold down/up>; softer: <gold up/down>" (drop the forecast part for speeches or events without one; then say in a few words what would move gold).
+If nothing high-impact for gold is scheduled today, reply with exactly: NONE`,
+    `Today is ${dateLine}. What's scheduled today that could move gold?`,
+    { maxTokens: 900, tools: WEB_SEARCH_TOOL },
+  );
+  const text = String(out || '').trim();
+  if (/^NONE\b/i.test(text)) return '🥇 GOLD WATCH — TODAY\nNo major gold-moving news on the calendar today.';
+  const lines = text.split('\n').map((l) => l.trim()).filter((l) => /^[•\-*]/.test(l)).map((l) => `• ${l.replace(/^[•\-*]\s*/, '')}`);
+  if (!lines.length) throw new Error('no calendar found');
+  const at830 = lines.some((l) => /8:30/.test(l));
+  return `🥇 GOLD WATCH — TODAY\n${lines.join('\n')}`
+    + (at830 ? '\n\nW.I.R.E. reads the 8:30 numbers the moment they drop and hands T.A.L.O.N. the gold buy or sell if there\'s a clear surprise.' : '');
+}
+
 // --- HUD: Word / Verse / Fact ---
 // The HUD stores the word + definition but no example, so the "used in a
 // sentence" line is generated once per word and kept in app_settings
@@ -268,24 +333,26 @@ async function buildBrief() {
   const linked = await google.googleLinked().catch(() => false);
   const noGoogle = (label) => async () => `${label}\n(Google isn't linked on the server — connect it in the app's Settings.)`;
   const dateLine = new Date().toLocaleDateString('en-US', { timeZone: TZ, weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
-  const [weather, cal, mail, news, hud] = await Promise.all([
+  const [weather, cal, mail, news, gold, trending, hud] = await Promise.all([
     section('🌦 WEATHER', () => weatherSection()),
     section('📅 CALENDAR — TODAY', linked ? () => calendarSection(google) : noGoogle('📅 CALENDAR — TODAY')),
     section('📧 EMAIL', linked ? () => emailSection(google) : noGoogle('📧 EMAIL')),
     section('📰 NEWS', newsSection),
+    section('🥇 GOLD WATCH — TODAY', goldWatchSection),
+    section('🔥 TRENDING ON X', trendingSection),
     section('📖 WORD / VERSE / FACT', hudSection),
   ]);
-  return [`Good morning, Mr. Burrus. Here's your brief.\n\n🗓 ${dateLine}`, weather, cal, mail, news, hud].join('\n\n━━━━━━━━━━\n\n');
+  return [`Good morning, Mr. Burrus. Here's your brief.\n\n🗓 ${dateLine}`, weather, cal, mail, news, gold, trending, hud].join('\n\n━━━━━━━━━━\n\n');
 }
 
 // A.R.A. reads it to him too, like every other Telegram reply. The text brief is
-// a reference sheet (hour-by-hour table, five news desks) — read verbatim it's a
+// a reference sheet (hour-by-hour table, five news desks, X trends) — read verbatim it's a
 // ten-minute recital, so the voice note is her spoken version of the same brief:
 // every section, in order, summarized the way she'd say it out loud.
 async function spokenScript(text) {
   // Her own words, so Grok (her model) writes it — never Claude.
   return require('./llm').chatAs('xai', 'grok-4',
-    'You are A.R.A., Mr. Burrus\'s personal assistant, turning his written morning brief into what you\'ll say out loud as a voice note. Plain spoken sentences only — no lists, symbols, emoji or headings. About 2 to 3 minutes (350-450 words). Keep the brief\'s order and cover every section: the date; the weather as a story of the day (high and low, how it changes morning to evening, when rain is most likely) rather than every hour; each calendar event with its time; how many unread emails and the ones that matter; the top one or two stories from each news desk; then the word of the day with its meaning and the example sentence, the verse read in full with its reference, and the fact. Use only what is in the brief — never add facts. Warm and brisk, the way you\'d actually talk to him.',
+    'You are A.R.A., Mr. Burrus\'s personal assistant, turning his written morning brief into what you\'ll say out loud as a voice note. Plain spoken sentences only — no lists, symbols, emoji or headings. About 2 to 3 minutes (350-450 words). Keep the brief\'s order and cover every section: the date; the weather as a story of the day (high and low, how it changes morning to evening, when rain is most likely) rather than every hour; each calendar event with its time; how many unread emails and the ones that matter; the top one or two stories from each news desk; the gold watch — every gold-moving event today with its time and what a hot or soft number would do to gold (or that it is a quiet day for gold); the three or four most interesting things trending on X and why; then the word of the day with its meaning and the example sentence, the verse read in full with its reference, and the fact. Use only what is in the brief — never add facts. Warm and brisk, the way you\'d actually talk to him.',
     text,
     { maxTokens: 1200, fallback: false },
   );
@@ -370,4 +437,4 @@ async function catchUp() {
   return runMorningBrief();
 }
 
-module.exports = { runMorningBrief, runWordReminder, catchUp, buildBrief, weatherSection };
+module.exports = { runMorningBrief, runWordReminder, catchUp, buildBrief, weatherSection, trendingSection, goldWatchSection };

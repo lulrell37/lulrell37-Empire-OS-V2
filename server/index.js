@@ -191,8 +191,17 @@ function startScoutSignalCron() {
 function startTalonAutoTradeCron() {
   if (process.env.TALON_AUTOTRADE === 'off') return console.log('T.A.L.O.N. auto-trade cron disabled (TALON_AUTOTRADE=off)');
   if (!process.env.ANTHROPIC_API_KEY) return console.log('T.A.L.O.N. auto-trade cron off (no ANTHROPIC_API_KEY)');
+  talonAutoTrade.enableOnce().catch((e) => console.error('talon switch-on failed:', e.message));
   cron.schedule('*/5 * * * *', () => talonAutoTrade.tick().catch((e) => console.error('talon auto-trade cron failed:', e.message)));
   console.log('T.A.L.O.N. auto-trade cron scheduled (every 5m, self-paced to auto_trade_interval_min)');
+  // Nightly trading recap from A.R.A. on Telegram. TRADE_RECAP=off to stop.
+  if (process.env.TRADE_RECAP !== 'off') {
+    cron.schedule('0 21 * * *', () => {
+      require('./talonAlerts').runDailyRecap()
+        .then((r) => console.log('trade recap:', JSON.stringify(r)))
+        .catch((e) => console.error('trade recap failed:', e.message));
+    }, { timezone: 'America/New_York' });
+  }
 }
 
 // W.I.R.E. news desk — ports src/services/newsWire.js's setInterval(10min).
@@ -202,6 +211,15 @@ function startNewsWireCron() {
   if (process.env.NEWS_WIRE === 'off') return console.log('W.I.R.E. news desk cron disabled (NEWS_WIRE=off)');
   if (!process.env.ANTHROPIC_API_KEY) return console.log('W.I.R.E. news desk cron off (no ANTHROPIC_API_KEY)');
   cron.schedule('*/10 * * * *', () => newsWire.tick().catch((e) => console.error('news wire cron failed:', e.message)));
+  // 8:30 AM ET data desk (CPI, jobs, claims…) -> gold trade via T.A.L.O.N.
+  // Retries until the numbers are out. ECON_DESK=off to stop.
+  if (process.env.ECON_DESK !== 'off') {
+    cron.schedule('32,36,42,50 8 * * 1-5', () => {
+      newsWire.runEconDesk()
+        .then((r) => console.log('econ desk:', JSON.stringify(r)))
+        .catch((e) => console.error('econ desk failed:', e.message));
+    }, { timezone: 'America/New_York' });
+  }
   console.log('W.I.R.E. news desk cron scheduled (every 10m)');
 }
 

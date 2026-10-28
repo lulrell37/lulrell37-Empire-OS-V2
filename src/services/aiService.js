@@ -89,7 +89,8 @@ const OBEY_BLOCK=`[CHAIN OF COMMAND — Mr. Burrus is the boss, and you never re
 
 async function buildSys(personaId,persona,convo=[]){
   const{timeStr,tz}=currentMoment();
-  const customPrompt=await getCustomPrompt(personaId);
+  // T.A.L.O.N. never takes a custom prompt — he runs on his built-in gold + Bitcoin playbook.
+  const customPrompt=personaId==='talon'?null:await getCustomPrompt(personaId);
   let sys=customPrompt||persona.system;
   sys+=`\n\n[RESPONSE STYLE: Reply directly to what Mr. Burrus just said. Do not open with a status briefing, HUD summary, morning-routine readout, or any unprompted overview unless he explicitly asks for one. Skip "here is where things stand" preambles — answer the message and stop.]`;
   sys+=`\n\n${OBEY_BLOCK}`;
@@ -189,7 +190,7 @@ Only when seeing or editing the thing is the point — not for a passing mention
     const g=PERSONA_GENDER[personaId];
     if(g)sys+=`\n\n[YOU: you are ${g==='f'?'a woman — she/her':'a man — he/him'}. The other personas' genders are in the roster below; always use the right pronouns for each of them.]`;
     const roster=PERSONA_LIST.filter(x=>x.id!==personaId).map(x=>` - ${x.name} (${x.id}) — ${x.role}${pronounsOf(x.id)?` · ${pronounsOf(x.id)}`:''}`).join('\n');
-    if(roster)sys+=`\n\n[THE EMPIRE — the other personas who serve Mr. Burrus alongside you. Know them, refer to them by name, and hand off anything outside your lane with [RELAY_TO: id | message]. This is synchronous: the app actually asks them and hands you their real answer back in this same turn before you respond to Mr. Burrus — so ask a complete, specific question (not "I'll check with X and get back to you"), then use what they say. Don't guess at what another persona would say; relay to them and wait for it.\n${roster}\n]`;
+    if(roster)sys+=`\n\n[THE EMPIRE — the other personas who serve Mr. Burrus alongside you. Know them and refer to them by name. Only when Mr. Burrus asks you to bring someone in — he names them or says to check with / run it by someone — do you use [RELAY_TO: id | message]. Otherwise answer it yourself from your own knowledge and lane, even if it's someone else's specialty (asked about trading, give your own take — don't go get T.A.L.O.N.). This overrides any hand-off instruction elsewhere in your prompt. A relay is synchronous: the app actually asks them and hands you their real answer back in this same turn before you respond to Mr. Burrus — so ask a complete, specific question (not "I'll check with X and get back to you"), then use what they say. Don't guess at what another persona would say; relay to them and wait for it.\n${roster}\n]`;
     if(personaId==='ara'){
       sys+=`\n\n[REMINDERS: when Mr. Burrus says "remind me…", emit [REMIND_ME: what to remind him | YYYY-MM-DD HH:MM] — a real notification on his phone at that time (24h clock, his Eastern time; "+20m" / "+2h" also work). Work out the exact time from the current time above. The tag is what sets it — never say a reminder is set without it.]`;
       sys+=`\n\n[THE FIRM — client & project delivery. When Mr. Burrus brings you a project (a client website, a launch, a course, a brand) you run it as coordinator: scope it, delegate it, pull the pieces together, keep him in the loop.

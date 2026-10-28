@@ -6,8 +6,9 @@
 // process instead of a memory-only session that resets on every cold app open).
 const { getSetting, setSetting, saveMemory } = require('./syncStore');
 const { tlStatus, tlConnect, tlSnapshot, tlFormatSnapshot, tlPlaceOrder, tlClosePosition, tlModifyPosition, tlPositions, tlInstrumentsById, MAX_QTY, MAX_OPEN_POSITIONS } = require('./tradeLocker');
-const { autoTradeDecision } = require('./talonBrain');
-const { reconcileOpenTrades, formatTradeRecord, getStrategy, recordTradeOpen, TRADER_ID } = require('./tradeJournal');
+const { autoTradeDecision, SYMBOLS } = require('./talonBrain');
+const { reconcileOpenTrades, formatTradeRecord, recordTradeOpen, TRADER_ID } = require('./tradeJournal');
+const { orderRejected } = require('./talonAlerts');
 const { pushAlert } = require('./pushSender');
 
 let busy = false;
@@ -42,8 +43,8 @@ async function tick() {
   busy = true;
   try {
     if ((await getSetting('auto_trade', '0')) !== '1') return;
-    if (!(await dueNow())) return;
-    await setSetting('talon_last_cycle_at', String(Date.now()));
+    const due = await dueNow();
+    if (due) await setSetting('talon_last_cycle_at', String(Date.now()));
     let st = tlStatus();
     if (!st.connected) {
       try { await tlConnect(); st = tlStatus(); }
@@ -60,15 +61,17 @@ async function tick() {
       return;
     }
 
+    // Every 5-min tick, not just on a decision cycle: closes (stops, targets)
+    // reach A.R.A.'s Telegram alerts within minutes. No AI calls in here.
     await reconcileOpenTrades().catch(() => {});
+    if (!due) return;
 
-    const symsRaw = await getSetting('auto_trade_symbols', 'XAUUSD, EURUSD, GBPUSD, USDJPY, GBPJPY, AUDUSD, XAGUSD, BTCUSD');
+    // Gold and Bitcoin only — the app's auto_trade_symbols setting is ignored.
     const marketOpen = fxOpen();
-    const syms = [...new Set(symsRaw.split(/[\s,]+/).map((s) => s.trim().toUpperCase()).filter(Boolean))].slice(0, 12)
-      .filter((sym) => marketOpen || CRYPTO.test(sym));
+    const syms = SYMBOLS.filter((sym) => marketOpen || CRYPTO.test(sym));
     if (!syms.length) return;
 
-    const maxOpen = Math.min(MAX_OPEN_POSITIONS, Math.max(1, parseInt(await getSetting('auto_trade_max_open', String(MAX_OPEN_POSITIONS)), 10) || MAX_OPEN_POSITIONS));
+    const maxOpen = Math.min(MAX_OPEN_POSITIONS, SYMBOLS.length);
 
     const positions = await tlPositions().catch(() => []);
     const idToSym = await tlInstrumentsById().catch(() => ({}));
@@ -76,7 +79,6 @@ async function tick() {
     const openSyms = new Set(positions.map(symOf));
     let openCount = positions.length;
     const record = await formatTradeRecord().catch(() => '');
-    const strategy = await getStrategy().catch(() => '');
 
     let entered = 0, closed = 0, scanned = 0, snapFails = 0, decFails = 0, orderFails = 0;
     for (const sym of syms) {
@@ -87,7 +89,7 @@ async function tick() {
       const posText = mine.map((p) => `#${p.id} ${p.side} ${p.qty} @ ${p.avgPrice} (uP/L ${p.unrealizedPl})`).join('; ') || 'none';
 
       let dec;
-      try { dec = await autoTradeDecision({ symbol: sym, snapshot: tlFormatSnapshot(snap), record, strategy, positions: posText, openCount, maxOpen }); }
+      try { dec = await autoTradeDecision({ symbol: sym, snapshot: tlFormatSnapshot(snap), record, positions: posText, openCount, maxOpen }); }
       catch (e) { decFails++; console.error(`talon-autotrade: ${sym} decision failed —`, e.message); continue; }
 
       if (Array.isArray(dec.breakevenIds) && dec.breakevenIds.length) {
@@ -118,7 +120,7 @@ async function tick() {
           openSyms.add(sym); openCount++; entered++;
           console.log(`talon-autotrade: ${r.side.toUpperCase()} ${r.qty} ${sym} @ ~${price ?? 'mkt'} · SL ${dec.stopLoss ?? '—'} TP ${dec.takeProfit ?? '—'}${dec.rationale ? ` — ${dec.rationale}` : ''}`);
           await saveMemory(TRADER_ID, `[auto-trade] opened ${r.side} ${sym} @ ~${price ?? 'mkt'} — ${dec.rationale || ''}`);
-        } catch (e) { orderFails++; console.error(`talon-autotrade: ${sym} order failed —`, e.message); }
+        } catch (e) { orderFails++; console.error(`talon-autotrade: ${sym} order failed —`, e.message); orderRejected({ symbol: sym, side: dec.side, error: e.message }); }
       }
     }
     console.log(`talon-autotrade: scanned ${scanned}/${syms.length}${snapFails ? `, ${snapFails} snapshot fail` : ''}${decFails ? `, ${decFails} decision fail` : ''}${orderFails ? `, ${orderFails} order fail` : ''}, ${entered} entered, ${closed} closed (${openCount}/${maxOpen} open)`);
@@ -129,4 +131,15 @@ async function tick() {
   }
 }
 
-module.exports = { tick };
+// One-time switch-on for the gold + Bitcoin rework: flips the app's
+// `auto_trade` toggle on once (it syncs back to the app's Settings). After
+// that the toggle is his again — turning it off in the app sticks.
+async function enableOnce() {
+  if ((await getSetting('talon_gold_btc_enabled', '0')) === '1') return false;
+  await setSetting('auto_trade', '1');
+  await setSetting('talon_gold_btc_enabled', '1');
+  console.log('talon-autotrade: switched on (gold + Bitcoin playbook)');
+  return true;
+}
+
+module.exports = { tick, enableOnce };
