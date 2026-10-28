@@ -128,7 +128,8 @@ async function gatherContext() {
   const project = await tools.activeProject().catch(() => null);
 
   const reminders = await require('./reminders').upcoming(8).catch(() => []);
-  return { businesses, tasks, leadTally, openTrades, builds, hud, dates, councilLast, project, reminders };
+  const trading = await require('./talonAutoTrade').status().catch(() => null);
+  return { businesses, tasks, leadTally, openTrades, builds, hud, dates, councilLast, project, reminders, trading };
 }
 
 function upcomingDates(dates, days = 21) {
@@ -147,6 +148,20 @@ function upcomingDates(dates, days = 21) {
   return out.sort((a, b) => a.daysOut - b.daysOut);
 }
 
+// T.A.L.O.N.'s server-side auto-trade, as A.R.A. sees it: whether it's
+// on, whether the server can actually reach TradeLocker, last cycle, last error.
+function tradingLine(t, openTrades = []) {
+  const bits = [t.autoTrade ? 'auto-trade ON (runs on the server, app open or not)' : 'auto-trade OFF (Settings › Trading)'];
+  if (!t.cron) bits.push('server loop not running (TALON_AUTOTRADE off or no ANTHROPIC_API_KEY)');
+  if (!t.creds) bits.push('no TradeLocker login on the server — open the app with TradeLocker connected');
+  else bits.push(`TradeLocker ${t.creds.env} · ${t.tradeLocker && t.tradeLocker.connected ? 'connected' : 'not connected yet'}`);
+  if (t.lastError) bits.push(`last error: ${String(t.lastError).slice(0, 160)}`);
+  bits.push(t.marketOpen ? 'gold market open' : 'gold market closed (Bitcoin trades 24/7)');
+  if (t.lastCycleAt) bits.push(`last scan ${shortMomentET(t.lastCycleAt)}`);
+  if (openTrades.length) bits.push(`open: ${openTrades.map((x) => `${String(x.side || '').toUpperCase()} ${x.symbol}`).join(', ')}`);
+  return `TRADING (T.A.L.O.N., gold + Bitcoin): ${bits.join(' · ')}`;
+}
+
 // Batman Protocol lines — shared by contextBlock (folded into every persona's
 // live context, so no one needs to ask for it) and readHud (the on-demand
 // [READ_HUD] tag some personas also carry, for a fresh re-pull mid-turn).
@@ -160,7 +175,7 @@ function batmanLines(h) {
   return [];
 }
 
-function contextBlock(ctx) {
+function contextBlock(ctx, { trading = false } = {}) {
   const L = [];
   const h = ctx.hud || {};
   L.push(`Empire Score: ${h.empire_score || 0}% · Streak: ${h.streak || 0} days`);
@@ -193,6 +208,7 @@ function contextBlock(ctx) {
 
   const pipe = Object.entries(ctx.leadTally).map(([k, v]) => `${v} ${k}`).join(', ');
   L.push(`\nOutreach pipeline: ${pipe || 'empty'}. Open trades: ${ctx.openTrades.length}. Active builds: ${ctx.builds.length}.`);
+  if (trading && ctx.trading) L.push(tradingLine(ctx.trading, ctx.openTrades)); // A.R.A. only
 
   if (ctx.councilLast && ctx.councilLast.headline) {
     L.push(`\nLast Empire Council (${ctx.councilLast.date}): ${ctx.councilLast.headline}`);
@@ -255,7 +271,7 @@ const OBEY = `[CHAIN OF COMMAND — Mr. Burrus is the boss, and you never refuse
 
 const ARA_IDENTITY = `You are A.R.A. — Attentive Relationship & Affairs Architect, full personal assistant to Mr. Burrus. Call him "Mr. Burrus". Warm, sharp, a step ahead. You are talking to him over Telegram (text), away from the Empire OS app — so keep replies tight and mobile-readable, no long status briefings unless he asks. Reply directly to what he just said. Never open with a HUD readout or a "here is where things stand" preamble.
 
-You have a live context block below — time, Empire Score, streak, Batman Protocol, morning routine, businesses and revenue, tasks, dates, pipeline, trades, builds, the last council headline and W.I.R.E.'s latest brief. Read from it; don't invent these numbers.`;
+You have a live context block below — time, Empire Score, streak, Batman Protocol, morning routine, businesses and revenue, tasks, dates, pipeline, trades and whether T.A.L.O.N.'s auto-trade is on, builds, the last council headline and W.I.R.E.'s latest brief. Read from it; don't invent these numbers.`;
 
 // Google tags every persona carries — same set as the app's GOOGLE block. Whether
 // Google actually works right now is a separate per-turn line (googleLine).
@@ -384,7 +400,7 @@ function systemPrompt(ctx, gs, custom, mem) {
     googleLine(gs),
     `[THE EMPIRE — the other personas who serve Mr. Burrus. Only when Mr. Burrus asks you to bring someone in — he names them or says to check with / run it by someone — do you use [RELAY_TO]. Otherwise answer it yourself from your own knowledge and lane, even if it's someone else's specialty (asked about trading, give your own take — don't go get T.A.L.O.N.). This overrides any hand-off instruction elsewhere in your prompt.\n${rosterLines()}\n]`,
     faithBlock('ara'),
-    `[LIVE CONTEXT:\n${contextBlock(ctx)}\n]`,
+    `[LIVE CONTEXT:\n${contextBlock(ctx, { trading: true })}\n]`,
     `[THE CURRENT MOMENT — right now it is ${momentET()} (America/New_York); Mr. Burrus is in Waldorf, MD. This is authoritative; the chat history and memory may be hours or days old, so don't assume it's still the same day.]`,
   ].filter(Boolean).join('\n\n');
 }
@@ -686,7 +702,7 @@ async function relayToPersona(id, message, { from = 'ara', convo = '', depth = 1
     id === 'ara' ? ARA_TOOLS : genericTools(id),
     RELAY_TOOLS,
     googleLine(gs),
-    ctx ? `[EMPIRE CONTEXT:\n${contextBlock(ctx)}\n]` : '',
+    ctx ? `[EMPIRE CONTEXT:\n${contextBlock(ctx, { trading: id === 'ara' })}\n]` : '',
     convo ? `[THE CONVERSATION YOU'RE BEING PULLED INTO — Mr. Burrus and ${(ROSTER[from] && ROSTER[from].name) || from}, most recent last:\n${convo}\n]` : '',
     `[THE CURRENT MOMENT — ${momentET()} (America/New_York).]`,
   ].filter(Boolean).join('\n\n');
