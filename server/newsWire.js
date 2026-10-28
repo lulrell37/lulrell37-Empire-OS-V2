@@ -4,7 +4,8 @@
 // waking hours, matching the client) — cheap search + classify, escalates to a
 // full brief on a real break. Tier 2: the full brief, written to `hud_state`
 // (the app's NEWS panel already reads this via sync — no separate delivery
-// needed) plus a push alert on the owner's phone for a real break. A
+// needed) plus a push alert on the owner's phone for a real break, and the
+// full brief to him on Telegram from A.R.A.'s bot. A
 // MARKETIMPACT high-confidence line hands off to T.A.L.O.N. exactly like the
 // client's newsTradeHandoff, demo-account-only.
 const { webResearch, chatAs } = require('./llm');
@@ -12,7 +13,7 @@ const { getSetting, setSetting, upsertSyncRow, syncedRow, syncedRows, saveMemory
 const { tlStatus, tlConnect, tlSnapshot, tlFormatSnapshot, tlPositions, tlInstrumentsById, tlPlaceOrder, MAX_QTY, MAX_OPEN_POSITIONS } = require('./tradeLocker');
 const { recordTradeOpen, TRADER_ID } = require('./tradeJournal');
 const { newsTradeLevels, SYMBOLS } = require('./talonBrain');
-const { orderRejected } = require('./talonAlerts');
+const { orderRejected, araNote } = require('./talonAlerts');
 const { pushAlert } = require('./pushSender');
 
 const TZ = 'America/New_York';
@@ -127,6 +128,9 @@ MONEY|<one line>
 
     const lead = headlines[0]?.text || brief.split('\n').find(Boolean) || 'brief updated';
     console.log('newswire: brief in —', lead.slice(0, 120));
+    // Every brief W.I.R.E. writes reaches him on Telegram from A.R.A. (and goes
+    // into her Telegram history, so he can reply about it).
+    araNote(`📰 **W.I.R.E. — ${trigger === 'manual' ? 'news brief' : 'breaking news'}**, Mr. Burrus.\n\n${brief}`);
     if (trigger !== 'manual') {
       await pushAlert(`newswire:${todayET()}-${pollSlot()}`, 'W.I.R.E. — news brief', lead.slice(0, 160), { kind: 'news' }).catch(() => {});
     }

@@ -173,7 +173,8 @@ rejected order and a 9 PM ET recap go to the owner from A.R.A.'s Telegram bot
 (`server/talonAlerts.js`, also logged in her `tg_messages` history). W.I.R.E.'s
 8:30 AM ET data desk (`runEconDesk` in `server/newsWire.js`, `ECON_DESK=off` to
 stop) reads CPI/jobs/claims/etc. vs forecast and hands a gold BUY/SELL to
-T.A.L.O.N. on a clear surprise. The morning brief's GOLD WATCH section
+T.A.L.O.N. on a clear surprise. Every W.I.R.E. news brief (breaking or on request) also goes to the
+owner on Telegram from A.R.A. (`araNote`). The morning brief's GOLD WATCH section
 (`goldWatchSection` in `server/morningBrief.js`) lists that day's gold-moving
 events with forecasts.
 

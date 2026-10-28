@@ -5,6 +5,8 @@
 // TRADE_RECAP=off to stop) of the day's trades and what's still open.
 //
 // Fire-and-forget: an alert failing never holds up or breaks a trade.
+// araNote() is the same delivery for anything else headed to him through
+// A.R.A. (W.I.R.E.'s news briefs and 8:30 data reads).
 const { query } = require('./db');
 const { syncedRows, todayET } = require('./syncStore');
 
