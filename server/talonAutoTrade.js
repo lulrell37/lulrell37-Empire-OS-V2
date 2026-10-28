@@ -8,11 +8,12 @@ const { getSetting, setSetting, saveMemory } = require('./syncStore');
 const { tlStatus, tlConnect, tlSnapshot, tlFormatSnapshot, tlPlaceOrder, tlClosePosition, tlModifyPosition, tlPositions, tlInstrumentsById, MAX_QTY, MAX_OPEN_POSITIONS } = require('./tradeLocker');
 const { autoTradeDecision, SYMBOLS } = require('./talonBrain');
 const { reconcileOpenTrades, formatTradeRecord, recordTradeOpen, TRADER_ID } = require('./tradeJournal');
-const { orderRejected } = require('./talonAlerts');
+const { orderRejected, araNote } = require('./talonAlerts');
 const { pushAlert } = require('./pushSender');
 
 let busy = false;
 let warnedDisconnected = false;
+let lastError = null; // surfaced by GET /trade/status
 
 // The cron ticks every 5 min (see server/index.js); this self-paces to
 // whatever `auto_trade_interval_min` says, same due-check pattern as
@@ -49,11 +50,20 @@ async function tick() {
     if (!st.connected) {
       try { await tlConnect(); st = tlStatus(); }
       catch (e) {
-        if (!warnedDisconnected) { warnedDisconnected = true; console.error('talon-autotrade: TradeLocker login failed —', e.message); }
+        lastError = e.message;
+        if (!warnedDisconnected) {
+          warnedDisconnected = true;
+          console.error('talon-autotrade: TradeLocker login failed —', e.message);
+          // Without this the loop just goes quiet on the server. Once per
+          // outage, so he knows T.A.L.O.N. isn't trading with the app closed.
+          araNote(`⚠️ T.A.L.O.N. can't reach TradeLocker from the server, so he isn't trading while the app is closed: ${String(e.message).slice(0, 200)}\nOpen the app once (Settings › TRADELOCKER → reconnect) and he picks back up on his own.`);
+        }
         return;
       }
     }
+    if (warnedDisconnected) araNote('✅ T.A.L.O.N. is back on TradeLocker and trading from the server again.');
     warnedDisconnected = false;
+    lastError = null;
     if (st.env !== 'demo') {
       console.error('talon-autotrade: HALTED — TradeLocker is on a LIVE account. Auto-trade only runs on demo.');
       await pushAlert(`talon-live-halt:${new Date().toDateString()}`, 'T.A.L.O.N. — auto-trade halted', 'TradeLocker is on a LIVE account. Switch back to demo to resume.', { kind: 'talon-halt' }).catch(() => {});
@@ -142,4 +152,21 @@ async function enableOnce() {
   return true;
 }
 
-module.exports = { tick, enableOnce };
+// What GET /trade/status reports: is the server actually able to trade on
+// its own right now.
+async function status() {
+  const { query } = require('./db');
+  const { rows } = await query('SELECT server, env, updated_at FROM trade_creds WHERE id = 1').catch(() => ({ rows: [] }));
+  const last = parseInt(await getSetting('talon_last_cycle_at', '0'), 10) || 0;
+  return {
+    cron: process.env.TALON_AUTOTRADE !== 'off' && !!process.env.ANTHROPIC_API_KEY,
+    autoTrade: (await getSetting('auto_trade', '0')) === '1',
+    creds: rows[0] ? { server: rows[0].server, env: rows[0].env, updatedAt: Number(rows[0].updated_at) } : null,
+    tradeLocker: tlStatus(),
+    marketOpen: fxOpen(),
+    lastCycleAt: last || null,
+    lastError,
+  };
+}
+
+module.exports = { tick, enableOnce, status };

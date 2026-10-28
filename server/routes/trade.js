@@ -36,4 +36,10 @@ r.delete('/creds', async (req, res) => {
   }
 });
 
+// Can T.A.L.O.N. trade with the app closed? (creds on file, toggle, last cycle, last error)
+r.get('/status', async (req, res) => {
+  try { res.json(await require('../talonAutoTrade').status()); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 module.exports = r;
