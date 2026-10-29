@@ -20,7 +20,7 @@ const STRATEGY = `GOLD + BITCOIN TREND-PULLBACK PLAYBOOK. You trade exactly two 
 2. LOCATION (1H). Never chase an extended candle. Enter on a pullback into value: a retest of the 1H SMA20, a prior broken high/low, or the edge of the recent 1H range — in the bias direction.
 3. TRIGGER (15m). The pullback has to be rejected: a 15m close back in the bias direction (a higher low in an uptrend, a lower high in a downtrend). No rejection yet = wait.
 4. STOP. BEYOND the key level, never on it. Find the swing that invalidates the idea (the pullback low for a buy, the high for a sell) and every level sitting in that zone with it — the SMA20, a round number, a prior broken high/low. The stop goes past the FAR side of that whole zone, plus a buffer of at least one 1H ATR14 (shown in the snapshot) — gold never less than about $10 from entry, Bitcoin never less than about 0.8%. Price wicks into key levels to grab the stops sitting on them; yours must not be one of them. If the honest stop would be wider than roughly gold $35 / Bitcoin 3% from entry, skip it; the location is wrong.
-5. TARGETS — every setup is a SCALP + SWING pair: two positions, same entry, same stop. SCALP target ("takeProfit"): the next clear 1H structure level in the bias direction, at least 2x the stop distance — if there's under 2R of room, skip the setup. SWING target ("swingTakeProfit"): the next clear 4H structure level beyond it, at least 3x the stop distance — the bigger move the 4H trend is pointing at. If no 4H level gives 3R, leave swingTakeProfit out and it's a scalp only.
+5. TARGETS — every setup is a SCALP + SWING pair: two positions, same entry, same stop. SCALP target ("takeProfit"): the next clear 15m structure level in the bias direction, at least 1x the stop distance — the quick move; the swing carries the payoff. SWING target ("swingTakeProfit"): the next clear 4H structure level beyond it, at least 3x the stop distance — the bigger move the 4H trend is pointing at. If no 4H level gives 3R, leave swingTakeProfit out: the setup goes in as a scalp only, and then the scalp target must be at least 2x the stop distance (aim it at the next 1H level) — under that, skip the setup.
 6. HOLD. Once you're in, the trade runs to its stop or its target. You never close a position early — not on a 4H flip, not on a pullback, not on a feeling; the stop is already where the idea is wrong. The only management is moving the stop to break-even ("breakevenIds") once a position is about 1R in profit. When the scalp of a pair pays, the swing's stop goes to break-even automatically — you don't need to ask.
 7. GOLD SPECIFICS. Gold moves inverse to the dollar and with risk-off fear: read the cross-market quotes (EURUSD up / USDJPY down = weaker dollar = tailwind for gold buys). The cleanest moves come in the London open and New York morning (about 3 AM-12 PM ET); avoid fresh entries in the 5-6 PM ET rollover.
 8. BITCOIN SPECIFICS. Bitcoin trades 24/7 and spikes on thin weekend liquidity — on weekends require a cleaner trigger and keep stops at the wider end. Round numbers (every $1,000, especially $5,000s) act as magnets and walls: don't buy just under one or sell just above one.
@@ -67,8 +67,9 @@ Reply with ONLY a JSON object, no prose, no code fence:
 
 // The stop rule (4) enforced in code, whatever the model wrote: at least the
 // floor (gold $10 / Bitcoin 0.8%) and 1.2x the 1H ATR14 from entry. A stop
-// inside that is pushed out to it; if the target then pays under 2R the trade
-// is skipped rather than taken on a worse ratio. Returns the levels to send,
+// inside that is pushed out to it; if the targets then pay too little (scalp
+// 1R beside a 3R swing, or 2R alone) the trade is skipped rather than taken
+// on a worse ratio. Returns the levels to send,
 // or { skip } with the reason.
 const STOP_FLOOR = { XAUUSD: (px) => 10, BTCUSD: (px) => px * 0.008 };
 function guardStop({ symbol, side, entry, stopLoss, takeProfit, swingTakeProfit, snap }) {
@@ -81,7 +82,6 @@ function guardStop({ symbol, side, entry, stopLoss, takeProfit, swingTakeProfit,
   let dist = Math.abs(px - sl);
   let stop = sl, widened = false;
   if (dist < minDist) { dist = minDist; stop = +(px - dir * minDist).toFixed(2); widened = true; }
-  if (Math.abs(tp - px) < 2 * dist) return { skip: `stop needs ${dist.toFixed(2)} of room (1H ATR ${atr.toFixed(2)}) and target ${tp} pays under 2R` };
   // The swing half of a pair: past the scalp target and at least 3R off the
   // final stop, or it's dropped and the setup goes in as a scalp only.
   const sw = Number(swingTakeProfit);
@@ -90,6 +90,9 @@ function guardStop({ symbol, side, entry, stopLoss, takeProfit, swingTakeProfit,
     if ((sw - tp) * dir > 0 && Math.abs(sw - px) >= 3 * dist) swing = sw;
     else swingNote = `swing target ${sw} dropped (needs to be past the scalp target and 3R = ${(3 * dist).toFixed(2)} from entry)`;
   }
+  // Scalp (15m target) needs 1R beside a swing; alone it has to pay 2R.
+  const minR = swing != null ? 1 : 2;
+  if (Math.abs(tp - px) < minR * dist) return { skip: `stop needs ${dist.toFixed(2)} of room (1H ATR ${atr.toFixed(2)}) and scalp target ${tp} pays under ${minR}R${swing == null ? ' with no valid swing' : ''}` };
   return { stopLoss: stop, takeProfit: tp, swingTakeProfit: swing, widened, swingNote,
     note: widened ? `stop widened ${sl} → ${stop} (min ${minDist.toFixed(2)} from entry)` : '' };
 }
