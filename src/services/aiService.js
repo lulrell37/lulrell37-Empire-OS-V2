@@ -416,6 +416,8 @@ export async function callPersona(personaId,messages,signal=null,onDelta=null,op
       const res=await fetch(url,{method:'POST',headers,body,signal});
       if(!res.ok){const e=await res.text();throw new Error(`Claude error: ${e.substring(0,100)}`);}
       const d=await res.json();
+      // The backend keeps a slow call open with a 200 up front, so a late failure arrives as an error body.
+      if(d.type==='error')throw new Error(`Claude error: ${String(d.error?.message||'unknown').substring(0,100)}`);
       emit(d.content?.[0]?.text||'');
       if(d.usage)await trackApiUsage('claude',(d.usage.input_tokens||0)+(d.usage.cache_read_input_tokens||0)+(d.usage.cache_creation_input_tokens||0),d.usage.output_tokens||0).catch(()=>{});
     }

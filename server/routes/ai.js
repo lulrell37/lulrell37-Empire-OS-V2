@@ -61,17 +61,23 @@ r.all('/:provider/*', async (req, res) => {
   // limit, can't carry the request (images), or fails before replying.
   let body = hasBody ? Readable.toWeb(req) : undefined;
   const claudeCall = req.params.provider === 'anthropic' && req.method === 'POST';
+  const t0 = Date.now();
+  let stopKeepAlive = () => {};
 
   try {
-    if (claudeCall && upstreamPath === 'v1/messages' && subscriptionAvailable()) {
-      body = await readBody(req);
-      if (await trySubscription(body, req, res)) return;
-    }
-
     // Anthropic having a bad second (500 / 529 overloaded / 503) used to land on
     // the phone as "Claude error: Internal server error" and kill the turn. Hold
     // the body so the call can be retried — nothing has gone back to the app yet.
-    if (claudeCall && !Buffer.isBuffer(body)) body = await readBody(req);
+    if (claudeCall) {
+      body = await readBody(req);
+      let streaming = false;
+      try { streaming = !!JSON.parse(body.toString('utf8')).stream; } catch {}
+      if (!streaming) stopKeepAlive = keepAlive(res);
+    }
+
+    if (claudeCall && upstreamPath === 'v1/messages' && subscriptionAvailable()) {
+      if (await trySubscription(body, req, res)) return;
+    }
 
     let upstream;
     for (let attempt = 0; ; attempt++) {
@@ -87,10 +93,13 @@ r.all('/:provider/*', async (req, res) => {
       if (upstream && upstream.body) await upstream.body.cancel().catch(() => {});
       await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
     }
-    res.status(upstream.status);
-    const rct = upstream.headers.get('content-type');
-    if (rct) res.set('content-type', rct);
-    res.set('cache-control', 'no-store');
+    stopKeepAlive();
+    if (!res.headersSent) {
+      res.status(upstream.status);
+      const rct = upstream.headers.get('content-type');
+      if (rct) res.set('content-type', rct);
+      res.set('cache-control', 'no-store');
+    }
     if (upstream.body) {
       Readable.fromWeb(upstream.body).pipe(res);
     } else {
@@ -100,12 +109,40 @@ r.all('/:provider/*', async (req, res) => {
     // The app hung up mid-upload: nobody is left to answer. Before this sat
     // inside the try, that rejection went unhandled and took the whole server
     // down (every persona then got "Internal server error" while it restarted).
-    if (req.aborted || e.message === 'aborted') return console.warn('ai proxy: app closed the request', req.params.provider);
-    console.error('ai proxy failed', req.params.provider, e.message);
-    if (!res.headersSent) res.status(502).json({ error: 'proxy failed: ' + e.message });
-    else res.end();
+    stopKeepAlive();
+    const secs = Math.round((Date.now() - t0) / 1000);
+    if (req.aborted || e.message === 'aborted') return console.warn(`ai proxy: app closed the request after ${secs}s`, req.params.provider);
+    console.error(`ai proxy failed after ${secs}s`, req.params.provider, e.message);
+    sendJson(res, 502, { type: 'error', error: { type: 'proxy_error', message: 'proxy failed: ' + e.message } });
   }
 });
+
+// A non-streaming Claude call sends nothing until the whole reply exists — the
+// subscription CLI alone can take minutes — and Replit's edge drops a silent
+// request, answering the app with its own "Internal server error". After 10s
+// of silence, commit a 200 and trickle spaces (leading whitespace is still
+// valid JSON) so the connection stays open; an error that comes after that
+// goes out as an Anthropic-shaped error body instead of a status code.
+function keepAlive(res) {
+  let iv = null;
+  const t = setTimeout(() => {
+    if (res.headersSent || res.writableEnded) return;
+    res.status(200).set({ 'content-type': 'application/json', 'cache-control': 'no-store' });
+    res.write(' ');
+    iv = setInterval(() => { if (!res.writableEnded) res.write(' '); }, 10000);
+  }, 10000);
+  const stop = () => { clearTimeout(t); if (iv) clearInterval(iv); };
+  res.on('close', stop);
+  return stop;
+}
+
+// res.status().json(), or — once keepAlive has already sent the headers — the
+// same body written onto the open response.
+function sendJson(res, status, obj) {
+  if (res.writableEnded) return;
+  if (!res.headersSent) return res.status(status).json(obj);
+  res.end(JSON.stringify(obj));
+}
 
 function readBody(req) {
   return new Promise((resolve, reject) => {
@@ -153,7 +190,7 @@ async function trySubscription(raw, req, res) {
       onText: b.stream ? (t) => { start(); sse({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: t } }); } : undefined,
     });
     if (b.stream) { start(); endStream(); return true; }
-    res.status(200).json({
+    sendJson(res, 200, {
       id: 'msg_sub', type: 'message', role: 'assistant', model,
       content: [{ type: 'text', text }], stop_reason: 'end_turn',
       usage: { input_tokens: 0, output_tokens: 0 },
