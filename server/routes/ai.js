@@ -65,13 +65,27 @@ r.all('/:provider/*', async (req, res) => {
     if (await trySubscription(body, req, res)) return;
   }
 
+  // Anthropic having a bad second (500 / 529 overloaded / 503) used to land on
+  // the phone as "Claude error: Internal server error" and kill the turn. Hold
+  // the body so the call can be retried — nothing has gone back to the app yet.
+  const claudeCall = req.params.provider === 'anthropic' && req.method === 'POST';
+  if (claudeCall && !Buffer.isBuffer(body)) body = await readBody(req);
+
   try {
-    const upstream = await fetch(url, {
-      method: req.method,
-      headers,
-      body,
-      duplex: hasBody && !Buffer.isBuffer(body) ? 'half' : undefined,
-    });
+    let upstream;
+    for (let attempt = 0; ; attempt++) {
+      upstream = await fetch(url, {
+        method: req.method,
+        headers,
+        body,
+        duplex: hasBody && !Buffer.isBuffer(body) ? 'half' : undefined,
+      }).catch((e) => { if (!claudeCall || attempt >= 3) throw e; return null; });
+      const retry = claudeCall && attempt < 3 && (!upstream || upstream.status >= 500);
+      if (!retry) break;
+      console.warn(`ai proxy: anthropic ${upstream ? upstream.status : 'network error'} — retry ${attempt + 1}/3`);
+      if (upstream && upstream.body) await upstream.body.cancel().catch(() => {});
+      await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
+    }
     res.status(upstream.status);
     const rct = upstream.headers.get('content-type');
     if (rct) res.set('content-type', rct);
