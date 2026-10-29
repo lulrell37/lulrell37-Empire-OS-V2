@@ -45,7 +45,7 @@ app.get('/mem0/status', auth, async (req, res) => {
   const health = mem0Health();
   const counts = {};
   if (health.ok) {
-    for (const id of String(req.query.personas || 'ara,stephanie,haven,jarvis,selene').split(',')) {
+    for (const id of String(req.query.personas || 'ara,stephanie,haven,jarvis,selene,aisha').split(',')) {
       const all = await mem0All(id.trim(), { max: 5000 });
       counts[id.trim()] = { memories: all.length, newest: all[0] ? require('./mem0').mem0Line(all[0]).slice(1, 11) : null, oldest: all.length ? require('./mem0').mem0Line(all[all.length - 1]).slice(1, 11) : null };
     }
@@ -75,6 +75,7 @@ db.init()
     startCouncilCron();
     startScoutSignalCron();
     startTalonAutoTradeCron();
+    startBuildPollCron();
     startNewsWireCron();
     startScoutOutreachCron();
     startAutoAtlasCron();
@@ -188,9 +189,19 @@ function startScoutSignalCron() {
 // thing is a no-op unless the app's `auto_trade` toggle (Settings › Trading) is
 // on — no separate on/off surface needed. TALON_AUTOTRADE=off kills this
 // instance's cron outright (e.g. running two backend instances).
+// J.A.R.V.I.S.'s build loop over Telegram: follow open Claude Code builds and
+// tell him when one asks a question, opens a PR, fails or ships. Needs
+// GITHUB_TOKEN (server/buildAgent.js); BUILD_POLL=off to stop.
+function startBuildPollCron() {
+  if (process.env.BUILD_POLL === 'off') return console.log('build poll cron disabled (BUILD_POLL=off)');
+  if (!require('./buildAgent').configured()) return console.log('build poll cron off (no GITHUB_TOKEN) — J.A.R.V.I.S. saves build specs as notes instead');
+  cron.schedule('*/3 * * * *', () => require('./buildAgent').pollAndNotify().catch((e) => console.error('build poll failed:', e.message)));
+  console.log('build poll cron scheduled (every 3m)');
+}
+
 function startTalonAutoTradeCron() {
   if (process.env.TALON_AUTOTRADE === 'off') return console.log('T.A.L.O.N. auto-trade cron disabled (TALON_AUTOTRADE=off)');
-  if (!process.env.ANTHROPIC_API_KEY) return console.log('T.A.L.O.N. auto-trade cron off (no ANTHROPIC_API_KEY)');
+  if (!talonAutoTrade.cronEnabled()) return console.log('T.A.L.O.N. auto-trade cron off (no Claude subscription, ANTHROPIC_API_KEY or XAI_API_KEY)');
   talonAutoTrade.enableOnce().catch((e) => console.error('talon switch-on failed:', e.message));
   cron.schedule('*/5 * * * *', () => talonAutoTrade.tick().catch((e) => console.error('talon auto-trade cron failed:', e.message)));
   console.log('T.A.L.O.N. auto-trade cron scheduled (every 5m, self-paced to auto_trade_interval_min)');

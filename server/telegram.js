@@ -8,6 +8,7 @@
 //   haven     -> TELEGRAM_BOT_TOKEN_HAVEN
 //   jarvis    -> TELEGRAM_BOT_TOKEN_JARVIS
 //   selene    -> TELEGRAM_BOT_TOKEN_SELENE
+//   aisha     -> TELEGRAM_BOT_TOKEN_AISHA
 // TELEGRAM_OWNER_ID is shared across all of them.
 const crypto = require('crypto');
 const { toTelegramHtml } = require('./telegramMedia');
@@ -23,6 +24,7 @@ const BOT_TOKENS = {
   haven: process.env.TELEGRAM_BOT_TOKEN_HAVEN || '',
   jarvis: process.env.TELEGRAM_BOT_TOKEN_JARVIS || '',
   selene: process.env.TELEGRAM_BOT_TOKEN_SELENE || '',
+  aisha: process.env.TELEGRAM_BOT_TOKEN_AISHA || '',
 };
 
 const isOwner = (id) => OWNER_ID && String(id) === OWNER_ID;

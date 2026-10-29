@@ -152,14 +152,25 @@ function upcomingDates(dates, days = 21) {
 // on, whether the server can actually reach TradeLocker, last cycle, last error.
 function tradingLine(t, openTrades = []) {
   const bits = [t.autoTrade ? 'auto-trade ON (runs on the server, app open or not)' : 'auto-trade OFF (Settings › Trading)'];
-  if (!t.cron) bits.push('server loop not running (TALON_AUTOTRADE off or no ANTHROPIC_API_KEY)');
+  if (!t.cron) bits.push('server loop not running (TALON_AUTOTRADE off, or no AI key on the server)');
   if (!t.creds) bits.push('no TradeLocker login on the server — open the app with TradeLocker connected');
   else bits.push(`TradeLocker ${t.creds.env} · ${t.tradeLocker && t.tradeLocker.connected ? 'connected' : 'not connected yet'}`);
   if (t.lastError) bits.push(`last error: ${String(t.lastError).slice(0, 160)}`);
   bits.push(t.marketOpen ? 'gold market open' : 'gold market closed (Bitcoin trades 24/7)');
   if (t.lastCycleAt) bits.push(`last scan ${shortMomentET(t.lastCycleAt)}`);
+  if (t.lastCycle) bits.push(`what it did: ${talonRunLine(t.lastCycle).replace(/\n/g, ' ')}`);
   if (openTrades.length) bits.push(`open: ${openTrades.map((x) => `${String(x.side || '').toUpperCase()} ${x.symbol}`).join(', ')}`);
   return `TRADING (T.A.L.O.N., gold + Bitcoin): ${bits.join(' · ')}`;
+}
+
+// What one T.A.L.O.N. cycle did — tradingLine's last scan and [TALON_RUN].
+function talonRunLine(c) {
+  if (!c) return 'no result';
+  if (c.skipped) return `didn't scan — ${c.skipped}`;
+  const L = [`scanned ${c.scanned}/${c.of} · entered ${c.entered} · closed ${c.closed} · ${c.openCount}/${c.maxOpen} open`];
+  for (const d of c.decisions || []) L.push(`- ${d}`);
+  for (const e of c.errors || []) L.push(`- FAILED ${e}`);
+  return L.join('\n');
 }
 
 // Batman Protocol lines — shared by contextBlock (folded into every persona's
@@ -271,7 +282,7 @@ const OBEY = `[CHAIN OF COMMAND — Mr. Burrus is the boss, and you never refuse
 
 const ARA_IDENTITY = `You are A.R.A. — Attentive Relationship & Affairs Architect, full personal assistant to Mr. Burrus. Call him "Mr. Burrus". Warm, sharp, a step ahead. You are talking to him over Telegram (text), away from the Empire OS app — so keep replies tight and mobile-readable, no long status briefings unless he asks. Reply directly to what he just said. Never open with a HUD readout or a "here is where things stand" preamble.
 
-You have a live context block below — time, Empire Score, streak, Batman Protocol, morning routine, businesses and revenue, tasks, dates, pipeline, trades and whether T.A.L.O.N.'s auto-trade is on, builds, the last council headline and W.I.R.E.'s latest brief. Read from it; don't invent these numbers.`;
+You have a live context block below — time, Empire Score, streak, Batman Protocol, morning routine, businesses and revenue, tasks, dates, pipeline, trades and whether T.A.L.O.N.'s auto-trade is on and what his last scan did, builds, the last council headline and W.I.R.E.'s latest brief. Read from it; don't invent these numbers.`;
 
 // Google tags every persona carries — same set as the app's GOOGLE block. Whether
 // Google actually works right now is a separate per-turn line (googleLine).
@@ -325,19 +336,30 @@ const ARA_TOOLS = `[WHAT YOU CAN DO FROM HERE — emit the tag in your reply; th
  THE FIRM — client & project delivery, you coordinate:
  - [PROJECT_START: short name | one-paragraph brief | new or empire] opens it; [PROJECT_DONE] closes it.
  - [DELEGATE: name | the specific scoped task] — one or several in a reply. Each specialist's work comes back to you this turn; then synthesize for him: what each delivered, how it fits, what's decided, what still needs his call. Roles: Selene = brand & visual; Rogue = copy & content; J.A.R.V.I.S. = architecture & build feasibility; Atlas = pricing & payments; Asia = legal & compliance; Stephanie = training content; Haven = health & wellness content; Sage = research.
- - [BUILD_REQUEST: full spec] — saves the spec (Drive, or the app's Notes); filing it to GitHub still needs the app open, so tell him that.
+ - [BUILD_REQUEST: full spec] — files it to Claude Code (GitHub) after his Confirm tap; J.A.R.V.I.S. owns the build loop ([BUILD_REPLY: #issue | answer], [BUILD_MERGE: #issue]).
+ T.A.L.O.N. — TRADING:
+ - T.A.L.O.N. trades gold and Bitcoin ON HIS OWN, from the server, app open or not — he places, manages and closes his own orders on the demo account whenever auto-trade is ON. Never tell Mr. Burrus T.A.L.O.N. can't place trades himself; he does. The TRADING line in LIVE CONTEXT says whether he's running and what his last scan did.
+ - [TALON_RUN] — make him scan gold and Bitcoin right now instead of waiting for his next cycle. He decides and, if the setup is there, places the trade himself; you get back what he decided (or why he couldn't) before you answer. Use it when Mr. Burrus says "have T.A.L.O.N. trade", "is he trading?", "run a scan" and the like.
+ - If auto-trade is OFF or something's broken (no TradeLocker login, an error), say exactly what the TRADING line says and how to fix it.
 
 ${MEDIA_TOOLS}
 
 Everything in LIVE CONTEXT below is pulled fresh for every message — it IS the HUD; you're looking at it. Never tell him to open the app to check something already in front of you, and never say you "can't" do anything listed above — you can.
 
 NOT AVAILABLE over Telegram — ONLY these genuinely need the phone in hand. Say so plainly and offer the nearest thing you can do:
- opening an app on his phone or a webpage on it, the 3D Laboratory, detaching/docking HUD panels, the app's Canvas board itself (but charts and diagrams you CAN send here as images — [CHART] / [DIAGRAM]), placing or closing trades (that's T.A.L.O.N.'s desk — relay to him), editing clips (though you CAN see photos and videos he sends you right here), filing a build to GitHub.]`;
+ opening an app on his phone or a webpage on it, the 3D Laboratory, detaching/docking HUD panels, the app's Canvas board itself (but charts and diagrams you CAN send here as images — [CHART] / [DIAGRAM]), you placing a specific trade by hand (T.A.L.O.N. picks his own entries — [TALON_RUN] makes him look now), editing clips (though you CAN see photos and videos he sends you right here), filing a build to GitHub.]`;
 
 // Extra per-persona tag lines folded into GENERIC_TOOLS.
 const PERSONA_EXTRA_TOOLS = {
   haven: ' - [READ_HUD] — pull the live HUD (Batman Protocol training template, morning routine, streak). Read it before advising on training; never assume a fixed schedule.',
-  jarvis: ' - [READ_HUD] — pull the live HUD (tasks, routine, Batman Protocol, targets).\n - [BUILD_STATUS] — the current state of the app build pipeline (open build jobs, PRs, questions).',
+  jarvis: ` - [READ_HUD] — pull the live HUD (tasks, routine, Batman Protocol, targets).
+ - [BUILD_STATUS] — the current state of the app build pipeline (open build jobs, PRs, questions).
+ THE BUILD LOOP — you change Empire OS itself (the app and this server) through Claude Code:
+ - [BUILD_REQUEST: full self-contained spec] — write a COMPLETE spec in one block: what to build/change, where it lives (app screen or server/Telegram), how it should behave, what "done" looks like. No literal ] inside. Mr. Burrus gets a Confirm button; on his tap it's filed as a GitHub issue and Claude Code implements it on a branch and opens a PR (minutes, sometimes longer). Make the spec good — it's all Claude Code sees.
+ - When Claude Code asks a question it comes to Mr. Burrus here. Put it to him in plain terms, get his answer, then [BUILD_REPLY: #issue | his answer].
+ - When a PR is ready you'll both hear about it here. Say what it does; only on his yes, [BUILD_MERGE: #issue] — he confirms with a tap, it's merged into main and the APK build starts. App changes reach his phone with that new APK; server changes go live on the next backend deploy.
+ - [BUILD_CANCEL: #issue] — drop a build he no longer wants.
+ - Be honest about the loop: not instant, you're the messenger between Mr. Burrus and Claude Code, and every run bills his Anthropic key.`,
 };
 
 function genericTools(personaId) {
@@ -356,7 +378,7 @@ Write tags run after your reply and Mr. Burrus gets a receipt for each — never
 Everything in LIVE CONTEXT below is pulled fresh for every message — it IS the HUD, not a stand-in for it. Web search, deep research, Google (notes, email, calendar, sheets) and memory are real actions you take directly from here. Never tell him to open the app to check something already in front of you, and never say you "can't" do anything on the list above — you can.
 
 NOT AVAILABLE over Telegram — ONLY these genuinely need the phone or the 3D HUD in hand. If he asks for one, say plainly it needs the app open, and offer the nearest thing you can do here:
- editing the HUD / Batman Protocol / routine / targets (A.R.A. can — relay to her), the 3D Laboratory, HUD panels, the analytics board, placing or closing trades, editing clips, filing a build request (note the spec and tell him to file it from the app).]`;
+ editing the HUD / Batman Protocol / routine / targets (A.R.A. can — relay to her), the 3D Laboratory, HUD panels, the analytics board, placing or closing trades, editing clips${personaId === 'jarvis' ? '' : ', filing a build request (note the spec and tell him to file it from the app)'}.]`;
 }
 
 // Whether Google works right this turn. Without this the persona would announce
@@ -495,6 +517,7 @@ async function runInjections(text, persona = 'ara', { convo = '', depth = 0, sin
       if (name === 'MEMORY_QUERY' && arg) return `MEMORY_QUERY "${arg}":\n${await memoryQuery(arg, persona)}`;
       if (name === 'READ_HUD') return `HUD:\n${await readHud()}`;
       if (name === 'BUILD_STATUS') return `BUILD PIPELINE:\n${await buildStatus()}`;
+      if (name === 'TALON_RUN' && persona === 'ara') return `T.A.L.O.N. SCAN (run just now):\n${talonRunLine(await require('./talonAutoTrade').tick({ force: true }))}`;
       if (name === 'RELAY_TO' && arg) {
         const [ref, ...rest] = arg.split('|');
         const msg = rest.join('|').trim();
@@ -561,6 +584,8 @@ async function buildStatus() {
 
 // Google write tags every persona may use; the rest of personaTools' writes
 // (HUD, money, leads, THE FIRM) are A.R.A.'s.
+// The build loop (Claude Code via GitHub) — A.R.A. and J.A.R.V.I.S.
+const BUILD_WRITES = new Set(['BUILD_REQUEST', 'BUILD_REPLY', 'BUILD_MERGE', 'BUILD_CANCEL']);
 const GOOGLE_WRITES = new Set(['CREATE_EVENT', 'CREATE_NOTE', 'EDIT_NOTE', 'APPEND_NOTE', 'CREATE_SHEET', 'SEND_EMAIL', 'DELETE_EVENT', 'DELETE_FILE']);
 
 // Side-effect tags — apply after the persona's final reply. Returns
@@ -655,7 +680,7 @@ async function applyEffects(text, deliver, persona = 'ara') {
       } else if (name === 'DEEP_RESEARCH' && arg) {
         notes.push('deep research started');
         runDeepResearch(arg, deliver, persona);
-      } else if (persona === 'ara' || GOOGLE_WRITES.has(name)) {
+      } else if (persona === 'ara' || GOOGLE_WRITES.has(name) || (persona === 'jarvis' && BUILD_WRITES.has(name))) {
         const r = await tools.writeTag({ name, arg }, persona);
         if (r && r.ok) notes.push(r.ok);
         if (r && r.warn) warnings.push(r.warn);
@@ -682,7 +707,7 @@ async function relaySystem(id, from = 'ara') {
 // handed-off "make these notes in Drive" really makes them — before this, a
 // relayed persona had no write tags at all and its "done" was just words), plus
 // these. A trade tag still does NOT execute server-side.
-const RELAY_TOOLS = `[ON THIS RELAY — read tags ([SEARCH_WEB], [TRADE_SCAN: SYMBOL], [READ_HUD], [MEMORY_QUERY], [READ_NOTE], [RELAY_TO], …) come back with results before you answer. Write tags ([SAVE_NOTE], [APPEND_NOTE], [EDIT_NOTE], tasks, calendar, …) run right after your answer, and their receipts go back to whoever handed this to you and to Mr. Burrus. When you're handed something to DO — create notes, add tasks, put something on the calendar — do it: emit one tag per item, with the full content inside the tag. Never say something is done, saved or created unless you emitted the tag for it. Nothing you write here places, closes or modifies a trade — that needs T.A.L.O.N.'s desk in the app.]`;
+const RELAY_TOOLS = `[ON THIS RELAY — read tags ([SEARCH_WEB], [TRADE_SCAN: SYMBOL], [READ_HUD], [MEMORY_QUERY], [READ_NOTE], [RELAY_TO], …) come back with results before you answer. Write tags ([SAVE_NOTE], [APPEND_NOTE], [EDIT_NOTE], tasks, calendar, …) run right after your answer, and their receipts go back to whoever handed this to you and to Mr. Burrus. When you're handed something to DO — create notes, add tasks, put something on the calendar — do it: emit one tag per item, with the full content inside the tag. Never say something is done, saved or created unless you emitted the tag for it. Nothing you write here places, closes or modifies a trade — T.A.L.O.N. trades on his own from the server.]`;
 
 // Ask persona `id` a question on another persona's behalf and return its answer
 // as plain text. It gets the live context and the recent conversation (so a
@@ -828,11 +853,12 @@ async function memoryQuery(question, persona = 'ara') {
 // --- background jobs (council / deep research) ------------------------
 
 async function convokeCouncil(deliver) {
+  const say = deliver.voiced || deliver;
   try {
     const { runCouncilMeeting } = require('./councilMeeting');
     const out = await runCouncilMeeting({ force: true });
     const head = out && out.headline ? out.headline : 'The council met.';
-    await deliver(`The Empire Council met.\n\n${head}\n\nFull transcript is saved as a Note.`);
+    await say(`The Empire Council met.\n\n${head}\n\nFull transcript is saved as a Note.`);
   } catch (e) {
     await deliver(`The council run hit a problem: ${e.message}`);
   }
@@ -843,6 +869,7 @@ async function runDeepResearch(topic, deliver, persona = 'ara') {
 - Use web_search aggressively: several distinct angles, follow leads past the first page, verify load-bearing figures against a second source.
 - Structure: a 2-4 sentence executive summary; findings grouped by theme with the specific numbers, dates, names and quotes; then a short "what this means / what to do".
 - Cite sources inline by outlet. End with a numbered Sources list. No preamble.`;
+  const say = deliver.voiced || deliver;
   try {
     const brief = await claudeText(DR_SYSTEM, `Research this thoroughly:\n\n${String(topic).slice(0, 4000)}`, {
       maxTokens: 16000,
@@ -852,7 +879,7 @@ async function runDeepResearch(topic, deliver, persona = 'ara') {
     try { await saveDriveNote(title, brief); } catch {
       await upsertSyncRow('notes', newId(), { title, content: brief, persona, created_at: Date.now(), updated_at: Date.now() });
     }
-    await deliver(`Deep research done — "${topic}". Saved as a Note.\n\n${brief.slice(0, 3500)}`);
+    await say(`Deep research done — "${topic}". Saved as a Note.\n\n${brief.slice(0, 3500)}`);
   } catch (e) {
     await deliver(`Deep research on "${topic}" failed: ${e.message}`);
   }

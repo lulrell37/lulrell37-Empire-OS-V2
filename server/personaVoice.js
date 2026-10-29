@@ -101,7 +101,7 @@ async function elevenLabsOgg(voiceId, text, { flat = false, personaId = '' } = {
 
 // Last-resort voice when the persona's own engine is down: OpenAI TTS (the
 // key is already here for Whisper). Not her voice, but he still gets a note.
-const OPENAI_FALLBACK_VOICE = { ara: 'shimmer', selene: 'nova', stephanie: 'coral', haven: 'sage', jarvis: 'onyx' };
+const OPENAI_FALLBACK_VOICE = { ara: 'shimmer', selene: 'nova', stephanie: 'coral', haven: 'sage', jarvis: 'onyx', aisha: 'fable' };
 async function openaiOgg(personaId, text) {
   const key = process.env.OPENAI_API_KEY;
   if (!key) throw new Error('OPENAI_API_KEY not set');

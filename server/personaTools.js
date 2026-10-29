@@ -13,6 +13,7 @@
 // tg_pending row and the bot asks for a tap, the same rule the app enforces
 // with its confirmation card.
 const { query } = require('./db');
+const builds = require('./buildAgent');
 const { syncedRow, syncedRows, upsertSyncRow, getSetting, setSetting, newId, todayET } = require('./syncStore');
 const g = require('./google');
 const { addLead, updateLead, appendLeadLog, leadHasContact } = require('./scoutLeads');
@@ -502,9 +503,14 @@ async function writeTag({ name, arg }, persona) {
       return { ok: proj ? `project closed: ${proj.name}` : 'no project was open' };
     }
     case 'BUILD_REQUEST': {
-      // Filing a build needs the GitHub token, which lives on the phone. Keep the
-      // spec safe in Drive (or the app's notes) so it can be filed from the app.
+      // With GITHUB_TOKEN on the server it files to Claude Code (after his tap,
+      // same as the app). Without it, keep the spec safe in Drive (or the app's
+      // notes) so it can be filed from the app.
       const proj = await activeProject();
+      if (builds.configured()) {
+        const first = String(arg).trim().split('\n')[0].slice(0, 90);
+        return propose(persona, 'build_request', 'File this build to Claude Code', `${first}\n\n${String(arg).trim().slice(0, 1200)}`, { spec: arg, projectName: proj ? proj.name : null });
+      }
       const title = `Build Spec — ${proj ? proj.name : todayET()}`;
       try {
         await g.saveDriveNote(title, arg);
@@ -513,6 +519,27 @@ async function writeTag({ name, arg }, persona) {
         await upsertSyncRow('notes', newId(), { title, content: arg, persona, created_at: now, updated_at: now });
         return { warn: `build spec saved to the app's Notes as "${title}" — filing it to GitHub still needs the app open` };
       }
+    }
+    case 'BUILD_REPLY': {
+      const [ref, ...rest] = arg.split('|');
+      const n = parseInt(String(ref).replace(/\D/g, ''), 10);
+      const answer = rest.join('|').trim();
+      if (!n || !answer) return { warn: 'BUILD_REPLY needs #issue | answer' };
+      if (!builds.configured()) return { warn: 'answering Claude Code needs GITHUB_TOKEN on the server — answer it from the app' };
+      await builds.replyToBuild(n, answer);
+      return { ok: `answer sent to Claude Code on #${n}` };
+    }
+    case 'BUILD_MERGE': {
+      const n = parseInt(String(arg).replace(/\D/g, ''), 10);
+      if (!n) return { warn: 'BUILD_MERGE needs an issue number' };
+      if (!builds.configured()) return { warn: 'merging needs GITHUB_TOKEN on the server — merge it from the app' };
+      return propose(persona, 'build_merge', `Merge build #${n} into main and start the APK build`, `Ships build #${n}: squash-merges its PR into main, which kicks off the Android build.`, { n });
+    }
+    case 'BUILD_CANCEL': {
+      const n = parseInt(String(arg).replace(/\D/g, ''), 10);
+      if (!n) return { warn: 'BUILD_CANCEL needs an issue number' };
+      if (!builds.configured()) return { warn: 'cancelling needs GITHUB_TOKEN on the server — cancel it from the app' };
+      return { ok: await builds.cancelBuild(n) };
     }
     default:
       return null;
@@ -549,6 +576,11 @@ async function runPending(id) {
       text = await g.calendarDelete(pl.id);
     } else if (row.kind === 'delete_file') {
       text = await g.driveTrash(pl.id);
+    } else if (row.kind === 'build_request') {
+      const r = await builds.fileBuildRequest(pl.spec, { projectName: pl.projectName });
+      text = `Filed as #${r.issueNumber} — Claude Code is on it (${r.url}). I'll tell you when it has a question or a PR.`;
+    } else if (row.kind === 'build_merge') {
+      text = await builds.mergeBuild(pl.n);
     } else {
       throw new Error(`unknown action ${row.kind}`);
     }
