@@ -67,12 +67,19 @@ async function claudeText(system, messages, { maxTokens = 900, tools, model = CL
     }
   }
   if (creditOk('anthropic')) {
-    try {
-      return await claudeApiText(system, msgs, { maxTokens, tools, model });
-    } catch (e) {
-      if (!isCreditError('anthropic', e.message)) throw e;
-      markOutOfCredit('anthropic', e.message);
-      errs.push(e.message);
+    // A 500 / 529 "overloaded" / dropped connection is Anthropic having a bad
+    // second — retry twice, then answer on Grok rather than fail the turn.
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await claudeApiText(system, msgs, { maxTokens, tools, model });
+      } catch (e) {
+        if (isCreditError('anthropic', e.message)) { markOutOfCredit('anthropic', e.message); errs.push(e.message); break; }
+        if (!isTransient(e)) throw e;
+        if (attempt < 2) { await new Promise((r) => setTimeout(r, 1500 * (attempt + 1))); continue; }
+        console.error(`llm: anthropic still failing after retries (${e.message}) — trying Grok`);
+        errs.push(e.message);
+        break;
+      }
     }
   }
   // Out of prepaid API credits (a claude.ai subscription doesn't fund the API):
@@ -88,6 +95,8 @@ async function claudeText(system, messages, { maxTokens = 900, tools, model = CL
   }
   throw new Error(noCreditMessage(errs));
 }
+
+const isTransient = (e) => /anthropic (5\d\d|429)\b|overloaded|internal server|api_error|fetch failed|ECONNRESET|ETIMEDOUT|socket hang up|aborted|timeout/i.test(String((e && e.message) || e));
 
 // One readable line for "every provider in the chain is out" instead of a raw
 // provider JSON error.
