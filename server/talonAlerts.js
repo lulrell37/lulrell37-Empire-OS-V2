@@ -34,11 +34,13 @@ function notify(text) {
   sendFromAra(text).catch((e) => console.error('trade alert failed:', e.message));
 }
 
-function tradeOpened({ symbol, side, qty, entry, stopLoss, takeProfit, rationale, setup }) {
+function tradeOpened({ symbol, side, qty, entry, stopLoss, takeProfit, rationale, setup, swingTarget }) {
   const news = setup === 'news';
-  notify(`📈 **T.A.L.O.N. just opened a trade**${news ? ' (news-driven)' : ''}, Mr. Burrus.\n`
-    + `**${String(side).toUpperCase()} ${nameOf(symbol)}** · ${qty} lot @ ~${px(entry)}\n`
-    + `Stop ${px(stopLoss)} · Target ${px(takeProfit)}`
+  const pair = swingTarget != null;
+  notify(`📈 **T.A.L.O.N. just opened ${pair ? 'a scalp + swing' : 'a trade'}**${news ? ' (news-driven)' : ''}, Mr. Burrus.\n`
+    + `**${String(side).toUpperCase()} ${nameOf(symbol)}** · ${pair ? `2 × ${qty}` : qty} lot @ ~${px(entry)}\n`
+    + (pair ? `Stop ${px(stopLoss)} · Scalp target ${px(takeProfit)} · Swing target ${px(swingTarget)} (stop to break-even when the scalp pays)`
+      : `Stop ${px(stopLoss)} · Target ${px(takeProfit)}`)
     + `${rationale ? `\nWhy: ${String(rationale).replace(/^news — /, '')}` : ''}`);
 }
 
@@ -47,7 +49,8 @@ function tradeClosed(t) {
   const word = t.outcome === 'win' ? 'a win' : t.outcome === 'loss' ? 'a loss' : 'break-even';
   const hit = t.exit_price != null && t.take_profit != null && Math.abs(t.exit_price - t.take_profit) <= Math.abs(t.take_profit) * 3e-4 ? ' — target hit'
     : t.exit_price != null && t.stop_loss != null && Math.abs(t.exit_price - t.stop_loss) <= Math.abs(t.stop_loss) * 3e-4 ? ' — stopped out' : '';
-  notify(`${icon} **T.A.L.O.N. closed ${String(t.side).toUpperCase()} ${nameOf(t.symbol)}** — ${word}${hit}.\n`
+  const kind = t.pair_id && (t.setup === 'scalp' || t.setup === 'swing') ? ` (${t.setup})` : '';
+  notify(`${icon} **T.A.L.O.N. closed ${String(t.side).toUpperCase()} ${nameOf(t.symbol)}${kind}** — ${word}${hit}.\n`
     + `Entry ${px(t.entry_fill ?? t.entry_ref)} → Exit ${px(t.exit_price)} · P/L ${money(t.realized_pl)}${t.pl_estimated ? ' (est.)' : ''}`
     + `${t.r_multiple != null ? ` · ${t.r_multiple}R` : ''}`);
 }

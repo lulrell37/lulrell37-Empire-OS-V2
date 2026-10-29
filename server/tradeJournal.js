@@ -8,7 +8,7 @@
 // which either already ran on-device or doesn't apply to rows this cron creates.
 const crypto = require('crypto');
 const { syncedRows, upsertSyncRow } = require('./syncStore');
-const { tlPositions, tlOrdersHistory, tlInstrumentsById } = require('./tradeLocker');
+const { tlPositions, tlOrdersHistory, tlInstrumentsById, tlModifyPosition } = require('./tradeLocker');
 const alerts = require('./talonAlerts');
 
 const TRADER_ID = 'talon';
@@ -52,7 +52,9 @@ async function getStrategy() {
 
 // --- recording ---------------------------------------------------------------
 
-async function recordTradeOpen({ symbol, side, qty, entry, stopLoss, takeProfit, rationale, orderId, setup, auto }) {
+// `pairId` links a scalp + swing opened on the same setup; `alert: false` when
+// the caller sends one alert for the pair itself.
+async function recordTradeOpen({ symbol, side, qty, entry, stopLoss, takeProfit, rationale, orderId, setup, auto, pairId, alert = true }) {
   const now = Date.now();
   const syncId = newId();
   await upsertSyncRow('trades', syncId, {
@@ -60,9 +62,9 @@ async function recordTradeOpen({ symbol, side, qty, entry, stopLoss, takeProfit,
     qty: num(qty), entry_ref: num(entry), stop_loss: num(stopLoss), take_profit: num(takeProfit),
     setup: setup || inferSetup(rationale), rationale: String(rationale || '').slice(0, 400),
     status: 'open', order_id: orderId != null ? String(orderId) : null, opened_at: now,
-    auto: auto ? 1 : 0, updated_at: now,
+    auto: auto ? 1 : 0, pair_id: pairId || null, updated_at: now,
   });
-  alerts.tradeOpened({ symbol: String(symbol || '').toUpperCase(), side, qty, entry, stopLoss, takeProfit, rationale, setup });
+  if (alert) alerts.tradeOpened({ symbol: String(symbol || '').toUpperCase(), side, qty, entry, stopLoss, takeProfit, rationale, setup });
   return syncId;
 }
 
@@ -91,9 +93,13 @@ async function reconcileOpenTrades() {
   let closed = 0;
   for (const t of open) {
     const now = Date.now();
-    // 1. bind a freshly-opened trade to its live position
+    // 1. bind a freshly-opened trade to its live position — by its own order
+    // first (a scalp + swing pair are otherwise identical positions), then by
+    // symbol/side/size/time.
     if (!t.position_id) {
-      const cand = positions.find((p) => {
+      const own = t.order_id ? (await loadHistory()).find((r) => String(r.id) === String(t.order_id)) : null;
+      const ownPid = own && String(own.position ?? own.positionId ?? '');
+      const cand = (ownPid && posById[ownPid] && !boundIds.has(ownPid)) ? posById[ownPid] : positions.find((p) => {
         if (boundIds.has(String(p.id))) return false;
         const sym = String(idToSym[String(p.tradableInstrumentId)] || '').toUpperCase();
         if (sym && t.symbol && sym !== t.symbol) return false;
@@ -180,6 +186,19 @@ async function reconcileOpenTrades() {
     await upsertSyncRow('trades', t.sync_id, done);
     alerts.tradeClosed(done);
     closed++;
+
+    // Scalp of a pair hit its target: the swing's stop goes to break-even, so
+    // the rest of the trade can no longer lose.
+    if (done.setup === 'scalp' && done.pair_id && outcome === 'win') {
+      const swing = open.find((o) => o.pair_id === done.pair_id && o.sync_id !== t.sync_id);
+      const be = swing && num(swing.entry_fill) != null ? num(swing.entry_fill) : entry;
+      if (swing && swing.position_id && posById[String(swing.position_id)] && be != null) {
+        try {
+          await tlModifyPosition(swing.position_id, { stopLoss: be });
+          alerts.araNote(`🔒 Scalp paid — T.A.L.O.N.'s swing ${String(swing.side).toUpperCase()} on ${swing.symbol} now has its stop at break-even (${be}). It can't lose from here; it's riding to ${swing.take_profit}.`);
+        } catch (e) { console.error(`trade-journal: swing break-even #${swing.position_id} failed —`, e.message); }
+      }
+    }
   }
   return { checked: open.length, closed };
 }
