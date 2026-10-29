@@ -60,18 +60,19 @@ r.all('/:provider/*', async (req, res) => {
   // the metered API below only sees them when the subscription is at its usage
   // limit, can't carry the request (images), or fails before replying.
   let body = hasBody ? Readable.toWeb(req) : undefined;
-  if (req.params.provider === 'anthropic' && req.method === 'POST' && upstreamPath === 'v1/messages' && subscriptionAvailable()) {
-    body = await readBody(req);
-    if (await trySubscription(body, req, res)) return;
-  }
-
-  // Anthropic having a bad second (500 / 529 overloaded / 503) used to land on
-  // the phone as "Claude error: Internal server error" and kill the turn. Hold
-  // the body so the call can be retried — nothing has gone back to the app yet.
   const claudeCall = req.params.provider === 'anthropic' && req.method === 'POST';
-  if (claudeCall && !Buffer.isBuffer(body)) body = await readBody(req);
 
   try {
+    if (claudeCall && upstreamPath === 'v1/messages' && subscriptionAvailable()) {
+      body = await readBody(req);
+      if (await trySubscription(body, req, res)) return;
+    }
+
+    // Anthropic having a bad second (500 / 529 overloaded / 503) used to land on
+    // the phone as "Claude error: Internal server error" and kill the turn. Hold
+    // the body so the call can be retried — nothing has gone back to the app yet.
+    if (claudeCall && !Buffer.isBuffer(body)) body = await readBody(req);
+
     let upstream;
     for (let attempt = 0; ; attempt++) {
       upstream = await fetch(url, {
@@ -96,6 +97,10 @@ r.all('/:provider/*', async (req, res) => {
       res.end();
     }
   } catch (e) {
+    // The app hung up mid-upload: nobody is left to answer. Before this sat
+    // inside the try, that rejection went unhandled and took the whole server
+    // down (every persona then got "Internal server error" while it restarted).
+    if (req.aborted || e.message === 'aborted') return console.warn('ai proxy: app closed the request', req.params.provider);
     console.error('ai proxy failed', req.params.provider, e.message);
     if (!res.headersSent) res.status(502).json({ error: 'proxy failed: ' + e.message });
     else res.end();
