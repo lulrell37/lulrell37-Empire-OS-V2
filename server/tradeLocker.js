@@ -309,9 +309,13 @@ function summarizeBars(bars) {
   const sma = c.slice(-smaN).reduce((a, x) => a + x, 0) / smaN;
   const hi = Math.max(...bars.map((b) => b.h)), lo = Math.min(...bars.map((b) => b.l));
   const px = (n) => +n.toFixed(2);
+  // ATR14 — the bar's normal swing, so stops sit past the noise, not inside it.
+  const tr = bars.slice(1).map((b, i) => Math.max(b.h - b.l, Math.abs(b.h - bars[i].c), Math.abs(b.l - bars[i].c)));
+  const atrN = tr.slice(-14);
+  const atr = atrN.reduce((a, x) => a + x, 0) / atrN.length;
   return {
     last: px(last), changePct: +(((last - first) / first) * 100).toFixed(2),
-    sma20: px(sma), trend: last > sma ? 'up' : 'down',
+    sma20: px(sma), trend: last > sma ? 'up' : 'down', atr14: px(atr),
     rangeHigh: px(hi), rangeLow: px(lo),
     recent: bars.slice(-6).map((b) => ({ o: px(b.o), h: px(b.h), l: px(b.l), c: px(b.c) })),
   };
@@ -347,7 +351,7 @@ function tlFormatSnapshot(snap) {
   if (state) L.push(`Account: balance ${state.balance}, available ${state.availableFunds}, open P/L ${state.openNetPnL}, open positions ${state.positionsCount}`);
   for (const tf of Object.keys(candles)) {
     const c = candles[tf]; if (!c) { L.push(`${tf}: no data`); continue; }
-    L.push(`${tf}: last ${c.last}, ${c.changePct >= 0 ? '+' : ''}${c.changePct}% over window, trend ${c.trend} (SMA20 ${c.sma20}), range ${c.rangeLow}–${c.rangeHigh}; recent bars ${c.recent.map((b) => `${b.o}/${b.h}/${b.l}/${b.c}`).join('  ')}`);
+    L.push(`${tf}: last ${c.last}, ${c.changePct >= 0 ? '+' : ''}${c.changePct}% over window, trend ${c.trend} (SMA20 ${c.sma20}), ATR14 ${c.atr14}, range ${c.rangeLow}–${c.rangeHigh}; recent bars ${c.recent.map((b) => `${b.o}/${b.h}/${b.l}/${b.c}`).join('  ')}`);
   }
   if (context && Object.keys(context).length) L.push(`Cross-market: ${Object.entries(context).map(([k, v]) => `${k} ${v}`).join(', ')} (read dollar direction / risk tone from these)`);
   if (positions?.length) L.push(`Open positions (all pairs): ${positions.map((p) => `#${p.id} ${p.side} ${p.qty} @ ${p.avgPrice} (uP/L ${p.unrealizedPl})`).join('; ')}`);

@@ -19,6 +19,19 @@ const PL_KEYS = ['positionNetPl', 'positionGrossPl', 'netPl', 'pnl', 'profit', '
 const num = (v) => { const n = Number(v); return isNaN(n) ? null : n; };
 const near = (a, b, tol) => a != null && b != null && Math.abs(a - b) <= tol;
 
+// The order that actually closed the position. A position's history also
+// holds its stop-loss and take-profit orders, which get CANCELLED when it's
+// closed by hand — taking the first opposite-side row picked up the cancelled
+// stop, booked its price as the exit, and an early close read as a full stop-out.
+// Only a filled opposite-side order with a real fill price counts.
+function pickCloser(rows, side) {
+  const filled = rows.filter((r) => r.side && side && r.side !== side
+    && !/cancel|reject|expire/i.test(String(r.status || ''))
+    && num(r.avgPrice) > 0 && (r.filledQty == null || num(r.filledQty) > 0));
+  const at = (r) => Number(r.lastModified) || Date.parse(r.lastModified || '') || Number(r.createdDate) || 0;
+  return filled.sort((a, b) => at(b) - at(a))[0] || null;
+}
+
 function inferSetup(rationale = '') {
   if (/scalp/i.test(rationale)) return 'scalp';
   if (/swing/i.test(rationale)) return 'swing';
@@ -122,8 +135,8 @@ async function reconcileOpenTrades() {
     });
     let exit = null, histPl = null;
     if (rows.length) {
-      const closer = rows.find((r) => r.side && t.side && r.side !== t.side) || rows[rows.length - 1];
-      exit = num(closer?.avgPrice) ?? num(closer?.price);
+      const closer = pickCloser(rows, t.side);
+      exit = closer ? num(closer.avgPrice) : null;
       for (const k of PL_KEYS) {
         const v = num(closer?.[k]);
         if (v != null && isFinite(v) && Math.abs(v) < 1e7) { histPl = v; break; }

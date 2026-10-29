@@ -171,7 +171,11 @@ token does (`POST /trade/creds`, `server/routes/trade.js`, table
 start (`syncTradeCredsToBackend()` in `src/services/tradeLocker.js`).
 
 **T.A.L.O.N. trades gold (XAUUSD) and Bitcoin (BTCUSD) only**, on a fixed
-playbook in `server/talonBrain.js` (`STRATEGY`, `SYMBOLS`). The "Winning
+playbook in `server/talonBrain.js` (`STRATEGY`, `SYMBOLS`). He holds every trade to its stop or
+target — a "close" from his brain is ignored — and `guardStop()` keeps
+every stop (his and W.I.R.E.'s news trades) at least gold $10 / Bitcoin 0.8% and
+1.2× the 1H ATR14 from entry, skipping the trade if the target then pays under
+2R. The "Winning
 Strategy" note, the `auto_trade_symbols` setting and his custom persona prompt
 (`custom_prompts`, blocked in both `personaRuntime.customPrompt` and the app's
 `buildSys`) are deliberately ignored. W.I.R.E.'s news hand-offs are filtered to

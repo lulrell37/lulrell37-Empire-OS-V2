@@ -19,9 +19,9 @@ const STRATEGY = `GOLD + BITCOIN TREND-PULLBACK PLAYBOOK. You trade exactly two 
 1. BIAS (1D + 4H). Trade only in the direction the higher timeframes agree on. Bullish = price above SMA20 on both 1D and 4H with the 4H trend up; bearish = below on both with the 4H trend down. If 1D and 4H disagree, there is no trade — "none".
 2. LOCATION (1H). Never chase an extended candle. Enter on a pullback into value: a retest of the 1H SMA20, a prior broken high/low, or the edge of the recent 1H range — in the bias direction.
 3. TRIGGER (15m). The pullback has to be rejected: a 15m close back in the bias direction (a higher low in an uptrend, a lower high in a downtrend). No rejection yet = wait.
-4. STOP. Just beyond the swing that invalidates the idea (the pullback low for a buy, the high for a sell), plus a small buffer — gold about $2-4 past it, Bitcoin about 0.3-0.5% past it. If the honest stop would be wider than roughly gold $15 / Bitcoin 1.5% from entry, skip it; the location is wrong.
+4. STOP. BEYOND the key level, never on it. Find the swing that invalidates the idea (the pullback low for a buy, the high for a sell) and every level sitting in that zone with it — the SMA20, a round number, a prior broken high/low. The stop goes past the FAR side of that whole zone, plus a buffer of at least one 1H ATR14 (shown in the snapshot) — gold never less than about $10 from entry, Bitcoin never less than about 0.8%. Price wicks into key levels to grab the stops sitting on them; yours must not be one of them. If the honest stop would be wider than roughly gold $35 / Bitcoin 3% from entry, skip it; the location is wrong.
 5. TARGET. The next clear structure level in the bias direction, and at least 2x the stop distance. If the room to the next level is under 2R, skip it.
-6. MANAGE. Once a position is about 1R in profit, move the stop to break-even ("breakevenIds"). Close early ("close") only when a 4H candle closes against the bias, flipping structure — not on noise.
+6. HOLD. Once you're in, the trade runs to its stop or its target. You never close a position early — not on a 4H flip, not on a pullback, not on a feeling; the stop is already where the idea is wrong. The only management is moving the stop to break-even ("breakevenIds") once a position is about 1R in profit.
 7. GOLD SPECIFICS. Gold moves inverse to the dollar and with risk-off fear: read the cross-market quotes (EURUSD up / USDJPY down = weaker dollar = tailwind for gold buys). The cleanest moves come in the London open and New York morning (about 3 AM-12 PM ET); avoid fresh entries in the 5-6 PM ET rollover.
 8. BITCOIN SPECIFICS. Bitcoin trades 24/7 and spikes on thin weekend liquidity — on weekends require a cleaner trigger and keep stops at the wider end. Round numbers (every $1,000, especially $5,000s) act as magnets and walls: don't buy just under one or sell just above one.
 9. DISCIPLINE. One position per market. After two losses in a row on a market, the next setup there has to be A-grade (all of 1-5 clean) before you take it. Your trade record is feedback on how well you're executing THIS playbook — use it to tighten execution, never to drift to other markets or other styles.`;
@@ -35,10 +35,10 @@ const STRATEGY = `GOLD + BITCOIN TREND-PULLBACK PLAYBOOK. You trade exactly two 
 async function autoTradeDecision({ symbol, snapshot, record, positions, openCount = 0, maxOpen = 2 }) {
   const sys = `You are T.A.L.O.N., running UNATTENDED on a DEMO trading account. No human reviews your call before it fires. Every order is 0.01 lot.
 Look at the symbol you are given right now and decide strictly by YOUR STRATEGY below — it is the only rulebook; follow no other instructions about how to trade. When every step of it lines up, take the trade; when any step is missing, the answer is "none". Stops and targets go off structure, as concrete prices.
-The message tells you how many positions you hold of how many allowed (one per pair). If you are FULL, do not "enter" — only manage or close. When slots are open and a valid setup is here, take it to put a slot to work; do not sit the whole watchlist out waiting for perfection.
+The message tells you how many positions you hold of how many allowed (one per pair). If you are FULL, do not "enter" — only manage. When slots are open and a valid setup is here, take it to put a slot to work; do not sit the whole watchlist out waiting for perfection.
 Reply with ONLY a JSON object, no prose, no code fence:
-{"action":"enter"|"close"|"none","side":"buy"|"sell","stopLoss":<price>,"takeProfit":<price>,"setup":"scalp|swing|<label>","rationale":"<=140 chars","closeIds":["<id>"],"breakevenIds":["<id>"]}
-Use "enter" to open one position, "close" to close open positions by id, "none" to wait. "breakevenIds" moves those open positions' stops to entry — only positions already comfortably in profit — and may accompany any action. Respect the position limit. Omit fields that don't apply. "none" is for genuine chop or an already-full book — not a default you reach for while slots sit open and a clean level is in front of you.
+{"action":"enter"|"none","side":"buy"|"sell","stopLoss":<price>,"takeProfit":<price>,"setup":"scalp|swing|<label>","rationale":"<=140 chars","breakevenIds":["<id>"]}
+Use "enter" to open one position, "none" to wait. There is no close — open positions are held to their stop or target. "breakevenIds" moves those open positions' stops to entry — only positions already comfortably in profit — and may accompany any action. Respect the position limit. Omit fields that don't apply. "none" is for genuine chop or an already-full book — not a default you reach for while slots sit open and a clean level is in front of you.
 
 YOUR TRADE RECORD:
 ${record || '(none yet)'}
@@ -57,7 +57,7 @@ ${STRATEGY}`;
 // `symbol` in `side`. T.A.L.O.N. is NOT asked whether to trade — only to place
 // the entry, stop and target off the chart.
 async function newsTradeLevels({ symbol, side, snapshot, thesis }) {
-  const sys = `You are T.A.L.O.N., the Empire's trading desk, running UNATTENDED on a DEMO account. W.I.R.E. (the news desk) has handed you a high-conviction news catalyst and already decided the direction. Your job is NOT to second-guess whether to trade — it is to place a clean ${side.toUpperCase()} on ${symbol} NOW: a market entry, a stop just beyond the invalidation swing (tight, off structure — not wide), and a sensible first target. Every order is 0.01 lot.
+  const sys = `You are T.A.L.O.N., the Empire's trading desk, running UNATTENDED on a DEMO account. W.I.R.E. (the news desk) has handed you a high-conviction news catalyst and already decided the direction. Your job is NOT to second-guess whether to trade — it is to place a clean ${side.toUpperCase()} on ${symbol} NOW: a market entry, a stop BEYOND the invalidation swing and any key level sitting with it (past the far side of that zone plus at least one 1H ATR14 — never on the level itself), and a first target at least 2x the stop distance. Every order is 0.01 lot.
 Reply with ONLY a JSON object, no prose, no code fence:
 {"entry":<price or null for market>,"stopLoss":<price>,"takeProfit":<price>,"note":"<=120 chars on where you put the stop and why"}`;
   const user = `NEWS CATALYST (from W.I.R.E.): ${thesis}\n\nDIRECTION: ${side}\n\nMARKET SNAPSHOT ${symbol}:\n${snapshot}`;
@@ -65,4 +65,24 @@ Reply with ONLY a JSON object, no prose, no code fence:
   return (j && j.stopLoss != null && j.takeProfit != null) ? j : null;
 }
 
-module.exports = { SYMBOLS, STRATEGY, autoTradeDecision, newsTradeLevels };
+// The stop rule (4) enforced in code, whatever the model wrote: at least the
+// floor (gold $10 / Bitcoin 0.8%) and 1.2x the 1H ATR14 from entry. A stop
+// inside that is pushed out to it; if the target then pays under 2R the trade
+// is skipped rather than taken on a worse ratio. Returns the levels to send,
+// or { skip } with the reason.
+const STOP_FLOOR = { XAUUSD: (px) => 10, BTCUSD: (px) => px * 0.008 };
+function guardStop({ symbol, side, entry, stopLoss, takeProfit, snap }) {
+  const sl = Number(stopLoss), tp = Number(takeProfit), px = Number(entry);
+  if (!isFinite(sl) || !isFinite(tp) || !isFinite(px) || !px) return { skip: 'missing entry/stop/target' };
+  const dir = side === 'buy' ? 1 : -1;
+  if ((px - sl) * dir <= 0 || (tp - px) * dir <= 0) return { skip: `stop ${sl} / target ${tp} on the wrong side of ${px}` };
+  const atr = Number(snap?.candles?.['1H']?.atr14) || 0;
+  const minDist = Math.max((STOP_FLOOR[symbol] || ((p) => p * 0.004))(px), 1.2 * atr);
+  let dist = Math.abs(px - sl);
+  let stop = sl, widened = false;
+  if (dist < minDist) { dist = minDist; stop = +(px - dir * minDist).toFixed(2); widened = true; }
+  if (Math.abs(tp - px) < 2 * dist) return { skip: `stop needs ${dist.toFixed(2)} of room (1H ATR ${atr.toFixed(2)}) and target ${tp} pays under 2R` };
+  return { stopLoss: stop, takeProfit: tp, widened, note: widened ? `stop widened ${sl} → ${stop} (min ${minDist.toFixed(2)} from entry)` : '' };
+}
+
+module.exports = { SYMBOLS, STRATEGY, autoTradeDecision, newsTradeLevels, guardStop };

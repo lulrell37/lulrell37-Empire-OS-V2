@@ -12,7 +12,7 @@ const { webResearch, chatAs } = require('./llm');
 const { getSetting, setSetting, upsertSyncRow, syncedRow, syncedRows, saveMemory, todayET } = require('./syncStore');
 const { tlStatus, tlConnect, tlSnapshot, tlFormatSnapshot, tlPositions, tlInstrumentsById, tlPlaceOrder, MAX_QTY, MAX_OPEN_POSITIONS } = require('./tradeLocker');
 const { recordTradeOpen, TRADER_ID } = require('./tradeJournal');
-const { newsTradeLevels, SYMBOLS } = require('./talonBrain');
+const { newsTradeLevels, guardStop, SYMBOLS } = require('./talonBrain');
 const { orderRejected, araNote } = require('./talonAlerts');
 const { pushAlert } = require('./pushSender');
 
@@ -204,6 +204,10 @@ async function newsTradeHandoff(impacts) {
     catch (e) { console.log(`newswire->talon: ${imp.symbol} levels call failed —`, e.message); continue; }
     if (!lv) { console.log(`newswire->talon: ${imp.symbol} — T.A.L.O.N. couldn't set levels`); continue; }
     const price = snap.quote?.mid ?? (imp.side === 'buy' ? snap.quote?.ask : snap.quote?.bid);
+    const g = guardStop({ symbol: imp.symbol, side: imp.side, entry: price, stopLoss: lv.stopLoss, takeProfit: lv.takeProfit, snap });
+    if (g.skip) { console.log(`newswire->talon: ${imp.symbol} skipped — ${g.skip}`); continue; }
+    if (g.widened) console.log(`newswire->talon: ${imp.symbol} ${g.note}`);
+    lv = { ...lv, stopLoss: g.stopLoss, takeProfit: g.takeProfit };
     try {
       const r = await tlPlaceOrder({ symbol: imp.symbol, side: imp.side, qty: MAX_QTY, stopLoss: lv.stopLoss, takeProfit: lv.takeProfit });
       await recordTradeOpen({ symbol: imp.symbol, side: r.side, qty: r.qty, entry: price, stopLoss: lv.stopLoss, takeProfit: lv.takeProfit,
