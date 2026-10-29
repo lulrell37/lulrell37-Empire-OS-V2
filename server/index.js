@@ -63,6 +63,10 @@ app.use((err, req, res, next) => {
   if (!res.headersSent) res.status(500).json({ error: 'internal error' });
 });
 
+// One stray rejection (e.g. the app dropping a request mid-upload) used to exit
+// the process — every bot, cron and app call down until Replit restarted it.
+process.on('unhandledRejection', (e) => console.error('unhandled rejection', e));
+
 const PORT = process.env.PORT || 3000;
 db.init()
   .then(() => {
