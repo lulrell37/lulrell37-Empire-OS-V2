@@ -5,8 +5,8 @@
 // is that the TradeLocker session now survives between cycles (a long-lived
 // process instead of a memory-only session that resets on every cold app open).
 const { getSetting, setSetting, saveMemory } = require('./syncStore');
-const { tlStatus, tlConnect, tlSnapshot, tlFormatSnapshot, tlPlaceOrder, tlClosePosition, tlModifyPosition, tlPositions, tlInstrumentsById, MAX_QTY, MAX_OPEN_POSITIONS } = require('./tradeLocker');
-const { autoTradeDecision, SYMBOLS } = require('./talonBrain');
+const { tlStatus, tlConnect, tlSnapshot, tlFormatSnapshot, tlPlaceOrder, tlModifyPosition, tlPositions, tlInstrumentsById, MAX_QTY, MAX_OPEN_POSITIONS } = require('./tradeLocker');
+const { autoTradeDecision, guardStop, SYMBOLS } = require('./talonBrain');
 const { reconcileOpenTrades, formatTradeRecord, recordTradeOpen, TRADER_ID } = require('./tradeJournal');
 const { orderRejected, araNote } = require('./talonAlerts');
 const { pushAlert } = require('./pushSender');
@@ -118,24 +118,23 @@ async function tick({ force = false } = {}) {
         }
       }
 
-      if (dec.action === 'close' && Array.isArray(dec.closeIds) && dec.closeIds.length) {
-        for (const id of dec.closeIds) {
-          try { await tlClosePosition(id); closed++; console.log(`talon-autotrade: closed #${id} ${sym}${dec.rationale ? ` — ${dec.rationale}` : ''}`); }
-          catch (e) { console.error(`talon-autotrade: close #${id} failed —`, e.message); }
-        }
-        continue;
-      }
+      // He holds every trade to its stop or target (rule 6) — a "close" from
+      // the model is never acted on.
+      if (dec.action === 'close') { console.log(`talon-autotrade: ${sym} — ignored a close, holding to stop/target${dec.rationale ? ` (${dec.rationale})` : ''}`); continue; }
 
       if (dec.action === 'enter' && (dec.side === 'buy' || dec.side === 'sell')) {
         if (openSyms.has(sym)) continue;
         if (openCount >= maxOpen) { console.log(`talon-autotrade: skipped ${sym} — ${maxOpen} positions already open`); continue; }
         const price = snap.quote?.mid ?? (dec.side === 'buy' ? snap.quote?.ask : snap.quote?.bid);
+        const lv = guardStop({ symbol: sym, side: dec.side, entry: price, stopLoss: dec.stopLoss, takeProfit: dec.takeProfit, snap });
+        if (lv.skip) { console.log(`talon-autotrade: skipped ${sym} ${dec.side} — ${lv.skip}`); decisions.push(`${sym}: skipped — ${lv.skip}`); continue; }
+        if (lv.widened) console.log(`talon-autotrade: ${sym} ${lv.note}`);
         try {
-          const r = await tlPlaceOrder({ symbol: sym, side: dec.side, qty: MAX_QTY, stopLoss: dec.stopLoss, takeProfit: dec.takeProfit });
-          await recordTradeOpen({ symbol: sym, side: r.side, qty: r.qty, entry: price, stopLoss: dec.stopLoss, takeProfit: dec.takeProfit,
+          const r = await tlPlaceOrder({ symbol: sym, side: dec.side, qty: MAX_QTY, stopLoss: lv.stopLoss, takeProfit: lv.takeProfit });
+          await recordTradeOpen({ symbol: sym, side: r.side, qty: r.qty, entry: price, stopLoss: lv.stopLoss, takeProfit: lv.takeProfit,
             rationale: dec.rationale || 'auto-trade', orderId: r.orderId, setup: dec.setup, auto: true }).catch(() => {});
           openSyms.add(sym); openCount++; entered++;
-          console.log(`talon-autotrade: ${r.side.toUpperCase()} ${r.qty} ${sym} @ ~${price ?? 'mkt'} · SL ${dec.stopLoss ?? '—'} TP ${dec.takeProfit ?? '—'}${dec.rationale ? ` — ${dec.rationale}` : ''}`);
+          console.log(`talon-autotrade: ${r.side.toUpperCase()} ${r.qty} ${sym} @ ~${price ?? 'mkt'} · SL ${lv.stopLoss} TP ${lv.takeProfit}${dec.rationale ? ` — ${dec.rationale}` : ''}`);
           await saveMemory(TRADER_ID, `[auto-trade] opened ${r.side} ${sym} @ ~${price ?? 'mkt'} — ${dec.rationale || ''}`);
         } catch (e) { orderFails++; console.error(`talon-autotrade: ${sym} order failed —`, e.message); orderRejected({ symbol: sym, side: dec.side, error: e.message }); }
       }
