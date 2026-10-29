@@ -68,17 +68,14 @@ async function claudeText(system, messages, { maxTokens = 900, tools, model = CL
   }
   if (creditOk('anthropic')) {
     // A 500 / 529 "overloaded" / dropped connection is Anthropic having a bad
-    // second — retry twice, then answer on Grok rather than fail the turn.
+    // second — retry it. Still failing after that, the error stands (no Grok).
     for (let attempt = 0; ; attempt++) {
       try {
         return await claudeApiText(system, msgs, { maxTokens, tools, model });
       } catch (e) {
         if (isCreditError('anthropic', e.message)) { markOutOfCredit('anthropic', e.message); errs.push(e.message); break; }
-        if (!isTransient(e)) throw e;
-        if (attempt < 2) { await new Promise((r) => setTimeout(r, 1500 * (attempt + 1))); continue; }
-        console.error(`llm: anthropic still failing after retries (${e.message}) — trying Grok`);
-        errs.push(e.message);
-        break;
+        if (!isTransient(e) || attempt >= 3) throw e;
+        await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
       }
     }
   }
