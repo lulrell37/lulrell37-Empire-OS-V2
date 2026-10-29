@@ -103,7 +103,7 @@ forwards with them. See `DEPLOY_BACKEND.md` (gitignored — holds the real token
 
 **Telegram bots** — `server/telegram.js` + `server/personaRuntime.js` +
 `routes/telegram.js` run **one bot per persona** (A.R.A., S.T.E.P.H.A.N.I.E.,
-H.A.V.E.N., J.A.R.V.I.S., S.E.L.E.N.E.), each a headless front door to that
+H.A.V.E.N., J.A.R.V.I.S., S.E.L.E.N.E., A.I.S.H.A.), each a headless front door to that
 persona. Server-side re-implementation of a persona's turn: context from
 `sync_rows`, per-persona history in `tg_messages.persona`, and the app's command
 tags ported to `server/personaTools.js`. Every persona gets web/deep research,
@@ -122,9 +122,16 @@ persona can send media (`server/telegramMedia.js`): `[SEND_PHOTO]`,
 `[SEND_LOCATION]`; `[WEATHER]` is a keyless Open-Meteo read. ElevenLabs voice
 notes retry, fall back to OpenAI TTS, and say so in the chat when none went out
 (`voiceNote()` in `server/personaVoice.js`). Still app-only: opening apps on
-the phone, 3D Lab, HUD panel layout, the Canvas, trades, clips/video watch, and
-filing GitHub builds (the token lives on the device — `[BUILD_REQUEST]` saves
-the spec as a note instead). Each
+the phone, 3D Lab, HUD panel layout, the Canvas, hand-placed trades and
+clips/video watch. J.A.R.V.I.S. (and A.R.A.) run the Claude Code build loop
+from Telegram too (`server/buildAgent.js`, needs `GITHUB_TOKEN` — the same PAT
+as the app's Settings › Dev): `[BUILD_REQUEST]` → Confirm tap → `@claude`
+issue → `claude.yml` → PR; `[BUILD_REPLY]` answers its questions,
+`[BUILD_MERGE]` (Confirm tap) merges into `main` and starts the APK build. Jobs
+are the app's synced `build_jobs` rows, so both sides see them; a 3-min cron
+(`BUILD_POLL=off` to stop) tells him on J.A.R.V.I.S.'s bot when one asks, opens
+a PR, fails or ships. Without `GITHUB_TOKEN`, `[BUILD_REQUEST]` saves the spec
+as a note. Each
 bot's token is `TELEGRAM_BOT_TOKEN[_PERSONA]`; all locked to `TELEGRAM_OWNER_ID`;
 webhook at `/telegram/webhook/:persona/:secret`. Voice notes both ways: Whisper
 in (`OPENAI_API_KEY`); out is ElevenLabs for everyone, A.R.A. scripted by Grok first (`server/personaVoice.js`,
@@ -170,7 +177,12 @@ Strategy" note, the `auto_trade_symbols` setting and his custom persona prompt
 `buildSys`) are deliberately ignored. W.I.R.E.'s news hand-offs are filtered to
 the same two symbols. Every open, close (stop/target hit, checked every 5 min),
 rejected order and a 9 PM ET recap go to the owner from A.R.A.'s Telegram bot
-(`server/talonAlerts.js`, also logged in her `tg_messages` history). W.I.R.E.'s
+(`server/talonAlerts.js`, also logged in her `tg_messages` history) — each as
+a voice note from her, then the text. T.A.L.O.N. places his own orders; A.R.A.'s
+`[TALON_RUN]` (and `/talon` on her bot) runs a scan now and reports what he
+decided. A cycle where nothing could be decided (credits out, no quotes) alerts
+once instead of only logging. The cron runs on any of the Claude subscription,
+`ANTHROPIC_API_KEY` or `XAI_API_KEY` (his brain is `claudeText`'s chain). W.I.R.E.'s
 8:30 AM ET data desk (`runEconDesk` in `server/newsWire.js`, `ECON_DESK=off` to
 stop) reads CPI/jobs/claims/etc. vs forecast and hands a gold BUY/SELL to
 T.A.L.O.N. on a clear surprise. Every W.I.R.E. news brief (breaking or on request) also goes to the

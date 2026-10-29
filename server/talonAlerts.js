@@ -4,7 +4,8 @@
 // replies ("why'd he take that gold short?"). Plus a nightly recap (9 PM ET,
 // TRADE_RECAP=off to stop) of the day's trades and what's still open.
 //
-// Fire-and-forget: an alert failing never holds up or breaks a trade.
+// Fire-and-forget: an alert failing never holds up or breaks a trade. Each
+// one goes out as a voice note from A.R.A. and then the text.
 // araNote() is the same delivery for anything else headed to him through
 // A.R.A. (W.I.R.E.'s news briefs and 8:30 data reads).
 const { query } = require('./db');
@@ -19,6 +20,10 @@ async function sendFromAra(text) {
   const telegram = require('./telegram');
   const ara = telegram.botFor('ara');
   if (!ara || !ara.isConfigured()) return false;
+  // Same as a reply to him: she says it, then the text (with the exact numbers).
+  const { ogg } = await require('./personaVoice').voiceNote('ara', text.replace(/\*\*/g, ''))
+    .catch((e) => { console.error('trade alert voice failed:', e.message); return { ogg: null }; });
+  if (ogg) await ara.sendVoice(telegram.OWNER_ID, ogg).catch((e) => console.error('trade alert sendVoice failed:', e.message));
   await ara.sendMessage(telegram.OWNER_ID, text);
   await query('INSERT INTO tg_messages (persona, role, content, ts) VALUES ($1, $2, $3, $4)', ['ara', 'assistant', text, Date.now()])
     .catch((e) => console.error('trade alert history save failed:', e.message));

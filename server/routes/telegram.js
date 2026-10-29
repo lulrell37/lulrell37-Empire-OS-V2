@@ -22,11 +22,12 @@ const { describePhotos, describeVideo } = require('../vision');
 const r = express.Router();
 
 const GREETINGS = {
-  ara: "A.R.A. here, Mr. Burrus — same me, on Telegram now, away from the app. Type, send a voice note, or send me a photo or video. Hand me a task, ask what's on your plate, say \"convene the council\". A few things still need the app open (the Lab, HUD panels, trades) and I'll tell you when.",
+  ara: "A.R.A. here, Mr. Burrus — same me, on Telegram now, away from the app. Type, send a voice note, or send me a photo or video. Hand me a task, ask what's on your plate, say \"convene the council\". A few things still need the app open (the Lab, HUD panels) and I'll tell you when. /talon shows whether T.A.L.O.N. is trading.",
   stephanie: "S.T.E.P.H.A.N.I.E. — your personal university, on Telegram now. Ask me anything you want to actually understand. I can page through the \"Learning Everything\" curriculum, save notes, and pull in S.A.G.E. for deep research.",
   haven: "H.A.V.E.N. here — doctor and wellness, on Telegram. Training, recovery, sleep, stress, nutrition. I read the Batman Protocol live from the HUD. Not for emergencies — if it's urgent, get real care.",
   jarvis: "J.A.R.V.I.S., sir — on Telegram, away from the app. Operations, execution, systems, the build pipeline. I can check build status and read the HUD; editing it and filing builds still needs the app.",
   selene: "S.E.L.E.N.E. — Creative Director, on Telegram. Content strategy, positioning, copy, visual direction. I can brief S.C.R.I.B.E. and H.O.O.K. and fold their work back into a direction.",
+  aisha: "A.I.S.H.A. — Legal Counsel, on Telegram. Contracts, entity structure, IP, terms, compliance. Send me the clause, the contract (photo works), or the situation and I'll tell you what could bite.",
 };
 
 r.post('/webhook/:persona/:secret', (req, res) => {
@@ -121,10 +122,33 @@ async function seeMedia(bot, msgs) {
   return { seen: parts.join('\n\n'), caption };
 }
 
+// The voice half of a reply: synth (ElevenLabs, OpenAI backup) and send, with
+// one retry on the upload. Returns '' when it went out, or a 🔇 line saying why
+// it didn't — so a reply never comes back text-only without him knowing.
+async function sendSpoken(personaId, bot, chatId, script, userText) {
+  let why;
+  try {
+    const { ogg, error } = await voiceNote(personaId, script, { userText });
+    if (ogg) {
+      try { await bot.sendVoice(chatId, ogg); return ''; }
+      catch { await bot.sendVoice(chatId, ogg); return ''; }
+    }
+    why = error || 'no audio came back';
+  } catch (e) { why = e.message; }
+  console.error(`tg ${personaId} voice failed:`, why);
+  return `🔇 voice note didn't go through — ${String(why).slice(0, 160)}`;
+}
+
 async function handleMessages(personaId, bot, msgs) {
   const msg = msgs[0];
   const chatId = msg.chat.id;
   const deliver = (t) => bot.sendMessage(chatId, t).catch((e) => console.error(`tg ${personaId} send:`, e.message));
+  // Results that land after the turn (council, deep research) are replies too —
+  // voice note first, then the text.
+  deliver.voiced = async (t) => {
+    const muted = await sendSpoken(personaId, bot, chatId, String(t).slice(0, 1500), text);
+    return deliver(muted ? `${t}\n\n${muted}` : t);
+  };
 
   const voice = msg.voice || msg.audio;
   let text = typeof msg.text === 'string' ? msg.text.trim() : '';
@@ -147,6 +171,10 @@ async function handleMessages(personaId, bot, msgs) {
       return;
     }
     if (!text) { await deliver("That came through silent — say again?"); return; }
+    // What he said, as text, threaded under his voice note — so scrolling back
+    // (or Telegram search) finds his side of the conversation too.
+    await bot.sendMessage(chatId, `🎙 ${text}`, { plain: true, reply_parameters: { message_id: msg.message_id, allow_sending_without_reply: true } })
+      .catch((e) => console.error(`tg ${personaId} transcript echo:`, e.message));
   }
   if (!text) return;
 
@@ -163,6 +191,18 @@ async function handleMessages(personaId, bot, msgs) {
     return;
   }
 
+  // /talon — T.A.L.O.N.'s server loop, straight from the source (what A.R.A.
+  // reads in her TRADING line), plus a scan run right now.
+  if (personaId === 'ara' && text === '/talon') {
+    await bot.sendChatAction(chatId, 'typing');
+    const at = require('../talonAutoTrade');
+    const st = await at.status().catch((e) => ({ error: e.message }));
+    const run = await at.tick({ force: true }).catch((e) => ({ skipped: e.message }));
+    await bot.sendMessage(chatId, `T.A.L.O.N. status\n${JSON.stringify(st, null, 1).slice(0, 2500)}\n\nScan just now\n${JSON.stringify(run, null, 1).slice(0, 1200)}`, { plain: true })
+      .catch((e) => console.error('tg /talon:', e.message));
+    return;
+  }
+
   // Every reply goes out as both a voice note and text, however he wrote in.
   await bot.sendChatAction(chatId, 'record_voice');
   const keepTyping = setInterval(() => bot.sendChatAction(chatId, 'record_voice').catch(() => {}), 6000);
@@ -170,10 +210,9 @@ async function handleMessages(personaId, bot, msgs) {
   try {
     const { text: reply, spoken, footer, confirms } = await runPersonaTurn(personaId, text, deliver);
     console.log(`tg ${personaId}: reply ready in ${Math.round((Date.now() - started) / 1000)}s`);
-    const { ogg } = await voiceNote(personaId, spoken || reply, { userText: text })
-      .catch((e) => { console.error(`tg ${personaId} voice synth:`, e.message); return { ogg: null }; });
-    if (ogg) await bot.sendVoice(chatId, ogg).catch((e) => console.error(`tg ${personaId} sendVoice:`, e.message));
-    await deliver(footer ? `${reply}\n\n${footer}` : reply);
+    const muted = await sendSpoken(personaId, bot, chatId, spoken || reply, text);
+    const tail = [footer, muted].filter(Boolean).join('\n\n');
+    await deliver(tail ? `${reply}\n\n${tail}` : reply);
     for (const c of confirms || []) {
       await bot.sendMessage(chatId, `${c.label}?\n\n${c.detail}`, {
         reply_markup: { inline_keyboard: [[

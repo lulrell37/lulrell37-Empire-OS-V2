@@ -14,6 +14,8 @@ const { pushAlert } = require('./pushSender');
 let busy = false;
 let warnedDisconnected = false;
 let lastError = null; // surfaced by GET /trade/status
+let lastCycle = null; // the last decision cycle's tally, same
+let warnedFailing = '';
 
 // The cron ticks every 5 min (see server/index.js); this self-paces to
 // whatever `auto_trade_interval_min` says, same due-check pattern as
@@ -39,12 +41,14 @@ function fxOpen(now = new Date()) {
   return h !== 17;
 }
 
-async function tick() {
-  if (busy) return;
+// `force` (A.R.A.'s [TALON_RUN]) runs a decision cycle now instead of waiting
+// for the interval. Returns what happened, for her to report.
+async function tick({ force = false } = {}) {
+  if (busy) return { skipped: 'a cycle is already running' };
   busy = true;
   try {
-    if ((await getSetting('auto_trade', '0')) !== '1') return;
-    const due = await dueNow();
+    if ((await getSetting('auto_trade', '0')) !== '1') return { skipped: 'auto-trade is OFF (Settings › Trading)' };
+    const due = force || await dueNow();
     if (due) await setSetting('talon_last_cycle_at', String(Date.now()));
     let st = tlStatus();
     if (!st.connected) {
@@ -58,7 +62,7 @@ async function tick() {
           // outage, so he knows T.A.L.O.N. isn't trading with the app closed.
           araNote(`⚠️ T.A.L.O.N. can't reach TradeLocker from the server, so he isn't trading while the app is closed: ${String(e.message).slice(0, 200)}\nOpen the app once (Settings › TRADELOCKER → reconnect) and he picks back up on his own.`);
         }
-        return;
+        return { skipped: `can't log in to TradeLocker — ${e.message}` };
       }
     }
     if (warnedDisconnected) araNote('✅ T.A.L.O.N. is back on TradeLocker and trading from the server again.');
@@ -68,18 +72,18 @@ async function tick() {
       console.error('talon-autotrade: HALTED — TradeLocker is on a LIVE account. Auto-trade only runs on demo.');
       await pushAlert(`talon-live-halt:${new Date().toDateString()}`, 'T.A.L.O.N. — auto-trade halted', 'TradeLocker is on a LIVE account. Switch back to demo to resume.', { kind: 'talon-halt' }).catch(() => {});
       await setSetting('auto_trade', '0');
-      return;
+      return { skipped: 'TradeLocker is on a LIVE account — auto-trade halted (demo only)' };
     }
 
     // Every 5-min tick, not just on a decision cycle: closes (stops, targets)
     // reach A.R.A.'s Telegram alerts within minutes. No AI calls in here.
     await reconcileOpenTrades().catch(() => {});
-    if (!due) return;
+    if (!due) return { skipped: 'not due yet' };
 
     // Gold and Bitcoin only — the app's auto_trade_symbols setting is ignored.
     const marketOpen = fxOpen();
     const syms = SYMBOLS.filter((sym) => marketOpen || CRYPTO.test(sym));
-    if (!syms.length) return;
+    if (!syms.length) return { skipped: 'markets closed' };
 
     const maxOpen = Math.min(MAX_OPEN_POSITIONS, SYMBOLS.length);
 
@@ -91,16 +95,19 @@ async function tick() {
     const record = await formatTradeRecord().catch(() => '');
 
     let entered = 0, closed = 0, scanned = 0, snapFails = 0, decFails = 0, orderFails = 0;
+    const errs = [];
+    const decisions = [];
     for (const sym of syms) {
       let snap;
-      try { snap = await tlSnapshot(sym); } catch { snapFails++; continue; }
+      try { snap = await tlSnapshot(sym); } catch (e) { snapFails++; errs.push(`${sym} market data: ${e.message}`); continue; }
       scanned++;
       const mine = positions.filter((p) => symOf(p) === sym);
       const posText = mine.map((p) => `#${p.id} ${p.side} ${p.qty} @ ${p.avgPrice} (uP/L ${p.unrealizedPl})`).join('; ') || 'none';
 
       let dec;
       try { dec = await autoTradeDecision({ symbol: sym, snapshot: tlFormatSnapshot(snap), record, positions: posText, openCount, maxOpen }); }
-      catch (e) { decFails++; console.error(`talon-autotrade: ${sym} decision failed —`, e.message); continue; }
+      catch (e) { decFails++; errs.push(`${sym} decision: ${e.message}`); console.error(`talon-autotrade: ${sym} decision failed —`, e.message); continue; }
+      decisions.push(`${sym}: ${dec.action}${dec.side ? ` ${dec.side}` : ''}${dec.rationale ? ` — ${String(dec.rationale).slice(0, 160)}` : ''}`);
 
       if (Array.isArray(dec.breakevenIds) && dec.breakevenIds.length) {
         for (const id of dec.breakevenIds) {
@@ -133,9 +140,27 @@ async function tick() {
         } catch (e) { orderFails++; console.error(`talon-autotrade: ${sym} order failed —`, e.message); orderRejected({ symbol: sym, side: dec.side, error: e.message }); }
       }
     }
+    lastCycle = { at: Date.now(), scanned, of: syms.length, entered, closed, openCount, maxOpen, decisions, errors: errs.slice(0, 4) };
+    // Nothing scanned or decided at all is an outage, not a quiet market — say
+    // so once (credits out, no quotes), instead of only logging it.
+    const dead = syms.length && !decisions.length && errs.length;
+    if (dead) {
+      lastError = errs[0];
+      const kind = String(errs[0]).replace(/^\w+ /, '').slice(0, 40);
+      if (warnedFailing !== kind) {
+        warnedFailing = kind;
+        araNote(`⚠️ T.A.L.O.N. ran his scan but couldn't decide on anything — ${String(errs[0]).slice(0, 220)}. He's not trading until that clears.`);
+      }
+    } else if (decisions.length) {
+      if (warnedFailing) araNote('✅ T.A.L.O.N. is scanning and deciding again.');
+      warnedFailing = '';
+    }
     console.log(`talon-autotrade: scanned ${scanned}/${syms.length}${snapFails ? `, ${snapFails} snapshot fail` : ''}${decFails ? `, ${decFails} decision fail` : ''}${orderFails ? `, ${orderFails} order fail` : ''}, ${entered} entered, ${closed} closed (${openCount}/${maxOpen} open)`);
+    return lastCycle;
   } catch (e) {
     console.error('talon-autotrade: cycle crashed', e.message);
+    lastError = `cycle crashed: ${e.message}`;
+    return { skipped: lastError };
   } finally {
     busy = false;
   }
@@ -159,14 +184,22 @@ async function status() {
   const { rows } = await query('SELECT server, env, updated_at FROM trade_creds WHERE id = 1').catch(() => ({ rows: [] }));
   const last = parseInt(await getSetting('talon_last_cycle_at', '0'), 10) || 0;
   return {
-    cron: process.env.TALON_AUTOTRADE !== 'off' && !!process.env.ANTHROPIC_API_KEY,
+    cron: cronEnabled(),
     autoTrade: (await getSetting('auto_trade', '0')) === '1',
     creds: rows[0] ? { server: rows[0].server, env: rows[0].env, updatedAt: Number(rows[0].updated_at) } : null,
     tradeLocker: tlStatus(),
     marketOpen: fxOpen(),
     lastCycleAt: last || null,
+    lastCycle,
     lastError,
   };
 }
 
-module.exports = { tick, enableOnce, status };
+// His brain is claudeText: subscription -> Anthropic API -> Grok. Any one of
+// them is enough to trade; ANTHROPIC_API_KEY alone used to be required.
+function cronEnabled() {
+  if (process.env.TALON_AUTOTRADE === 'off') return false;
+  return !!(process.env.ANTHROPIC_API_KEY || process.env.XAI_API_KEY || require('./claudeSub').subscriptionEnabled());
+}
+
+module.exports = { tick, enableOnce, status, cronEnabled };
