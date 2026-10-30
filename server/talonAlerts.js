@@ -30,6 +30,9 @@ async function sendFromAra(text) {
   return true;
 }
 
+// Flags every alert on a live account, so a real-money trade never reads like a demo one.
+const acct = () => (require('./tradeLocker').tlStatus().env === 'live' ? ' · 🔴 LIVE' : '');
+
 function notify(text) {
   sendFromAra(text).catch((e) => console.error('trade alert failed:', e.message));
 }
@@ -38,11 +41,16 @@ function tradeOpened({ symbol, side, qty, entry, stopLoss, takeProfit, rationale
   const news = setup === 'news';
   const pair = swingTarget != null;
   const n = (pair ? 2 : 1) * copies;
-  notify(`📈 **T.A.L.O.N. just opened ${pair ? 'a scalp + swing' : 'a trade'}**${news ? ' (news-driven)' : ''}, Mr. Burrus.\n`
+  notify(`📈 **T.A.L.O.N. just opened ${pair ? 'a scalp + swing' : 'a trade'}**${news ? ' (news-driven)' : ''}${acct()}, Mr. Burrus.\n`
     + `**${String(side).toUpperCase()} ${nameOf(symbol)}** · ${n > 1 ? `${n} × ${qty}` : qty} lot @ ~${px(entry)}\n`
     + (pair ? `Stop ${px(stopLoss)} · Scalp target ${px(takeProfit)} · Swing target ${px(swingTarget)} (stop to break-even when the scalp pays)`
       : `Stop ${px(stopLoss)} · Target ${px(takeProfit)}`)
     + `${rationale ? `\nWhy: ${String(rationale).replace(/^news — /, '')}` : ''}`);
+}
+
+function addedOn({ symbol, side, qty, copies, step, entry, stopLoss, earlyTarget, takeProfit }) {
+  notify(`➕ **T.A.L.O.N. added to his ${String(side).toUpperCase()} ${nameOf(symbol)}**${acct()} — add-on ${step}, ${copies > 1 ? `${copies} × ${qty}` : qty} lot @ ~${px(entry)}.\n`
+    + `Stop ${px(stopLoss)} · ${copies > 1 ? `Early target ${px(earlyTarget)} (one) · Target ${px(takeProfit)} (the other)` : `Target ${px(earlyTarget)}`}`);
 }
 
 function tradeClosed(t) {
@@ -91,4 +99,4 @@ async function runDailyRecap() {
   return { sent, opened: opened.length, closed: closed.length, open: open.length };
 }
 
-module.exports = { araNote: notify, tradeOpened, tradeClosed, tradeLost, orderRejected, runDailyRecap };
+module.exports = { araNote: notify, tradeOpened, addedOn, tradeClosed, tradeLost, orderRejected, runDailyRecap };

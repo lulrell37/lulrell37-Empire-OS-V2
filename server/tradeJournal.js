@@ -52,9 +52,11 @@ async function getStrategy() {
 
 // --- recording ---------------------------------------------------------------
 
-// `pairId` links a scalp + swing opened on the same setup; `alert: false` when
-// the caller sends one alert for the pair itself.
-async function recordTradeOpen({ symbol, side, qty, entry, stopLoss, takeProfit, rationale, orderId, setup, auto, pairId, alert = true }) {
+// `pairId` links a scalp + swing opened on the same setup; `setupId` links
+// every position of one setup (all its copies and its add-ons, `addLevel` = which
+// step toward the target an add went in at); `alert: false` when the caller
+// sends one alert for the pair itself.
+async function recordTradeOpen({ symbol, side, qty, entry, stopLoss, takeProfit, rationale, orderId, setup, auto, pairId, setupId, addLevel, alert = true }) {
   const now = Date.now();
   const syncId = newId();
   await upsertSyncRow('trades', syncId, {
@@ -62,7 +64,7 @@ async function recordTradeOpen({ symbol, side, qty, entry, stopLoss, takeProfit,
     qty: num(qty), entry_ref: num(entry), stop_loss: num(stopLoss), take_profit: num(takeProfit),
     setup: setup || inferSetup(rationale), rationale: String(rationale || '').slice(0, 400),
     status: 'open', order_id: orderId != null ? String(orderId) : null, opened_at: now,
-    auto: auto ? 1 : 0, pair_id: pairId || null, updated_at: now,
+    auto: auto ? 1 : 0, pair_id: pairId || null, setup_id: setupId || null, add_level: addLevel || null, updated_at: now,
   });
   if (alert) alerts.tradeOpened({ symbol: String(symbol || '').toUpperCase(), side, qty, entry, stopLoss, takeProfit, rationale, setup });
   return syncId;
@@ -262,4 +264,4 @@ async function formatTradeRecord() {
   return L.join('\n');
 }
 
-module.exports = { TRADER_ID, STRATEGY_TITLE, getStrategy, recordTradeOpen, reconcileOpenTrades, tradeRecord, formatTradeRecord };
+module.exports = { TRADER_ID, STRATEGY_TITLE, allTrades, getStrategy, recordTradeOpen, reconcileOpenTrades, tradeRecord, formatTradeRecord };
