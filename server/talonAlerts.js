@@ -34,11 +34,12 @@ function notify(text) {
   sendFromAra(text).catch((e) => console.error('trade alert failed:', e.message));
 }
 
-function tradeOpened({ symbol, side, qty, entry, stopLoss, takeProfit, rationale, setup, swingTarget }) {
+function tradeOpened({ symbol, side, qty, entry, stopLoss, takeProfit, rationale, setup, swingTarget, copies = 1 }) {
   const news = setup === 'news';
   const pair = swingTarget != null;
+  const n = (pair ? 2 : 1) * copies;
   notify(`📈 **T.A.L.O.N. just opened ${pair ? 'a scalp + swing' : 'a trade'}**${news ? ' (news-driven)' : ''}, Mr. Burrus.\n`
-    + `**${String(side).toUpperCase()} ${nameOf(symbol)}** · ${pair ? `2 × ${qty}` : qty} lot @ ~${px(entry)}\n`
+    + `**${String(side).toUpperCase()} ${nameOf(symbol)}** · ${n > 1 ? `${n} × ${qty}` : qty} lot @ ~${px(entry)}\n`
     + (pair ? `Stop ${px(stopLoss)} · Scalp target ${px(takeProfit)} · Swing target ${px(swingTarget)} (stop to break-even when the scalp pays)`
       : `Stop ${px(stopLoss)} · Target ${px(takeProfit)}`)
     + `${rationale ? `\nWhy: ${String(rationale).replace(/^news — /, '')}` : ''}`);

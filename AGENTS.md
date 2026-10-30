@@ -175,11 +175,13 @@ playbook in `server/talonBrain.js` (`STRATEGY`, `SYMBOLS`). He holds every trade
 target — a "close" from his brain is ignored — and `guardStop()` keeps
 every stop (his and W.I.R.E.'s news trades) at least gold $10 / Bitcoin 0.8% and
 1.2× the 1H ATR14 from entry, skipping the trade if the targets then pay too
-little. Every setup goes in as a scalp + swing pair (two 0.01 positions, same
+little. Every setup goes in as a scalp + swing pair (two 0.02 positions, same
 entry and stop; scalp → next 15m level at 1R+, swing → next 4H level at 3R+;
 no valid swing → scalp alone, which needs 2R;
 linked by `pair_id` in `trades`); when the scalp pays, `reconcileOpenTrades`
-moves the swing's stop to break-even. The "Winning
+moves the swing's stop to break-even. Every trade (setups and news trades) is
+entered `ENTRY_COPIES` = 2 times, each scalp + swing copy with its own `pair_id`,
+and there's no cap on open positions or setups per market. The "Winning
 Strategy" note, the `auto_trade_symbols` setting and his custom persona prompt
 (`custom_prompts`, blocked in both `personaRuntime.customPrompt` and the app's
 `buildSys`) are deliberately ignored. W.I.R.E.'s news hand-offs are filtered to

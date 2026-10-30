@@ -10,10 +10,10 @@
 // client's newsTradeHandoff, demo-account-only.
 const { webResearch, chatAs } = require('./llm');
 const { getSetting, setSetting, upsertSyncRow, syncedRow, syncedRows, saveMemory, todayET } = require('./syncStore');
-const { tlStatus, tlConnect, tlSnapshot, tlFormatSnapshot, tlPositions, tlInstrumentsById, tlPlaceOrder, MAX_QTY, MAX_OPEN_POSITIONS } = require('./tradeLocker');
+const { tlStatus, tlConnect, tlSnapshot, tlFormatSnapshot, tlPlaceOrder, MAX_QTY, ENTRY_COPIES } = require('./tradeLocker');
 const { recordTradeOpen, TRADER_ID } = require('./tradeJournal');
 const { newsTradeLevels, guardStop, SYMBOLS } = require('./talonBrain');
-const { orderRejected, araNote } = require('./talonAlerts');
+const { orderRejected, tradeOpened, araNote } = require('./talonAlerts');
 const { pushAlert } = require('./pushSender');
 
 const TZ = 'America/New_York';
@@ -189,14 +189,7 @@ async function newsTradeHandoff(impacts) {
   if (!st.connected) { try { await tlConnect(); st = tlStatus(); } catch (e) { console.error('newswire->talon: cannot reach TradeLocker', e.message); return; } }
   if (st.env !== 'demo') { console.log('newswire->talon: LIVE account — news trades are demo-only, not placing'); return; }
 
-  const positions = await tlPositions().catch(() => []);
-  const idToSym = await tlInstrumentsById().catch(() => ({}));
-  const openSyms = new Set(positions.map((p) => String(idToSym[String(p.tradableInstrumentId)] || '').toUpperCase()));
-  let openCount = positions.length;
-
   for (const imp of highs) {
-    if (openSyms.has(imp.symbol)) continue;
-    if (openCount >= MAX_OPEN_POSITIONS) { console.log(`newswire->talon: book full (${MAX_OPEN_POSITIONS}), holding ${imp.symbol}`); break; }
     let snap;
     try { snap = await tlSnapshot(imp.symbol); } catch { console.log(`newswire->talon: no market data for ${imp.symbol}`); continue; }
     let lv;
@@ -208,19 +201,26 @@ async function newsTradeHandoff(impacts) {
     if (g.skip) { console.log(`newswire->talon: ${imp.symbol} skipped — ${g.skip}`); continue; }
     if (g.widened) console.log(`newswire->talon: ${imp.symbol} ${g.note}`);
     lv = { ...lv, stopLoss: g.stopLoss, takeProfit: g.takeProfit };
-    try {
-      const r = await tlPlaceOrder({ symbol: imp.symbol, side: imp.side, qty: MAX_QTY, stopLoss: lv.stopLoss, takeProfit: lv.takeProfit });
-      await recordTradeOpen({ symbol: imp.symbol, side: r.side, qty: r.qty, entry: price, stopLoss: lv.stopLoss, takeProfit: lv.takeProfit,
-        rationale: `news — ${imp.thesis}`.slice(0, 180), orderId: r.orderId, setup: 'news', auto: true });
-      openSyms.add(imp.symbol); openCount++;
-      console.log(`newswire->talon: ${r.side.toUpperCase()} ${r.qty} ${imp.symbol} @ ~${price ?? 'mkt'} · SL ${lv.stopLoss} TP ${lv.takeProfit} — ${imp.thesis.slice(0, 80)}`);
-      const note = `[news trade] ${r.side} ${imp.symbol} @ ~${price ?? 'mkt'} on: ${imp.thesis}`;
-      await saveMemory(TRADER_ID, note);
-      await saveMemory('wire', note);
-    } catch (e) {
-      console.error(`newswire->talon: ${imp.symbol} order rejected —`, e.message);
-      orderRejected({ symbol: imp.symbol, side: imp.side, error: e.message });
+    // Every news trade goes in ENTRY_COPIES times; one alert covers them all.
+    const why = `news — ${imp.thesis}`.slice(0, 180);
+    let r = null, copies = 0;
+    for (let copy = 0; copy < ENTRY_COPIES; copy++) {
+      try {
+        const s = await tlPlaceOrder({ symbol: imp.symbol, side: imp.side, qty: MAX_QTY, stopLoss: lv.stopLoss, takeProfit: lv.takeProfit });
+        await recordTradeOpen({ symbol: imp.symbol, side: s.side, qty: s.qty, entry: price, stopLoss: lv.stopLoss, takeProfit: lv.takeProfit,
+          rationale: why, orderId: s.orderId, setup: 'news', auto: true, alert: false });
+        r = r || s; copies++;
+        console.log(`newswire->talon: ${s.side.toUpperCase()} ${s.qty} ${imp.symbol} @ ~${price ?? 'mkt'} · SL ${lv.stopLoss} TP ${lv.takeProfit} — ${imp.thesis.slice(0, 80)}`);
+      } catch (e) {
+        console.error(`newswire->talon: ${imp.symbol} order rejected —`, e.message);
+        orderRejected({ symbol: imp.symbol, side: imp.side, error: e.message });
+      }
     }
+    if (!r) continue;
+    tradeOpened({ symbol: imp.symbol, side: r.side, qty: r.qty, entry: price, stopLoss: lv.stopLoss, takeProfit: lv.takeProfit, rationale: why, setup: 'news', copies });
+    const note = `[news trade] ${r.side} ${imp.symbol} ×${copies} @ ~${price ?? 'mkt'} on: ${imp.thesis}`;
+    await saveMemory(TRADER_ID, note).catch(() => {});
+    await saveMemory('wire', note).catch(() => {});
   }
 }
 
