@@ -5,7 +5,7 @@
 // is that the TradeLocker session now survives between cycles (a long-lived
 // process instead of a memory-only session that resets on every cold app open).
 const { getSetting, setSetting, saveMemory } = require('./syncStore');
-const { tlStatus, tlConnect, tlSnapshot, tlFormatSnapshot, tlPlaceOrder, tlModifyPosition, tlPositions, tlInstrumentsById, MAX_QTY, MAX_OPEN_POSITIONS } = require('./tradeLocker');
+const { tlStatus, tlConnect, tlSnapshot, tlFormatSnapshot, tlPlaceOrder, tlModifyPosition, tlPositions, tlInstrumentsById, MAX_QTY, ENTRY_COPIES } = require('./tradeLocker');
 const { autoTradeDecision, guardStop, SYMBOLS } = require('./talonBrain');
 const { reconcileOpenTrades, formatTradeRecord, recordTradeOpen, TRADER_ID } = require('./tradeJournal');
 const { orderRejected, araNote, tradeOpened } = require('./talonAlerts');
@@ -85,16 +85,10 @@ async function tick({ force = false } = {}) {
     const syms = SYMBOLS.filter((sym) => marketOpen || CRYPTO.test(sym));
     if (!syms.length) return { skipped: 'markets closed' };
 
-    // Limits count setups — one per market; a scalp + swing pair is one setup
-    // (two positions, so up to 4 open at once).
-    const maxOpen = SYMBOLS.length;
-
     const positions = await tlPositions().catch(() => []);
     const idToSym = await tlInstrumentsById().catch(() => ({}));
     const symOf = (p) => String(idToSym[String(p.tradableInstrumentId)] || '').toUpperCase();
-    const openSyms = new Set(positions.map(symOf));
-    let openCount = openSyms.size;
-    let posCount = positions.length;
+    let openCount = positions.length;
     const record = await formatTradeRecord().catch(() => '');
 
     let entered = 0, closed = 0, scanned = 0, snapFails = 0, decFails = 0, orderFails = 0;
@@ -108,7 +102,7 @@ async function tick({ force = false } = {}) {
       const posText = mine.map((p) => `#${p.id} ${p.side} ${p.qty} @ ${p.avgPrice} (uP/L ${p.unrealizedPl})`).join('; ') || 'none';
 
       let dec;
-      try { dec = await autoTradeDecision({ symbol: sym, snapshot: tlFormatSnapshot(snap), record, positions: posText, openCount, maxOpen }); }
+      try { dec = await autoTradeDecision({ symbol: sym, snapshot: tlFormatSnapshot(snap), record, positions: posText }); }
       catch (e) { decFails++; errs.push(`${sym} decision: ${e.message}`); console.error(`talon-autotrade: ${sym} decision failed —`, e.message); continue; }
       decisions.push(`${sym}: ${dec.action}${dec.side ? ` ${dec.side}` : ''}${dec.rationale ? ` — ${String(dec.rationale).slice(0, 160)}` : ''}`);
 
@@ -126,42 +120,44 @@ async function tick({ force = false } = {}) {
       if (dec.action === 'close') { console.log(`talon-autotrade: ${sym} — ignored a close, holding to stop/target${dec.rationale ? ` (${dec.rationale})` : ''}`); continue; }
 
       if (dec.action === 'enter' && (dec.side === 'buy' || dec.side === 'sell')) {
-        if (openSyms.has(sym)) continue;
-        if (openCount >= maxOpen || posCount + 2 > MAX_OPEN_POSITIONS) { console.log(`talon-autotrade: skipped ${sym} — book full`); continue; }
         const price = snap.quote?.mid ?? (dec.side === 'buy' ? snap.quote?.ask : snap.quote?.bid);
         const lv = guardStop({ symbol: sym, side: dec.side, entry: price, stopLoss: dec.stopLoss, takeProfit: dec.takeProfit, swingTakeProfit: dec.swingTakeProfit, snap });
         if (lv.skip) { console.log(`talon-autotrade: skipped ${sym} ${dec.side} — ${lv.skip}`); decisions.push(`${sym}: skipped — ${lv.skip}`); continue; }
         if (lv.widened) console.log(`talon-autotrade: ${sym} ${lv.note}`);
         if (lv.swingNote) console.log(`talon-autotrade: ${sym} ${lv.swingNote}`);
-        // Scalp first (0.01 to the 1H target); then, when there's a valid 4H
-        // target, the swing (0.01, same stop) linked to it by pairId — the
-        // journal moves the swing's stop to break-even once the scalp pays.
-        const pairId = lv.swingTakeProfit != null ? `${sym}-${Date.now()}` : null;
+        // The setup goes in ENTRY_COPIES times. Each copy is a scalp (to the
+        // 15m target) and, when there's a valid 4H target, a swing (same stop)
+        // linked to it by its own pairId — the journal moves that swing's stop
+        // to break-even once its scalp pays.
         const why = dec.rationale || 'auto-trade';
-        let r;
-        try {
-          r = await tlPlaceOrder({ symbol: sym, side: dec.side, qty: MAX_QTY, stopLoss: lv.stopLoss, takeProfit: lv.takeProfit });
-        } catch (e) { orderFails++; console.error(`talon-autotrade: ${sym} order failed —`, e.message); orderRejected({ symbol: sym, side: dec.side, error: e.message }); continue; }
-        await recordTradeOpen({ symbol: sym, side: r.side, qty: r.qty, entry: price, stopLoss: lv.stopLoss, takeProfit: lv.takeProfit,
-          rationale: why, orderId: r.orderId, setup: pairId ? 'scalp' : (dec.setup || 'scalp'), auto: true, pairId, alert: !pairId }).catch(() => {});
-        openSyms.add(sym); openCount++; posCount++; entered++;
-        console.log(`talon-autotrade: ${r.side.toUpperCase()} ${r.qty} ${sym} @ ~${price ?? 'mkt'} · SL ${lv.stopLoss} TP ${lv.takeProfit}${pairId ? ' (scalp)' : ''}${dec.rationale ? ` — ${dec.rationale}` : ''}`);
-        let swingOk = false;
-        if (pairId) {
+        let r = null, scalps = 0, swings = 0;
+        for (let copy = 0; copy < ENTRY_COPIES; copy++) {
+          const pairId = lv.swingTakeProfit != null ? `${sym}-${Date.now()}-${copy}` : null;
+          let s;
           try {
-            const r2 = await tlPlaceOrder({ symbol: sym, side: dec.side, qty: MAX_QTY, stopLoss: lv.stopLoss, takeProfit: lv.swingTakeProfit });
-            await recordTradeOpen({ symbol: sym, side: r2.side, qty: r2.qty, entry: price, stopLoss: lv.stopLoss, takeProfit: lv.swingTakeProfit,
-              rationale: why, orderId: r2.orderId, setup: 'swing', auto: true, pairId, alert: false }).catch(() => {});
-            swingOk = true; posCount++;
-            console.log(`talon-autotrade: ${r2.side.toUpperCase()} ${r2.qty} ${sym} · SL ${lv.stopLoss} TP ${lv.swingTakeProfit} (swing)`);
+            s = await tlPlaceOrder({ symbol: sym, side: dec.side, qty: MAX_QTY, stopLoss: lv.stopLoss, takeProfit: lv.takeProfit });
+          } catch (e) { orderFails++; console.error(`talon-autotrade: ${sym} order failed —`, e.message); orderRejected({ symbol: sym, side: dec.side, error: e.message }); continue; }
+          r = r || s; scalps++; openCount++;
+          await recordTradeOpen({ symbol: sym, side: s.side, qty: s.qty, entry: price, stopLoss: lv.stopLoss, takeProfit: lv.takeProfit,
+            rationale: why, orderId: s.orderId, setup: pairId ? 'scalp' : (dec.setup || 'scalp'), auto: true, pairId, alert: false }).catch(() => {});
+          console.log(`talon-autotrade: ${s.side.toUpperCase()} ${s.qty} ${sym} @ ~${price ?? 'mkt'} · SL ${lv.stopLoss} TP ${lv.takeProfit}${pairId ? ' (scalp)' : ''}${dec.rationale ? ` — ${dec.rationale}` : ''}`);
+          if (!pairId) continue;
+          try {
+            const s2 = await tlPlaceOrder({ symbol: sym, side: dec.side, qty: MAX_QTY, stopLoss: lv.stopLoss, takeProfit: lv.swingTakeProfit });
+            await recordTradeOpen({ symbol: sym, side: s2.side, qty: s2.qty, entry: price, stopLoss: lv.stopLoss, takeProfit: lv.swingTakeProfit,
+              rationale: why, orderId: s2.orderId, setup: 'swing', auto: true, pairId, alert: false }).catch(() => {});
+            swings++; openCount++;
+            console.log(`talon-autotrade: ${s2.side.toUpperCase()} ${s2.qty} ${sym} · SL ${lv.stopLoss} TP ${lv.swingTakeProfit} (swing)`);
           } catch (e) { orderFails++; console.error(`talon-autotrade: ${sym} swing order failed —`, e.message); orderRejected({ symbol: sym, side: `${dec.side} (swing half)`, error: e.message }); }
-          tradeOpened({ symbol: sym, side: r.side, qty: r.qty, entry: price, stopLoss: lv.stopLoss, takeProfit: lv.takeProfit,
-            swingTarget: swingOk ? lv.swingTakeProfit : null, rationale: why, setup: 'scalp' });
         }
-        await saveMemory(TRADER_ID, `[auto-trade] opened ${r.side} ${sym}${swingOk ? ' scalp + swing' : ''} @ ~${price ?? 'mkt'} — ${why}`).catch(() => {});
+        if (!r) continue;
+        entered++;
+        tradeOpened({ symbol: sym, side: r.side, qty: r.qty, entry: price, stopLoss: lv.stopLoss, takeProfit: lv.takeProfit,
+          swingTarget: swings ? lv.swingTakeProfit : null, rationale: why, setup: swings ? 'scalp' : (dec.setup || 'scalp'), copies: scalps });
+        await saveMemory(TRADER_ID, `[auto-trade] opened ${r.side} ${sym} ×${scalps}${swings ? ' scalp + swing' : ''} @ ~${price ?? 'mkt'} — ${why}`).catch(() => {});
       }
     }
-    lastCycle = { at: Date.now(), scanned, of: syms.length, entered, closed, openCount, maxOpen, decisions, errors: errs.slice(0, 4) };
+    lastCycle = { at: Date.now(), scanned, of: syms.length, entered, closed, openCount, decisions, errors: errs.slice(0, 4) };
     // Nothing scanned or decided at all is an outage, not a quiet market — say
     // so once (credits out, no quotes), instead of only logging it.
     const dead = syms.length && !decisions.length && errs.length;
@@ -176,7 +172,7 @@ async function tick({ force = false } = {}) {
       if (warnedFailing) araNote('✅ T.A.L.O.N. is scanning and deciding again.');
       warnedFailing = '';
     }
-    console.log(`talon-autotrade: scanned ${scanned}/${syms.length}${snapFails ? `, ${snapFails} snapshot fail` : ''}${decFails ? `, ${decFails} decision fail` : ''}${orderFails ? `, ${orderFails} order fail` : ''}, ${entered} entered, ${closed} closed (${openCount}/${maxOpen} open)`);
+    console.log(`talon-autotrade: scanned ${scanned}/${syms.length}${snapFails ? `, ${snapFails} snapshot fail` : ''}${decFails ? `, ${decFails} decision fail` : ''}${orderFails ? `, ${orderFails} order fail` : ''}, ${entered} entered, ${closed} closed (${openCount} open)`);
     return lastCycle;
   } catch (e) {
     console.error('talon-autotrade: cycle crashed', e.message);

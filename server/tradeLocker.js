@@ -16,8 +16,8 @@ const POSITION_COLS = ['id', 'tradableInstrumentId', 'routeId', 'side', 'qty', '
 
 const RES_MS = { '1m': 60e3, '5m': 300e3, '15m': 900e3, '30m': 1800e3, '1H': 3600e3, '4H': 14400e3, '1D': 86400e3, '1W': 604800e3 };
 
-const MAX_QTY = 0.01; // hard lot cap — enforced on every order
-const MAX_OPEN_POSITIONS = 5; // most positions T.A.L.O.N. may run at once
+const MAX_QTY = 0.02; // hard lot cap — enforced on every order
+const ENTRY_COPIES = 2; // every trade T.A.L.O.N. takes goes in this many times
 
 const session = { token: null, refresh: null, exp: 0, env: 'demo', accountId: null, accNum: null, instruments: {}, instrumentList: null, rateLimitedUntil: 0 };
 
@@ -359,7 +359,7 @@ function tlFormatSnapshot(snap) {
 }
 
 module.exports = {
-  MAX_QTY, MAX_OPEN_POSITIONS,
+  MAX_QTY, ENTRY_COPIES,
   tlConnect, tlStatus, tlAccountState, tlListInstruments, tlInstrumentsById, tlInstrument,
   tlQuote, tlHistory, tlPositions, tlOrdersHistory, tlPlaceOrder, tlClosePosition, tlModifyPosition,
   tlReset, tlSnapshot, tlFormatSnapshot,

@@ -167,7 +167,7 @@ function tradingLine(t, openTrades = []) {
 function talonRunLine(c) {
   if (!c) return 'no result';
   if (c.skipped) return `didn't scan — ${c.skipped}`;
-  const L = [`scanned ${c.scanned}/${c.of} · entered ${c.entered} · closed ${c.closed} · ${c.openCount}/${c.maxOpen} open`];
+  const L = [`scanned ${c.scanned}/${c.of} · entered ${c.entered} · closed ${c.closed} · ${c.openCount} open`];
   for (const d of c.decisions || []) L.push(`- ${d}`);
   for (const e of c.errors || []) L.push(`- FAILED ${e}`);
   return L.join('\n');

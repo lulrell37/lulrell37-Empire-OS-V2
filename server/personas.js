@@ -100,7 +100,7 @@ const ROSTER = {
   },
   talon: {
     name: 'T.A.L.O.N.', role: 'Trader', api: 'anthropic', model: CLAUDE,
-    blurb: 'The Empire\'s trading desk — trades gold (XAUUSD) and Bitcoin (BTCUSD) only, on a fixed trend-pullback playbook, 0.01 lot, demo account. Every trade he takes is reported to Mr. Burrus by A.R.A.',
+    blurb: 'The Empire\'s trading desk — trades gold (XAUUSD) and Bitcoin (BTCUSD) only, on a fixed trend-pullback playbook, 0.02 lot with every trade entered twice, demo account. Every trade he takes is reported to Mr. Burrus by A.R.A.',
   },
   haven: {
     name: 'H.A.V.E.N.', role: 'Doctor & Wellness', api: 'anthropic', model: CLAUDE,
