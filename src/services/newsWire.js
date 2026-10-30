@@ -200,10 +200,10 @@ async function newsTradeHandoff(impacts){
     emit(`— W.I.R.E. flags ${highs.map(i=>`${i.side.toUpperCase()} ${i.symbol}`).join(', ')} — news trades are off, not placing —`);
     return;
   }
-  // Same hard rule as autoTrader.js: reachable + DEMO only.
+  // Same rule as autoTrader.js: reachable + demo, or live once armed.
   let st=tlStatus();
   if(!st.connected){try{await tlConnect();st=tlStatus();}catch(e){emit(`— W.I.R.E. → T.A.L.O.N.: can't reach TradeLocker, not placing —`);return;}}
-  if(st.env!=='demo'){emit(`— W.I.R.E. → T.A.L.O.N.: LIVE account — news trades are demo-only, not placing —`);return;}
+  if(st.env!=='demo'&&(await getSetting('talon_live','0'))!=='1'){emit(`— W.I.R.E. → T.A.L.O.N.: LIVE account and LIVE TRADING isn't armed — not placing —`);return;}
 
   const positions=await tlPositions().catch(()=>[]);
   const idToSym=await tlInstrumentsById().catch(()=>({}));

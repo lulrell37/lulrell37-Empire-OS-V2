@@ -1,4 +1,4 @@
-// T.A.L.O.N. autonomous trading loop — DEMO ACCOUNT ONLY.
+// T.A.L.O.N. autonomous trading loop — demo account unless LIVE TRADING is armed.
 //
 // Runs while the app is open (App.js starts/stops it on foreground) — but only
 // when no backend is configured. Once a backend is linked, server/talonAutoTrade.js
@@ -71,8 +71,8 @@ async function runOnce(){
     }
     warnedDisconnected=false;
     unflag('connect');
-    if(st.env!=='demo'){
-      emit('AUTO-TRADE HALTED — TradeLocker is on a LIVE account. Auto-trade only runs on demo. Turn it back on in Settings once you are back on demo.');
+    if(st.env!=='demo'&&(await getSetting('talon_live','0'))!=='1'){
+      emit('AUTO-TRADE HALTED — TradeLocker is on a LIVE account and LIVE TRADING isn\'t armed. Arm it in Settings › Trading, or switch back to demo.');
       await getSetting('auto_trade','0'); // (read only — leave the toggle; the guard above stops the loop)
       stopAutoTrader();
       return;

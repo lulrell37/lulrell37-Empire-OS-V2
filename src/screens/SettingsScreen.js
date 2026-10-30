@@ -40,6 +40,7 @@ export default function SettingsScreen({navigation}){
   const[tlBusy,setTlBusy]=useState(false);
   const[tlAccount,setTlAccount]=useState(null);
   const[autoTrade,setAutoTrade]=useState(false);
+  const[talonLive,setTalonLive]=useState(false);
   const[autoSyms,setAutoSyms]=useState('XAUUSD, EURUSD, GBPUSD, USDJPY, GBPJPY, AUDUSD, XAGUSD, BTCUSD');
   const[autoEvery,setAutoEvery]=useState('60');
   const[autoMaxOpen,setAutoMaxOpen]=useState('5'); // risk cap — how many positions T.A.L.O.N. may run at once; applies to every trade, auto or confirmed
@@ -89,6 +90,7 @@ export default function SettingsScreen({navigation}){
     setDeepConfirm((await getSetting('deep_research_confirm','1'))==='1');
     const tc=await loadTradeCreds();if(tc)setTl({email:tc.email||'',password:tc.password||'',server:tc.server||'',env:tc.env||'demo'});
     setAutoTrade((await getSetting('auto_trade','0'))==='1');
+    setTalonLive((await getSetting('talon_live','0'))==='1');
     setAutoSyms(await getSetting('auto_trade_symbols','XAUUSD, EURUSD, GBPUSD, USDJPY, GBPJPY, AUDUSD, XAGUSD, BTCUSD'));
     setAutoEvery(await getSetting('auto_trade_interval_min','60'));
     setAutoMaxOpen(await getSetting('auto_trade_max_open','5'));
@@ -168,10 +170,21 @@ export default function SettingsScreen({navigation}){
   }
   async function toggleAutoTrade(){
     const nv=!autoTrade;
-    if(nv&&tl.env!=='demo'){Alert.alert('Demo only','Auto-trade runs on a demo account only. Switch TradeLocker to DEMO first.');return;}
+    if(nv&&tl.env!=='demo'&&!talonLive){Alert.alert('Live account','TradeLocker is on LIVE. Arm LIVE TRADING below first, or switch TradeLocker to DEMO.');return;}
     setAutoTrade(nv);
     await setSetting('auto_trade',nv?'1':'0');
     await refreshAutoTrader().catch(()=>{});
+  }
+  // Real money: off unless he arms it here, on a live TradeLocker login. The
+  // server loop (talonAutoTrade.js) and W.I.R.E.'s news trades read the same
+  // synced `talon_live` setting.
+  async function toggleTalonLive(){
+    if(talonLive){setTalonLive(false);await setSetting('talon_live','0');await refreshAutoTrader().catch(()=>{});return;}
+    if(tl.env!=='live'||tlAccount?.env!=='live'){Alert.alert('Live login first','Pick LIVE above, enter your live TradeLocker login and CONNECT — then arm this.');return;}
+    Alert.alert('Trade real money?',`T.A.L.O.N. and W.I.R.E. will place real orders on your LIVE account (${tlAccount.currency} ${Number(tlAccount.balance||0).toLocaleString()}) with no confirmation — every setup twice at 0.02 lot, plus add-ons on the way to target. No loss cap.`,[
+      {text:'Cancel',style:'cancel'},
+      {text:'GO LIVE',style:'destructive',onPress:async()=>{setTalonLive(true);await setSetting('talon_live','1');await refreshAutoTrader().catch(()=>{});}},
+    ]);
   }
   async function saveAutoSyms(){await setSetting('auto_trade_symbols',autoSyms.trim()||'XAUUSD');await refreshAutoTrader().catch(()=>{});}
   async function saveAutoEvery(){
@@ -247,7 +260,8 @@ export default function SettingsScreen({navigation}){
   }
   async function disconnectTradeLocker(){
     await clearTradeCreds();tlReset();setTlAccount(null);setTl({email:'',password:'',server:'',env:'demo'});
-    setAutoTrade(false);await setSetting('auto_trade','0');await refreshAutoTrader().catch(()=>{});
+    setAutoTrade(false);await setSetting('auto_trade','0');
+    setTalonLive(false);await setSetting('talon_live','0');await refreshAutoTrader().catch(()=>{});
     clearTradeCredsOnBackend().catch(()=>{});
     Alert.alert('Disconnected','TradeLocker login removed.');
   }
@@ -455,13 +469,20 @@ export default function SettingsScreen({navigation}){
             </TouchableOpacity>
 
             <Text style={[s.secTitle,{marginTop:28}]}>T.A.L.O.N. AUTO-TRADE</Text>
-            <Text style={s.secSub}>Lets T.A.L.O.N. open and close 0.01-lot trades on its own while the app is open — no confirmation. DEMO ACCOUNT ONLY; the loop refuses to touch a live account. No caps or loss limit — this is an experiment to see how it does. This toggle is unattended, self-initiated trading — separate from chat, where he still only proposes, closes or adjusts a trade when you ask, but fires it immediately, same as here.</Text>
+            <Text style={s.secSub}>Lets T.A.L.O.N. open trades on his own — no confirmation. Every 1R a setup moves toward its target he adds another entry, stop one step behind price (up to 3 adds). Demo account unless you arm LIVE TRADING below; without it the loop refuses to touch a live account. No caps or loss limit — this is an experiment to see how it does. This toggle is unattended, self-initiated trading — separate from chat, where he still only proposes, closes or adjusts a trade when you ask, but fires it immediately, same as here.</Text>
             <TouchableOpacity style={s.toggleRow} onPress={toggleAutoTrade} activeOpacity={0.7}>
               <View style={{flex:1,paddingRight:12}}>
                 <Text style={s.toggleLabel}>AUTONOMOUS TRADING</Text>
                 <Text style={s.toggleSub}>{autoTrade?`On — T.A.L.O.N. is watching ${autoSyms} every ${autoEvery} min.`:'Off — T.A.L.O.N. only trades when you ask him to, in chat.'}</Text>
               </View>
               <View style={[s.switch,autoTrade&&s.switchOn]}><View style={[s.knob,autoTrade&&s.knobOn]}/></View>
+            </TouchableOpacity>
+            <TouchableOpacity style={s.toggleRow} onPress={toggleTalonLive} activeOpacity={0.7}>
+              <View style={{flex:1,paddingRight:12}}>
+                <Text style={[s.toggleLabel,talonLive&&{color:'#E05555'}]}>LIVE TRADING</Text>
+                <Text style={s.toggleSub}>{talonLive?'Armed — on a live login, T.A.L.O.N. and W.I.R.E. trade real money.':'Off — T.A.L.O.N. only trades a demo account.'}</Text>
+              </View>
+              <View style={[s.switch,talonLive&&s.switchOn,talonLive&&{backgroundColor:'#E05555'}]}><View style={[s.knob,talonLive&&s.knobOn]}/></View>
             </TouchableOpacity>
             <View style={s.keyField}>
               <Text style={s.keyLabel}>WATCHED SYMBOLS</Text>
@@ -544,7 +565,7 @@ export default function SettingsScreen({navigation}){
             </TouchableOpacity>
 
             <Text style={[s.secTitle,{marginTop:28}]}>NEWS-DRIVEN TRADES</Text>
-            <Text style={s.secSub}>When W.I.R.E. is highly confident a story is moving — or about to move — an instrument the desk trades, she hands it to T.A.L.O.N. and he places it. 0.01 lot, one position per pair, bounded only by his open-position limit. DEMO ACCOUNT ONLY — the same hard rule as auto-trade; it never touches a live account. This switch is independent of Autonomous Trading.</Text>
+            <Text style={s.secSub}>When W.I.R.E. is highly confident a story is moving — or about to move — an instrument the desk trades, she hands it to T.A.L.O.N. and he places it. 0.01 lot, one position per pair, bounded only by his open-position limit. Demo account unless LIVE TRADING is armed — the same rule as auto-trade. This switch is independent of Autonomous Trading.</Text>
             <TouchableOpacity style={s.toggleRow} onPress={toggleNewsTrades} activeOpacity={0.7}>
               <View style={{flex:1,paddingRight:12}}>
                 <Text style={s.toggleLabel}>HAND MARKET-MOVERS TO T.A.L.O.N.</Text>

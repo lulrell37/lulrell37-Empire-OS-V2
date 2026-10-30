@@ -21,6 +21,9 @@ r.post('/creds', async (req, res) => {
              server = EXCLUDED.server, env = EXCLUDED.env, updated_at = EXCLUDED.updated_at`,
       [email, password, server, env === 'live' ? 'live' : 'demo', Date.now()],
     );
+    // Drop the old session so the next call logs in on the new login — a
+    // demo -> live switch otherwise keeps refreshing the demo token.
+    require('../tradeLocker').tlReset();
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -30,6 +33,7 @@ r.post('/creds', async (req, res) => {
 r.delete('/creds', async (req, res) => {
   try {
     await query('DELETE FROM trade_creds WHERE id = 1');
+    require('../tradeLocker').tlReset();
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: e.message });

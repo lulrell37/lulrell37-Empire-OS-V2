@@ -1,14 +1,14 @@
 // T.A.L.O.N. auto-trade cron — server-side port of src/services/autoTrader.js.
 // Ports the loop exactly as unguarded as the client version: no daily loss cap,
-// no kill-switch. The one hard rule stays the same — refuses to place an order
-// on anything but a demo account. The only behavior difference from the client
+// no kill-switch. A live account is refused unless he's armed LIVE TRADING
+// (`talon_live`, Settings › Trading). The only behavior difference from the client
 // is that the TradeLocker session now survives between cycles (a long-lived
 // process instead of a memory-only session that resets on every cold app open).
 const { getSetting, setSetting, saveMemory } = require('./syncStore');
-const { tlStatus, tlConnect, tlSnapshot, tlFormatSnapshot, tlPlaceOrder, tlModifyPosition, tlPositions, tlInstrumentsById, MAX_QTY, ENTRY_COPIES } = require('./tradeLocker');
+const { tlStatus, tlConnect, tlSnapshot, tlFormatSnapshot, tlPlaceOrder, tlModifyPosition, tlPositions, tlInstrumentsById, tlQuote, MAX_QTY, ENTRY_COPIES } = require('./tradeLocker');
 const { autoTradeDecision, guardStop, SYMBOLS } = require('./talonBrain');
-const { reconcileOpenTrades, formatTradeRecord, recordTradeOpen, TRADER_ID } = require('./tradeJournal');
-const { orderRejected, araNote, tradeOpened } = require('./talonAlerts');
+const { reconcileOpenTrades, formatTradeRecord, recordTradeOpen, allTrades, TRADER_ID } = require('./tradeJournal');
+const { orderRejected, araNote, tradeOpened, addedOn } = require('./talonAlerts');
 const { pushAlert } = require('./pushSender');
 
 let busy = false;
@@ -68,20 +68,23 @@ async function tick({ force = false } = {}) {
     if (warnedDisconnected) araNote('✅ T.A.L.O.N. is back on TradeLocker and trading from the server again.');
     warnedDisconnected = false;
     lastError = null;
-    if (st.env !== 'demo') {
-      console.error('talon-autotrade: HALTED — TradeLocker is on a LIVE account. Auto-trade only runs on demo.');
-      await pushAlert(`talon-live-halt:${new Date().toDateString()}`, 'T.A.L.O.N. — auto-trade halted', 'TradeLocker is on a LIVE account. Switch back to demo to resume.', { kind: 'talon-halt' }).catch(() => {});
+    const live = st.env !== 'demo';
+    if (live && !(await liveArmed())) {
+      console.error('talon-autotrade: HALTED — TradeLocker is on a LIVE account and LIVE TRADING is not armed.');
+      await pushAlert(`talon-live-halt:${new Date().toDateString()}`, 'T.A.L.O.N. — auto-trade halted', 'TradeLocker is on a LIVE account. Arm LIVE TRADING in Settings › Trading, or switch back to demo.', { kind: 'talon-halt' }).catch(() => {});
       await setSetting('auto_trade', '0');
-      return { skipped: 'TradeLocker is on a LIVE account — auto-trade halted (demo only)' };
+      return { skipped: 'TradeLocker is on a LIVE account and LIVE TRADING is not armed (Settings › Trading)' };
     }
 
     // Every 5-min tick, not just on a decision cycle: closes (stops, targets)
-    // reach A.R.A.'s Telegram alerts within minutes. No AI calls in here.
+    // reach A.R.A.'s Telegram alerts within minutes, and open setups get their
+    // add-ons on the way to target. No AI calls in here.
     await reconcileOpenTrades().catch(() => {});
+    const marketOpen = fxOpen();
+    await addOnEntries(marketOpen).catch((e) => console.error('talon-autotrade: add-on pass failed —', e.message));
     if (!due) return { skipped: 'not due yet' };
 
     // Gold and Bitcoin only — the app's auto_trade_symbols setting is ignored.
-    const marketOpen = fxOpen();
     const syms = SYMBOLS.filter((sym) => marketOpen || CRYPTO.test(sym));
     if (!syms.length) return { skipped: 'markets closed' };
 
@@ -128,8 +131,10 @@ async function tick({ force = false } = {}) {
         // The setup goes in ENTRY_COPIES times. Each copy is a scalp (to the
         // 15m target) and, when there's a valid 4H target, a swing (same stop)
         // linked to it by its own pairId — the journal moves that swing's stop
-        // to break-even once its scalp pays.
+        // to break-even once its scalp pays. setupId ties every copy together
+        // for the add-ons.
         const why = dec.rationale || 'auto-trade';
+        const setupId = `${sym}-${Date.now()}`;
         let r = null, scalps = 0, swings = 0;
         for (let copy = 0; copy < ENTRY_COPIES; copy++) {
           const pairId = lv.swingTakeProfit != null ? `${sym}-${Date.now()}-${copy}` : null;
@@ -139,13 +144,13 @@ async function tick({ force = false } = {}) {
           } catch (e) { orderFails++; console.error(`talon-autotrade: ${sym} order failed —`, e.message); orderRejected({ symbol: sym, side: dec.side, error: e.message }); continue; }
           r = r || s; scalps++; openCount++;
           await recordTradeOpen({ symbol: sym, side: s.side, qty: s.qty, entry: price, stopLoss: lv.stopLoss, takeProfit: lv.takeProfit,
-            rationale: why, orderId: s.orderId, setup: pairId ? 'scalp' : (dec.setup || 'scalp'), auto: true, pairId, alert: false }).catch(() => {});
+            rationale: why, orderId: s.orderId, setup: pairId ? 'scalp' : (dec.setup || 'scalp'), auto: true, pairId, setupId, alert: false }).catch(() => {});
           console.log(`talon-autotrade: ${s.side.toUpperCase()} ${s.qty} ${sym} @ ~${price ?? 'mkt'} · SL ${lv.stopLoss} TP ${lv.takeProfit}${pairId ? ' (scalp)' : ''}${dec.rationale ? ` — ${dec.rationale}` : ''}`);
           if (!pairId) continue;
           try {
             const s2 = await tlPlaceOrder({ symbol: sym, side: dec.side, qty: MAX_QTY, stopLoss: lv.stopLoss, takeProfit: lv.swingTakeProfit });
             await recordTradeOpen({ symbol: sym, side: s2.side, qty: s2.qty, entry: price, stopLoss: lv.stopLoss, takeProfit: lv.swingTakeProfit,
-              rationale: why, orderId: s2.orderId, setup: 'swing', auto: true, pairId, alert: false }).catch(() => {});
+              rationale: why, orderId: s2.orderId, setup: 'swing', auto: true, pairId, setupId, alert: false }).catch(() => {});
             swings++; openCount++;
             console.log(`talon-autotrade: ${s2.side.toUpperCase()} ${s2.qty} ${sym} · SL ${lv.stopLoss} TP ${lv.swingTakeProfit} (swing)`);
           } catch (e) { orderFails++; console.error(`talon-autotrade: ${sym} swing order failed —`, e.message); orderRejected({ symbol: sym, side: `${dec.side} (swing half)`, error: e.message }); }
@@ -183,6 +188,59 @@ async function tick({ force = false } = {}) {
   }
 }
 
+async function liveArmed() { return (await getSetting('talon_live', '0')) === '1'; }
+
+// Adds on the way to the take profit. Every ADD_STEP_R of open profit on one
+// of his setups, ENTRY_COPIES more 0.02 positions go in toward that setup's
+// final target (the swing's, when it has one) — the first copy takes profit
+// early, 1R past its own entry (the next step); the rest ride to the final
+// target. Each add's stop sits one step
+// behind price — the first add's stop is the setup's entry, so it can only
+// lose what the setup already made. Up to ADD_MAX adds per setup, never one
+// within 1R of the target, and only while one of the setup's own positions is
+// still open. One try per step: a rejected add isn't retried every 5 minutes.
+const ADD_STEP_R = 1;
+const ADD_MAX = 3;
+const addTried = new Map(); // setup key -> highest step attempted
+async function addOnEntries(marketOpen) {
+  const mine = (await allTrades()).filter((t) => t.auto);
+  const groups = {};
+  for (const t of mine) { const k = t.setup_id || t.pair_id || t.sync_id; (groups[k] || (groups[k] = [])).push(t); }
+  for (const [key, g] of Object.entries(groups)) {
+    const base = g.filter((t) => t.setup !== 'add');
+    if (!base.length || !base.some((t) => t.status === 'open' && t.position_id)) continue;
+    const t0 = base[0], sym = t0.symbol;
+    if (!marketOpen && !CRYPTO.test(sym)) continue;
+    const dir = t0.side === 'buy' ? 1 : -1;
+    const entry = Number(t0.entry_fill ?? t0.entry_ref), stop = Number(t0.stop_loss);
+    const target = base.map((t) => Number(t.take_profit)).filter(isFinite).sort((a, b) => (b - a) * dir)[0];
+    const r = Math.abs(entry - stop) * ADD_STEP_R;
+    if (!isFinite(entry) || !isFinite(stop) || !isFinite(target) || !r) continue;
+    const q = await tlQuote(sym).catch(() => null);
+    const price = Number(dir > 0 ? (q?.bid ?? q?.mid) : (q?.ask ?? q?.mid));
+    if (!isFinite(price)) continue;
+    const step = Math.floor(((price - entry) * dir) / r + 1e-9);
+    const done = Math.max(0, addTried.get(key) || 0, ...g.filter((t) => t.setup === 'add').map((t) => Number(t.add_level) || 0));
+    if (step < 1 || step <= done || step > ADD_MAX) continue;
+    if ((target - price) * dir < r) continue;
+    addTried.set(key, step);
+    const addStop = +(entry + dir * (step - 1) * r).toFixed(2);
+    const early = +(price + dir * r).toFixed(2);
+    let placed = null, copies = 0;
+    for (let copy = 0; copy < ENTRY_COPIES; copy++) {
+      const tp = copy === 0 ? early : target;
+      try {
+        const s = await tlPlaceOrder({ symbol: sym, side: t0.side, qty: MAX_QTY, stopLoss: addStop, takeProfit: tp });
+        await recordTradeOpen({ symbol: sym, side: s.side, qty: s.qty, entry: price, stopLoss: addStop, takeProfit: tp,
+          rationale: `add-on ${step} — ${t0.rationale || ''}`.slice(0, 400), orderId: s.orderId, setup: 'add', auto: true, setupId: key, addLevel: step, alert: false }).catch(() => {});
+        placed = placed || s; copies++;
+        console.log(`talon-autotrade: ADD ${step} ${s.side.toUpperCase()} ${s.qty} ${sym} @ ~${price} · SL ${addStop} TP ${tp}${copy === 0 ? ' (early)' : ''}`);
+      } catch (e) { console.error(`talon-autotrade: ${sym} add-on ${step} failed —`, e.message); orderRejected({ symbol: sym, side: `${t0.side} (add-on ${step})`, error: e.message }); }
+    }
+    if (placed) addedOn({ symbol: sym, side: placed.side, qty: placed.qty, copies, step, entry: price, stopLoss: addStop, earlyTarget: early, takeProfit: target });
+  }
+}
+
 // One-time switch-on for the gold + Bitcoin rework: flips the app's
 // `auto_trade` toggle on once (it syncs back to the app's Settings). After
 // that the toggle is his again — turning it off in the app sticks.
@@ -203,6 +261,7 @@ async function status() {
   return {
     cron: cronEnabled(),
     autoTrade: (await getSetting('auto_trade', '0')) === '1',
+    liveArmed: await liveArmed(),
     creds: rows[0] ? { server: rows[0].server, env: rows[0].env, updatedAt: Number(rows[0].updated_at) } : null,
     tradeLocker: tlStatus(),
     marketOpen: fxOpen(),

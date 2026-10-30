@@ -177,6 +177,11 @@ async function pullChanges(be) {
 export async function runSync(opts = {}) {
   const be = await loadBackend();
   if (!be) { set({ configured: false, running: false }); return status; }
+  // The foreground listener and the 2-min interval can fire while App.js is
+  // still opening the local database (fonts load first) — that surfaced as
+  // "Backend sync failed: Cannot read property 'getFirstAsync' of undefined".
+  // App.js runs a sync itself once the database is up.
+  if (!getDb()) return status;
   if (inFlight) return inFlight;
   inFlight = (async () => {
     set({ configured: true, running: true, error: null });

@@ -187,7 +187,8 @@ async function newsTradeHandoff(impacts) {
   }
   let st = tlStatus();
   if (!st.connected) { try { await tlConnect(); st = tlStatus(); } catch (e) { console.error('newswire->talon: cannot reach TradeLocker', e.message); return; } }
-  if (st.env !== 'demo') { console.log('newswire->talon: LIVE account — news trades are demo-only, not placing'); return; }
+  const live = st.env !== 'demo';
+  if (live && (await getSetting('talon_live', '0')) !== '1') { console.log('newswire->talon: LIVE account and LIVE TRADING not armed — not placing'); return; }
 
   for (const imp of highs) {
     let snap;
@@ -203,12 +204,13 @@ async function newsTradeHandoff(impacts) {
     lv = { ...lv, stopLoss: g.stopLoss, takeProfit: g.takeProfit };
     // Every news trade goes in ENTRY_COPIES times; one alert covers them all.
     const why = `news — ${imp.thesis}`.slice(0, 180);
+    const setupId = `${imp.symbol}-news-${Date.now()}`;
     let r = null, copies = 0;
     for (let copy = 0; copy < ENTRY_COPIES; copy++) {
       try {
         const s = await tlPlaceOrder({ symbol: imp.symbol, side: imp.side, qty: MAX_QTY, stopLoss: lv.stopLoss, takeProfit: lv.takeProfit });
         await recordTradeOpen({ symbol: imp.symbol, side: s.side, qty: s.qty, entry: price, stopLoss: lv.stopLoss, takeProfit: lv.takeProfit,
-          rationale: why, orderId: s.orderId, setup: 'news', auto: true, alert: false });
+          rationale: why, orderId: s.orderId, setup: 'news', auto: true, setupId, alert: false });
         r = r || s; copies++;
         console.log(`newswire->talon: ${s.side.toUpperCase()} ${s.qty} ${imp.symbol} @ ~${price ?? 'mkt'} · SL ${lv.stopLoss} TP ${lv.takeProfit} — ${imp.thesis.slice(0, 80)}`);
       } catch (e) {
@@ -229,7 +231,7 @@ async function newsTradeHandoff(impacts) {
 // sales, GDP, PCE…) all drop at 8:30 AM ET, and gold reacts hard to the surprise
 // vs. forecast. Weekdays at 8:32 / 8:36 / 8:42 / 8:50 ET (server/index.js) W.I.R.E.
 // reads what came out; a clear surprise becomes a BUY/SELL hand-off to T.A.L.O.N.
-// on XAUUSD through the same newsTradeHandoff as any other news call (demo only,
+// on XAUUSD through the same newsTradeHandoff as any other news call (demo, or live once armed,
 // `news_wire_trades` toggle respected). A.R.A. tells Mr. Burrus what the number
 // was and what was done. Once a day (`wire_830_date`); "not out yet" retries on
 // the next slot. ECON_DESK=off disables the cron.
