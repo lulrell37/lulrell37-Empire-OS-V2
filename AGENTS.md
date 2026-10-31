@@ -182,11 +182,12 @@ linked by `pair_id` in `trades`); when the scalp pays, `reconcileOpenTrades`
 moves the swing's stop to break-even. Every trade (setups and news trades) is
 entered `ENTRY_COPIES` = 2 times, each scalp + swing copy with its own `pair_id`,
 and there's no cap on open positions or setups per market. On the way to the target he
-adds: every 1R a setup (all its copies share a `setup_id`) moves toward its
-final target, `addOnEntries` in `server/talonAutoTrade.js` puts in
-`ENTRY_COPIES` more 0.02 positions (`setup: 'add'`, `add_level`): the first copy
-takes profit 1R past its entry, the rest ride to that same target, all with the stop one step behind price (first add's stop = the setup's entry), up
-to `ADD_MAX` = 3, never within 1R of the target. It runs on every 5-min tick, with no AI calls.
+adds, on pullbacks only: every 1R a setup (all its copies share a `setup_id`) reaches toward its
+final target arms an add, and `addOnEntries` in `server/talonAutoTrade.js` puts it in
+once price pulls back 0.5R off the setup's best price (still 0.25R+ above the add's stop) —
+one 0.02 position (`setup: 'add'`, `add_level`, not doubled by `ENTRY_COPIES`)
+that takes profit 1R past its entry, with the stop one step behind the armed step (first add's stop = the setup's entry), no
+cap on adds per setup, never within 1R of the target. It runs on every 5-min tick, with no AI calls.
 **Live account:** demo by default; Settings › Trading › LIVE TRADING (needs a
 connected live TradeLocker login, confirm dialog) writes `talon_live` = `1`
 (synced), which lets the auto-trade loop and W.I.R.E.'s news trades place
