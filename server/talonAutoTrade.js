@@ -74,7 +74,9 @@ async function tick({ force = false } = {}) {
     if (live && !(await liveArmed())) {
       console.error('talon-autotrade: HALTED — TradeLocker is on a LIVE account and LIVE TRADING is not armed.');
       await pushAlert(`talon-live-halt:${new Date().toDateString()}`, 'T.A.L.O.N. — auto-trade halted', 'TradeLocker is on a LIVE account. Arm LIVE TRADING in Settings › Trading, or switch back to demo.', { kind: 'talon-halt' }).catch(() => {});
-      await setSetting('auto_trade', '0');
+      // Wait, don't switch auto-trade off — he picks back up the moment LIVE
+      // TRADING is armed (switching to the live login before arming it used to
+      // leave him off for good).
       return { skipped: 'TradeLocker is on a LIVE account and LIVE TRADING is not armed (Settings › Trading)' };
     }
 
