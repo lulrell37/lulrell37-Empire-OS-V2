@@ -181,7 +181,10 @@ no valid swing → scalp alone, which needs 2R;
 linked by `pair_id` in `trades`); when the scalp pays, `reconcileOpenTrades`
 moves the swing's stop to break-even. Every trade (setups and news trades) is
 entered `ENTRY_COPIES` = 2 times, each scalp + swing copy with its own `pair_id`,
-and there's no cap on open positions or setups per market. On the way to the target he
+capped at `MAX_PAIRS` = 3 scalp + swing pairs open per market at once (a pair
+counts only while its scalp is open — once the scalp pays, the swing alone
+frees the slot; a setup that would top the cap goes in with fewer copies or is
+skipped). Lone scalps, news trades and add-ons don't count toward it. On the way to the target he
 adds, on pullbacks only: every 1R a setup (all its copies share a `setup_id`) reaches toward its
 final target arms an add, and `addOnEntries` in `server/talonAutoTrade.js` puts it in
 once price pulls back 0.5R off the setup's best price (still 0.25R+ above the add's stop) —

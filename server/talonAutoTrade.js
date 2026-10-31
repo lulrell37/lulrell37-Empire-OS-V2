@@ -130,15 +130,19 @@ async function tick({ force = false } = {}) {
         if (lv.skip) { console.log(`talon-autotrade: skipped ${sym} ${dec.side} — ${lv.skip}`); decisions.push(`${sym}: skipped — ${lv.skip}`); continue; }
         if (lv.widened) console.log(`talon-autotrade: ${sym} ${lv.note}`);
         if (lv.swingNote) console.log(`talon-autotrade: ${sym} ${lv.swingNote}`);
-        // The setup goes in ENTRY_COPIES times. Each copy is a scalp (to the
+        // The setup goes in ENTRY_COPIES times (fewer if that would top MAX_PAIRS). Each copy is a scalp (to the
         // 15m target) and, when there's a valid 4H target, a swing (same stop)
         // linked to it by its own pairId — the journal moves that swing's stop
         // to break-even once its scalp pays. setupId ties every copy together
         // for the add-ons.
+        const paired = lv.swingTakeProfit != null;
+        const held = paired ? await openPairs(sym).catch(() => 0) : 0;
+        const slots = paired ? Math.min(ENTRY_COPIES, MAX_PAIRS - held) : ENTRY_COPIES;
+        if (slots <= 0) { console.log(`talon-autotrade: skipped ${sym} ${dec.side} — ${held} scalp/swing pairs already open (cap ${MAX_PAIRS})`); decisions.push(`${sym}: skipped — ${held}/${MAX_PAIRS} pairs already open`); continue; }
         const why = dec.rationale || 'auto-trade';
         const setupId = `${sym}-${Date.now()}`;
         let r = null, scalps = 0, swings = 0;
-        for (let copy = 0; copy < ENTRY_COPIES; copy++) {
+        for (let copy = 0; copy < slots; copy++) {
           const pairId = lv.swingTakeProfit != null ? `${sym}-${Date.now()}-${copy}` : null;
           let s;
           try {
@@ -191,6 +195,20 @@ async function tick({ force = false } = {}) {
 }
 
 async function liveArmed() { return (await getSetting('talon_live', '0')) === '1'; }
+
+// At most MAX_PAIRS scalp + swing pairs open per market at once. A pair
+// counts only while its scalp is open — once the scalp pays, the swing riding
+// on alone frees the slot. Lone scalps (no swing), news trades and add-ons
+// don't count.
+const MAX_PAIRS = 3;
+async function openPairs(sym) {
+  const keys = new Set();
+  for (const t of await allTrades()) {
+    if (!t.auto || t.status !== 'open' || String(t.symbol).toUpperCase() !== sym) continue;
+    if (t.setup === 'scalp' && t.pair_id) keys.add(t.pair_id);
+  }
+  return keys.size;
+}
 
 // Adds on the way to the take profit, on pullbacks only. Once one of his
 // setups has run ADD_STEP_R further into profit (the step), the add for that
