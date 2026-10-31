@@ -14,6 +14,7 @@
 // badge in CommandScreen/OrbZoom) so it's waiting whenever Mr. Burrus opens
 // her orb next, spoken as a catch-up line if voice is on.
 // Mirrors services/autoTrader.js / services/autoScout.js.
+import{loadBackend}from './keyStore';
 import{getSetting,setSetting,saveMessage,savePersonaMemory}from './database';
 import{callPersona}from './aiService';
 import{handleCommands,stripCommands}from './commandHandler';
@@ -62,6 +63,10 @@ async function runOnce(){
 }
 
 export async function startAutoAtlas(){
+  // A linked backend runs this loop server-side; never run both (doubled
+  // orders/emails). Checked here so no caller — Settings toggles included —
+  // can start it while the server owns it.
+  if(await loadBackend())return;
   if(running)return;
   if((await getSetting('auto_atlas','0'))!=='1')return;
   running=true;

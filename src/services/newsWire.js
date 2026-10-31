@@ -19,6 +19,7 @@
 //
 // Mirrors services/dailyBriefing.js (ET date stamps) + services/autoScout.js
 // (foreground loop) + services/autoTrader.js (guarded trade path).
+import{loadBackend}from './keyStore';
 import{getSetting,setSetting,updateHudState,getHudState,saveMessage,savePersonaMemory}from './database';
 import{webSearch,callPersona,newsTradeLevels}from './aiService';
 import{tlStatus,tlConnect,tlSnapshot,tlFormatSnapshot,tlPlaceOrder,tlPositions,tlInstrumentsById,MAX_QTY,MAX_OPEN_POSITIONS}from './tradeLocker';
@@ -247,6 +248,10 @@ async function tick(){
 }
 
 export async function startNewsWire(){
+  // A linked backend runs this loop server-side; never run both (doubled
+  // orders/emails). Checked here so no caller — Settings toggles included —
+  // can start it while the server owns it.
+  if(await loadBackend())return;
   if(running)return;
   if((await getSetting('news_wire','1'))!=='1')return;
   running=true;
