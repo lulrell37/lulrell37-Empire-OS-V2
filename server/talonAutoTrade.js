@@ -202,7 +202,7 @@ async function liveArmed() { return (await getSetting('talon_live', '0')) === '1
 // counts only while its scalp is open — once the scalp pays, the swing riding
 // on alone frees the slot. Lone scalps (no swing), news trades and add-ons
 // don't count.
-const MAX_PAIRS = 3;
+const MAX_PAIRS = 2;
 async function openPairs(sym) {
   const keys = new Set();
   for (const t of await allTrades()) {
