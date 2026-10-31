@@ -17,13 +17,15 @@ let lastError = null; // surfaced by GET /trade/status
 let lastCycle = null; // the last decision cycle's tally, same
 let warnedFailing = '';
 
-// The cron ticks every 5 min (see server/index.js); this self-paces to
-// whatever `auto_trade_interval_min` says, same due-check pattern as
-// server/autoAtlas.js.
+// The cron ticks 20s past every 5-min mark (see server/index.js), so the
+// candle that just closed is in the broker's history. A scan is due in each new
+// `auto_trade_interval_min` slot on the clock — 15 scans right after every 15m
+// close (:00, :15, :30, :45), 60 right after the top of the hour — rather than
+// N minutes after the last scan, which drifted off the closes.
 async function dueNow() {
-  const mins = Math.max(1, parseInt(await getSetting('auto_trade_interval_min', '60'), 10) || 60);
+  const slot = Math.max(1, parseInt(await getSetting('auto_trade_interval_min', '15'), 10) || 15) * 60000;
   const last = parseInt(await getSetting('talon_last_cycle_at', '0'), 10) || 0;
-  return Date.now() - last >= mins * 60000;
+  return Math.floor(Date.now() / slot) > Math.floor(last / slot);
 }
 
 // FX/metals trade Sun 17:00 ET → Fri 17:00 ET with a daily 17:00-18:00 ET
@@ -250,6 +252,13 @@ async function addOnEntries(marketOpen) {
 // `auto_trade` toggle on once (it syncs back to the app's Settings). After
 // that the toggle is his again — turning it off in the app sticks.
 async function enableOnce() {
+  // One-time move to scanning every 15m candle close (synced back to the app's
+  // Settings › Trading interval box; changing it there sticks after this).
+  if ((await getSetting('talon_scan_15_set', '0')) !== '1') {
+    await setSetting('auto_trade_interval_min', '15');
+    await setSetting('talon_scan_15_set', '1');
+    console.log('talon-autotrade: scan interval set to 15 min');
+  }
   if ((await getSetting('talon_gold_btc_enabled', '0')) === '1') return false;
   await setSetting('auto_trade', '1');
   await setSetting('talon_gold_btc_enabled', '1');

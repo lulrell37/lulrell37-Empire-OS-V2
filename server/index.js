@@ -188,8 +188,9 @@ function startScoutSignalCron() {
 }
 
 // T.A.L.O.N. auto-trade — the loop that used to run only while the app was
-// foregrounded (src/services/autoTrader.js). Ticks every 5 min; self-paces
-// internally to the app's own `auto_trade_interval_min` setting, and the whole
+// foregrounded (src/services/autoTrader.js). Ticks 20s past every 5-min mark;
+// scans once per `auto_trade_interval_min` slot on the clock (the app's own
+// setting) — right after each candle close — and the whole
 // thing is a no-op unless the app's `auto_trade` toggle (Settings › Trading) is
 // on — no separate on/off surface needed. TALON_AUTOTRADE=off kills this
 // instance's cron outright (e.g. running two backend instances).
@@ -207,8 +208,8 @@ function startTalonAutoTradeCron() {
   if (process.env.TALON_AUTOTRADE === 'off') return console.log('T.A.L.O.N. auto-trade cron disabled (TALON_AUTOTRADE=off)');
   if (!talonAutoTrade.cronEnabled()) return console.log('T.A.L.O.N. auto-trade cron off (no Claude subscription, ANTHROPIC_API_KEY or XAI_API_KEY)');
   talonAutoTrade.enableOnce().catch((e) => console.error('talon switch-on failed:', e.message));
-  cron.schedule('*/5 * * * *', () => talonAutoTrade.tick().catch((e) => console.error('talon auto-trade cron failed:', e.message)));
-  console.log('T.A.L.O.N. auto-trade cron scheduled (every 5m, self-paced to auto_trade_interval_min)');
+  cron.schedule('20 */5 * * * *', () => talonAutoTrade.tick().catch((e) => console.error('talon auto-trade cron failed:', e.message)));
+  console.log('T.A.L.O.N. auto-trade cron scheduled (every 5m, scans on each auto_trade_interval_min candle close)');
   // Nightly trading recap from A.R.A. on Telegram. TRADE_RECAP=off to stop.
   if (process.env.TRADE_RECAP !== 'off') {
     cron.schedule('0 21 * * *', () => {
