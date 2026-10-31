@@ -189,7 +189,9 @@ frees the slot; a setup that would top the cap goes in with fewer copies or is
 skipped). Lone scalps, news trades and add-ons don't count toward it. On the way to the target he
 adds, on pullbacks only: every 1R a setup (all its copies share a `setup_id`) reaches toward its
 final target arms an add, and `addOnEntries` in `server/talonAutoTrade.js` puts it in
-once price pulls back 0.5R off the setup's best price (still 0.25R+ above the add's stop) —
+only once price has pulled back 0.5R off the setup's best price (its low staying 0.25R+
+above the add's stop) and then turned back toward the target by 0.2R off that pullback's
+low — never while price is still falling away from the TP; a new best price restarts the pullback —
 one 0.02 position (`setup: 'add'`, `add_level`, not doubled by `ENTRY_COPIES`)
 that takes profit 1R past its entry, with the stop one step behind the armed step (first add's stop = the setup's entry), no
 cap on adds per setup, never within 1R of the target. It runs on every 5-min tick, with no AI calls.

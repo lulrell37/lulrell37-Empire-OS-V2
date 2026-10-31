@@ -214,21 +214,27 @@ async function openPairs(sym) {
 
 // Adds on the way to the take profit, on pullbacks only. Once one of his
 // setups has run ADD_STEP_R further into profit (the step), the add for that
-// step is armed; it goes in when price pulls back at least ADD_PULLBACK_R off
-// the best price the setup has reached, while still at least ADD_ROOM_R above
-// the add's stop. One 0.02 position, taking profit 1R past its own entry
+// step is armed; it goes in only on a pullback that has turned back toward the
+// take profit: price first pulls back at least ADD_PULLBACK_R off the best price
+// the setup has reached (never deeper than ADD_ROOM_R above the add's stop), then
+// has to bounce ADD_RESUME_R back off that pullback's low — so he never adds
+// while price is still falling away from the target. A new best price starts the
+// pullback over. One 0.02 position, taking profit 1R past its own entry
 // rather than riding to the setup's final target (the swing's, when it has
 // one). Each add's stop sits one step behind the step it was armed at — the
 // first add's stop is the setup's entry, so it can only lose what the setup
 // already made. No cap on adds per setup — never one within 1R of the
 // target, though, and only while one of the setup's own positions is still open. One
-// try per step: a rejected add isn't retried every 5 minutes. The best price
-// lives in memory, so a server restart starts it over from the current price.
+// try per step: a rejected add isn't retried every 5 minutes. The best price and
+// pullback low live in memory, so a server restart starts them over from the
+// current price.
 const ADD_STEP_R = 1;
 const ADD_PULLBACK_R = 0.5;
 const ADD_ROOM_R = 0.25;
+const ADD_RESUME_R = 0.2;
 const addTried = new Map(); // setup key -> highest step attempted
 const addPeak = new Map(); // setup key -> best price seen (in its direction)
+const addTrough = new Map(); // setup key -> deepest pullback price since that best price
 async function addOnEntries(marketOpen) {
   const mine = (await allTrades()).filter((t) => t.auto);
   const groups = {};
@@ -249,12 +255,18 @@ async function addOnEntries(marketOpen) {
     const prevPeak = addPeak.get(key);
     const peak = prevPeak == null ? price : (dir > 0 ? Math.max(prevPeak, price) : Math.min(prevPeak, price));
     addPeak.set(key, peak);
+    // Pullback low since the best price; a new best price resets it.
+    const prevTrough = peak !== prevPeak ? null : addTrough.get(key);
+    const trough = prevTrough == null ? price : (dir > 0 ? Math.min(prevTrough, price) : Math.max(prevTrough, price));
+    addTrough.set(key, trough);
     const step = Math.floor(((peak - entry) * dir) / r + 1e-9);
     const done = Math.max(0, addTried.get(key) || 0, ...g.filter((t) => t.setup === 'add').map((t) => Number(t.add_level) || 0));
     if (step < 1 || step <= done) continue;
     const addStop = +(entry + dir * (step - 1) * r).toFixed(2);
-    if ((peak - price) * dir < ADD_PULLBACK_R * r) continue; // no pullback yet
-    if ((price - addStop) * dir < ADD_ROOM_R * r) continue; // pulled back too deep, wait
+    if ((peak - trough) * dir < ADD_PULLBACK_R * r) continue; // no pullback yet
+    if ((trough - addStop) * dir < ADD_ROOM_R * r) continue; // pulled back too deep — not this one
+    if ((price - trough) * dir < ADD_RESUME_R * r) continue; // still pulling back, not headed to TP yet
+    if ((peak - price) * dir <= 0) continue; // back at the high — the pullback entry is gone
     if ((target - price) * dir < r) continue;
     addTried.set(key, step);
     const early = +(price + dir * r).toFixed(2);
@@ -262,7 +274,7 @@ async function addOnEntries(marketOpen) {
       const s = await tlPlaceOrder({ symbol: sym, side: t0.side, qty: MAX_QTY, stopLoss: addStop, takeProfit: early });
       await recordTradeOpen({ symbol: sym, side: s.side, qty: s.qty, entry: price, stopLoss: addStop, takeProfit: early,
         rationale: `add-on ${step} — ${t0.rationale || ''}`.slice(0, 400), orderId: s.orderId, setup: 'add', auto: true, setupId: key, addLevel: step, alert: false }).catch(() => {});
-      console.log(`talon-autotrade: ADD ${step} ${s.side.toUpperCase()} ${s.qty} ${sym} @ ~${price} on a pullback from ${peak} · SL ${addStop} TP ${early}`);
+      console.log(`talon-autotrade: ADD ${step} ${s.side.toUpperCase()} ${s.qty} ${sym} @ ~${price} after a pullback from ${peak} to ${trough}, turning back toward TP · SL ${addStop} TP ${early}`);
       addedOn({ symbol: sym, side: s.side, qty: s.qty, copies: 1, step, entry: price, stopLoss: addStop, earlyTarget: early, takeProfit: early });
     } catch (e) { console.error(`talon-autotrade: ${sym} add-on ${step} failed —`, e.message); orderRejected({ symbol: sym, side: `${t0.side} (add-on ${step})`, error: e.message }); }
   }
