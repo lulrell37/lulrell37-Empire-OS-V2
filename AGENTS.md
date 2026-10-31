@@ -165,6 +165,8 @@ when `loadBackend()` finds no backend configured; once one is linked the
 server becomes the sole actor and the client-side versions in `src/services/`
 stop starting at all (`SettingsScreen.js`'s backend connect/disconnect
 handlers flip this immediately rather than waiting for the next foreground).
+The check lives inside each `start*` function itself, so a Settings toggle's
+`refresh*` can't start a local loop while a backend is linked.
 TradeLocker's login travels to the server the same way the Google refresh
 token does (`POST /trade/creds`, `server/routes/trade.js`, table
 `trade_creds`) — pushed on TradeLocker connect, backend connect, and app

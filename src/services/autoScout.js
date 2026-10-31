@@ -16,6 +16,7 @@
 //   4. sends due follow-ups.
 // Daily caps (`auto_scout_daily_leads`, `auto_scout_daily_emails`) bound the
 // volume and the API/Gmail exposure. Mirrors services/autoTrader.js.
+import{loadBackend}from './keyStore';
 import{getSetting,setSetting,saveMessage,addLead,leadExists,leadHasContact,updateLead,appendLeadLog,getLeadsForOutreach,getLeadsDue,getTodayStr}from './database';
 import{webSearch,callPersona}from './aiService';
 import{runInboundScan}from './inbound';
@@ -257,6 +258,10 @@ async function runOnce(){
 }
 
 export async function startAutoScout(){
+  // A linked backend runs this loop server-side; never run both (doubled
+  // orders/emails). Checked here so no caller — Settings toggles included —
+  // can start it while the server owns it.
+  if(await loadBackend())return;
   if(running)return;
   if((await getSetting('auto_scout','0'))!=='1')return;
   running=true;lastHeartbeat=0;

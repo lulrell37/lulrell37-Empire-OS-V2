@@ -12,6 +12,7 @@
 // This is a deliberately unguarded experiment: no daily caps, no loss
 // kill-switch. The ONE hard rule is env must be 'demo' — the loop refuses to
 // place a single order on a live account and stops itself if it sees one.
+import{loadBackend}from './keyStore';
 import{tlStatus,tlConnect,tlSnapshot,tlFormatSnapshot,tlPlaceOrder,tlClosePosition,tlModifyPosition,tlPositions,tlInstrumentsById,MAX_QTY,MAX_OPEN_POSITIONS}from './tradeLocker';
 import{autoTradeDecision}from './aiService';
 import{reconcileOpenTrades,formatTradeRecord,getStrategy,recordTradeOpen,TRADER_ID}from './tradeJournal';
@@ -186,6 +187,10 @@ async function runOnce(){
 }
 
 export async function startAutoTrader(){
+  // A linked backend runs this loop server-side; never run both (doubled
+  // orders/emails). Checked here so no caller — Settings toggles included —
+  // can start it while the server owns it.
+  if(await loadBackend())return;
   if(running)return;
   if((await getSetting('auto_trade','0'))!=='1')return;
   running=true;
