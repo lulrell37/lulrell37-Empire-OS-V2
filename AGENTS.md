@@ -195,6 +195,14 @@ low — never while price is still falling away from the TP; a new best price re
 one 0.02 position (`setup: 'add'`, `add_level`, not doubled by `ENTRY_COPIES`)
 that takes profit 1R past its entry, with the stop one step behind the armed step (first add's stop = the setup's entry), no
 cap on adds per setup, never within 1R of the target. It runs on every 5-min tick, with no AI calls.
+**Quick scalps** (`server/talonQuick.js`, `TALON_QUICK=off` to stop) are a separate 5m desk on the same
+5-min tick: a coded filter (1H + 15m trend agree, pullback into the 5m EMA20, a closed 5m rejection
+bar) and only when it fires one AI call to confirm and pick the target (1.5R min, capped at 3R).
+Stop past the 5-bar swing + 0.3 ATR, min gold $3 / Bitcoin 0.3% and 1× 5m ATR14, over gold $8 /
+Bitcoin 0.8% → skip; stop to break-even at +1R. One 0.02 position (`setup: 'quick'`), one open per
+market, never against an open position there; gold 3 AM-12 PM ET only, both off 8:25-8:45 AM ET
+weekdays; 2 quick losses in a row → 1 h off that market, 3 in a day → done for the day. No add-ons,
+not doubled, not counted in `MAX_PAIRS`, skipped by the near-stop watch.
 **Live account:** demo by default; Settings › Trading › LIVE TRADING (needs a
 connected live TradeLocker login, confirm dialog) writes `talon_live` = `1`
 (synced), which lets the auto-trade loop and W.I.R.E.'s news trades place
@@ -223,7 +231,13 @@ ATR14 on gold or Bitcoin, price through the invalidation level of his last
 market update (the update ends in a `LEVELS:` JSON line, stripped and saved to
 `app_settings.talon_update_levels`), a position with no stop, and the loop
 itself failing (`systemFault`/`systemOk`). `tradeClosed` flags a close nowhere
-near the stop, target or break-even as one he didn't make. The cron runs on any of the Claude subscription,
+near the stop, target or break-even as one he didn't make.
+Stops are never optional: both `tlPlaceOrder`s round stop/target to the
+instrument's `pricePrecision` (an off-tick stop can be dropped while the
+market order fills), the app's refuses an order with no stop, and modifies send
+`stopLossType`. Every 5-min reconcile runs `ensureStop` (`server/tradeJournal.js`)
+on each of his open positions: no stop on the broker → the journal stop is put
+back, or the position is closed if price is already through it. The cron runs on any of the Claude subscription,
 `ANTHROPIC_API_KEY` or `XAI_API_KEY` (his brain is `claudeText`'s chain). W.I.R.E.'s
 8:30 AM ET data desk (`runEconDesk` in `server/newsWire.js`, `ECON_DESK=off` to
 stop) reads CPI/jobs/claims/etc. vs forecast and hands a gold BUY/SELL to

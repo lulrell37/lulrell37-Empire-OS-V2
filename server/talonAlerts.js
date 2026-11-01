@@ -38,14 +38,15 @@ function notify(text) {
 }
 
 function tradeOpened({ symbol, side, qty, entry, stopLoss, takeProfit, rationale, setup, swingTarget, copies = 1 }) {
-  const news = setup === 'news';
+  const news = setup === 'news', quick = setup === 'quick';
   const pair = swingTarget != null;
   const n = (pair ? 2 : 1) * copies;
-  notify(`📈 **T.A.L.O.N. just opened ${pair ? 'a scalp + swing' : 'a trade'}**${news ? ' (news-driven)' : ''}${acct()}, Mr. Burrus.\n`
+  notify(`📈 **T.A.L.O.N. just opened ${pair ? 'a scalp + swing' : quick ? 'a quick 5m scalp' : 'a trade'}**${news ? ' (news-driven)' : ''}${acct()}, Mr. Burrus.\n`
     + `**${String(side).toUpperCase()} ${nameOf(symbol)}** · ${n > 1 ? `${n} × ${qty}` : qty} lot @ ~${px(entry)}\n`
     + (pair ? `Stop ${px(stopLoss)} · Scalp target ${px(takeProfit)} · Swing target ${px(swingTarget)} (stop to break-even when the scalp pays)`
       : `Stop ${px(stopLoss)} · Target ${px(takeProfit)}`)
-    + `${rationale ? `\nWhy: ${String(rationale).replace(/^news — /, '')}` : ''}`);
+    + `${quick ? ' (stop to break-even at +1R)' : ''}`
+    + `${rationale ? `\nWhy: ${String(rationale).replace(/^(news|quick 5m) — /, '')}` : ''}`);
 }
 
 function addedOn({ symbol, side, qty, copies, step, entry, stopLoss, earlyTarget, takeProfit }) {
@@ -58,7 +59,7 @@ function tradeClosed(t) {
   const word = t.outcome === 'win' ? 'a win' : t.outcome === 'loss' ? 'a loss' : 'break-even';
   const hit = t.exit_price != null && t.take_profit != null && Math.abs(t.exit_price - t.take_profit) <= Math.abs(t.take_profit) * 3e-4 ? ' — target hit'
     : t.exit_price != null && t.stop_loss != null && Math.abs(t.exit_price - t.stop_loss) <= Math.abs(t.stop_loss) * 3e-4 ? ' — stopped out' : '';
-  const kind = t.pair_id && (t.setup === 'scalp' || t.setup === 'swing') ? ` (${t.setup})` : '';
+  const kind = t.setup === 'quick' ? ' (quick scalp)' : t.pair_id && (t.setup === 'scalp' || t.setup === 'swing') ? ` (${t.setup})` : '';
   // He never closes early, so an exit nowhere near the stop, the target or
   // break-even means something else closed it.
   const entry = Number(t.entry_fill ?? t.entry_ref), exit = Number(t.exit_price), sl = Number(t.stop_loss), tp = Number(t.take_profit);

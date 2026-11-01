@@ -240,6 +240,7 @@ export async function tlInstrument(symbol='XAUUSD'){
     id:inst.tradableInstrumentId,name:inst.name,
     tradeRouteId:trade?.id,infoRouteId:info?.id,
     precision:inst.quantityPrecision??inst.pricePrecision??2,
+    pricePrecision:Number.isInteger(inst.pricePrecision)?inst.pricePrecision:2,
   };
   session.instruments[symbol]=meta;
   return meta;
@@ -317,13 +318,17 @@ export async function tlPlaceOrder({symbol='XAUUSD',side,qty=MAX_QTY,stopLoss,ta
   if(side!=='buy'&&side!=='sell')throw new Error('side must be buy or sell');
   const q=Math.min(Math.max(Number(qty)||0,0),MAX_QTY);
   if(!q)throw new Error('qty must be > 0');
+  // Never a trade without a stop — a chat proposal that left it out is refused.
+  if(stopLoss==null||!isFinite(Number(stopLoss)))throw new Error('no stop loss given — every trade needs one');
   const m=await tlInstrument(symbol);
+  // On the instrument's own price precision, so the broker doesn't drop an off-tick stop.
+  const px=v=>+Number(v).toFixed(m.pricePrecision??2);
   const body={
     tradableInstrumentId:m.id,routeId:m.tradeRouteId,
     side,qty:q,type:'market',validity:'IOC',price:0,
   };
-  if(stopLoss!=null){body.stopLoss=Number(stopLoss);body.stopLossType='absolute';}
-  if(takeProfit!=null){body.takeProfit=Number(takeProfit);body.takeProfitType='absolute';}
+  stopLoss=px(stopLoss);body.stopLoss=stopLoss;body.stopLossType='absolute';
+  if(takeProfit!=null&&isFinite(Number(takeProfit))){takeProfit=px(takeProfit);body.takeProfit=takeProfit;body.takeProfitType='absolute';}
   const j=await api(`/trade/accounts/${session.accountId}/orders`,{method:'POST',body});
   tlBustPositions();
   return{orderId:j.d?.orderId,qty:q,side,symbol,stopLoss,takeProfit};
@@ -339,8 +344,8 @@ export async function tlClosePosition(positionId,qty=0){
 export async function tlModifyPosition(positionId,{stopLoss,takeProfit}={}){
   await ensureAccount();
   const body={};
-  if(stopLoss!==undefined)body.stopLoss=stopLoss===null?null:Number(stopLoss);
-  if(takeProfit!==undefined)body.takeProfit=takeProfit===null?null:Number(takeProfit);
+  if(stopLoss!==undefined){body.stopLoss=stopLoss===null?null:Number(stopLoss);if(stopLoss!==null)body.stopLossType='absolute';}
+  if(takeProfit!==undefined){body.takeProfit=takeProfit===null?null:Number(takeProfit);if(takeProfit!==null)body.takeProfitType='absolute';}
   await api(`/trade/positions/${positionId}`,{method:'PATCH',body});
   tlBustPositions();
   return{modified:positionId};

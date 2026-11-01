@@ -11,6 +11,7 @@ const { reconcileOpenTrades, formatTradeRecord, recordTradeOpen, allTrades, TRAD
 const { orderRejected, araNote, tradeOpened, addedOn } = require('./talonAlerts');
 const { pushAlert } = require('./pushSender');
 const { watchTick, systemFault, systemOk } = require('./talonWatch');
+const quick = require('./talonQuick');
 
 let busy = false;
 let warnedDisconnected = false;
@@ -92,6 +93,10 @@ async function tick({ force = false } = {}) {
       .catch((e) => { console.error('talon-autotrade: add-on pass failed —', e.message); systemFault('add-on pass', e.message); });
     // Anything unexpected (trade near its stop, spike, broken call, no stop) -> A.R.A.
     await watchTick({ marketOpen }).catch((e) => console.error('talon-watch failed —', e.message));
+    // Quick 5m scalps — their own playbook and limits (server/talonQuick.js),
+    // checked on every 5m close; the brain is only called when the filter fires.
+    await quick.quickTick({ marketOpen }).then(() => systemOk('quick-scalp pass'))
+      .catch((e) => { console.error('talon-quick failed —', e.message); systemFault('quick-scalp pass', e.message); });
     if (!due) return { skipped: 'not due yet' };
 
     // Gold and Bitcoin only — the app's auto_trade_symbols setting is ignored.
@@ -123,7 +128,7 @@ async function tick({ force = false } = {}) {
         for (const id of dec.breakevenIds) {
           const pos = positions.find((p) => String(p.id) === String(id));
           if (!pos || Number(pos.unrealizedPl) <= 0) continue;
-          try { await tlModifyPosition(id, { stopLoss: Number(pos.avgPrice) }); console.log(`talon-autotrade: #${id} ${sym} stop -> break-even`); }
+          try { await tlModifyPosition(id, { stopLoss: Number(pos.avgPrice), symbol: sym }); console.log(`talon-autotrade: #${id} ${sym} stop -> break-even`); }
           catch (e) { console.error(`talon-autotrade: break-even #${id} failed —`, e.message); }
         }
       }
@@ -248,7 +253,8 @@ const addTried = new Map(); // setup key -> highest step attempted
 const addPeak = new Map(); // setup key -> best price seen (in its direction)
 const addTrough = new Map(); // setup key -> deepest pullback price since that best price
 async function addOnEntries(marketOpen) {
-  const mine = (await allTrades()).filter((t) => t.auto);
+  // Quick scalps never get add-ons — they're in and out on the 5m.
+  const mine = (await allTrades()).filter((t) => t.auto && t.setup !== 'quick');
   const groups = {};
   for (const t of mine) { const k = t.setup_id || t.pair_id || t.sync_id; (groups[k] || (groups[k] = [])).push(t); }
   for (const [key, g] of Object.entries(groups)) {
@@ -325,6 +331,7 @@ async function status() {
     marketOpen: fxOpen(),
     lastCycleAt: last || null,
     lastCycle,
+    quickScalps: quick.status(),
     lastError,
   };
 }

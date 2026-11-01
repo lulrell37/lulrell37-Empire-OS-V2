@@ -53,6 +53,7 @@ async function nearStops(open, live) {
   const groups = {};
   for (const t of open) {
     if (!live(t.symbol)) continue;
+    if (t.setup === 'quick') continue; // 5m scalps with tight stops — too noisy to relay
     const entry = Number(t.entry_fill ?? t.entry_ref), stop = Number(t.stop_loss);
     if (!isFinite(entry) || !isFinite(stop) || entry === stop) continue;
     const k = `${t.setup_id || t.pair_id || t.sync_id}:${stop}`;
@@ -131,10 +132,12 @@ async function missingStops(open) {
     if (sl != null && sl !== '' && String(sl) !== '0') continue;
     const opened = Number(p.openDate) || Date.parse(p.openDate || '') || 0;
     if (opened && Date.now() - opened < 2 * 60e3) continue; // stop may still be attaching
+    // His own positions get their stop re-attached by the journal (ensureStop
+    // in tradeJournal.js), which says so itself.
+    if (open.some((t) => String(t.position_id) === String(p.id))) continue;
     if (!once(`nostop:${p.id}`)) continue;
     const sym = String(idToSym[String(p.tradableInstrumentId)] || '').toUpperCase() || 'an instrument';
-    const ours = open.some((t) => String(t.position_id) === String(p.id));
-    relay(`🚨 **T.A.L.O.N. → A.R.A.: a position has NO stop on it.** ${String(p.side).toUpperCase()} ${p.qty} ${nameOf(sym)} @ ${p.avgPrice} (#${p.id}), open P/L ${p.unrealizedPl}.${ours ? '' : ' It isn\'t one of mine.'}\n`
+    relay(`🚨 **T.A.L.O.N. → A.R.A.: a position has NO stop on it.** ${String(p.side).toUpperCase()} ${p.qty} ${nameOf(sym)} @ ${p.avgPrice} (#${p.id}), open P/L ${p.unrealizedPl}. It isn't one of mine (opened by hand or from the app).\n`
       + `Nothing protects it if price runs. Put a stop on it in TradeLocker, or close it.`, false);
   }
 }
