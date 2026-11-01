@@ -216,7 +216,14 @@ prediction for the next several hours (target and invalidation levels) and how
 our open positions look. She sends it on her bot like the trade alerts and it's
 saved to her `persona_memory`; her `[TALON_UPDATE]` gets one on demand, and the
 morning brief carries one too (`talonSection` in `server/morningBrief.js`). A cycle where nothing could be decided (credits out, no quotes) alerts
-once instead of only logging. The cron runs on any of the Claude subscription,
+once instead of only logging. On every 5-min tick `server/talonWatch.js` (no AI
+calls, `TALON_WATCH=off` to stop) has him relay anything unexpected to A.R.A.,
+once each: a setup 75%+ of the way to its stop, a 15m candle over 2× the 15m
+ATR14 on gold or Bitcoin, price through the invalidation level of his last
+market update (the update ends in a `LEVELS:` JSON line, stripped and saved to
+`app_settings.talon_update_levels`), a position with no stop, and the loop
+itself failing (`systemFault`/`systemOk`). `tradeClosed` flags a close nowhere
+near the stop, target or break-even as one he didn't make. The cron runs on any of the Claude subscription,
 `ANTHROPIC_API_KEY` or `XAI_API_KEY` (his brain is `claudeText`'s chain). W.I.R.E.'s
 8:30 AM ET data desk (`runEconDesk` in `server/newsWire.js`, `ECON_DESK=off` to
 stop) reads CPI/jobs/claims/etc. vs forecast and hands a gold BUY/SELL to

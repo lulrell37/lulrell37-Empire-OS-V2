@@ -10,6 +10,7 @@ const { autoTradeDecision, guardStop, SYMBOLS } = require('./talonBrain');
 const { reconcileOpenTrades, formatTradeRecord, recordTradeOpen, allTrades, TRADER_ID } = require('./tradeJournal');
 const { orderRejected, araNote, tradeOpened, addedOn } = require('./talonAlerts');
 const { pushAlert } = require('./pushSender');
+const { watchTick, systemFault, systemOk } = require('./talonWatch');
 
 let busy = false;
 let warnedDisconnected = false;
@@ -83,9 +84,14 @@ async function tick({ force = false } = {}) {
     // Every 5-min tick, not just on a decision cycle: closes (stops, targets)
     // reach A.R.A.'s Telegram alerts within minutes, and open setups get their
     // add-ons on the way to target. No AI calls in here.
-    await reconcileOpenTrades().catch(() => {});
+    const rec = await reconcileOpenTrades().catch((e) => ({ error: e.message }));
+    if (rec?.error) systemFault('trade journal check', rec.error === 'positions' ? 'couldn\'t read open positions from TradeLocker' : rec.error);
+    else systemOk('trade journal check');
     const marketOpen = fxOpen();
-    await addOnEntries(marketOpen).catch((e) => console.error('talon-autotrade: add-on pass failed —', e.message));
+    await addOnEntries(marketOpen).then(() => systemOk('add-on pass'))
+      .catch((e) => { console.error('talon-autotrade: add-on pass failed —', e.message); systemFault('add-on pass', e.message); });
+    // Anything unexpected (trade near its stop, spike, broken call, no stop) -> A.R.A.
+    await watchTick({ marketOpen }).catch((e) => console.error('talon-watch failed —', e.message));
     if (!due) return { skipped: 'not due yet' };
 
     // Gold and Bitcoin only — the app's auto_trade_symbols setting is ignored.
@@ -187,11 +193,13 @@ async function tick({ force = false } = {}) {
       if (warnedFailing) araNote('✅ T.A.L.O.N. is scanning and deciding again.');
       warnedFailing = '';
     }
+    systemOk('trade loop');
     console.log(`talon-autotrade: scanned ${scanned}/${syms.length}${snapFails ? `, ${snapFails} snapshot fail` : ''}${decFails ? `, ${decFails} decision fail` : ''}${orderFails ? `, ${orderFails} order fail` : ''}, ${entered} entered, ${closed} closed (${openCount} open)`);
     return lastCycle;
   } catch (e) {
     console.error('talon-autotrade: cycle crashed', e.message);
     lastError = `cycle crashed: ${e.message}`;
+    systemFault('trade loop', `the cycle crashed — ${e.message}`);
     return { skipped: lastError };
   } finally {
     busy = false;
