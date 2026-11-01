@@ -209,7 +209,7 @@ async function newsTradeHandoff(impacts) {
     for (let copy = 0, n = entryCopies(imp.symbol); copy < n; copy++) {
       try {
         const s = await tlPlaceOrder({ symbol: imp.symbol, side: imp.side, qty: MAX_QTY, stopLoss: lv.stopLoss, takeProfit: lv.takeProfit });
-        await recordTradeOpen({ symbol: imp.symbol, side: s.side, qty: s.qty, entry: price, stopLoss: lv.stopLoss, takeProfit: lv.takeProfit,
+        await recordTradeOpen({ symbol: imp.symbol, side: s.side, qty: s.qty, entry: price, stopLoss: s.stopLoss ?? lv.stopLoss, takeProfit: lv.takeProfit,
           rationale: why, orderId: s.orderId, setup: 'news', auto: true, setupId, alert: false });
         r = r || s; copies++;
         console.log(`newswire->talon: ${s.side.toUpperCase()} ${s.qty} ${imp.symbol} @ ~${price ?? 'mkt'} · SL ${lv.stopLoss} TP ${lv.takeProfit} — ${imp.thesis.slice(0, 80)}`);

@@ -3,6 +3,7 @@
 // unattended: by server/talonAutoTrade.js's own scan loop, and by
 // server/newsWire.js's news-driven hand-off.
 const { claudeText } = require('./llm');
+const { minStopDist } = require('./tradeLocker');
 
 function parseJsonBlock(raw) {
   const m = String(raw || '').match(/\{[\s\S]*\}/);
@@ -68,14 +69,13 @@ Reply with ONLY a JSON object, no prose, no code fence:
 // 1R beside a 3R swing, or 2R alone) the trade is skipped rather than taken
 // on a worse ratio. Returns the levels to send,
 // or { skip } with the reason.
-const STOP_FLOOR = { XAUUSD: (px) => 10, BTCUSD: (px) => px * 0.008 };
 function guardStop({ symbol, side, entry, stopLoss, takeProfit, swingTakeProfit, snap }) {
   const sl = Number(stopLoss), tp = Number(takeProfit), px = Number(entry);
   if (!isFinite(sl) || !isFinite(tp) || !isFinite(px) || !px) return { skip: 'missing entry/stop/target' };
   const dir = side === 'buy' ? 1 : -1;
   if ((px - sl) * dir <= 0 || (tp - px) * dir <= 0) return { skip: `stop ${sl} / target ${tp} on the wrong side of ${px}` };
   const atr = Number(snap?.candles?.['1H']?.atr14) || 0;
-  const minDist = Math.max((STOP_FLOOR[symbol] || ((p) => p * 0.004))(px), 1.2 * atr);
+  const minDist = minStopDist(symbol, px, atr);
   let dist = Math.abs(px - sl);
   let stop = sl, widened = false;
   if (dist < minDist) { dist = minDist; stop = +(px - dir * minDist).toFixed(2); widened = true; }

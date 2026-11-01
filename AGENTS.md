@@ -198,8 +198,9 @@ cap on adds per setup, never within 1R of the target. It runs on every 5-min tic
 **Quick scalps** (`server/talonQuick.js`, `TALON_QUICK=off` to stop) are a separate 5m desk on the same
 5-min tick: a coded filter (1H + 15m trend agree, pullback into the 5m EMA20, a closed 5m rejection
 bar) and only when it fires one AI call to confirm and pick the target (1.5R min, capped at 3R).
-Stop past the 5-bar swing + 0.3 ATR, min gold $3 / Bitcoin 0.3% and 1× 5m ATR14, over gold $8 /
-Bitcoin 0.8% → skip; stop to break-even at +1R. One 0.02 position (`setup: 'quick'`), one open per
+Stop beyond the key level, sized for the 5m: past the zone (5-bar swing, 5m EMA20, a round number
+with them) + one 5m ATR, min gold $3 / Bitcoin 0.3%; over gold $8 / Bitcoin 0.8% → skip; stop to
+break-even at +1R. One 0.02 position (`setup: 'quick'`), one open per
 market, never against an open position there; gold 3 AM-12 PM ET only, both off 8:25-8:45 AM ET
 weekdays; 2 quick losses in a row → 1 h off that market, 3 in a day → done for the day. No add-ons,
 not doubled, not counted in `MAX_PAIRS`, skipped by the near-stop watch.
@@ -232,6 +233,10 @@ market update (the update ends in a `LEVELS:` JSON line, stripped and saved to
 `app_settings.talon_update_levels`), a position with no stop, and the loop
 itself failing (`systemFault`/`systemOk`). `tradeClosed` flags a close nowhere
 near the stop, target or break-even as one he didn't make.
+**The main stop rule's minimum is on every order except quick scalps and add-ons** — gold $10 /
+Bitcoin 0.8% and 1.2× the 1H ATR14 from entry (`minStopDist`, server and app `tradeLocker.js`).
+Setups and news trades size their stop to it up front, and both `tlPlaceOrder`s widen any closer
+stop as a backstop (chat trades say so); quick scalps and add-ons keep their own stops (`minStop: false`).
 Stops are never optional: both `tlPlaceOrder`s round stop/target to the
 instrument's `pricePrecision` (an off-tick stop can be dropped while the
 market order fills), the app's refuses an order with no stop, and modifies send
