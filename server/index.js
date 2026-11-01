@@ -218,6 +218,17 @@ function startTalonAutoTradeCron() {
         .catch((e) => console.error('trade recap failed:', e.message));
     }, { timezone: 'America/New_York' });
   }
+  // T.A.L.O.N.'s market update relayed through A.R.A. (read, prediction,
+  // positions). TALON_UPDATES=off to stop; TALON_UPDATE_HOURS=9,12,15,18 (ET, on the half hour).
+  if (process.env.TALON_UPDATES !== 'off') {
+    const hours = (process.env.TALON_UPDATE_HOURS || '9,12,15,18').replace(/[^0-9,]/g, '') || '9,12,15,18';
+    cron.schedule(`30 ${hours} * * *`, () => {
+      require('./talonUpdate').runMarketUpdate()
+        .then((r) => console.log('talon market update:', JSON.stringify(r)))
+        .catch((e) => console.error('talon market update failed:', e.message));
+    }, { timezone: 'America/New_York' });
+    console.log(`T.A.L.O.N. market update cron scheduled (:30 past ${hours} ET)`);
+  }
 }
 
 // W.I.R.E. news desk — ports src/services/newsWire.js's setInterval(10min).

@@ -324,4 +324,4 @@ function cronEnabled() {
   return !!(process.env.ANTHROPIC_API_KEY || process.env.XAI_API_KEY || require('./claudeSub').subscriptionEnabled());
 }
 
-module.exports = { tick, enableOnce, status, cronEnabled };
+module.exports = { tick, enableOnce, status, cronEnabled, fxOpen };
