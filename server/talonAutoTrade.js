@@ -5,7 +5,7 @@
 // is that the TradeLocker session now survives between cycles (a long-lived
 // process instead of a memory-only session that resets on every cold app open).
 const { getSetting, setSetting, saveMemory } = require('./syncStore');
-const { tlStatus, tlConnect, tlSnapshot, tlFormatSnapshot, tlPlaceOrder, tlModifyPosition, tlPositions, tlInstrumentsById, tlQuote, MAX_QTY, ENTRY_COPIES } = require('./tradeLocker');
+const { tlStatus, tlConnect, tlSnapshot, tlFormatSnapshot, tlPlaceOrder, tlModifyPosition, tlPositions, tlInstrumentsById, tlQuote, MAX_QTY, entryCopies } = require('./tradeLocker');
 const { autoTradeDecision, guardStop, SYMBOLS } = require('./talonBrain');
 const { reconcileOpenTrades, formatTradeRecord, recordTradeOpen, allTrades, TRADER_ID } = require('./tradeJournal');
 const { orderRejected, araNote, tradeOpened, addedOn } = require('./talonAlerts');
@@ -132,15 +132,17 @@ async function tick({ force = false } = {}) {
         if (lv.skip) { console.log(`talon-autotrade: skipped ${sym} ${dec.side} — ${lv.skip}`); decisions.push(`${sym}: skipped — ${lv.skip}`); continue; }
         if (lv.widened) console.log(`talon-autotrade: ${sym} ${lv.note}`);
         if (lv.swingNote) console.log(`talon-autotrade: ${sym} ${lv.swingNote}`);
-        // The setup goes in ENTRY_COPIES times (fewer if that would top MAX_PAIRS). Each copy is a scalp (to the
+        // The setup goes in entryCopies(sym) times — once on gold, twice on Bitcoin (fewer if that would top MAX_PAIRS). Each copy is a scalp (to the
         // 15m target) and, when there's a valid 4H target, a swing (same stop)
         // linked to it by its own pairId — the journal moves that swing's stop
         // to break-even once its scalp pays. setupId ties every copy together
         // for the add-ons.
         const paired = lv.swingTakeProfit != null;
         const held = paired ? await openPairs(sym).catch(() => 0) : 0;
-        const slots = paired ? Math.min(ENTRY_COPIES, MAX_PAIRS - held) : ENTRY_COPIES;
-        if (slots <= 0) { console.log(`talon-autotrade: skipped ${sym} ${dec.side} — ${held} scalp/swing pairs already open (cap ${MAX_PAIRS})`); decisions.push(`${sym}: skipped — ${held}/${MAX_PAIRS} pairs already open`); continue; }
+        const cap = maxPairs(sym);
+        const copiesFor = entryCopies(sym);
+        const slots = paired ? Math.min(copiesFor, cap - held) : copiesFor;
+        if (slots <= 0) { console.log(`talon-autotrade: skipped ${sym} ${dec.side} — ${held} scalp/swing pairs already open (cap ${cap})`); decisions.push(`${sym}: skipped — ${held}/${cap} pairs already open`); continue; }
         const why = dec.rationale || 'auto-trade';
         const setupId = `${sym}-${Date.now()}`;
         let r = null, scalps = 0, swings = 0;
@@ -198,11 +200,13 @@ async function tick({ force = false } = {}) {
 
 async function liveArmed() { return (await getSetting('talon_live', '0')) === '1'; }
 
-// At most MAX_PAIRS scalp + swing pairs open per market at once. A pair
+// At most MAX_PAIRS[symbol] scalp + swing pairs open per market at once
+// (gold 1, Bitcoin 2). A pair
 // counts only while its scalp is open — once the scalp pays, the swing riding
 // on alone frees the slot. Lone scalps (no swing), news trades and add-ons
 // don't count.
-const MAX_PAIRS = 2;
+const MAX_PAIRS = { XAUUSD: 1, BTCUSD: 2 };
+const maxPairs = (sym) => MAX_PAIRS[sym] ?? 2;
 async function openPairs(sym) {
   const keys = new Set();
   for (const t of await allTrades()) {

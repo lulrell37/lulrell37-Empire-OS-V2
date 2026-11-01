@@ -181,9 +181,9 @@ little. Every setup goes in as a scalp + swing pair (two 0.02 positions, same
 entry and stop; scalp → next 15m level at 1R+, swing → next 4H level at 3R+;
 no valid swing → scalp alone, which needs 2R;
 linked by `pair_id` in `trades`); when the scalp pays, `reconcileOpenTrades`
-moves the swing's stop to break-even. Every trade (setups and news trades) is
-entered `ENTRY_COPIES` = 2 times, each scalp + swing copy with its own `pair_id`,
-capped at `MAX_PAIRS` = 2 scalp + swing pairs open per market at once (a pair
+moves the swing's stop to break-even. Every Bitcoin trade (setups and news trades) is
+entered `ENTRY_COPIES` = 2 times (gold once — `entryCopies()` in `server/tradeLocker.js`), each scalp + swing copy with its own `pair_id`,
+capped by `MAX_PAIRS` at 1 scalp + swing pair open at once on gold (so a gold paired setup goes in once) and 2 on Bitcoin (a pair
 counts only while its scalp is open — once the scalp pays, the swing alone
 frees the slot; a setup that would top the cap goes in with fewer copies or is
 skipped). Lone scalps, news trades and add-ons don't count toward it. On the way to the target he
