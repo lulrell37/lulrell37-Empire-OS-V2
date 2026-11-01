@@ -209,7 +209,13 @@ rejected order and a 9 PM ET recap go to the owner from A.R.A.'s Telegram bot
 (`server/talonAlerts.js`, also logged in her `tg_messages` history) — each as
 a voice note from her, then the text. T.A.L.O.N. places his own orders; A.R.A.'s
 `[TALON_RUN]` (and `/talon` on her bot) runs a scan now and reports what he
-decided. A cycle where nothing could be decided (credits out, no quotes) alerts
+decided. At 9:30 AM / 12:30 PM / 3:30 PM / 6:30 PM ET (`TALON_UPDATE_HOURS`, on the half hour,
+`TALON_UPDATES=off` to stop) he relays a market update to A.R.A.
+(`server/talonUpdate.js`, one AI call, never trades): per market his read, his
+prediction for the next several hours (target and invalidation levels) and how
+our open positions look. She sends it on her bot like the trade alerts and it's
+saved to her `persona_memory`; her `[TALON_UPDATE]` gets one on demand, and the
+morning brief carries one too (`talonSection` in `server/morningBrief.js`). A cycle where nothing could be decided (credits out, no quotes) alerts
 once instead of only logging. The cron runs on any of the Claude subscription,
 `ANTHROPIC_API_KEY` or `XAI_API_KEY` (his brain is `claudeText`'s chain). W.I.R.E.'s
 8:30 AM ET data desk (`runEconDesk` in `server/newsWire.js`, `ECON_DESK=off` to

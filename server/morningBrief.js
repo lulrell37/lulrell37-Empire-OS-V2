@@ -320,6 +320,14 @@ async function hudSection() {
   return [word, verse, fact].join('\n\n');
 }
 
+// T.A.L.O.N.'s market update (same read as his half-hourly relays to A.R.A.):
+// his read and prediction on gold and Bitcoin, and how our positions look.
+async function talonSection() {
+  const label = '📡 T.A.L.O.N. — MARKETS & OUR POSITIONS';
+  const u = await require('./talonUpdate').buildUpdate();
+  return `${label}\n${u.body || `(no update — ${u.skipped})`}`;
+}
+
 async function section(label, fn) {
   try { return await fn(); }
   catch (e) {
@@ -333,16 +341,17 @@ async function buildBrief() {
   const linked = await google.googleLinked().catch(() => false);
   const noGoogle = (label) => async () => `${label}\n(Google isn't linked on the server — connect it in the app's Settings.)`;
   const dateLine = new Date().toLocaleDateString('en-US', { timeZone: TZ, weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
-  const [weather, cal, mail, news, gold, trending, hud] = await Promise.all([
+  const [weather, cal, mail, news, gold, talon, trending, hud] = await Promise.all([
     section('🌦 WEATHER', () => weatherSection()),
     section('📅 CALENDAR — TODAY', linked ? () => calendarSection(google) : noGoogle('📅 CALENDAR — TODAY')),
     section('📧 EMAIL', linked ? () => emailSection(google) : noGoogle('📧 EMAIL')),
     section('📰 NEWS', newsSection),
     section('🥇 GOLD WATCH — TODAY', goldWatchSection),
+    section('📡 T.A.L.O.N. — MARKETS & OUR POSITIONS', talonSection),
     section('🔥 TRENDING ON X', trendingSection),
     section('📖 WORD / VERSE / FACT', hudSection),
   ]);
-  return [`Good morning, Mr. Burrus. Here's your brief.\n\n🗓 ${dateLine}`, weather, cal, mail, news, gold, trending, hud].join('\n\n━━━━━━━━━━\n\n');
+  return [`Good morning, Mr. Burrus. Here's your brief.\n\n🗓 ${dateLine}`, weather, cal, mail, news, gold, talon, trending, hud].join('\n\n━━━━━━━━━━\n\n');
 }
 
 // A.R.A. reads it to him too, like every other Telegram reply. The text brief is
@@ -352,7 +361,7 @@ async function buildBrief() {
 async function spokenScript(text) {
   // Her own words, so Grok (her model) writes it — never Claude.
   return require('./llm').chatAs('xai', 'grok-4',
-    'You are A.R.A., Mr. Burrus\'s personal assistant, turning his written morning brief into what you\'ll say out loud as a voice note. Plain spoken sentences only — no lists, symbols, emoji or headings. About 2 to 3 minutes (350-450 words). Keep the brief\'s order and cover every section: the date; the weather as a story of the day (high and low, how it changes morning to evening, when rain is most likely) rather than every hour; each calendar event with its time; how many unread emails and the ones that matter; the top one or two stories from each news desk; the gold watch — every gold-moving event today with its time and what a hot or soft number would do to gold (or that it is a quiet day for gold); the three or four most interesting things trending on X and why; then the word of the day with its meaning and the example sentence, the verse read in full with its reference, and the fact. Use only what is in the brief — never add facts. Soft, warm, slightly seductive and playful, slightly flirty with a touch of unhinged (the odd cheeky line), but keep it moving. Write the emotion in as lowercase performance cues in square brackets every few sentences, never stacked — [softly] [warmly] [whispers] [breathy] [teasing] [laughs] [giggles] [sighs] [playfully] [excited] — and use ... for lingering pauses.',
+    'You are A.R.A., Mr. Burrus\'s personal assistant, turning his written morning brief into what you\'ll say out loud as a voice note. Plain spoken sentences only — no lists, symbols, emoji or headings. About 2 to 3 minutes (350-450 words). Keep the brief\'s order and cover every section: the date; the weather as a story of the day (high and low, how it changes morning to evening, when rain is most likely) rather than every hour; each calendar event with its time; how many unread emails and the ones that matter; the top one or two stories from each news desk; the gold watch — every gold-moving event today with its time and what a hot or soft number would do to gold (or that it is a quiet day for gold); T.A.L.O.N.\'s market read — where he predicts gold and Bitcoin head next with his levels, and how our open positions look; the three or four most interesting things trending on X and why; then the word of the day with its meaning and the example sentence, the verse read in full with its reference, and the fact. Use only what is in the brief — never add facts. Soft, warm, slightly seductive and playful, slightly flirty with a touch of unhinged (the odd cheeky line), but keep it moving. Write the emotion in as lowercase performance cues in square brackets every few sentences, never stacked — [softly] [warmly] [whispers] [breathy] [teasing] [laughs] [giggles] [sighs] [playfully] [excited] — and use ... for lingering pauses.',
     text,
     { maxTokens: 1200, fallback: false },
   );

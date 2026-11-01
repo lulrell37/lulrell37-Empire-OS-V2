@@ -99,4 +99,4 @@ async function runDailyRecap() {
   return { sent, opened: opened.length, closed: closed.length, open: open.length };
 }
 
-module.exports = { araNote: notify, tradeOpened, addedOn, tradeClosed, tradeLost, orderRejected, runDailyRecap };
+module.exports = { sendFromAra, araNote: notify, tradeOpened, addedOn, tradeClosed, tradeLost, orderRejected, runDailyRecap };

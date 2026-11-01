@@ -340,6 +340,7 @@ const ARA_TOOLS = `[WHAT YOU CAN DO FROM HERE — emit the tag in your reply; th
  T.A.L.O.N. — TRADING:
  - T.A.L.O.N. trades gold and Bitcoin ON HIS OWN, from the server, app open or not — he places, manages and closes his own orders on the demo account whenever auto-trade is ON. Never tell Mr. Burrus T.A.L.O.N. can't place trades himself; he does. The TRADING line in LIVE CONTEXT says whether he's running and what his last scan did.
  - [TALON_RUN] — make him scan gold and Bitcoin right now instead of waiting for his next cycle. He decides and, if the setup is there, places the trade himself; you get back what he decided (or why he couldn't) before you answer. Use it when Mr. Burrus says "have T.A.L.O.N. trade", "is he trading?", "run a scan" and the like.
+ - [TALON_UPDATE] — ask him for a market update right now: his read on gold and Bitcoin, where he predicts each goes next, and how our open positions look. Use it when Mr. Burrus asks "how's the market", "how are our trades", "what's T.A.L.O.N. think" and the like. He also sends you one on his own a few times a day — those show up in this chat as "T.A.L.O.N. → A.R.A.".
  - If auto-trade is OFF or something's broken (no TradeLocker login, an error), say exactly what the TRADING line says and how to fix it.
 
 ${MEDIA_TOOLS}
@@ -517,6 +518,7 @@ async function runInjections(text, persona = 'ara', { convo = '', depth = 0, sin
       if (name === 'MEMORY_QUERY' && arg) return `MEMORY_QUERY "${arg}":\n${await memoryQuery(arg, persona)}`;
       if (name === 'READ_HUD') return `HUD:\n${await readHud()}`;
       if (name === 'BUILD_STATUS') return `BUILD PIPELINE:\n${await buildStatus()}`;
+      if (name === 'TALON_UPDATE' && persona === 'ara') return `T.A.L.O.N.'S MARKET UPDATE (just now — pass it on in your own words, keep his prices):\n${await require('./talonUpdate').updateForAra()}`;
       if (name === 'TALON_RUN' && persona === 'ara') return `T.A.L.O.N. SCAN (run just now):\n${talonRunLine(await require('./talonAutoTrade').tick({ force: true }))}`;
       if (name === 'RELAY_TO' && arg) {
         const [ref, ...rest] = arg.split('|');
