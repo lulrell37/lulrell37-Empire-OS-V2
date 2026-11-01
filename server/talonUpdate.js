@@ -9,7 +9,7 @@
 // One AI call per update; no trading happens in here — the update never
 // places, closes or moves anything.
 const { claudeText } = require('./llm');
-const { saveMemory } = require('./syncStore');
+const { saveMemory, setSetting } = require('./syncStore');
 const { tlStatus, tlConnect, tlSnapshot, tlFormatSnapshot, tlPositions, tlInstrumentsById, tlAccountState } = require('./tradeLocker');
 const { allTrades } = require('./tradeJournal');
 const { SYMBOLS, STRATEGY } = require('./talonBrain');
@@ -62,12 +62,23 @@ async function buildUpdate() {
 For each market: one line on where price is and the trend on 1D/4H; your PREDICTION for the next several hours — direction, the level you expect it to reach, and the level that would prove you wrong; and how OUR positions there look right now (in profit or under water, how close to stop/target, what you expect from them). If we hold nothing there, say whether a setup is forming and at what level you'd want in.
 End with one line on the account (open P/L).
 Plain text, short, confident, specific prices — no hedging walls, no disclaimers, no markdown headers. Bold (**like this**) is fine for the market names. Under 170 words.
+After the update, add ONE last line, exactly: LEVELS: {"XAUUSD":{"bias":"up","target":0,"invalidation":0},"BTCUSD":{...}} — JSON with each market you read, bias "up" or "down", and the target and invalidation prices you just gave (numbers only). It's stripped before he sees it and used to tell him if your call breaks.
 
 YOUR PLAYBOOK:
 ${STRATEGY}`;
   const user = `${blocks.join('\n\n')}${offScan ? `\n\nPOSITIONS ON MARKETS NOT SCANNED NOW:\n${offScan}` : ''}${closedNote}\n\nACCOUNT: ${state ? `balance ${state.balance}, open P/L ${state.openNetPnL}, open positions ${state.positionsCount}` : 'unavailable'}`;
-  const body = String(await claudeText(sys, [{ role: 'user', content: user }], { maxTokens: 600 }) || '').trim();
+  const raw = String(await claudeText(sys, [{ role: 'user', content: user }], { maxTokens: 700 }) || '').trim();
+  // Pull the machine-read LEVELS line off; talonWatch.js alerts when price
+  // crosses one of these invalidation levels.
+  const m = raw.match(/^\s*LEVELS:\s*(\{.*\})\s*$/m);
+  const body = raw.replace(/^\s*LEVELS:.*$/m, '').trim();
   if (!body) return { skipped: 'no read came back' };
+  if (m) {
+    try {
+      const levels = JSON.parse(m[1]);
+      await setSetting('talon_update_levels', JSON.stringify({ at: Date.now(), levels })).catch(() => {});
+    } catch {}
+  }
   const live = tlStatus().env === 'live' ? ' · 🔴 LIVE' : '';
   return { text: `📡 **T.A.L.O.N. → A.R.A. — market update**${live}\n${body}`, body };
 }

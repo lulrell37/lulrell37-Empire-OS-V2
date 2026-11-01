@@ -8,7 +8,7 @@
 // which either already ran on-device or doesn't apply to rows this cron creates.
 const crypto = require('crypto');
 const { syncedRows, upsertSyncRow } = require('./syncStore');
-const { tlPositions, tlOrdersHistory, tlInstrumentsById, tlModifyPosition } = require('./tradeLocker');
+const { tlPositions, tlOrdersHistory, tlInstrumentsById, tlModifyPosition, tlQuote, tlClosePosition } = require('./tradeLocker');
 const alerts = require('./talonAlerts');
 
 const TRADER_ID = 'talon';
@@ -72,6 +72,37 @@ async function recordTradeOpen({ symbol, side, qty, entry, stopLoss, takeProfit,
 
 // --- reconciliation ------------------------------------------------------
 
+// A position of his that's open on the broker with no stop attached (the stop
+// leg got dropped, or a modify cleared it) gets its journal stop put back.
+// If price is already through that stop, the stop would have taken it out —
+// so it's closed instead. Retried every 5-min tick until it sticks; A.R.A.
+// hears once per position when it's fixed and once if it keeps failing.
+const hasStop = (p) => p.stopLossId != null && p.stopLossId !== '' && String(p.stopLossId) !== '0';
+const stopFixTries = new Map(); // position id -> attempts
+async function ensureStop(t, p) {
+  if (hasStop(p)) { stopFixTries.delete(String(p.id)); return; }
+  const stop = num(t.stop_loss);
+  if (stop == null) return;
+  const id = String(p.id), tries = (stopFixTries.get(id) || 0) + 1;
+  stopFixTries.set(id, tries);
+  const side = String(t.side).toUpperCase();
+  try {
+    const q = await tlQuote(t.symbol);
+    const price = num(t.side === 'buy' ? (q.bid ?? q.mid) : (q.ask ?? q.mid));
+    if (price != null && (t.side === 'buy' ? price <= stop : price >= stop)) {
+      await tlClosePosition(p.id);
+      alerts.araNote(`🚨 **T.A.L.O.N. → A.R.A.: my ${side} ${t.symbol} (#${p.id}) was open with NO stop**, and price (${price}) is already past where it should have been (${stop}). I closed it — that's what the stop would have done.`);
+    } else {
+      await tlModifyPosition(p.id, { stopLoss: stop, symbol: t.symbol });
+      alerts.araNote(`🛡️ **T.A.L.O.N. → A.R.A.: my ${side} ${t.symbol} (#${p.id}) was open with NO stop.** I put it back at ${stop}.`);
+    }
+    stopFixTries.delete(id);
+  } catch (e) {
+    console.error(`trade-journal: stop fix #${p.id} failed —`, e.message);
+    if (tries === 2) alerts.araNote(`🚨 **T.A.L.O.N. → A.R.A.: my ${side} ${t.symbol} (#${p.id}) has NO stop and I can't attach one** (${String(e.message).slice(0, 160)}). Put a stop at ${stop} in TradeLocker, or close it. I'll keep trying every 5 minutes.`);
+  }
+}
+
 async function reconcileOpenTrades() {
   const trades = await allTrades();
   const open = trades.filter((t) => t.status === 'open');
@@ -114,6 +145,7 @@ async function reconcileOpenTrades() {
       if (cand) {
         boundIds.add(String(cand.id));
         await upsertSyncRow('trades', t.sync_id, { ...t, position_id: String(cand.id), entry_fill: num(cand.avgPrice), last_unrealized: num(cand.unrealizedPl), misses: 0, updated_at: now });
+        await ensureStop(t, cand);
         continue;
       }
       const misses = (t.misses || 0) + 1;
@@ -131,6 +163,7 @@ async function reconcileOpenTrades() {
     const live = posById[String(t.position_id)];
     if (live) {
       await upsertSyncRow('trades', t.sync_id, { ...t, last_unrealized: num(live.unrealizedPl), entry_fill: t.entry_fill ?? num(live.avgPrice), misses: 0, updated_at: now });
+      await ensureStop(t, live);
       continue;
     }
 
@@ -196,7 +229,7 @@ async function reconcileOpenTrades() {
       const be = swing && num(swing.entry_fill) != null ? num(swing.entry_fill) : entry;
       if (swing && swing.position_id && posById[String(swing.position_id)] && be != null) {
         try {
-          await tlModifyPosition(swing.position_id, { stopLoss: be });
+          await tlModifyPosition(swing.position_id, { stopLoss: be, symbol: swing.symbol });
           alerts.araNote(`🔒 Scalp paid — T.A.L.O.N.'s swing ${String(swing.side).toUpperCase()} on ${swing.symbol} now has its stop at break-even (${be}). It can't lose from here; it's riding to ${swing.take_profit}.`);
         } catch (e) { console.error(`trade-journal: swing break-even #${swing.position_id} failed —`, e.message); }
       }
@@ -258,7 +291,7 @@ async function formatTradeRecord() {
       const pl = t.realized_pl != null ? ` ${t.realized_pl >= 0 ? '+' : ''}${t.realized_pl}${t.pl_estimated ? '~' : ''}` : '';
       const rr = t.r_multiple != null ? ` (${t.r_multiple >= 0 ? '+' : ''}${t.r_multiple}R)` : '';
       const rev = t.review ? ` · "${t.review}"` : '';
-      L.push(` • ${t.auto ? '[auto] ' : ''}${t.symbol} ${t.side} — ${tag}${pl}${rr}${rev}`);
+      L.push(` • ${t.auto ? '[auto] ' : ''}${t.symbol} ${t.side}${t.setup && t.setup !== 'other' ? ` ${t.setup}` : ''} — ${tag}${pl}${rr}${rev}`);
     }
   }
   return L.join('\n');

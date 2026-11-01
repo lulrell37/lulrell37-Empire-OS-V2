@@ -17,7 +17,9 @@ const POSITION_COLS = ['id', 'tradableInstrumentId', 'routeId', 'side', 'qty', '
 const RES_MS = { '1m': 60e3, '5m': 300e3, '15m': 900e3, '30m': 1800e3, '1H': 3600e3, '4H': 14400e3, '1D': 86400e3, '1W': 604800e3 };
 
 const MAX_QTY = 0.02; // hard lot cap — enforced on every order
-const ENTRY_COPIES = 2; // every trade T.A.L.O.N. takes goes in this many times
+const ENTRY_COPIES = 2; // every trade T.A.L.O.N. takes goes in this many times…
+const COPIES_BY_SYMBOL = { XAUUSD: 1 }; // …except gold, which goes in once
+const entryCopies = (sym) => COPIES_BY_SYMBOL[String(sym).toUpperCase()] ?? ENTRY_COPIES;
 
 const session = { token: null, refresh: null, exp: 0, env: 'demo', accountId: null, accNum: null, instruments: {}, instrumentList: null, rateLimitedUntil: 0 };
 
@@ -195,7 +197,7 @@ async function tlInstrument(symbol = 'XAUUSD') {
   const routes = inst.routes || [];
   const trade = routes.find((r) => r.type === 'TRADE');
   const info = routes.find((r) => r.type === 'INFO');
-  const meta = { id: inst.tradableInstrumentId, name: inst.name, tradeRouteId: trade?.id, infoRouteId: info?.id, precision: inst.quantityPrecision ?? inst.pricePrecision ?? 2 };
+  const meta = { id: inst.tradableInstrumentId, name: inst.name, tradeRouteId: trade?.id, infoRouteId: info?.id, precision: inst.quantityPrecision ?? inst.pricePrecision ?? 2, pricePrecision: Number.isInteger(inst.pricePrecision) ? inst.pricePrecision : 2 };
   session.instruments[symbol] = meta;
   return meta;
 }
@@ -260,6 +262,11 @@ async function tlOrdersHistory() {
   });
 }
 
+// Stop/target prices go out on the instrument's own price precision — an
+// off-tick level (an AI's 3985.375) can get the stop dropped while the market
+// order still fills.
+const roundPx = (m, v) => +Number(v).toFixed(m?.pricePrecision ?? 2);
+
 async function tlPlaceOrder({ symbol = 'XAUUSD', side, qty = MAX_QTY, stopLoss, takeProfit }) {
   await ensureAccount();
   if (side !== 'buy' && side !== 'sell') throw new Error('side must be buy or sell');
@@ -267,8 +274,8 @@ async function tlPlaceOrder({ symbol = 'XAUUSD', side, qty = MAX_QTY, stopLoss, 
   if (!q) throw new Error('qty must be > 0');
   const m = await tlInstrument(symbol);
   const body = { tradableInstrumentId: m.id, routeId: m.tradeRouteId, side, qty: q, type: 'market', validity: 'IOC', price: 0 };
-  if (stopLoss != null) { body.stopLoss = Number(stopLoss); body.stopLossType = 'absolute'; }
-  if (takeProfit != null) { body.takeProfit = Number(takeProfit); body.takeProfitType = 'absolute'; }
+  if (stopLoss != null && isFinite(Number(stopLoss))) { stopLoss = roundPx(m, stopLoss); body.stopLoss = stopLoss; body.stopLossType = 'absolute'; }
+  if (takeProfit != null && isFinite(Number(takeProfit))) { takeProfit = roundPx(m, takeProfit); body.takeProfit = takeProfit; body.takeProfitType = 'absolute'; }
   const j = await api(`/trade/accounts/${session.accountId}/orders`, { method: 'POST', body });
   tlBustPositions();
   return { orderId: j.d?.orderId, qty: q, side, symbol, stopLoss, takeProfit };
@@ -281,11 +288,18 @@ async function tlClosePosition(positionId, qty = 0) {
   return { closed: positionId };
 }
 
-async function tlModifyPosition(positionId, { stopLoss, takeProfit } = {}) {
+async function tlModifyPosition(positionId, { stopLoss, takeProfit, symbol } = {}) {
   await ensureAccount();
+  const m = symbol ? await tlInstrument(symbol).catch(() => null) : null;
   const body = {};
-  if (stopLoss !== undefined) body.stopLoss = stopLoss === null ? null : Number(stopLoss);
-  if (takeProfit !== undefined) body.takeProfit = takeProfit === null ? null : Number(takeProfit);
+  if (stopLoss !== undefined) {
+    body.stopLoss = stopLoss === null ? null : roundPx(m, stopLoss);
+    if (stopLoss !== null) body.stopLossType = 'absolute';
+  }
+  if (takeProfit !== undefined) {
+    body.takeProfit = takeProfit === null ? null : roundPx(m, takeProfit);
+    if (takeProfit !== null) body.takeProfitType = 'absolute';
+  }
   await api(`/trade/positions/${positionId}`, { method: 'PATCH', body });
   tlBustPositions();
   return { modified: positionId };
@@ -359,8 +373,8 @@ function tlFormatSnapshot(snap) {
 }
 
 module.exports = {
-  MAX_QTY, ENTRY_COPIES,
+  MAX_QTY, ENTRY_COPIES, entryCopies,
   tlConnect, tlStatus, tlAccountState, tlListInstruments, tlInstrumentsById, tlInstrument,
   tlQuote, tlHistory, tlPositions, tlOrdersHistory, tlPlaceOrder, tlClosePosition, tlModifyPosition,
-  tlReset, tlSnapshot, tlFormatSnapshot,
+  tlReset, tlSnapshot, tlFormatSnapshot, summarizeBars,
 };

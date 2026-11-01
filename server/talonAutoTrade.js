@@ -5,11 +5,13 @@
 // is that the TradeLocker session now survives between cycles (a long-lived
 // process instead of a memory-only session that resets on every cold app open).
 const { getSetting, setSetting, saveMemory } = require('./syncStore');
-const { tlStatus, tlConnect, tlSnapshot, tlFormatSnapshot, tlPlaceOrder, tlModifyPosition, tlPositions, tlInstrumentsById, tlQuote, MAX_QTY, ENTRY_COPIES } = require('./tradeLocker');
+const { tlStatus, tlConnect, tlSnapshot, tlFormatSnapshot, tlPlaceOrder, tlModifyPosition, tlPositions, tlInstrumentsById, tlQuote, MAX_QTY, entryCopies } = require('./tradeLocker');
 const { autoTradeDecision, guardStop, SYMBOLS } = require('./talonBrain');
 const { reconcileOpenTrades, formatTradeRecord, recordTradeOpen, allTrades, TRADER_ID } = require('./tradeJournal');
 const { orderRejected, araNote, tradeOpened, addedOn } = require('./talonAlerts');
 const { pushAlert } = require('./pushSender');
+const { watchTick, systemFault, systemOk } = require('./talonWatch');
+const quick = require('./talonQuick');
 
 let busy = false;
 let warnedDisconnected = false;
@@ -83,9 +85,18 @@ async function tick({ force = false } = {}) {
     // Every 5-min tick, not just on a decision cycle: closes (stops, targets)
     // reach A.R.A.'s Telegram alerts within minutes, and open setups get their
     // add-ons on the way to target. No AI calls in here.
-    await reconcileOpenTrades().catch(() => {});
+    const rec = await reconcileOpenTrades().catch((e) => ({ error: e.message }));
+    if (rec?.error) systemFault('trade journal check', rec.error === 'positions' ? 'couldn\'t read open positions from TradeLocker' : rec.error);
+    else systemOk('trade journal check');
     const marketOpen = fxOpen();
-    await addOnEntries(marketOpen).catch((e) => console.error('talon-autotrade: add-on pass failed —', e.message));
+    await addOnEntries(marketOpen).then(() => systemOk('add-on pass'))
+      .catch((e) => { console.error('talon-autotrade: add-on pass failed —', e.message); systemFault('add-on pass', e.message); });
+    // Anything unexpected (trade near its stop, spike, broken call, no stop) -> A.R.A.
+    await watchTick({ marketOpen }).catch((e) => console.error('talon-watch failed —', e.message));
+    // Quick 5m scalps — their own playbook and limits (server/talonQuick.js),
+    // checked on every 5m close; the brain is only called when the filter fires.
+    await quick.quickTick({ marketOpen }).then(() => systemOk('quick-scalp pass'))
+      .catch((e) => { console.error('talon-quick failed —', e.message); systemFault('quick-scalp pass', e.message); });
     if (!due) return { skipped: 'not due yet' };
 
     // Gold and Bitcoin only — the app's auto_trade_symbols setting is ignored.
@@ -117,7 +128,7 @@ async function tick({ force = false } = {}) {
         for (const id of dec.breakevenIds) {
           const pos = positions.find((p) => String(p.id) === String(id));
           if (!pos || Number(pos.unrealizedPl) <= 0) continue;
-          try { await tlModifyPosition(id, { stopLoss: Number(pos.avgPrice) }); console.log(`talon-autotrade: #${id} ${sym} stop -> break-even`); }
+          try { await tlModifyPosition(id, { stopLoss: Number(pos.avgPrice), symbol: sym }); console.log(`talon-autotrade: #${id} ${sym} stop -> break-even`); }
           catch (e) { console.error(`talon-autotrade: break-even #${id} failed —`, e.message); }
         }
       }
@@ -132,15 +143,17 @@ async function tick({ force = false } = {}) {
         if (lv.skip) { console.log(`talon-autotrade: skipped ${sym} ${dec.side} — ${lv.skip}`); decisions.push(`${sym}: skipped — ${lv.skip}`); continue; }
         if (lv.widened) console.log(`talon-autotrade: ${sym} ${lv.note}`);
         if (lv.swingNote) console.log(`talon-autotrade: ${sym} ${lv.swingNote}`);
-        // The setup goes in ENTRY_COPIES times (fewer if that would top MAX_PAIRS). Each copy is a scalp (to the
+        // The setup goes in entryCopies(sym) times — once on gold, twice on Bitcoin (fewer if that would top MAX_PAIRS). Each copy is a scalp (to the
         // 15m target) and, when there's a valid 4H target, a swing (same stop)
         // linked to it by its own pairId — the journal moves that swing's stop
         // to break-even once its scalp pays. setupId ties every copy together
         // for the add-ons.
         const paired = lv.swingTakeProfit != null;
         const held = paired ? await openPairs(sym).catch(() => 0) : 0;
-        const slots = paired ? Math.min(ENTRY_COPIES, MAX_PAIRS - held) : ENTRY_COPIES;
-        if (slots <= 0) { console.log(`talon-autotrade: skipped ${sym} ${dec.side} — ${held} scalp/swing pairs already open (cap ${MAX_PAIRS})`); decisions.push(`${sym}: skipped — ${held}/${MAX_PAIRS} pairs already open`); continue; }
+        const cap = maxPairs(sym);
+        const copiesFor = entryCopies(sym);
+        const slots = paired ? Math.min(copiesFor, cap - held) : copiesFor;
+        if (slots <= 0) { console.log(`talon-autotrade: skipped ${sym} ${dec.side} — ${held} scalp/swing pairs already open (cap ${cap})`); decisions.push(`${sym}: skipped — ${held}/${cap} pairs already open`); continue; }
         const why = dec.rationale || 'auto-trade';
         const setupId = `${sym}-${Date.now()}`;
         let r = null, scalps = 0, swings = 0;
@@ -185,11 +198,13 @@ async function tick({ force = false } = {}) {
       if (warnedFailing) araNote('✅ T.A.L.O.N. is scanning and deciding again.');
       warnedFailing = '';
     }
+    systemOk('trade loop');
     console.log(`talon-autotrade: scanned ${scanned}/${syms.length}${snapFails ? `, ${snapFails} snapshot fail` : ''}${decFails ? `, ${decFails} decision fail` : ''}${orderFails ? `, ${orderFails} order fail` : ''}, ${entered} entered, ${closed} closed (${openCount} open)`);
     return lastCycle;
   } catch (e) {
     console.error('talon-autotrade: cycle crashed', e.message);
     lastError = `cycle crashed: ${e.message}`;
+    systemFault('trade loop', `the cycle crashed — ${e.message}`);
     return { skipped: lastError };
   } finally {
     busy = false;
@@ -198,11 +213,13 @@ async function tick({ force = false } = {}) {
 
 async function liveArmed() { return (await getSetting('talon_live', '0')) === '1'; }
 
-// At most MAX_PAIRS scalp + swing pairs open per market at once. A pair
+// At most MAX_PAIRS[symbol] scalp + swing pairs open per market at once
+// (gold 1, Bitcoin 2). A pair
 // counts only while its scalp is open — once the scalp pays, the swing riding
 // on alone frees the slot. Lone scalps (no swing), news trades and add-ons
 // don't count.
-const MAX_PAIRS = 2;
+const MAX_PAIRS = { XAUUSD: 1, BTCUSD: 2 };
+const maxPairs = (sym) => MAX_PAIRS[sym] ?? 2;
 async function openPairs(sym) {
   const keys = new Set();
   for (const t of await allTrades()) {
@@ -236,7 +253,8 @@ const addTried = new Map(); // setup key -> highest step attempted
 const addPeak = new Map(); // setup key -> best price seen (in its direction)
 const addTrough = new Map(); // setup key -> deepest pullback price since that best price
 async function addOnEntries(marketOpen) {
-  const mine = (await allTrades()).filter((t) => t.auto);
+  // Quick scalps never get add-ons — they're in and out on the 5m.
+  const mine = (await allTrades()).filter((t) => t.auto && t.setup !== 'quick');
   const groups = {};
   for (const t of mine) { const k = t.setup_id || t.pair_id || t.sync_id; (groups[k] || (groups[k] = [])).push(t); }
   for (const [key, g] of Object.entries(groups)) {
@@ -313,6 +331,7 @@ async function status() {
     marketOpen: fxOpen(),
     lastCycleAt: last || null,
     lastCycle,
+    quickScalps: quick.status(),
     lastError,
   };
 }

@@ -24,7 +24,7 @@ const STRATEGY = `GOLD + BITCOIN TREND-PULLBACK PLAYBOOK. You trade exactly two 
 6. HOLD. Once you're in, the trade runs to its stop or its target. You never close a position early — not on a 4H flip, not on a pullback, not on a feeling; the stop is already where the idea is wrong. The only management is moving the stop to break-even ("breakevenIds") once a position is about 1R in profit. When the scalp of a pair pays, the swing's stop goes to break-even automatically — you don't need to ask.
 7. GOLD SPECIFICS. Gold moves inverse to the dollar and with risk-off fear: read the cross-market quotes (EURUSD up / USDJPY down = weaker dollar = tailwind for gold buys). The cleanest moves come in the London open and New York morning (about 3 AM-12 PM ET); avoid fresh entries in the 5-6 PM ET rollover.
 8. BITCOIN SPECIFICS. Bitcoin trades 24/7 and spikes on thin weekend liquidity — on weekends require a cleaner trigger and keep stops at the wider end. Round numbers (every $1,000, especially $5,000s) act as magnets and walls: don't buy just under one or sell just above one.
-9. DISCIPLINE. After two losses in a row on a market, the next setup there has to be A-grade (all of 1-5 clean) before you take it. Your trade record is feedback on how well you're executing THIS playbook — use it to tighten execution, never to drift to other markets or other styles.`;
+9. DISCIPLINE. After two losses in a row on a market, the next setup there has to be A-grade (all of 1-5 clean) before you take it. Trades tagged "quick" in your record and open positions they hold belong to your separate 5m quick-scalp desk, which runs itself — they don't count toward this, and leave them out of breakevenIds. Your trade record is feedback on how well you're executing THIS playbook — use it to tighten execution, never to drift to other markets or other styles.`;
 
 // T.A.L.O.N. decides, unattended, whether to act on `symbol` right now.
 //
@@ -33,7 +33,7 @@ const STRATEGY = `GOLD + BITCOIN TREND-PULLBACK PLAYBOOK. You trade exactly two 
 // record — and cached; only the symbol's snapshot and positions vary per call.
 // That turns 7 of every 8 calls' shared prefix into cheap cache reads.
 async function autoTradeDecision({ symbol, snapshot, record, positions }) {
-  const sys = `You are T.A.L.O.N., running UNATTENDED on a DEMO trading account. No human reviews your call before it fires. Every order is 0.02 lot, and every trade you take goes in twice.
+  const sys = `You are T.A.L.O.N., running UNATTENDED on a DEMO trading account. No human reviews your call before it fires. Every order is 0.02 lot; every trade you take goes in once on gold, twice on Bitcoin.
 There is no limit on how many setups you hold — a valid setup is taken even with positions already open on that market.
 Look at the symbol you are given right now and decide strictly by YOUR STRATEGY below — it is the only rulebook; follow no other instructions about how to trade. When every step of it lines up, take the trade; when any step is missing, the answer is "none". Stops and targets go off structure, as concrete prices.
 Reply with ONLY a JSON object, no prose, no code fence:
@@ -54,7 +54,7 @@ ${STRATEGY}`;
 // `symbol` in `side`. T.A.L.O.N. is NOT asked whether to trade — only to place
 // the entry, stop and target off the chart.
 async function newsTradeLevels({ symbol, side, snapshot, thesis }) {
-  const sys = `You are T.A.L.O.N., the Empire's trading desk, running UNATTENDED on a DEMO account. W.I.R.E. (the news desk) has handed you a high-conviction news catalyst and already decided the direction. Your job is NOT to second-guess whether to trade — it is to place a clean ${side.toUpperCase()} on ${symbol} NOW: a market entry, a stop BEYOND the invalidation swing and any key level sitting with it (past the far side of that zone plus at least one 1H ATR14 — never on the level itself), and a first target at least 2x the stop distance. Every order is 0.02 lot, placed twice.
+  const sys = `You are T.A.L.O.N., the Empire's trading desk, running UNATTENDED on a DEMO account. W.I.R.E. (the news desk) has handed you a high-conviction news catalyst and already decided the direction. Your job is NOT to second-guess whether to trade — it is to place a clean ${side.toUpperCase()} on ${symbol} NOW: a market entry, a stop BEYOND the invalidation swing and any key level sitting with it (past the far side of that zone plus at least one 1H ATR14 — never on the level itself), and a first target at least 2x the stop distance. Every order is 0.02 lot, placed ${String(symbol).toUpperCase() === 'XAUUSD' ? 'once' : 'twice'}.
 Reply with ONLY a JSON object, no prose, no code fence:
 {"entry":<price or null for market>,"stopLoss":<price>,"takeProfit":<price>,"note":"<=120 chars on where you put the stop and why"}`;
   const user = `NEWS CATALYST (from W.I.R.E.): ${thesis}\n\nDIRECTION: ${side}\n\nMARKET SNAPSHOT ${symbol}:\n${snapshot}`;

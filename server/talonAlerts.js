@@ -38,14 +38,15 @@ function notify(text) {
 }
 
 function tradeOpened({ symbol, side, qty, entry, stopLoss, takeProfit, rationale, setup, swingTarget, copies = 1 }) {
-  const news = setup === 'news';
+  const news = setup === 'news', quick = setup === 'quick';
   const pair = swingTarget != null;
   const n = (pair ? 2 : 1) * copies;
-  notify(`📈 **T.A.L.O.N. just opened ${pair ? 'a scalp + swing' : 'a trade'}**${news ? ' (news-driven)' : ''}${acct()}, Mr. Burrus.\n`
+  notify(`📈 **T.A.L.O.N. just opened ${pair ? 'a scalp + swing' : quick ? 'a quick 5m scalp' : 'a trade'}**${news ? ' (news-driven)' : ''}${acct()}, Mr. Burrus.\n`
     + `**${String(side).toUpperCase()} ${nameOf(symbol)}** · ${n > 1 ? `${n} × ${qty}` : qty} lot @ ~${px(entry)}\n`
     + (pair ? `Stop ${px(stopLoss)} · Scalp target ${px(takeProfit)} · Swing target ${px(swingTarget)} (stop to break-even when the scalp pays)`
       : `Stop ${px(stopLoss)} · Target ${px(takeProfit)}`)
-    + `${rationale ? `\nWhy: ${String(rationale).replace(/^news — /, '')}` : ''}`);
+    + `${quick ? ' (stop to break-even at +1R)' : ''}`
+    + `${rationale ? `\nWhy: ${String(rationale).replace(/^(news|quick 5m) — /, '')}` : ''}`);
 }
 
 function addedOn({ symbol, side, qty, copies, step, entry, stopLoss, earlyTarget, takeProfit }) {
@@ -58,10 +59,17 @@ function tradeClosed(t) {
   const word = t.outcome === 'win' ? 'a win' : t.outcome === 'loss' ? 'a loss' : 'break-even';
   const hit = t.exit_price != null && t.take_profit != null && Math.abs(t.exit_price - t.take_profit) <= Math.abs(t.take_profit) * 3e-4 ? ' — target hit'
     : t.exit_price != null && t.stop_loss != null && Math.abs(t.exit_price - t.stop_loss) <= Math.abs(t.stop_loss) * 3e-4 ? ' — stopped out' : '';
-  const kind = t.pair_id && (t.setup === 'scalp' || t.setup === 'swing') ? ` (${t.setup})` : '';
+  const kind = t.setup === 'quick' ? ' (quick scalp)' : t.pair_id && (t.setup === 'scalp' || t.setup === 'swing') ? ` (${t.setup})` : '';
+  // He never closes early, so an exit nowhere near the stop, the target or
+  // break-even means something else closed it.
+  const entry = Number(t.entry_fill ?? t.entry_ref), exit = Number(t.exit_price), sl = Number(t.stop_loss), tp = Number(t.take_profit);
+  const tol = Math.max(Math.abs(entry) * 3e-4, Math.abs(entry - sl) * 0.15 || 0);
+  const nearAny = [sl, tp, entry].some((x) => isFinite(x) && Math.abs(exit - x) <= tol);
+  const odd = t.exit_price != null && isFinite(exit) && isFinite(entry) && !nearAny
+    ? `\n🚨 **T.A.L.O.N. → A.R.A.: I didn't close this one.** It closed at ${px(t.exit_price)}, nowhere near its stop (${px(t.stop_loss)}) or target (${px(t.take_profit)}) — a manual close, a margin stop-out or the broker. Worth a look in TradeLocker.` : '';
   notify(`${icon} **T.A.L.O.N. closed ${String(t.side).toUpperCase()} ${nameOf(t.symbol)}${kind}** — ${word}${hit}.\n`
     + `Entry ${px(t.entry_fill ?? t.entry_ref)} → Exit ${px(t.exit_price)} · P/L ${money(t.realized_pl)}${t.pl_estimated ? ' (est.)' : ''}`
-    + `${t.r_multiple != null ? ` · ${t.r_multiple}R` : ''}`);
+    + `${t.r_multiple != null ? ` · ${t.r_multiple}R` : ''}${odd}`);
 }
 
 function tradeLost(t, why) {
