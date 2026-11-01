@@ -135,10 +135,10 @@ async function runOnce(){
         const price=snap.quote?.mid??(dec.side==='buy'?snap.quote?.ask:snap.quote?.bid);
         try{
           const r=await tlPlaceOrder({symbol:sym,side:dec.side,qty:MAX_QTY,stopLoss:dec.stopLoss,takeProfit:dec.takeProfit});
-          await recordTradeOpen({symbol:sym,side:r.side,qty:r.qty,entry:price,stopLoss:dec.stopLoss,takeProfit:dec.takeProfit,
+          await recordTradeOpen({symbol:sym,side:r.side,qty:r.qty,entry:price,stopLoss:r.stopLoss??dec.stopLoss,takeProfit:dec.takeProfit,
             rationale:dec.rationale||'auto-trade',orderId:r.orderId,setup:dec.setup,auto:true}).catch(()=>{});
           openSyms.add(sym);openCount++;entered++;
-          emit(`AUTO · ${r.side.toUpperCase()} ${r.qty} ${sym} @ ~${price??'mkt'} · SL ${dec.stopLoss??'—'} TP ${dec.takeProfit??'—'}${dec.rationale?` — ${dec.rationale}`:''}`);
+          emit(`AUTO · ${r.side.toUpperCase()} ${r.qty} ${sym} @ ~${price??'mkt'} · SL ${r.stopLoss??dec.stopLoss??'—'} TP ${dec.takeProfit??'—'}${dec.rationale?` — ${dec.rationale}`:''}`);
           savePersonaMemory(TRADER_ID,`[auto-trade] opened ${r.side} ${sym} @ ~${price??'mkt'} — ${dec.rationale||''}`).catch(()=>{});
         }catch(e){orderFails++;lastErr=e;emit(`AUTO ${sym} order failed: ${e.message}`);flag('order',`Auto-trade order rejected on ${sym}`,e);}
       }

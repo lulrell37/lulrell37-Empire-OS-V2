@@ -224,10 +224,10 @@ async function newsTradeHandoff(impacts){
     const price=snap.quote?.mid??(imp.side==='buy'?snap.quote?.ask:snap.quote?.bid);
     try{
       const r=await tlPlaceOrder({symbol:imp.symbol,side:imp.side,qty:MAX_QTY,stopLoss:lv.stopLoss,takeProfit:lv.takeProfit});
-      await recordTradeOpen({symbol:imp.symbol,side:r.side,qty:r.qty,entry:price,stopLoss:lv.stopLoss,takeProfit:lv.takeProfit,
+      await recordTradeOpen({symbol:imp.symbol,side:r.side,qty:r.qty,entry:price,stopLoss:r.stopLoss??lv.stopLoss,takeProfit:lv.takeProfit,
         rationale:`news — ${imp.thesis}`.slice(0,180),orderId:r.orderId,setup:'news',auto:true}).catch(()=>{});
       openSyms.add(imp.symbol);openCount++;
-      emit(`— W.I.R.E. → T.A.L.O.N. · ${r.side.toUpperCase()} ${r.qty} ${imp.symbol} @ ~${price??'mkt'} · SL ${lv.stopLoss} TP ${lv.takeProfit} — ${imp.thesis.slice(0,80)} —`);
+      emit(`— W.I.R.E. → T.A.L.O.N. · ${r.side.toUpperCase()} ${r.qty} ${imp.symbol} @ ~${price??'mkt'} · SL ${r.stopLoss??lv.stopLoss} TP ${lv.takeProfit} — ${imp.thesis.slice(0,80)} —`);
       const note=`[news trade] ${r.side} ${imp.symbol} @ ~${price??'mkt'} on: ${imp.thesis}`;
       savePersonaMemory(TRADER_ID,note).catch(()=>{});
       savePersonaMemory('wire',note).catch(()=>{});

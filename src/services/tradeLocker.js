@@ -312,7 +312,20 @@ export async function tlOrdersHistory(){
   });
 }
 
-// Market order with absolute SL/TP prices. qty is clamped to MAX_QTY.
+// The main stop rule's minimum, on every order the app sends (chat trades and
+// the no-backend loops) — same as server/tradeLocker.js: at least gold $10 /
+// Bitcoin 0.8% (anything else 0.4%) and 1.2x the 1H ATR14 from entry.
+const STOP_FLOOR={XAUUSD:()=>10,BTCUSD:p=>p*0.008};
+export function minStopDist(symbol,px,atr1h=0){return Math.max((STOP_FLOOR[String(symbol).toUpperCase()]||(p=>p*0.004))(Number(px)),1.2*(Number(atr1h)||0));}
+async function atr1H(symbol){
+  const b=await tlHistory(String(symbol).toUpperCase(),'1H',60);
+  if(!b||b.length<3)return 0;
+  const tr=b.slice(1).map((x,i)=>Math.max(x.h-x.l,Math.abs(x.h-b[i].c),Math.abs(x.l-b[i].c))).slice(-14);
+  return tr.reduce((a,x)=>a+x,0)/tr.length;
+}
+
+// Market order with absolute SL/TP prices. qty is clamped to MAX_QTY. A stop
+// closer than the main rule's minimum (or on the wrong side) is pushed out to it.
 export async function tlPlaceOrder({symbol='XAUUSD',side,qty=MAX_QTY,stopLoss,takeProfit}){
   await ensureAccount();
   if(side!=='buy'&&side!=='sell')throw new Error('side must be buy or sell');
@@ -321,6 +334,14 @@ export async function tlPlaceOrder({symbol='XAUUSD',side,qty=MAX_QTY,stopLoss,ta
   // Never a trade without a stop — a chat proposal that left it out is refused.
   if(stopLoss==null||!isFinite(Number(stopLoss)))throw new Error('no stop loss given — every trade needs one');
   const m=await tlInstrument(symbol);
+  let widenedFrom=null;
+  const qt=await tlQuote(symbol).catch(()=>null);
+  const entry=Number(qt?.mid??(side==='buy'?qt?.ask:qt?.bid));
+  if(isFinite(entry)&&entry){
+    const min=minStopDist(symbol,entry,await atr1H(symbol).catch(()=>0));
+    const dir=side==='buy'?1:-1;
+    if((entry-Number(stopLoss))*dir<min-1e-9){widenedFrom=Number(stopLoss);stopLoss=entry-dir*min;}
+  }
   // On the instrument's own price precision, so the broker doesn't drop an off-tick stop.
   const px=v=>+Number(v).toFixed(m.pricePrecision??2);
   const body={
@@ -331,7 +352,7 @@ export async function tlPlaceOrder({symbol='XAUUSD',side,qty=MAX_QTY,stopLoss,ta
   if(takeProfit!=null&&isFinite(Number(takeProfit))){takeProfit=px(takeProfit);body.takeProfit=takeProfit;body.takeProfitType='absolute';}
   const j=await api(`/trade/accounts/${session.accountId}/orders`,{method:'POST',body});
   tlBustPositions();
-  return{orderId:j.d?.orderId,qty:q,side,symbol,stopLoss,takeProfit};
+  return{orderId:j.d?.orderId,qty:q,side,symbol,stopLoss,takeProfit,widenedFrom};
 }
 
 export async function tlClosePosition(positionId,qty=0){

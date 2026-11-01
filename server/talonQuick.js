@@ -10,8 +10,11 @@
 //      direction: closes past the EMA20 and past the prior close, in the outer
 //      40% of its range, not a spike (under 2.5× ATR), and not already more than
 //      1 ATR away from the EMA20.
-//   4. STOP past the last 5 bars' swing + 0.3 ATR, at least gold $3 / Bitcoin
-//      0.3% and 1× the 5m ATR14. Wider than gold $8 / Bitcoin 0.8% → skip.
+//   4. STOP beyond the key level, never on it, sized for the 5m: past the far
+//      side of the zone (the last 5 bars' swing, the 5m EMA20, a round number
+//      sitting with them) plus one 5m ATR14, at least gold $3 / Bitcoin 0.3%.
+//      Wider than gold $8 / Bitcoin 0.8% → skip. Its own minimum, not the
+//      main rule's $10 / 0.8% (that would make every quick scalp a swing).
 //   5. TARGET: his brain confirms the setup and picks the next 5m/15m level —
 //      at least 1.5R (else no trade), capped at 3R. Stop goes to break-even at
 //      +1R. Otherwise held to stop or target, like everything else.
@@ -35,6 +38,7 @@ const STOP = {
   XAUUSD: { floor: () => 3, cap: () => 8 },
   BTCUSD: { floor: (px) => px * 0.003, cap: (px) => px * 0.008 },
 };
+const ROUND = { XAUUSD: 10, BTCUSD: 1000 }; // round numbers that act as levels
 const MIN_R = 1.5, MAX_R = 3, BE_AT_R = 1;
 const CRYPTO = /^(BTC|ETH|SOL|XRP|LTC|DOGE|ADA|BNB)/;
 
@@ -104,20 +108,29 @@ function findSetup({ sym, bars5, s15, s1h, quote }) {
   if (!isFinite(px)) return { skip: 'no quote' };
   const spread = Number(quote.ask) - Number(quote.bid);
   if (isFinite(spread) && spread > 0.35 * atr) return { skip: `spread ${spread.toFixed(2)} too wide for the 5m ATR ${atr.toFixed(2)}` };
+  // The key-level zone the stop has to clear: the swing, the EMA20, and a
+  // round number sitting within one 5m ATR past them.
   const recent = bars5.slice(-5);
   const swing = dir > 0 ? Math.min(...recent.map((x) => x.l)) : Math.max(...recent.map((x) => x.h));
+  let far = dir > 0 ? Math.min(swing, E) : Math.max(swing, E);
+  const step = ROUND[sym];
+  if (step) {
+    const round = dir > 0 ? Math.floor(far / step) * step : Math.ceil(far / step) * step;
+    if (Math.abs(far - round) <= atr) far = round;
+  }
   const cfg = STOP[sym] || STOP.BTCUSD;
-  const dist = Math.max((px - (swing - dir * 0.3 * atr)) * dir, cfg.floor(px), atr);
-  if (dist > cfg.cap(px)) return { skip: `stop would need ${dist.toFixed(2)} — over the ${cfg.cap(px).toFixed(2)} cap` };
+  const dist = Math.max((px - (far - dir * atr)) * dir, cfg.floor(px), atr);
+  const cap = cfg.cap(px);
+  if (dist > cap) return { skip: `stop would need ${dist.toFixed(2)} — over the ${cap.toFixed(2)} cap` };
   const swingHi = dir > 0 ? Math.max(...bars5.slice(-24).map((x) => x.h)) : Math.min(...bars5.slice(-24).map((x) => x.l));
-  return { side: dir > 0 ? 'buy' : 'sell', dir, entry: +px.toFixed(2), dist, stopLoss: +(px - dir * dist).toFixed(2), atr, ema: E, swingHi };
+  return { side: dir > 0 ? 'buy' : 'sell', dir, entry: +px.toFixed(2), dist, stopLoss: +(px - dir * dist).toFixed(2), atr, ema: E, swingHi, zone: far };
 }
 
 // Rule 5: his brain looks at the setup the filter found and picks the target.
 async function confirm({ sym, setup, snapText, bars5 }) {
   const { side, entry, dist, stopLoss, atr, ema: E, swingHi } = setup;
   const minTp = +(entry + setup.dir * MIN_R * dist).toFixed(2);
-  const sys = `You are T.A.L.O.N., running UNATTENDED, on your QUICK-SCALP desk — separate from your 1D/4H setups. A coded 5m filter just flagged a ${side.toUpperCase()} on ${sym}: 1H and 15m trend agree, price pulled back into the 5m EMA20 and the 5m bar that just closed rejected back in the trend direction. The stop is already set by code at ${stopLoss} (${dist.toFixed(2)} from entry ~${entry}).
+  const sys = `You are T.A.L.O.N., running UNATTENDED, on your QUICK-SCALP desk — separate from your 1D/4H setups. A coded 5m filter just flagged a ${side.toUpperCase()} on ${sym}: 1H and 15m trend agree, price pulled back into the 5m EMA20 and the 5m bar that just closed rejected back in the trend direction. The stop is already set by code at ${stopLoss} (${dist.toFixed(2)} from entry ~${entry}) — beyond the key-level zone at ${+setup.zone.toFixed(2)} plus a 5m ATR.
 Your job: (a) say whether this is a clean continuation or a trap — "none" if price is pinned under/over a nearby 15m or 1H level in the trade's way, the 15m bars are choppy and overlapping, the move is late in an exhausted leg, or (gold) the dollar is moving against it; (b) if it's clean, the target: the next clear 5m/15m structure level in the trade direction. It must be at least ${MIN_R}R (${minTp} or further); if the nearest level in the way is closer than that, answer "none". One 0.02 position, held to stop or target.
 Reply with ONLY a JSON object, no prose, no code fence:
 {"action":"enter"|"none","takeProfit":<price>,"rationale":"<=120 chars"}`;
@@ -185,7 +198,7 @@ async function quickTick({ marketOpen }) {
       if ((tp - entry) * dir > MAX_R * dist) tp = +(entry + dir * MAX_R * dist).toFixed(2);
       const rationale = `quick 5m — ${dec.rationale || 'EMA20 pullback rejection'}`.slice(0, 400);
       let s;
-      try { s = await tlPlaceOrder({ symbol: sym, side: setup.side, qty: MAX_QTY, stopLoss, takeProfit: tp }); }
+      try { s = await tlPlaceOrder({ symbol: sym, side: setup.side, qty: MAX_QTY, stopLoss, takeProfit: tp, minStop: false }); }
       catch (e) { orderRejected({ symbol: sym, side: `${setup.side} (quick scalp)`, error: e.message }); out[sym] = `order rejected — ${e.message}`; continue; }
       await recordTradeOpen({ symbol: sym, side: s.side, qty: s.qty, entry, stopLoss, takeProfit: tp, rationale, orderId: s.orderId,
         setup: 'quick', auto: true, setupId: `${sym}-q-${Date.now()}`, alert: false }).catch(() => {});

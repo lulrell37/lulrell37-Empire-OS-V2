@@ -2380,9 +2380,9 @@ export default function CommandScreen({navigation,route}){
         return;
       }
       const r=await tlPlaceOrder({symbol:sym,side,qty:Math.min(qty||MAX_QTY,MAX_QTY),stopLoss,takeProfit});
-      pushSystemMsg(`— ORDER SENT · ${r.side.toUpperCase()} ${r.qty} ${sym} · SL ${r.stopLoss??'—'} · TP ${r.takeProfit??'—'} · #${r.orderId||'?'} —`);
+      pushSystemMsg(`— ORDER SENT · ${r.side.toUpperCase()} ${r.qty} ${sym} · SL ${r.stopLoss??'—'}${r.widenedFrom!=null?` (widened from ${r.widenedFrom} — main stop rule)`:''} · TP ${r.takeProfit??'—'} · #${r.orderId||'?'} —`);
       savePersonaMemory(pid||TRADER_ID,`T.A.L.O.N.: order sent ${r.side} ${r.qty} ${sym} SL ${r.stopLoss} TP ${r.takeProfit}${rationale?` — ${rationale}`:''}`).catch(()=>{});
-      recordTradeOpen({symbol:sym,side:r.side,qty:r.qty,entry,stopLoss,takeProfit,rationale,orderId:r.orderId}).catch(()=>{});
+      recordTradeOpen({symbol:sym,side:r.side,qty:r.qty,entry,stopLoss:r.stopLoss??stopLoss,takeProfit,rationale,orderId:r.orderId}).catch(()=>{});
       setTimeout(()=>reconcileOpenTrades().catch(()=>{}),6000);
     }catch(e){pushSystemMsg(`Order failed: ${e.message}`);}
     finally{setTradeBusy(false);}

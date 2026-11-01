@@ -21,6 +21,13 @@ const ENTRY_COPIES = 2; // every trade T.A.L.O.N. takes goes in this many times�
 const COPIES_BY_SYMBOL = { XAUUSD: 1 }; // …except gold, which goes in once
 const entryCopies = (sym) => COPIES_BY_SYMBOL[String(sym).toUpperCase()] ?? ENTRY_COPIES;
 
+// The main stop rule's minimum, applied to every order except quick scalps and
+// add-ons (his setups, W.I.R.E.'s news trades, anything else): the stop sits at least gold $10 /
+// Bitcoin 0.8% (anything else 0.4%) and 1.2x the 1H ATR14 from entry.
+const STOP_FLOOR = { XAUUSD: () => 10, BTCUSD: (px) => px * 0.008 };
+const minStopDist = (symbol, px, atr1h = 0) => Math.max((STOP_FLOOR[String(symbol).toUpperCase()] || ((p) => p * 0.004))(Number(px)), 1.2 * (Number(atr1h) || 0));
+async function tlAtr1H(symbol) { return summarizeBars(await tlHistory(String(symbol).toUpperCase(), '1H', 60))?.atr14 || 0; }
+
 const session = { token: null, refresh: null, exp: 0, env: 'demo', accountId: null, accNum: null, instruments: {}, instrumentList: null, rateLimitedUntil: 0 };
 
 function base() { return BASE[session.env] || BASE.demo; }
@@ -267,18 +274,34 @@ async function tlOrdersHistory() {
 // order still fills.
 const roundPx = (m, v) => +Number(v).toFixed(m?.pricePrecision ?? 2);
 
-async function tlPlaceOrder({ symbol = 'XAUUSD', side, qty = MAX_QTY, stopLoss, takeProfit }) {
+async function tlPlaceOrder({ symbol = 'XAUUSD', side, qty = MAX_QTY, stopLoss, takeProfit, minStop = true }) {
   await ensureAccount();
   if (side !== 'buy' && side !== 'sell') throw new Error('side must be buy or sell');
   const q = Math.min(Math.max(Number(qty) || 0, 0), MAX_QTY);
   if (!q) throw new Error('qty must be > 0');
+  // Never a trade without a stop — same refusal as the app's tlPlaceOrder.
+  if (stopLoss == null || !isFinite(Number(stopLoss))) throw new Error('no stop loss given — every trade needs one');
   const m = await tlInstrument(symbol);
   const body = { tradableInstrumentId: m.id, routeId: m.tradeRouteId, side, qty: q, type: 'market', validity: 'IOC', price: 0 };
+  // Backstop for the main stop rule: a stop closer than the minimum (or on the
+  // wrong side) is pushed out to it. Quick scalps and add-ons run their own
+  // tighter stops and pass minStop: false.
+  let widenedFrom = null;
+  if (minStop && stopLoss != null && isFinite(Number(stopLoss))) {
+    const qt = await tlQuote(symbol).catch(() => null);
+    const entry = Number(qt?.mid ?? (side === 'buy' ? qt?.ask : qt?.bid));
+    if (isFinite(entry) && entry) {
+      const min = minStopDist(symbol, entry, await tlAtr1H(symbol).catch(() => 0));
+      const dir = side === 'buy' ? 1 : -1;
+      if ((entry - Number(stopLoss)) * dir < min - 1e-9) { widenedFrom = Number(stopLoss); stopLoss = entry - dir * min; }
+    }
+  }
   if (stopLoss != null && isFinite(Number(stopLoss))) { stopLoss = roundPx(m, stopLoss); body.stopLoss = stopLoss; body.stopLossType = 'absolute'; }
   if (takeProfit != null && isFinite(Number(takeProfit))) { takeProfit = roundPx(m, takeProfit); body.takeProfit = takeProfit; body.takeProfitType = 'absolute'; }
   const j = await api(`/trade/accounts/${session.accountId}/orders`, { method: 'POST', body });
   tlBustPositions();
-  return { orderId: j.d?.orderId, qty: q, side, symbol, stopLoss, takeProfit };
+  if (widenedFrom != null) console.log(`tradelocker: ${symbol} ${side} stop ${widenedFrom} widened to ${stopLoss} (main stop rule minimum)`);
+  return { orderId: j.d?.orderId, qty: q, side, symbol, stopLoss, takeProfit, widenedFrom };
 }
 
 async function tlClosePosition(positionId, qty = 0) {
@@ -373,7 +396,7 @@ function tlFormatSnapshot(snap) {
 }
 
 module.exports = {
-  MAX_QTY, ENTRY_COPIES, entryCopies,
+  MAX_QTY, ENTRY_COPIES, entryCopies, minStopDist, tlAtr1H,
   tlConnect, tlStatus, tlAccountState, tlListInstruments, tlInstrumentsById, tlInstrument,
   tlQuote, tlHistory, tlPositions, tlOrdersHistory, tlPlaceOrder, tlClosePosition, tlModifyPosition,
   tlReset, tlSnapshot, tlFormatSnapshot, summarizeBars,

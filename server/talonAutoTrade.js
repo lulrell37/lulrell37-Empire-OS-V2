@@ -164,13 +164,13 @@ async function tick({ force = false } = {}) {
             s = await tlPlaceOrder({ symbol: sym, side: dec.side, qty: MAX_QTY, stopLoss: lv.stopLoss, takeProfit: lv.takeProfit });
           } catch (e) { orderFails++; console.error(`talon-autotrade: ${sym} order failed —`, e.message); orderRejected({ symbol: sym, side: dec.side, error: e.message }); continue; }
           r = r || s; scalps++; openCount++;
-          await recordTradeOpen({ symbol: sym, side: s.side, qty: s.qty, entry: price, stopLoss: lv.stopLoss, takeProfit: lv.takeProfit,
+          await recordTradeOpen({ symbol: sym, side: s.side, qty: s.qty, entry: price, stopLoss: s.stopLoss ?? lv.stopLoss, takeProfit: lv.takeProfit,
             rationale: why, orderId: s.orderId, setup: pairId ? 'scalp' : (dec.setup || 'scalp'), auto: true, pairId, setupId, alert: false }).catch(() => {});
           console.log(`talon-autotrade: ${s.side.toUpperCase()} ${s.qty} ${sym} @ ~${price ?? 'mkt'} · SL ${lv.stopLoss} TP ${lv.takeProfit}${pairId ? ' (scalp)' : ''}${dec.rationale ? ` — ${dec.rationale}` : ''}`);
           if (!pairId) continue;
           try {
             const s2 = await tlPlaceOrder({ symbol: sym, side: dec.side, qty: MAX_QTY, stopLoss: lv.stopLoss, takeProfit: lv.swingTakeProfit });
-            await recordTradeOpen({ symbol: sym, side: s2.side, qty: s2.qty, entry: price, stopLoss: lv.stopLoss, takeProfit: lv.swingTakeProfit,
+            await recordTradeOpen({ symbol: sym, side: s2.side, qty: s2.qty, entry: price, stopLoss: s2.stopLoss ?? lv.stopLoss, takeProfit: lv.swingTakeProfit,
               rationale: why, orderId: s2.orderId, setup: 'swing', auto: true, pairId, setupId, alert: false }).catch(() => {});
             swings++; openCount++;
             console.log(`talon-autotrade: ${s2.side.toUpperCase()} ${s2.qty} ${sym} · SL ${lv.stopLoss} TP ${lv.swingTakeProfit} (swing)`);
@@ -289,7 +289,8 @@ async function addOnEntries(marketOpen) {
     addTried.set(key, step);
     const early = +(price + dir * r).toFixed(2);
     try {
-      const s = await tlPlaceOrder({ symbol: sym, side: t0.side, qty: MAX_QTY, stopLoss: addStop, takeProfit: early });
+      // Its own stop (one step behind), not the main rule's minimum.
+      const s = await tlPlaceOrder({ symbol: sym, side: t0.side, qty: MAX_QTY, stopLoss: addStop, takeProfit: early, minStop: false });
       await recordTradeOpen({ symbol: sym, side: s.side, qty: s.qty, entry: price, stopLoss: addStop, takeProfit: early,
         rationale: `add-on ${step} — ${t0.rationale || ''}`.slice(0, 400), orderId: s.orderId, setup: 'add', auto: true, setupId: key, addLevel: step, alert: false }).catch(() => {});
       console.log(`talon-autotrade: ADD ${step} ${s.side.toUpperCase()} ${s.qty} ${sym} @ ~${price} after a pullback from ${peak} to ${trough}, turning back toward TP · SL ${addStop} TP ${early}`);
