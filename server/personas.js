@@ -169,9 +169,18 @@ const ALIASES = {
 const NAMES_FOR = (id) => [id, ...Object.keys(ALIASES).filter((k) => ALIASES[k] === id),
   String((ROSTER[id] && ROSTER[id].name) || '').toLowerCase().replace(/\./g, '')].filter(Boolean);
 const HANDOFF_ASK = /\b(check with|run (it|this|that) by|loop in|relay|pass (it|this|that) (on|to|along)|hand (it|this|that) (off|to)|ask (him|her|them|the (team|desk|others)|someone|around|whoever)|get (a|their|his|her) (take|input|read|opinion)|consult|have (him|her|them) )/i;
-function relayAllowed(userText, id) {
+// A trade order ("close the gold trade", "move the stop to 4010", "go live")
+// is T.A.L.O.N.'s to carry out even when he isn't named.
+const TRADE_ORDER = /\b(close|exit|enter|buy|sell|long|short|move (the |my |his )?(stop|sl|tp|target)|stop to|break ?even|take profit|go live|switch (to|him to) (live|demo)|live account|demo account)\b/i;
+// A.R.A. runs the team: she sends anything to whoever owns it without him
+// naming them (`from` === 'ara'). Everyone else keeps the gate.
+const CAL_MAIL = /\b(calendar|schedule|scheduled|event|meeting|appointment|email|e-mail|emails|inbox|gmail|mail)\b/;
+function relayAllowed(userText, id, from) {
   const said = String(userText || '').toLowerCase().replace(/\./g, '');
   if (!said) return false;
+  if (from === 'ara') return true;
+  if (id === 'talon' && TRADE_ORDER.test(said)) return true;
+  if (id === 'ara' && CAL_MAIL.test(said)) return true; // calendar + email are hers alone
   if (NAMES_FOR(id).some((n) => n.length > 2 && new RegExp(`\\b${n}\\b`).test(said))) return true;
   return HANDOFF_ASK.test(said);
 }
@@ -180,6 +189,9 @@ function resolvePersonaId(ref) {
   const s = String(ref || '').toLowerCase().replace(/[.\s]/g, '').trim();
   return ALIASES[s] || (ROSTER[s] ? s : null);
 }
+
+// Who owns what — A.R.A.'s routing map (mirrors ARA_ROUTE in src/personas/personas.js).
+const ARA_ROUTE = 'trades, positions, the live/demo account, the market → talon · Empire OS itself: code, bugs, builds, how the app or server works → jarvis · brand, visuals, creative direction, design → selene · video scripts → scribe · hooks/openers → hook · copy and content strategy → rogue · batching content → forge · publishing/posting → herald · AI prompts → pen · legal, contracts, terms, compliance → aisha · health, training, sleep, nutrition → haven · money, pricing, budgets, investing, capital → atlas · leads, prospecting, outreach → scout · news → wire · long cited research → sage · teaching him a subject → stephanie · analytics, metrics → pulse · connecting ideas across fields → nova · tactics and strategy → batman · accountability, growth goals → andrew · scripture, prayer, spiritual counsel → abraham';
 
 // One-line roster for A.R.A.'s context (everyone but her).
 function rosterLines() {
@@ -213,6 +225,6 @@ function personaVoiceId(id) {
 }
 
 module.exports = {
-  ROSTER, resolvePersonaId, relayAllowed, rosterLines, personaSystem, genderLine, pronouns,
+  ROSTER, resolvePersonaId, relayAllowed, ARA_ROUTE, rosterLines, personaSystem, genderLine, pronouns,
   personaTgIdentity, personaVoiceId,
 };

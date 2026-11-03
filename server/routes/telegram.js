@@ -18,6 +18,7 @@ const { runPending, cancelPending } = require('../personaTools');
 const { transcribe } = require('../llm');
 const { voiceNote } = require('../personaVoice');
 const { describePhotos, describeVideo } = require('../vision');
+const { sendMedia } = require('../telegramMedia');
 
 const r = express.Router();
 
@@ -25,7 +26,7 @@ const GREETINGS = {
   ara: "A.R.A. here, Mr. Burrus — same me, on Telegram now, away from the app. Type, send a voice note, or send me a photo or video. Hand me a task, ask what's on your plate, say \"convene the council\". A few things still need the app open (the Lab, HUD panels) and I'll tell you when. /talon shows whether T.A.L.O.N. is trading.",
   stephanie: "S.T.E.P.H.A.N.I.E. — your personal university, on Telegram now. Ask me anything you want to actually understand. I can page through the \"Learning Everything\" curriculum, save notes, and pull in S.A.G.E. for deep research.",
   haven: "H.A.V.E.N. here — doctor and wellness, on Telegram. Training, recovery, sleep, stress, nutrition. I read the Batman Protocol live from the HUD. Not for emergencies — if it's urgent, get real care.",
-  jarvis: "J.A.R.V.I.S., sir — on Telegram, away from the app. Operations, execution, systems, the build pipeline. I can check build status and read the HUD; editing it and filing builds still needs the app.",
+  jarvis: "J.A.R.V.I.S., sir — on Telegram, away from the app. Operations, execution, systems, the build pipeline. I can read Empire OS's own code, check build status, file builds to Claude Code and read the HUD.",
   selene: "S.E.L.E.N.E. — Creative Director, on Telegram. Content strategy, positioning, copy, visual direction. I can brief S.C.R.I.B.E. and H.O.O.K. and fold their work back into a direction.",
   aisha: "A.I.S.H.A. — Legal Counsel, on Telegram. Contracts, entity structure, IP, terms, compliance. Send me the clause, the contract (photo works), or the situation and I'll tell you what could bite.",
 };
@@ -208,11 +209,17 @@ async function handleMessages(personaId, bot, msgs) {
   const keepTyping = setInterval(() => bot.sendChatAction(chatId, 'record_voice').catch(() => {}), 6000);
   const started = Date.now();
   try {
-    const { text: reply, spoken, footer, confirms } = await runPersonaTurn(personaId, text, deliver);
+    const { text: reply, spoken, footer, confirms, media } = await runPersonaTurn(personaId, text, deliver);
     console.log(`tg ${personaId}: reply ready in ${Math.round((Date.now() - started) / 1000)}s`);
     const muted = await sendSpoken(personaId, bot, chatId, spoken || reply, text);
     const tail = [footer, muted].filter(Boolean).join('\n\n');
     await deliver(tail ? `${reply}\n\n${tail}` : reply);
+    // Generated images, diagrams, charts, photos and files — after the text.
+    // (These were built every turn but never sent, so [GENERATE_IMAGE] did nothing.)
+    if (media && media.length) {
+      const failed = await sendMedia(bot, chatId, media);
+      if (failed.length) await deliver(failed.map((w) => `⚠️ ${w}`).join('\n'));
+    }
     for (const c of confirms || []) {
       await bot.sendMessage(chatId, `${c.label}?\n\n${c.detail}`, {
         reply_markup: { inline_keyboard: [[

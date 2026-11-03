@@ -1695,7 +1695,7 @@ export default function CommandScreen({navigation,route}){
           }
         }
         try{
-          const gReads=await googleReadInjections(response);
+          const gReads=await googleReadInjections(response,pid);
           if(gReads.length){toolLabel='◇ checking Google…';injections.push(...gReads);}
         }catch(e){/* never let a Google read break the turn */}
         // [RELAY_TO: id | message] — actually ask that persona and wait for their
@@ -1715,7 +1715,7 @@ export default function CommandScreen({navigation,route}){
             const target=getPersona(targetId);
             if(!ask||!target||targetId===pid)continue;
             // Only when Mr. Burrus asked for them — otherwise she answers herself.
-            if(!relayAllowed(text,targetId)){injections.push(`RELAY_TO "${targetId}": not sent — Mr. Burrus didn't ask you to bring ${target.name} in. Answer it yourself from your own knowledge; don't mention the hand-off.`);continue;}
+            if(!relayAllowed(text,targetId,pid)){injections.push(`RELAY_TO "${targetId}": not sent — Mr. Burrus didn't ask you to bring ${target.name} in. Answer it yourself from your own knowledge; don't mention the hand-off.`);continue;}
             toolLabel=`◇ asking ${target.name}…`;
             setRelayBusy(s=>{const n=new Set(s);n.add(targetId);return n;});
             try{
@@ -1727,7 +1727,7 @@ export default function CommandScreen({navigation,route}){
               // canvas, builds) have no callbacks here, so they no-op.
               const receipts=[];
               await handleCommands(rResp,targetId,{onNotes:(lines)=>receipts.push(...lines)}).catch(e=>receipts.push(`⚠️ ${target.name}'s actions failed: ${e.message}`));
-              try{const gw=await googleWriteCommands(rResp,{onConfirm:queueGoogleAction});receipts.push(...gw.immediate);}
+              try{const gw=await googleWriteCommands(rResp,{onConfirm:queueGoogleAction,persona:targetId});receipts.push(...gw.immediate);}
               catch(e){receipts.push(`⚠️ ${target.name}'s Google actions failed: ${e.message}`);}
               const ran=[...new Set(scanTags(rResp).map(t=>t.name))].filter(n=>!/^(RELAY_TO|SEARCH_WEB|READ_|MEMORY_QUERY|LIST_NOTES|SEARCH_DRIVE)/.test(n));
               for(const line of receipts)pushSystemMsg(`${target.name}: ${line}`);
@@ -1929,7 +1929,7 @@ export default function CommandScreen({navigation,route}){
         if(display){replies.push({name:p.name,text:display});lastSpokenRef.current=display;}
         await handleCommands(response,pid,cmdCallbacks);
         try{
-          const gw=await googleWriteCommands(response,{onConfirm:queueGoogleAction});
+          const gw=await googleWriteCommands(response,{onConfirm:queueGoogleAction,persona:pid});
           for(const line of gw.immediate)pushSystemMsg(line);
         }catch(e){pushSystemMsg('Google action failed: '+e.message);}
         // A stalling reply ("give me a minute", "that's not it") in a direct,

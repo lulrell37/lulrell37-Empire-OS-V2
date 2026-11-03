@@ -34,8 +34,14 @@ function base() { return BASE[session.env] || BASE.demo; }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Row 1 is the login the app last pushed; rows 2 (demo) and 3 (live) keep one
+// of each so T.A.L.O.N. can be switched between them from Telegram
+// ([TRADE_ACCOUNT], server/talonCommands.js) — the `talon_account` setting
+// says which. No choice made, or that slot empty -> row 1, as before.
 async function loadTradeCreds() {
-  const { rows } = await query('SELECT email, password, server, env FROM trade_creds WHERE id = 1');
+  const want = String(await require('./syncStore').getSetting('talon_account', '').catch(() => '')).toLowerCase();
+  const slot = want === 'live' ? 3 : want === 'demo' ? 2 : 1;
+  const { rows } = await query('SELECT id, email, password, server, env FROM trade_creds WHERE id = ANY($1) ORDER BY id = $2 DESC, id', [[1, slot], slot]);
   return rows[0] || null;
 }
 
