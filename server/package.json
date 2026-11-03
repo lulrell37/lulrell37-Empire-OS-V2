@@ -4,7 +4,8 @@
   "private": true,
   "main": "index.js",
   "scripts": {
-    "start": "node index.js",
+    "start": "node boot.js",
+    "start:direct": "node index.js",
     "dev": "node --watch index.js"
   },
   "engines": {

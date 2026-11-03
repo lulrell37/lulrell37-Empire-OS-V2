@@ -225,7 +225,7 @@ async function saveNote(title, content, persona) {
   if (!t) return { warn: 'a note needs a title' };
   try {
     const r = await g.saveDriveNote(t, content || '');
-    return { ok: `Drive note ${r.created ? 'created' : 'updated'}: ${r.name}` };
+    return { ok: `Drive note ${r.created ? 'created' : 'updated'}: ${r.link ? `[${r.name}](${r.link})` : r.name} ` };
   } catch (e) {
     const created = await saveAppNote(t, content || '', persona);
     return { warn: `"${t}" is NOT in Drive (${e.message}) — ${created ? 'created' : 'updated'} in the app's Notes instead` };
@@ -290,8 +290,42 @@ async function writeTag({ name, arg }, persona) {
   switch (name) {
     // --- Google ---
     case 'CREATE_EVENT':
-      if (!p[0] || !p[1]) return { warn: 'CREATE_EVENT needs a title and a start time' };
-      return { ok: await g.calendarCreate({ title: p[0], startISO: p[1], minutes: parseInt(p[2], 10) || 60 }) };
+    case 'ADD_EVENT': {
+      // [CREATE_EVENT: title | when | minutes | location | notes] — "when" may be
+      // split across two fields (date | time); a time-looking third field joins it.
+      if (!p[0] || !p[1]) return { warn: `${name} needs a title and a start time` };
+      let when = p[1];
+      let i = 2;
+      if (p[2] && /(:\d{2}|\b\d{1,2}\s*(am|pm)\b|\bnoon\b|^\d{1,2}$)/i.test(p[2]) && !/^\d{2,3}$/.test(p[2])) { when = `${p[1]} ${p[2]}`; i = 3; }
+      const minutes = parseInt(String(p[i] || '').replace(/[^\d]/g, ''), 10) || 60;
+      const hrs = /h(ou)?r/i.test(p[i] || '') ? minutes * 60 : minutes;
+      return { ok: await g.calendarCreate({ title: p[0], startISO: when, minutes: hrs, location: p[i + 1] || undefined, notes: p[i + 2] || undefined }) };
+    }
+    case 'REDEPLOY':
+      return propose(persona, 'redeploy', 'Redeploy the server onto the latest main', 'Restarts the backend (about 1-2 minutes): Telegram bots, T.A.L.O.N. and the crons pause and come back on the newest merged code. If it fails to start, it falls back to the current version. A.R.A. confirms when it\'s live.', {});
+    case 'MOVE_NOTE':
+    case 'MOVE_FILE':
+      if (!p[0] || !p[1]) return { warn: 'MOVE_NOTE needs the note and the folder' };
+      return { ok: await g.driveMoveNote(p[0], rest(arg, 1)) };
+    case 'EDIT_EVENT':
+    case 'UPDATE_EVENT':
+    case 'MOVE_EVENT': {
+      // [EDIT_EVENT: event title or id | title=…; start=2026-11-05T15:00; minutes=90; location=…; notes=…]
+      if (!p[0]) return { warn: `${name} needs the event's title or id` };
+      const ch = {};
+      for (const kv of rest(arg, 1).split(';')) {
+        const i = kv.indexOf('=');
+        if (i < 0) { if (kv.trim() && !ch.start) ch.start = kv.trim(); continue; } // a bare time = new start
+        const k = kv.slice(0, i).trim().toLowerCase();
+        const v = kv.slice(i + 1).trim();
+        if (/^(title|name|summary)$/.test(k)) ch.title = v;
+        else if (/^(start|time|when|date)$/.test(k)) ch.start = v;
+        else if (/^(minutes|duration|length|mins)$/.test(k)) ch.minutes = parseInt(v, 10);
+        else if (/^(location|where|place)$/.test(k)) ch.location = v;
+        else if (/^(notes|description|details)$/.test(k)) ch.notes = v;
+      }
+      return { ok: await g.calendarUpdate(p[0], ch) };
+    }
     case 'SAVE_NOTE':
     case 'CREATE_NOTE':
       if (!p[0]) return null;
@@ -581,6 +615,12 @@ async function runPending(id) {
       text = `Filed as #${r.issueNumber} — Claude Code is on it (${r.url}). I'll tell you when it has a question or a PR.`;
     } else if (row.kind === 'build_merge') {
       text = await builds.mergeBuild(pl.n);
+    } else if (row.kind === 'redeploy') {
+      text = await require('./redeploy').requestRedeploy(row.persona);
+    } else if (String(row.kind).startsWith('talon_')) {
+      // T.A.L.O.N. on his order (server/talonCommands.js) — a live-account trade
+      // action or the switch to live.
+      text = `T.A.L.O.N.: ${await require('./talonCommands').runAction(row.kind.slice(6), pl)}`;
     } else {
       throw new Error(`unknown action ${row.kind}`);
     }

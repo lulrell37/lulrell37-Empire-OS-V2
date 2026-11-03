@@ -86,57 +86,95 @@ async function gapi(path, { query: q, raw = false, method = 'GET', json, body, h
   return text ? JSON.parse(text) : null;
 }
 
-// Notes live as .md files in a Drive folder called "Empire OS Notes" (so an
-// Obsidian vault can sync to them) — same convention as the app's googleClient.
-const NOTES_FOLDER = 'Empire OS Notes';
+// Notes are .md files (so an Obsidian vault can read them), created straight
+// into My Drive; [MOVE_NOTE] files them into folders on request.
 const mdName = (t) => (/\.md$/i.test(t) ? t : `${String(t || '').trim()}.md`);
 const baseName = (n) => String(n || '').replace(/\.md$/i, '').trim();
 
-async function notesFolderId() {
-  const found = await gapi('/drive/v3/files', {
-    query: {
-      q: `trashed=false and mimeType='application/vnd.google-apps.folder' and name='${NOTES_FOLDER}'`,
-      pageSize: 1, fields: 'files(id)',
-    },
-  });
-  if (found.files && found.files[0]) return found.files[0].id;
-  const made = await gapi('/drive/v3/files', {
-    method: 'POST', json: { name: NOTES_FOLDER, mimeType: 'application/vnd.google-apps.folder' },
-    query: { fields: 'id' },
-  });
-  return made.id;
-}
-
 // Create-or-update a Drive note by title — write the first time, edit in place
-// after. Mirrors the app's [SAVE_NOTE] path. Returns { name, id, created }.
+// after. Mirrors the app's [SAVE_NOTE] path. Returns { name, id, created, link }.
+// Only ever touches a NOTE (markdown / text / Google Doc) — the old loose "name
+// contains" match could land on a folder or a Sheet with the same name and the
+// write failed; a Google Doc is written as plain text (Drive converts it), since
+// pushing text/markdown into a Doc is refused. New notes go straight into My
+// Drive — no folder; he files them where he wants with [MOVE_NOTE].
+const qEsc = (s) => String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+const DOC_MIME = 'application/vnd.google-apps.document';
 async function saveDriveNote(title, content) {
   if (!(await googleLinked())) throw new Error('google not linked');
   const clean = baseName(title);
-  const esc = clean.replace(/'/g, "\\'");
+  if (!clean) throw new Error('a note needs a title');
   const list = await gapi('/drive/v3/files', {
-    query: { q: `trashed=false and name contains '${esc}'`, pageSize: 10, fields: 'files(id,name,mimeType)' },
+    query: {
+      q: `trashed=false and ${NOTE_MIME_Q} and name contains '${qEsc(clean)}'`,
+      pageSize: 20, fields: 'files(id,name,mimeType,parents,webViewLink)',
+    },
   });
   const want = clean.toLowerCase();
-  const hit = ((list && list.files) || []).find((f) => baseName(f.name).toLowerCase() === want);
+  const exact = ((list && list.files) || []).filter((f) => baseName(f.name).toLowerCase() === want);
+  const hit = exact[0];
   if (hit) {
     await gapi(`/upload/drive/v3/files/${hit.id}`, {
       method: 'PATCH', query: { uploadType: 'media' },
-      headers: { 'Content-Type': 'text/markdown' }, body: content || '',
+      headers: { 'Content-Type': hit.mimeType === DOC_MIME ? 'text/plain; charset=UTF-8' : 'text/markdown; charset=UTF-8' }, body: content || '',
     });
-    return { name: hit.name, id: hit.id, created: false };
+    return { name: hit.name, id: hit.id, created: false, link: hit.webViewLink || null };
   }
-  const folder = await notesFolderId().catch(() => null);
   const meta = { name: mdName(clean), mimeType: 'text/markdown' };
-  if (folder) meta.parents = [folder];
   const boundary = 'empireos' + Math.random().toString(36).slice(2);
   const multipart =
     `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n` +
-    `--${boundary}\r\nContent-Type: text/markdown\r\n\r\n${content || ''}\r\n--${boundary}--`;
+    `--${boundary}\r\nContent-Type: text/markdown; charset=UTF-8\r\n\r\n${content || ''}\r\n--${boundary}--`;
   const made = await gapi('/upload/drive/v3/files', {
-    method: 'POST', query: { uploadType: 'multipart', fields: 'id,name' },
+    method: 'POST', query: { uploadType: 'multipart', fields: 'id,name,webViewLink' },
     headers: { 'Content-Type': `multipart/related; boundary=${boundary}` }, body: multipart,
   });
-  return { name: made.name, id: made.id, created: true };
+  if (!made || !made.id) throw new Error('Drive accepted the upload but returned no file');
+  return { name: made.name, id: made.id, created: true, link: made.webViewLink || null };
+}
+
+// [MOVE_NOTE: note | folder] — file a note into a Drive folder. "Business/Plans"
+// walks nested folders, creating any that don't exist; a single name uses an
+// existing folder of that name anywhere in Drive first; "My Drive" = the top.
+// Mirrors driveMoveNote in src/services/googleClient.js.
+const ROOT_WORDS = /^(my drive|root|home|top)$/i;
+async function driveMoveNote(ref, folder) {
+  const r = String(ref || '').trim();
+  const file = /^[A-Za-z0-9_-]{20,}$/.test(r)
+    ? await gapi(`/drive/v3/files/${encodeURIComponent(r)}`, { query: { fields: 'id,name,parents' } })
+    : await (async () => {
+      const list = await gapi('/drive/v3/files', { query: { q: `trashed=false and ${NOTE_MIME_Q} and name contains '${qEsc(baseName(r))}'`, pageSize: 20, fields: 'files(id,name,parents)' } });
+      const files = (list && list.files) || [];
+      return files.find((f) => baseName(f.name).toLowerCase() === baseName(r).toLowerCase()) || files[0] || null;
+    })();
+  if (!file) throw new Error(`no note named "${r}"`);
+  const target = String(folder || '').trim();
+  if (!target) throw new Error('move it where? give a folder name');
+  const rootId = (await gapi('/drive/v3/files/root', { query: { fields: 'id' } })).id;
+  let parent = rootId;
+  const made = [];
+  if (!ROOT_WORDS.test(target)) {
+    const segs = target.split('/').map((s) => s.trim()).filter(Boolean);
+    for (const seg of segs) {
+      const folderQ = `trashed=false and mimeType='application/vnd.google-apps.folder' and name='${qEsc(seg)}'`;
+      let hit = await gapi('/drive/v3/files', { query: { q: `${folderQ} and '${parent}' in parents`, pageSize: 1, fields: 'files(id)' } });
+      let id = hit && hit.files && hit.files[0] && hit.files[0].id;
+      if (!id && segs.length === 1) {
+        hit = await gapi('/drive/v3/files', { query: { q: folderQ, pageSize: 1, fields: 'files(id)' } });
+        id = hit && hit.files && hit.files[0] && hit.files[0].id;
+      }
+      if (!id) {
+        id = (await gapi('/drive/v3/files', { method: 'POST', json: { name: seg, mimeType: 'application/vnd.google-apps.folder', parents: [parent] }, query: { fields: 'id' } })).id;
+        made.push(seg);
+      }
+      parent = id;
+    }
+  }
+  const where = ROOT_WORDS.test(target) ? 'My Drive' : `"${target}"`;
+  if ((file.parents || []).includes(parent)) return `Drive: "${baseName(file.name)}" is already in ${where}.`;
+  const from = (file.parents || []).join(',');
+  await gapi(`/drive/v3/files/${file.id}`, { method: 'PATCH', json: {}, query: { addParents: parent, ...(from ? { removeParents: from } : {}), fields: 'id' } });
+  return `Drive: "${baseName(file.name)}" moved to ${ROOT_WORDS.test(target) ? 'My Drive' : `"${target}"`}${made.length ? ` (new folder${made.length > 1 ? 's' : ''}: ${made.join(', ')})` : ''}.`;
 }
 
 // Read a Drive note (a text/plain file or a Google Doc) by exact title, matching
@@ -268,16 +306,100 @@ async function calendarList({ startISO, days = 7 } = {}) {
   }).join('\n');
 }
 
-async function calendarCreate({ title, startISO, minutes = 60 }) {
+// His "today" in Eastern time, for parseWhen.
+function todayParts() {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: TZ, year: 'numeric', month: 'numeric', day: 'numeric', weekday: 'short' })
+    .formatToParts(new Date()).map((x) => [x.type, x.value]));
+  return { y: +p.year, m: +p.month, d: +p.day, wd: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(p.weekday) };
+}
+const pad2 = (n) => String(n).padStart(2, '0');
+// Whatever the persona wrote -> { start: Date, allDay, date: 'YYYY-MM-DD' }.
+// A string carrying its own offset is taken as-is; anything else is read in his time.
+function resolveWhen(text) {
+  const s = String(text || '').trim();
+  if (/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}.*([zZ]|[+-]\d{2}:?\d{2})$/.test(s)) return { start: new Date(s), allDay: false };
+  const w = require('./when').parseWhen(s, todayParts());
+  if (!w) throw new Error(`couldn't read "${s}" as a date/time — use e.g. 2026-11-06T15:00 or "Friday 3pm"`);
+  const date = `${w.y}-${pad2(w.m)}-${pad2(w.d)}`;
+  if (w.allDay) return { start: zonedDate(date), allDay: true, date };
+  return { start: zonedDate(`${date}T${pad2(w.hh)}:${pad2(w.mm)}`), allDay: false, date };
+}
+
+async function calendarCreate({ title, startISO, minutes = 60, location, notes }) {
   if (!title || !startISO) throw new Error('need a title and a start time');
-  const start = zonedDate(startISO);
-  if (isNaN(start)) throw new Error(`bad start time: ${startISO}`);
-  const end = new Date(start.getTime() + (minutes || 60) * 60000);
-  await gapi('/calendar/v3/calendars/primary/events', {
-    method: 'POST',
-    json: { summary: title, start: { dateTime: start.toISOString(), timeZone: TZ }, end: { dateTime: end.toISOString(), timeZone: TZ } },
+  const w = resolveWhen(startISO);
+  if (isNaN(w.start)) throw new Error(`bad start time: ${startISO}`);
+  const ev = { summary: title };
+  if (location) ev.location = location;
+  if (notes) ev.description = notes;
+  if (w.allDay) {
+    const next = new Date(Date.parse(`${w.date}T00:00:00Z`) + 86400000).toISOString().slice(0, 10);
+    ev.start = { date: w.date };
+    ev.end = { date: next };
+  } else {
+    const end = new Date(w.start.getTime() + (minutes || 60) * 60000);
+    ev.start = { dateTime: w.start.toISOString(), timeZone: TZ };
+    ev.end = { dateTime: end.toISOString(), timeZone: TZ };
+  }
+  const made = await gapi('/calendar/v3/calendars/primary/events', { method: 'POST', json: ev });
+  const when = w.allDay
+    ? `${new Date(`${w.date}T12:00:00Z`).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' })} (all day)`
+    : fmtWhen(w.start, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  return `Calendar: "${title}" set for ${when}${minutes && !w.allDay && minutes !== 60 ? `, ${minutes} min` : ''}${made && made.htmlLink ? ` — [open](${made.htmlLink})` : ''}.`;
+}
+
+// Find an event by id, or by title among the next 60 days (and the past 7).
+async function calendarFind(ref) {
+  const r = String(ref || '').trim();
+  if (!r) throw new Error('which event? give its id or title');
+  if (/^[a-z0-9_]{10,}$/i.test(r) && !/\s/.test(r)) {
+    try { return await gapi(`/calendar/v3/calendars/primary/events/${encodeURIComponent(r)}`); } catch { /* not an id — search by title */ }
+  }
+  const data = await gapi('/calendar/v3/calendars/primary/events', {
+    query: { q: r, timeMin: new Date(Date.now() - 7 * 86400000).toISOString(), timeMax: new Date(Date.now() + 60 * 86400000).toISOString(), singleEvents: 'true', orderBy: 'startTime', maxResults: 10 },
   });
-  return `Calendar: "${title}" set for ${fmtWhen(start, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}.`;
+  const items = (data && data.items) || [];
+  const want = r.toLowerCase();
+  const hit = items.find((e) => String(e.summary || '').toLowerCase() === want)
+    || items.find((e) => new Date(e.end?.dateTime || e.end?.date || 0) >= new Date() && String(e.summary || '').toLowerCase().includes(want))
+    || items[0];
+  if (!hit) throw new Error(`no event matching "${r}" in the next 60 days`);
+  return hit;
+}
+
+// Edit an event in place. `changes`: title, start ("2026-11-05T15:00" Eastern,
+// or a bare date for all-day), minutes (length; kept when only start moves),
+// location, notes (description).
+async function calendarUpdate(ref, changes = {}) {
+  const ev = await calendarFind(ref);
+  const patch = {};
+  if (changes.title) patch.summary = changes.title;
+  if (changes.location != null) patch.location = changes.location;
+  if (changes.notes != null) patch.description = changes.notes;
+  const wasAllDay = !(ev.start && ev.start.dateTime);
+  const oldStart = wasAllDay ? zonedDate(ev.start.date) : new Date(ev.start.dateTime);
+  const oldEnd = wasAllDay ? zonedDate(ev.end.date) : new Date(ev.end.dateTime);
+  const oldMin = Math.max(15, Math.round((oldEnd - oldStart) / 60000));
+  if (changes.start || changes.minutes) {
+    const w = changes.start ? resolveWhen(changes.start) : null;
+    if (w && w.allDay) {
+      const days = wasAllDay ? Math.max(1, Math.round((oldEnd - oldStart) / 86400000)) : 1;
+      patch.start = { date: w.date, dateTime: null };
+      patch.end = { date: new Date(Date.parse(`${w.date}T00:00:00Z`) + days * 86400000).toISOString().slice(0, 10), dateTime: null };
+    } else {
+      const start = w ? w.start : oldStart;
+      if (isNaN(start)) throw new Error(`bad start time: ${changes.start}`);
+      const mins = parseInt(changes.minutes, 10) || (wasAllDay ? 60 : oldMin);
+      patch.start = { dateTime: start.toISOString(), timeZone: TZ, date: null };
+      patch.end = { dateTime: new Date(start.getTime() + mins * 60000).toISOString(), timeZone: TZ, date: null };
+    }
+  }
+  if (!Object.keys(patch).length) throw new Error('nothing to change — give title=, start=, minutes=, location= or notes=');
+  const out = await gapi(`/calendar/v3/calendars/primary/events/${encodeURIComponent(ev.id)}`, { method: 'PATCH', json: patch });
+  const s2 = out.start && out.start.dateTime
+    ? fmtWhen(new Date(out.start.dateTime), { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+    : `${out.start && out.start.date} (all day)`;
+  return `Calendar: "${out.summary || ev.summary}" updated — now ${s2}${out.location ? ` @ ${out.location}` : ''}.`;
 }
 
 async function calendarDelete(eventId) {
@@ -442,6 +564,7 @@ async function gTaskDelete(title) {
 }
 
 module.exports = {
+  calendarFind, calendarUpdate, driveMoveNote,
   accessToken, googleLinked, googleStatus, readDriveNote, saveDriveNote, gmailSend,
   gmailList, gmailRead, calendarList, calendarCreate, calendarDelete,
   driveList, driveSearch, driveRead, driveFindByName, driveFile, driveRawText, driveUpdate, driveTrash, sheetCreate,

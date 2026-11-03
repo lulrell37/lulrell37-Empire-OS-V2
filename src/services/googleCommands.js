@@ -6,10 +6,15 @@
 //
 // Read tags feed data back to the persona before it answers. Write tags either
 // run immediately (create/edit) or are handed to onConfirm() for a confirmation
-// card (send email, deletes). Any persona may use these — no gate.
+// card (send email, deletes). Calendar and email tags are A.R.A.'s alone —
+// pass `persona` and anyone else's are dropped (mirrors ARA_ONLY_* in
+// server/personaRuntime.js).
 import*as g from './googleClient';
 import{addImportantDate,getTasks,getNote,findLead,appendLeadLog,updateLead}from './database';
 import{runSync}from './sync';
+
+const ARA_ONLY=/\[(READ_EMAIL|READ_EMAIL_ID|READ_CALENDAR|CREATE_EVENT|ADD_EVENT|EDIT_EVENT|UPDATE_EVENT|MOVE_EVENT|DELETE_EVENT|SEND_EMAIL)\b[^\]]*\]/gi;
+const araOnly=(text,persona)=>(persona&&persona!=='ara'?String(text||'').replace(ARA_ONLY,''):String(text||''));
 
 // "Learning Everything | 2" or "abc123 | all" -> { ref, page }. A trailing
 // "| <number>" or "| all" is a page selector; anything else is part of the name.
@@ -21,9 +26,9 @@ function splitPageArg(raw){
 }
 
 // ---- reads ---------------------------------------------------------------
-export async function googleReadInjections(text){
+export async function googleReadInjections(text,persona){
   const out=[];
-  const t=String(text||'');
+  const t=araOnly(text,persona);
   const push=async(label,fn)=>{
     try{out.push(await fn());}
     catch(e){out.push(`${label}: unavailable — ${e.message}`);}
@@ -98,17 +103,29 @@ export async function googleReadInjections(text){
 }
 
 // ---- writes -------------------------------------------------------------
-export async function googleWriteCommands(text,{onConfirm}={}){
-  const t=String(text||'');
+export async function googleWriteCommands(text,{onConfirm,persona}={}){
+  const t=araOnly(text,persona);
   const immediate=[];
   let deferred=0;
   const run=async(fn)=>{try{immediate.push(await fn());}catch(e){immediate.push(`⚠️ ${e.message}`);}};
 
-  for(const m of t.matchAll(/\[CREATE_EVENT:\s*([^|\]]+)\|([^|\]]+)(?:\|([^\]]+))?\]/ig))
-    await run(()=>g.calendarCreate({title:m[1].trim(),startISO:m[2].trim(),minutes:parseInt(m[3],10)||60}));
+  // [CREATE_EVENT: title | when | minutes | location | notes]; "when" may be split
+  // across two fields (date | time) — a time-looking third field joins it.
+  for(const m of t.matchAll(/\[(?:CREATE|ADD)_EVENT:\s*([^\]]+)\]/ig)){
+    const p=m[1].split('|').map(s=>s.trim());
+    if(!p[0]||!p[1]){immediate.push('⚠️ CREATE_EVENT needs a title and a start time');continue;}
+    let when=p[1],i=2;
+    if(p[2]&&/(:\d{2}|\b\d{1,2}\s*(am|pm)\b|\bnoon\b|^\d{1,2}$)/i.test(p[2])&&!/^\d{2,3}$/.test(p[2])){when=`${p[1]} ${p[2]}`;i=3;}
+    const n=parseInt(String(p[i]||'').replace(/[^\d]/g,''),10)||60;
+    const minutes=/h(ou)?r/i.test(p[i]||'')?n*60:n;
+    await run(()=>g.calendarCreate({title:p[0],startISO:when,minutes,location:p[i+1]||undefined,notes:p[i+2]||undefined}));
+  }
 
   // [CREATE_NOTE] / [EDIT_NOTE] (and [SAVE_NOTE] / [APPEND_NOTE]) are run by
   // handleCommands via noteCommands.js — one path, with receipts, for every persona.
+
+  for(const m of t.matchAll(/\[MOVE_NOTE:\s*([^|\]]+)\|([^\]]+)\]/ig))
+    await run(()=>g.driveMoveNote({ref:m[1].trim(),folder:m[2].trim()}));
 
   if(/\[SYNC_NOTES\]/i.test(t))
     await run(()=>g.driveSyncNotesFolder());

@@ -1,0 +1,37 @@
+# Outside check after a server redeploy (server/redeploy.js fires this with a
+# repository_dispatch when J.A.R.V.I.S. redeploys). A few minutes later it asks
+# the server's /health whether it came back on a fresh boot. If it didn't, this
+# run fails — and GitHub emails the owner about the failed run. A.R.A. can't
+# report a server that never came back, so this is the backstop.
+name: Server redeploy check
+
+on:
+  repository_dispatch:
+    types: [server-redeploy]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Wait for the restart
+        run: sleep 360
+      - name: Is the server back on a fresh boot?
+        env:
+          URL: ${{ github.event.client_payload.url }}
+          SINCE: ${{ github.event.client_payload.since }}
+        run: |
+          for i in 1 2 3 4; do
+            body=$(curl -fsS --max-time 20 "$URL/health" || true)
+            booted=$(echo "$body" | jq -r '.code.booted_at // 0' 2>/dev/null || echo 0)
+            sha=$(echo "$body" | jq -r '.code.sha // "?"' 2>/dev/null || echo "?")
+            fell=$(echo "$body" | jq -r '.code.fell_back // false' 2>/dev/null || echo false)
+            if [ "${booted:-0}" -gt "${SINCE:-0}" ]; then
+              echo "Server is back: booted $(date -d @$((booted/1000))) on $sha (fell back: $fell)."
+              exit 0
+            fi
+            echo "Attempt $i: not back yet (${body:0:200})"
+            sleep 60
+          done
+          echo "::error::The Empire OS server did not come back after the redeploy. Open Replit → Deployments and redeploy it by hand."
+          exit 1

@@ -18,7 +18,7 @@
 const crypto = require('crypto');
 const { query } = require('./db');
 const { chatAs, claudeText, webResearch } = require('./llm');
-const { ROSTER, resolvePersonaId, relayAllowed, rosterLines, personaSystem, personaTgIdentity, genderLine } = require('./personas');
+const { ROSTER, resolvePersonaId, relayAllowed, ARA_ROUTE, rosterLines, personaSystem, personaTgIdentity, genderLine } = require('./personas');
 const { saveDriveNote, googleStatus, gTaskComplete } = require('./google');
 const tools = require('./personaTools');
 const { mem0Remember, mem0Search, mem0All, mem0Line, mem0Health } = require('./mem0');
@@ -26,6 +26,7 @@ const { tlSnapshot, tlFormatSnapshot } = require('./tradeLocker');
 const { formatTradeRecord } = require('./tradeJournal');
 const { EMOTION, emotionFor, stripCues } = require('./voiceCues');
 const { MEDIA_TOOLS, forSpeech, pullMarkdownImages, mediaFromTags } = require('./telegramMedia');
+const { CODE_TAGS, codeTag, empireOsBrief } = require('./codeAccess');
 
 const TZ = 'America/New_York';
 // Telegram messages loaded per turn (both roles) — ~20 exchanges. 16 left her
@@ -287,10 +288,15 @@ You have a live context block below — time, Empire Score, streak, Batman Proto
 // Google tags every persona carries — same set as the app's GOOGLE block. Whether
 // Google actually works right now is a separate per-turn line (googleLine).
 const GOOGLE_TOOLS = `GOOGLE (see the GOOGLE status line below for whether it's working right now):
- - NOTES (one tag per note — several notes means several tags in the same reply): [SAVE_NOTE: title | content] creates a Drive note, or overwrites the one with that title — a short "Saved that as '<title>'." is enough, don't paste the content back. [APPEND_NOTE: title | text] adds to the end of an existing note (creates it if there isn't one) — use it for "add this to my … note". [EDIT_NOTE: title or fileId | full new content] replaces a note's whole text — [READ_NOTE] it first so you keep what should stay. [READ_NOTE: title] (long notes page: [READ_NOTE: title | 2], [READ_NOTE: title | all]) · [LIST_NOTES] (30 newest, dated) · [LIST_NOTES: 200] · [LIST_NOTES: 2026-07-01] (every note since that date) · [SEARCH_DRIVE: keyword] (all of Drive, any age) · [READ_FILE_ID: id] · [DELETE_FILE: fileId] (he taps to confirm). Note text can be long and multi-line; brackets inside it are fine as long as they're balanced.
+ - NOTES (one tag per note — several notes means several tags in the same reply): [SAVE_NOTE: title | content] creates a Drive note (straight into his Drive, no folder), or overwrites the one with that title — a short "Saved that as '<title>'." is enough, don't paste the content back. [APPEND_NOTE: title | text] adds to the end of an existing note (creates it if there isn't one) — use it for "add this to my … note". [EDIT_NOTE: title or fileId | full new content] replaces a note's whole text — [READ_NOTE] it first so you keep what should stay. [READ_NOTE: title] (long notes page: [READ_NOTE: title | 2], [READ_NOTE: title | all]) · [LIST_NOTES] (30 newest, dated) · [LIST_NOTES: 200] · [LIST_NOTES: 2026-07-01] (every note since that date) · [SEARCH_DRIVE: keyword] (all of Drive, any age) · [READ_FILE_ID: id] · [DELETE_FILE: fileId] (he taps to confirm) · [MOVE_NOTE: note title | folder] — only when he asks to move or file a note: an existing folder by that name, or "Business/Plans" for nested folders (created if missing), "My Drive" for the top. Note text can be long and multi-line; brackets inside it are fine as long as they're balanced.
  - EMAIL: [READ_EMAIL] (unread inbox) · [READ_EMAIL: any Gmail search, e.g. from:bank newer_than:7d] · [READ_EMAIL_ID: id] (one full message) · [SEND_EMAIL: to | subject | body] — he gets a Confirm button before it sends; tell him it's ready to send, not that it's sent.
- - CALENDAR: [READ_CALENDAR] (next 7 days) · [READ_CALENDAR: 30] · [READ_CALENDAR: 2026-08-01 | 30] · [CREATE_EVENT: title | 2026-06-01T14:00 | minutes] (his Eastern time) · [DELETE_EVENT: id] (confirmed).
+ - CALENDAR: [READ_CALENDAR] (next 7 days) · [READ_CALENDAR: 30] · [READ_CALENDAR: 2026-08-01 | 30] · [CREATE_EVENT: title | when | minutes | location | notes] — when = 2026-06-01T14:00, or plainly "Friday 3pm" / "tomorrow 10:30am" / "Nov 6 2pm" (his Eastern time); a date with no time makes an all-day event; location and notes optional. Anything he wants "on my calendar" is this tag · [EDIT_EVENT: event title or id | title=new name; start=2026-06-01T15:30; minutes=90; location=…; notes=…] — change any of those on an existing event (move it, rename it, lengthen it, add a place or details); include only what changes, a bare date in start= makes it all-day · [DELETE_EVENT: id] (confirmed).
  - SHEETS: [CREATE_SHEET: title | col1,col2 | val1,val2].`;
+// Everyone but A.R.A.: Calendar and Gmail are hers alone (they hand those to her).
+const GOOGLE_TOOLS_OTHERS = `GOOGLE (see the GOOGLE status line below for whether it's working right now):
+ - NOTES (one tag per note — several notes means several tags in the same reply): [SAVE_NOTE: title | content] creates a Drive note, or overwrites the one with that title — a short "Saved that as '<title>'." is enough, don't paste the content back. [APPEND_NOTE: title | text] adds to the end of an existing note (creates it if there isn't one) — use it for "add this to my … note". [EDIT_NOTE: title or fileId | full new content] replaces a note's whole text — [READ_NOTE] it first so you keep what should stay. [READ_NOTE: title] (long notes page: [READ_NOTE: title | 2], [READ_NOTE: title | all]) · [LIST_NOTES] (30 newest, dated) · [LIST_NOTES: 200] · [LIST_NOTES: 2026-07-01] (every note since that date) · [SEARCH_DRIVE: keyword] (all of Drive, any age) · [READ_FILE_ID: id] · [DELETE_FILE: fileId] (he taps to confirm). Note text can be long and multi-line; brackets inside it are fine as long as they're balanced.
+ - SHEETS: [CREATE_SHEET: title | col1,col2 | val1,val2].
+ - CALENDAR AND EMAIL are A.R.A.'s alone — you can't read or change them. If he asks you for anything on his calendar or in his email, hand it to her: [RELAY_TO: ara | exactly what he wants done or found].`;
 
 // The persona's own prompt from the app (Settings → persona prompt, synced as the
 // `custom_prompts` row keyed by persona). In the app it replaces the built-in
@@ -307,6 +313,22 @@ async function customPrompt(personaId) {
 // was written for the app.
 const TG_FRAME = `[TELEGRAM: you are talking to Mr. Burrus over Telegram (text), away from the Empire OS app — keep replies tight and mobile-readable, no long status briefings unless he asks. Reply directly to what he just said. There is a live context block below — read from it, don't invent numbers. If your instructions above mention app-only things (the Canvas, opening apps, the 3D Lab), the tool list below is what actually works here.]`;
 
+// Tasks, money, dates, the HUD and the pipeline — A.R.A.'s everyday write set.
+// Also handed to any persona she passes one of his instructions to, so "tell
+// Atlas to log that expense" or "have Scout add this lead" really happens.
+const SHARED_OPS = ` TASKS, MONEY, DATES:
+ - [ADD_TASK: title | notes | YYYY-MM-DD] (app list) / [CREATE_TASK: title | notes | YYYY-MM-DD] (app + Google Tasks) / [COMPLETE_TASK: name] / [TASK_EDIT: name | new title] / [DELETE_TASK: name] / [READ_TASKS] (app + Google Tasks).
+ - [ADD_EXPENSE: amount | category | note] / [EXPENSE_SUMMARY] (this month by category).
+ - [ADD_REVENUE: business | amount | income or expense | note] / [SET_TARGET: business | monthly | weekly].
+ - [ADD_DATE: label | YYYY-MM-DD | note] / [SET_REMINDER: text | YYYY-MM-DD] (a dated entry on the HUD only — no alert, and NOT his Google Calendar: "put it on my calendar", "add an event", "schedule…" is always [CREATE_EVENT]).
+ - [REMIND_ME: what to remind him | YYYY-MM-DD HH:MM] — a real push notification to his phone (plus a ping here) at that Eastern time, 24h clock; "+20m" / "+2h" also work. Use this whenever he says "remind me…". Work out the absolute time from the current time in your context.
+ THE HUD (edits land in the app on its next sync):
+ - [UPDATE_SCORE: 0-100] / [SET_WORD: word | phonetic | definition] / [SET_VERSE: text | reference] / [SET_FACT: text]
+ - [ROUTINE_DONE: item, item] / [ROUTINE_ADD: item] / [ROUTINE_REMOVE: item] / [ROUTINE_RENAME: item | new label]
+ - [BATMAN_SET: day | label | description] — one day of the 7-day Batman Protocol.
+ PIPELINE:
+ - [LEADS] or [LEAD_LIST: stage] / [LEAD_ADD: name | business | website | contact | bottleneck | segment] / [LEAD_UPDATE: lead | stage=contacted; next_action=...; next_touch=YYYY-MM-DD; log=...] / [LEAD_LOG: lead | what happened] / [LEAD_EMAIL: lead | subject | body] (he taps to confirm).`;
+
 // A.R.A. runs the day, so she gets the full tool set — the same one she has in
 // the app, minus what physically needs the phone. The other personas get a
 // leaner set focused on their lane (plus Google, which every persona has).
@@ -316,23 +338,13 @@ const ARA_TOOLS = `[WHAT YOU CAN DO FROM HERE — emit the tag in your reply; th
  - [SEARCH_WEB: query] — one live web lookup. Use it for anything that turns on something current; never guess that from memory.
  - [DEEP_RESEARCH: topic] — ONLY when he explicitly asks for "deep research" / "a deep dive". Runs in the background (several minutes, ~12 searches, cited); the brief comes back here and is saved as a Note. Tell him it's running.
  THE EMPIRE:
- - [RELAY_TO: persona-id | a complete, specific question] — ONLY when he asks you to bring that persona in. Synchronous: you get their real answer back this turn. Never guess their answer.
+ - [RELAY_TO: persona-id | a complete, specific question or instruction] — ONLY when he asks you to bring that persona in. Synchronous: you get their real answer back this turn. Never guess their answer.
+ - GIVING ORDERS: anything he could tell a persona to do himself, he can tell you to have them do — "tell J.A.R.V.I.S. to file a build for…", "have S.E.L.E.N.E. make a logo", "get Atlas to log that expense", "tell Scout to add this lead". Pass it as [RELAY_TO: id | the full instruction, with every detail he gave you]. They carry it out with their own tools (notes, email, calendar, tasks, money, HUD, leads, images, builds, their own lane's tools), and you get back their answer plus receipts for what actually ran — report those receipts, not their words. Several personas, several RELAY_TO tags in the same reply.
  - [MEMORY_QUERY: precise question] — search your full history with Mr. Burrus.
  - [REMEMBER: the thing | days] (1-30) / [UNPIN_MEMORY: a few words] — keep something time-sensitive in front of you.
  - [COUNCIL_IDEA: text] / [COUNCIL_NOTE: text] / [COUNCIL_CONVENE] — the nightly Empire Council's agenda, brief, or run it now.
  ${GOOGLE_TOOLS}
- TASKS, MONEY, DATES:
- - [ADD_TASK: title | notes | YYYY-MM-DD] (app list) / [CREATE_TASK: title | notes | YYYY-MM-DD] (app + Google Tasks) / [COMPLETE_TASK: name] / [TASK_EDIT: name | new title] / [DELETE_TASK: name] / [READ_TASKS] (app + Google Tasks).
- - [ADD_EXPENSE: amount | category | note] / [EXPENSE_SUMMARY] (this month by category).
- - [ADD_REVENUE: business | amount | income or expense | note] / [SET_TARGET: business | monthly | weekly].
- - [ADD_DATE: label | YYYY-MM-DD | note] / [SET_REMINDER: text | YYYY-MM-DD] (a dated entry on the HUD — no alert).
- - [REMIND_ME: what to remind him | YYYY-MM-DD HH:MM] — a real push notification to his phone (plus a ping here) at that Eastern time, 24h clock; "+20m" / "+2h" also work. Use this whenever he says "remind me…". Work out the absolute time from the current time in your context.
- THE HUD (edits land in the app on its next sync):
- - [UPDATE_SCORE: 0-100] / [SET_WORD: word | phonetic | definition] / [SET_VERSE: text | reference] / [SET_FACT: text]
- - [ROUTINE_DONE: item, item] / [ROUTINE_ADD: item] / [ROUTINE_REMOVE: item] / [ROUTINE_RENAME: item | new label]
- - [BATMAN_SET: day | label | description] — one day of the 7-day Batman Protocol.
- PIPELINE:
- - [LEADS] or [LEAD_LIST: stage] / [LEAD_ADD: name | business | website | contact | bottleneck | segment] / [LEAD_UPDATE: lead | stage=contacted; next_action=...; next_touch=YYYY-MM-DD; log=...] / [LEAD_LOG: lead | what happened] / [LEAD_EMAIL: lead | subject | body] (he taps to confirm).
+${SHARED_OPS}
  THE FIRM — client & project delivery, you coordinate:
  - [PROJECT_START: short name | one-paragraph brief | new or empire] opens it; [PROJECT_DONE] closes it.
  - [DELEGATE: name | the specific scoped task] — one or several in a reply. Each specialist's work comes back to you this turn; then synthesize for him: what each delivered, how it fits, what's decided, what still needs his call. Roles: Selene = brand & visual; Rogue = copy & content; J.A.R.V.I.S. = architecture & build feasibility; Atlas = pricing & payments; Asia = legal & compliance; Stephanie = training content; Haven = health & wellness content; Sage = research.
@@ -340,6 +352,7 @@ const ARA_TOOLS = `[WHAT YOU CAN DO FROM HERE — emit the tag in your reply; th
  T.A.L.O.N. — TRADING:
  - T.A.L.O.N. trades gold and Bitcoin ON HIS OWN, from the server, app open or not — he places, manages and closes his own orders on the demo account whenever auto-trade is ON. Never tell Mr. Burrus T.A.L.O.N. can't place trades himself; he does. The TRADING line in LIVE CONTEXT says whether he's running and what his last scan did.
  - [TALON_RUN] — make him scan gold and Bitcoin right now instead of waiting for his next cycle. He decides and, if the setup is there, places the trade himself; you get back what he decided (or why he couldn't) before you answer. Use it when Mr. Burrus says "have T.A.L.O.N. trade", "is he trading?", "run a scan" and the like.
+ - ORDERS FOR T.A.L.O.N. — switch him between the live and demo account, enter a trade, close one or all, move a stop (or to break-even), move a target: pass it to him with [RELAY_TO: talon | the exact order with every number Mr. Burrus gave]. He executes it (on the live account Mr. Burrus gets a Confirm button), and you report his receipts. [TRADE_POSITIONS] shows you the open positions yourself; [QUICK_LOG] shows his 5m quick-scalp desk (what it's seeing, every time it fired and why it did or didn't trade).
  - [TALON_UPDATE] — ask him for a market update right now: his read on gold and Bitcoin, where he predicts each goes next, and how our open positions look. Use it when Mr. Burrus asks "how's the market", "how are our trades", "what's T.A.L.O.N. think" and the like. He also sends you one on his own a few times a day — those show up in this chat as "T.A.L.O.N. → A.R.A.".
  - If auto-trade is OFF or something's broken (no TradeLocker login, an error), say exactly what the TRADING line says and how to fix it.
 
@@ -348,20 +361,39 @@ ${MEDIA_TOOLS}
 Everything in LIVE CONTEXT below is pulled fresh for every message — it IS the HUD; you're looking at it. Never tell him to open the app to check something already in front of you, and never say you "can't" do anything listed above — you can.
 
 NOT AVAILABLE over Telegram — ONLY these genuinely need the phone in hand. Say so plainly and offer the nearest thing you can do:
- opening an app on his phone or a webpage on it, the 3D Laboratory, detaching/docking HUD panels, the app's Canvas board itself (but charts and diagrams you CAN send here as images — [CHART] / [DIAGRAM]), you placing a specific trade by hand (T.A.L.O.N. picks his own entries — [TALON_RUN] makes him look now), editing clips (though you CAN see photos and videos he sends you right here), filing a build to GitHub.]`;
+ opening an app on his phone or a webpage on it, the 3D Laboratory, detaching/docking HUD panels, the app's Canvas board itself (but charts and diagrams you CAN send here as images — [CHART] / [DIAGRAM]), you placing a trade yourself (relay the order to T.A.L.O.N. — he places, closes and adjusts on Mr. Burrus's word), editing clips (though you CAN see photos and videos he sends you right here), filing a build to GitHub.]`;
 
 // Extra per-persona tag lines folded into GENERIC_TOOLS.
 const PERSONA_EXTRA_TOOLS = {
   haven: ' - [READ_HUD] — pull the live HUD (Batman Protocol training template, morning routine, streak). Read it before advising on training; never assume a fixed schedule.',
   jarvis: ` - [READ_HUD] — pull the live HUD (tasks, routine, Batman Protocol, targets).
  - [BUILD_STATUS] — the current state of the app build pipeline (open build jobs, PRs, questions).
+ THE CODE — you can read Empire OS's actual source (the app and this server), read-only, right now:
+ - [SEARCH_CODE: text] — every line in the repo containing that text (a function, a tag, a setting, a phrase), as file:line.
+ - [READ_CODE: path] — read a file with line numbers (long files page: [READ_CODE: path | 2], [READ_CODE: path | all]). A unique file name like personaRuntime.js is enough.
+ - [CODE_TREE] / [CODE_TREE: folder] — list the files.
+ When he asks how something works, why something broke, or to look at the code: search and read it first, then answer from what's actually there, citing file:line. Never say you can't see the code — you can. To CHANGE code, write a [BUILD_REQUEST] spec grounded in what you read (name the files and functions).
  THE BUILD LOOP — you change Empire OS itself (the app and this server) through Claude Code:
  - [BUILD_REQUEST: full self-contained spec] — write a COMPLETE spec in one block: what to build/change, where it lives (app screen or server/Telegram), how it should behave, what "done" looks like. No literal ] inside. Mr. Burrus gets a Confirm button; on his tap it's filed as a GitHub issue and Claude Code implements it on a branch and opens a PR (minutes, sometimes longer). Make the spec good — it's all Claude Code sees.
  - When Claude Code asks a question it comes to Mr. Burrus here. Put it to him in plain terms, get his answer, then [BUILD_REPLY: #issue | his answer].
- - When a PR is ready you'll both hear about it here. Say what it does; only on his yes, [BUILD_MERGE: #issue] — he confirms with a tap, it's merged into main and the APK build starts. App changes reach his phone with that new APK; server changes go live on the next backend deploy.
+ - When a PR is ready you'll both hear about it here. Say what it does; only on his yes, [BUILD_MERGE: #issue] — he confirms with a tap and it's merged into main. What that sets off depends on what the PR touched, and the merge receipt says which: app files start the APK build on their own (EAS — the new APK reaches his phone when it finishes); server-only changes build no APK and go live only on a [REDEPLOY]; a PR touching both needs both. Tell him which it is from the receipt.
+ - [REDEPLOY] — restart the backend onto the latest merged main (he confirms with a tap; ~1-2 min; bots and T.A.L.O.N. pause then come back; a version that won't start falls back to the current one; A.R.A. tells him when it's live and what changed). Offer it after merging anything that touches the server, or whenever he asks to redeploy / ship the server. Never claim it's live yourself — A.R.A.'s message is the confirmation.
  - [BUILD_CANCEL: #issue] — drop a build he no longer wants.
  - Be honest about the loop: not instant, you're the messenger between Mr. Burrus and Claude Code, and every run bills his Anthropic key.`,
 };
+
+PERSONA_EXTRA_TOOLS.talon = ` - [TALON_RUN] — run your scan of gold and Bitcoin right now; you place the trade yourself if the setup is there, and get back what you decided.
+ - [TALON_UPDATE] — your market update right now: your read, prediction and how the open positions look.
+ - [TRADE_SCAN: XAUUSD, BTCUSD] — a live market snapshot plus your trade record.
+ - [QUICK_LOG] — your 5m quick-scalp desk: what the last check saw on each market and every time the filter fired with what happened (taken, passed and why, skipped). Use it whenever he asks about quick scalps.
+ ON MR. BURRUS'S ORDERS — he's the boss of the desk; when he (or A.R.A. for him) tells you to do one of these, do it, even if your playbook wouldn't (say so in a line if you disagree):
+ - [TRADE_POSITIONS] — every open position with its id, stop, target and P/L. Read it first when he refers to "the gold trade", "the swing", "everything".
+ - [TRADE_ENTER: XAUUSD or BTCUSD | buy or sell | stop price | target price] — a market order, 0.02. A stop is required; the main stop rule's minimum (gold $10 / Bitcoin 0.8% and 1.2× the 1H ATR) still applies and widens a tighter one. If he gave no stop or target, [TRADE_SCAN] first and set them off structure.
+ - [TRADE_CLOSE: position id, or XAUUSD / BTCUSD (add buy/sell/scalp/swing to narrow it), or all]
+ - [MOVE_STOP: position id / market / all | new price, or breakeven] — stops can be moved, never removed.
+ - [MOVE_TP: position id / market / all | new price]
+ - [TRADE_ACCOUNT: live] / [TRADE_ACCOUNT: demo] — which TradeLocker account you trade on (auto-trade, news trades and his orders). Live = real money.
+ On the demo account these run right away. On the LIVE account — and switching to live — he gets a Confirm button first: tell him it's waiting on his tap, not that it's done. Only gold and Bitcoin.`;
 
 function genericTools(personaId) {
   const extra = PERSONA_EXTRA_TOOLS[personaId] ? '\n' + PERSONA_EXTRA_TOOLS[personaId] : '';
@@ -371,7 +403,7 @@ function genericTools(personaId) {
  - [DEEP_RESEARCH: topic] — ONLY when he explicitly asks for "deep research" / "a deep dive". Runs in the background (several minutes, cited); you'll get the finished brief and it's saved as a Note. Tell him it's running.
  - [RELAY_TO: persona-id | a complete, specific question] — ONLY when he asks you to bring that persona in. Synchronous: you get their real answer back this turn. Ask a full question; never guess their answer.
  - [MEMORY_QUERY: precise question] — search your own history with Mr. Burrus when he points back to something not in view.
- ${GOOGLE_TOOLS}${extra}
+ ${GOOGLE_TOOLS_OTHERS}${extra}
 ${MEDIA_TOOLS}
 
 Write tags run after your reply and Mr. Burrus gets a receipt for each — never claim something happened that a tag didn't do.
@@ -421,7 +453,7 @@ function systemPrompt(ctx, gs, custom, mem) {
     memoryLine(),
     ARA_TOOLS,
     googleLine(gs),
-    `[THE EMPIRE — the other personas who serve Mr. Burrus. Only when Mr. Burrus asks you to bring someone in — he names them or says to check with / run it by someone — do you use [RELAY_TO]. Otherwise answer it yourself from your own knowledge and lane, even if it's someone else's specialty (asked about trading, give your own take — don't go get T.A.L.O.N.). This overrides any hand-off instruction elsewhere in your prompt.\n${rosterLines()}\n]`,
+    `[THE EMPIRE — you run the team. When Mr. Burrus tells you to DO something that's another persona's job, send it to whoever owns it with [RELAY_TO: id | the full instruction, every detail he gave] — he never has to name them. WHO OWNS WHAT: ${ARA_ROUTE}. Everyday things you have your own tags for (notes, tasks, calendar, email, reminders, expenses, the HUD, research, images) you just do yourself. A question or an opinion you answer yourself, unless he names someone or it needs their live tools (where his trades stand → T.A.L.O.N.; how something in the app's code works → J.A.R.V.I.S.). Several jobs for several people → several RELAY_TO tags in the same reply. Report what they actually did from their receipts. This overrides any hand-off instruction elsewhere in your prompt.\n${rosterLines()}\n]`,
     faithBlock('ara'),
     `[LIVE CONTEXT:\n${contextBlock(ctx, { trading: true })}\n]`,
     `[THE CURRENT MOMENT — right now it is ${momentET()} (America/New_York); Mr. Burrus is in Waldorf, MD. This is authoritative; the chat history and memory may be hours or days old, so don't assume it's still the same day.]`,
@@ -478,14 +510,25 @@ function scanTags(text) {
         depth--;
       }
     }
+    // Inner brackets all balanced but no closing ] — the reply was cut off
+    // mid-tag; otherwise (a stray [ inside) the first ] closes it, as before.
+    if (end < 0 && depth === 0) first = -1;
     if (end < 0) end = first;
-    if (end < 0) continue;
+    if (end < 0) {
+      // Never closed — the reply was cut off mid-tag (a long note hitting the
+      // token cap). Take it to the end rather than silently dropping it.
+      out.push({ name: m[1], arg: s.slice(from).trim(), start: m.index, end: s.length, open: true });
+      break;
+    }
     out.push({ name: m[1], arg: s.slice(from, end).trim(), start: m.index, end: end + 1 });
     TAG_HEAD.lastIndex = end + 1;
   }
   return out;
 }
 const findTags = (text) => scanTags(text).map(({ name, arg }) => ({ name, arg }));
+// Tags in `text` that never closed (see scanTags) — their content may be cut short.
+const openTags = (text) => scanTags(text).filter((t) => t.open).map((t) => t.name);
+const NOTE_TAGS = new Set(['SAVE_NOTE', 'CREATE_NOTE', 'APPEND_NOTE', 'EDIT_NOTE']);
 function stripTags(text) {
   const s = String(text || '');
   let out = '';
@@ -510,6 +553,7 @@ async function runInjections(text, persona = 'ara', { convo = '', depth = 0, sin
       if (name === 'TRADE_SCAN') return await tradeScan(arg);
       if (name === 'WEATHER') return `WEATHER${arg ? ` "${arg}"` : ''}:\n${await require('./morningBrief').weatherSection(arg || undefined)}`;
       if (name === 'SEARCH_WEB' && arg) return `SEARCH_WEB "${arg}":\n${(await webResearch(arg)) || '(nothing found)'}`;
+      if (ARA_ONLY_READS.has(name) && persona !== 'ara') return `${name}: not yours — calendar and email are A.R.A.'s. Hand it to her: [RELAY_TO: ara | what he wants].`;
       if (tools.READ_TAGS.has(name)) {
         const out = await tools.readTag({ name, arg }, persona);
         return out ? `${name}${arg ? ` "${arg}"` : ''}:\n${out}` : '';
@@ -518,8 +562,11 @@ async function runInjections(text, persona = 'ara', { convo = '', depth = 0, sin
       if (name === 'MEMORY_QUERY' && arg) return `MEMORY_QUERY "${arg}":\n${await memoryQuery(arg, persona)}`;
       if (name === 'READ_HUD') return `HUD:\n${await readHud()}`;
       if (name === 'BUILD_STATUS') return `BUILD PIPELINE:\n${await buildStatus()}`;
-      if (name === 'TALON_UPDATE' && persona === 'ara') return `T.A.L.O.N.'S MARKET UPDATE (just now — pass it on in your own words, keep his prices):\n${await require('./talonUpdate').updateForAra()}`;
-      if (name === 'TALON_RUN' && persona === 'ara') return `T.A.L.O.N. SCAN (run just now):\n${talonRunLine(await require('./talonAutoTrade').tick({ force: true }))}`;
+      if (CODE_TAGS.has(name) && ['jarvis', 'ara'].includes(persona)) return `${name}${arg ? ` "${arg}"` : ''}:\n${await codeTag(name, arg)}`;
+      if (name === 'TALON_UPDATE' && ['ara', 'talon'].includes(persona)) return `T.A.L.O.N.'S MARKET UPDATE (just now — pass it on in your own words, keep his prices):\n${await require('./talonUpdate').updateForAra()}`;
+      if (name === 'QUICK_LOG' && ['ara', 'talon'].includes(persona)) return `QUICK-SCALP DESK:\n${await require('./talonQuick').quickLogText()}`;
+      if (name === 'TRADE_POSITIONS' && ['ara', 'talon'].includes(persona)) return `OPEN POSITIONS:\n${await require('./talonCommands').positionsText()}`;
+      if (name === 'TALON_RUN' && ['ara', 'talon'].includes(persona)) return `T.A.L.O.N. SCAN (run just now):\n${talonRunLine(await require('./talonAutoTrade').tick({ force: true }))}`;
       if (name === 'RELAY_TO' && arg) {
         const [ref, ...rest] = arg.split('|');
         const msg = rest.join('|').trim();
@@ -528,7 +575,7 @@ async function runInjections(text, persona = 'ara', { convo = '', depth = 0, sin
         if (id === persona) return `RELAY_TO "${ref}": that's you — just answer him directly.`;
         if (depth > 1) return `RELAY_TO "${ref}": not from inside a relay — answer with what you have.`;
         // Mr. Burrus didn't ask for them — answer it yourself.
-        if (!relayAllowed(asked, id)) return `RELAY_TO "${ref}": not sent — Mr. Burrus didn't ask you to bring ${ROSTER[id].name} in. Answer it yourself from your own knowledge; don't mention the hand-off.`;
+        if (!relayAllowed(asked, id, persona)) return `RELAY_TO "${ref}": not sent — Mr. Burrus didn't ask you to bring ${ROSTER[id].name} in. Answer it yourself from your own knowledge; don't mention the hand-off.`;
         return `YOU ASKED ${ROSTER[id].name}: "${msg}"\n${ROSTER[id].name} REPLIED:\n${await relayToPersona(id, msg, { from: persona, convo, depth: depth + 1, sink, asked })}`;
       }
       return '';
@@ -587,13 +634,20 @@ async function buildStatus() {
 // Google write tags every persona may use; the rest of personaTools' writes
 // (HUD, money, leads, THE FIRM) are A.R.A.'s.
 // The build loop (Claude Code via GitHub) — A.R.A. and J.A.R.V.I.S.
-const BUILD_WRITES = new Set(['BUILD_REQUEST', 'BUILD_REPLY', 'BUILD_MERGE', 'BUILD_CANCEL']);
-const GOOGLE_WRITES = new Set(['CREATE_EVENT', 'CREATE_NOTE', 'EDIT_NOTE', 'APPEND_NOTE', 'CREATE_SHEET', 'SEND_EMAIL', 'DELETE_EVENT', 'DELETE_FILE']);
+const BUILD_WRITES = new Set(['BUILD_REQUEST', 'BUILD_REPLY', 'BUILD_MERGE', 'BUILD_CANCEL', 'REDEPLOY']);
+// Calendar and Gmail are A.R.A.'s alone — every other persona (relayed or not)
+// hands those to her.
+const ARA_ONLY_READS = new Set(['READ_EMAIL', 'READ_EMAIL_ID', 'READ_CALENDAR']);
+const ARA_ONLY_WRITES = new Set(['CREATE_EVENT', 'ADD_EVENT', 'EDIT_EVENT', 'UPDATE_EVENT', 'MOVE_EVENT', 'DELETE_EVENT', 'SEND_EMAIL']);
+const TALON_WRITES = new Set(['TRADE_ENTER', 'TRADE_CLOSE', 'MOVE_STOP', 'MOVE_TP', 'TRADE_ACCOUNT']);
+const GOOGLE_WRITES = new Set(['MOVE_NOTE', 'MOVE_FILE', 'ADD_EVENT', 'EDIT_EVENT', 'UPDATE_EVENT', 'MOVE_EVENT', 'CREATE_EVENT', 'CREATE_NOTE', 'EDIT_NOTE', 'APPEND_NOTE', 'CREATE_SHEET', 'SEND_EMAIL', 'DELETE_EVENT', 'DELETE_FILE']);
 
 // Side-effect tags — apply after the persona's final reply. Returns
 // { notes, warnings, confirms }: receipts for what happened, what failed or
 // landed somewhere other than asked, and actions waiting on the owner's tap.
-async function applyEffects(text, deliver, persona = 'ara') {
+// `full` — a persona carrying out an instruction Mr. Burrus passed through
+// A.R.A. (or another persona) gets her whole write set for it.
+async function applyEffects(text, deliver, persona = 'ara', { full = false } = {}) {
   const notes = [];
   const warnings = [];
   const confirms = [];
@@ -682,7 +736,16 @@ async function applyEffects(text, deliver, persona = 'ara') {
       } else if (name === 'DEEP_RESEARCH' && arg) {
         notes.push('deep research started');
         runDeepResearch(arg, deliver, persona);
-      } else if (persona === 'ara' || GOOGLE_WRITES.has(name) || (persona === 'jarvis' && BUILD_WRITES.has(name))) {
+      } else if (ARA_ONLY_WRITES.has(name) && persona !== 'ara') {
+        warnings.push(`${name} not run — calendar and email are A.R.A.'s (hand it to her)`);
+      } else if (TALON_WRITES.has(name)) {
+        // Hand-placed trading is T.A.L.O.N.'s alone — A.R.A. relays the order to him.
+        if (persona !== 'talon') { warnings.push(`${name} not run — trade orders go through T.A.L.O.N. ([RELAY_TO: talon | …])`); continue; }
+        const r = await require('./talonCommands').writeTag({ name, arg });
+        if (r && r.ok) notes.push(r.ok);
+        if (r && r.warn) warnings.push(r.warn);
+        if (r && r.confirm) confirms.push(r.confirm);
+      } else if (persona === 'ara' || full || GOOGLE_WRITES.has(name) || (persona === 'jarvis' && BUILD_WRITES.has(name))) {
         const r = await tools.writeTag({ name, arg }, persona);
         if (r && r.ok) notes.push(r.ok);
         if (r && r.warn) warnings.push(r.warn);
@@ -702,14 +765,18 @@ async function relaySystem(id, from = 'ara') {
   const custom = await customPrompt(id);
   if (!custom) return personaSystem(id);
   const who = from === 'ara' ? 'A.R.A. (his personal assistant)' : ((ROSTER[from] && ROSTER[from].name) || 'Another persona');
-  return `${custom}${genderLine(id) ? `\n\n${genderLine(id)}` : ''}\n\n[THE EMPIRE:\n${rosterLines()}\n]\n\n[${who} is passing you a question on his behalf, over Telegram. Answer it directly from your lane — concrete and specific, no greeting and no sign-off, a few sentences to a short paragraph. If it needs something only Mr. Burrus can decide or the app open, say so plainly.]`;
+  return `${custom}${genderLine(id) ? `\n\n${genderLine(id)}` : ''}\n\n[THE EMPIRE:\n${rosterLines()}\n]\n\n[${who} is passing you a question or an instruction on his behalf, over Telegram. An instruction from him through them is his instruction — carry it out fully with your tags. A question: answer it directly from your lane — concrete and specific, no greeting and no sign-off, a few sentences to a short paragraph. If it needs something only Mr. Burrus can decide or the app open, say so plainly.]`;
 }
 
 // What a relayed persona can use from here: its full Telegram tool block (so a
 // handed-off "make these notes in Drive" really makes them — before this, a
 // relayed persona had no write tags at all and its "done" was just words), plus
 // these. A trade tag still does NOT execute server-side.
-const RELAY_TOOLS = `[ON THIS RELAY — read tags ([SEARCH_WEB], [TRADE_SCAN: SYMBOL], [READ_HUD], [MEMORY_QUERY], [READ_NOTE], [RELAY_TO], …) come back with results before you answer. Write tags ([SAVE_NOTE], [APPEND_NOTE], [EDIT_NOTE], tasks, calendar, …) run right after your answer, and their receipts go back to whoever handed this to you and to Mr. Burrus. When you're handed something to DO — create notes, add tasks, put something on the calendar — do it: emit one tag per item, with the full content inside the tag. Never say something is done, saved or created unless you emitted the tag for it. Nothing you write here places, closes or modifies a trade — T.A.L.O.N. trades on his own from the server.]`;
+const RELAY_TOOLS = `[ON THIS RELAY — this may be an order from Mr. Burrus passed through another persona; treat it exactly as if he told you himself. Read tags ([SEARCH_WEB], [TRADE_SCAN: SYMBOL], [READ_HUD], [MEMORY_QUERY], [READ_NOTE], [RELAY_TO], …) come back with results before you answer. Write tags ([SAVE_NOTE], [APPEND_NOTE], [EDIT_NOTE], tasks, calendar, …) run right after your answer, and their receipts go back to whoever handed this to you and to Mr. Burrus. When you're handed something to DO — create notes, add tasks, put something on the calendar — do it: emit one tag per item, with the full content inside the tag. Never say something is done, saved or created unless you emitted the tag for it. Images, diagrams, charts and files you emit ([GENERATE_IMAGE], [DIAGRAM], …) are sent straight to Mr. Burrus. Nothing you write here places, closes or modifies a trade by hand — T.A.L.O.N. trades on his own from the server.]
+
+[ALSO YOURS ON THIS HAND-OFF — the Empire's shared write tags, for when the instruction calls for them:
+${SHARED_OPS}
+ - [REMEMBER: the thing | days] — keep something time-sensitive in front of you.]`;
 
 // Ask persona `id` a question on another persona's behalf and return its answer
 // as plain text. It gets the live context and the recent conversation (so a
@@ -727,6 +794,7 @@ async function relayToPersona(id, message, { from = 'ara', convo = '', depth = 1
     OBEY,
     emotionFor(id),
     id === 'ara' ? ARA_TOOLS : genericTools(id),
+    id === 'jarvis' ? await empireOsBrief() : '',
     RELAY_TOOLS,
     googleLine(gs),
     ctx ? `[EMPIRE CONTEXT:\n${contextBlock(ctx, { trading: id === 'ara' })}\n]` : '',
@@ -747,14 +815,18 @@ async function relayToPersona(id, message, { from = 'ara', convo = '', depth = 1
   // The relayed persona's writes run here, under its own name — then the result
   // is reported back with the real receipts, so whoever asked can't repeat a
   // "done" that didn't happen.
-  const fx = await applyEffects(replies.join('\n'), (sink && sink.deliver) || (async () => {}), id)
+  const fx = await applyEffects(replies.join('\n'), (sink && sink.deliver) || (async () => {}), id, { full: true })
     .catch((e) => ({ notes: [], warnings: [`actions failed: ${e.message}`], confirms: [] }));
+  // Images / diagrams / files the relayed persona made go out on the asking bot.
+  const relayMedia = [...mediaFromTags(findTags(replies.join('\n'))), ...pullMarkdownImages(stripTags(reply)).media];
   if (sink) {
+    if (sink.media) sink.media.push(...relayMedia);
     sink.notes.push(...fx.notes.map((n) => `${p.name}: ${n}`));
     sink.warnings.push(...fx.warnings.map((w) => `${p.name}: ${w}`));
     sink.confirms.push(...fx.confirms);
   }
-  const receipts = [...fx.notes.map((n) => `✓ ${n}`), ...fx.warnings.map((w) => `⚠️ ${w}`), ...fx.confirms.map((c) => `⏳ waiting on his Confirm tap: ${c.label}`)];
+  const receipts = [...fx.notes.map((n) => `✓ ${n}`), ...fx.warnings.map((w) => `⚠️ ${w}`), ...fx.confirms.map((c) => `⏳ waiting on his Confirm tap: ${c.label}`),
+    ...relayMedia.map((m) => `✓ ${m.name.toLowerCase().replace(/_/g, ' ')} sent to Mr. Burrus`)];
   const clean = stripCues(stripTags(reply));
   const relayMem = `[relayed from ${(ROSTER[from] && ROSTER[from].name) || from} on Telegram] ${message}\n${p.name}: ${clean}`;
   upsertSyncRow('persona_memory', newId(), {
@@ -932,13 +1004,16 @@ async function runPersonaTurn(personaId, userText, deliver) {
     customPrompt(persona),
     memoryBlock(persona, userText).catch(() => ''),
   ]);
-  const sys = persona === 'ara' ? systemPrompt(ctx, gs, custom, mem) : personaSystemPrompt(persona, ctx, gs, custom, mem);
+  let sys = persona === 'ara' ? systemPrompt(ctx, gs, custom, mem) : personaSystemPrompt(persona, ctx, gs, custom, mem);
+  if (persona === 'jarvis') sys = `${sys}\n\n${await empireOsBrief()}`;
   const history = await loadHistory(persona);
   const messages = [...history, { role: 'user', content: `[${momentET()}] ${userText}` }];
   const convo = convoLines(history, userText, persona);
-  const sink = { notes: [], warnings: [], confirms: [], deliver };
+  const sink = { notes: [], warnings: [], confirms: [], media: [], deliver };
 
-  let reply = await chatAs(p.api, p.model, sys, messages, { maxTokens: 1200, fallback: persona !== 'ara' });
+  // 4000: a long note lives inside the reply's tag — at 1200 it was cut off
+  // mid-note, the tag never closed, and nothing was saved.
+  let reply = await chatAs(p.api, p.model, sys, messages, { maxTokens: 4000, fallback: persona !== 'ara' });
   const replies = [reply];
   const looked = [];
 
@@ -951,7 +1026,7 @@ async function runPersonaTurn(personaId, userText, deliver) {
     looked.push(inj);
     messages.push({ role: 'assistant', content: reply });
     messages.push({ role: 'user', content: `[tool results — where a persona's actions are listed, those receipts are what really happened: report them, never "done" for something that failed or never ran]\n\n${inj}\n\n[If something Mr. Burrus asked for still needs a lookup you haven't done, emit every remaining read tag now, together, and nothing else. Otherwise reply to him covering everything he asked, using these results — don't re-run a lookup that's already above.]` });
-    reply = await chatAs(p.api, p.model, sys, messages, { maxTokens: 1200, fallback: persona !== 'ara' });
+    reply = await chatAs(p.api, p.model, sys, messages, { maxTokens: 4000, fallback: persona !== 'ara' });
     replies.push(reply);
   }
 
@@ -961,14 +1036,29 @@ async function runPersonaTurn(personaId, userText, deliver) {
   fx.notes.push(...sink.notes);
   fx.warnings.push(...sink.warnings);
   fx.confirms.push(...sink.confirms);
+  const all = replies.join('\n');
+  for (const t of openTags(all)) {
+    fx.warnings.push(`${t} was cut off before it closed — what ran may be incomplete; ask again for the rest`);
+  }
   // `spoken` keeps the lowercase voice cues ([laughs]) for the voice note;
   // `clean` is what he reads and what history keeps.
   // Media (photos, generated images, diagrams, charts, files) from any round's
   // tags plus markdown images in the reply — the route sends them after the text.
   const pulled = pullMarkdownImages(stripTags(reply));
-  const media = [...mediaFromTags(findTags(replies.join('\n'))), ...pulled.media];
+  const media = [...mediaFromTags(findTags(all)), ...pulled.media, ...sink.media];
   let spoken = pulled.text;
   let clean = stripCues(spoken);
+  // Said a note was saved without a note tag anywhere (hers or a relayed
+  // persona's) — nothing was saved, and he should know.
+  const noteRan = findTags(all).some((t) => NOTE_TAGS.has(t.name)) || [...fx.notes, ...fx.warnings].some((n) => /note/i.test(n));
+  if (!noteRan && /\b(saved|created|made|wrote|added|put)\b[^.\n]{0,60}\bnotes?\b|\bnotes?\b[^.\n]{0,30}\b(saved|created)\b/i.test(clean)) {
+    fx.warnings.push('no note was actually saved this turn (no note tag ran) — tell me again and I\'ll save it');
+  }
+  // Same for the calendar: "it's on your calendar" with no event tag behind it.
+  const calRan = findTags(all).some((t) => /^(CREATE_EVENT|ADD_EVENT|EDIT_EVENT|UPDATE_EVENT|MOVE_EVENT)$/.test(t.name)) || fx.notes.some((n) => /^Calendar:|Calendar:/.test(n));
+  if (!calRan && /\b(added|put|set|scheduled|booked|moved|updated|blocked)\b[^.\n]{0,50}\b(calendar|schedule)\b|\b(calendar|schedule)\b[^.\n]{0,30}\b(added|updated|set)\b/i.test(clean)) {
+    fx.warnings.push('nothing actually went on your Google Calendar this turn (no calendar tag ran) — tell me again and I\'ll add it');
+  }
   if (!clean) spoken = clean = fx.notes.length ? `Done — ${fx.notes.join('; ')}.` : media.length ? 'Here you go.' : 'On it.';
   spoken = forSpeech(spoken);
   // A receipt under the reply for every write — the reply is written before the

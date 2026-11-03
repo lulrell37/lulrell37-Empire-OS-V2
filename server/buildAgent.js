@@ -107,7 +107,23 @@ async function mergeBuild(n) {
   const r = await gh(`${rp(REPO)}/pulls/${pr.prNumber}/merge`, { method: 'PUT', body: { merge_method: 'squash' } });
   if (!r.merged) throw new Error(r.message || 'GitHub refused the merge');
   await patchJob(n, { pr_number: pr.prNumber, state: 'pushed' });
-  return `PR #${pr.prNumber} merged into main — the APK build is starting (${pr.url})`;
+  return `PR #${pr.prNumber} merged into main (${pr.url}). ${await whatShips(pr.prNumber)}`;
+}
+
+// What a merge actually sets off, from the PR's files — the same rules as
+// build.yml's paths-ignore: app files start the APK build; server/, docs and .md
+// files don't (the server goes live on a [REDEPLOY]).
+const NO_APK = /^(server\/|docs\/)|\.md$|^\.github\/workflows\/server-check\.yml$/;
+async function whatShips(prNumber) {
+  let files = [];
+  try { files = (await gh(`${rp(REPO)}/pulls/${prNumber}/files?per_page=100`)).map((f) => f.filename); } catch { /* unknown */ }
+  if (!files.length) return 'If it touched the app, the APK build is starting; if it touched the server, [REDEPLOY] puts it live.';
+  const app = files.some((f) => !NO_APK.test(f));
+  const server = files.some((f) => f.startsWith('server/'));
+  if (app && server) return 'It changes the app AND the server: the APK build is starting now, and the server needs a [REDEPLOY] to go live.';
+  if (app) return 'App change — the APK build is starting now.';
+  if (server) return 'Server-only change — no APK build. It goes live on a [REDEPLOY].';
+  return 'Docs only — nothing to build or redeploy.';
 }
 
 async function cancelBuild(n) {
@@ -189,4 +205,4 @@ async function pollAndNotify() {
   }
 }
 
-module.exports = { configured, fileBuildRequest, replyToBuild, mergeBuild, cancelBuild, pollBuildJobs, pollAndNotify, REPO };
+module.exports = { configured, fileBuildRequest, replyToBuild, mergeBuild, cancelBuild, pollBuildJobs, pollAndNotify, REPO, gh };

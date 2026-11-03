@@ -446,5 +446,6 @@ export function stripCommands(text){
     .replace(/\[READ_TASKS\]/gi,'').replace(/\[CREATE_TASK:[^\]]*\]/gi,'')
     .replace(/\[SET_REMINDER:[^\]]*\]/gi,'').replace(/\[SYNC_AND_SAVE\]/gi,'')
     .replace(/\[READ_CALENDAR(?::[^\]]*)?\]/gi,'').replace(/\[LIST_NOTES\]/gi,'')
+    .replace(/\[MOVE_NOTE:[^\]]*\]/gi,'')
     .trim());
 }

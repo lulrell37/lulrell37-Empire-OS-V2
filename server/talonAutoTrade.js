@@ -139,6 +139,16 @@ async function tick({ force = false } = {}) {
 
       if (dec.action === 'enter' && (dec.side === 'buy' || dec.side === 'sell')) {
         const price = snap.quote?.mid ?? (dec.side === 'buy' ? snap.quote?.ask : snap.quote?.bid);
+        // Rule 10, enforced: a setup against the 1D trend is a pullback unless he
+        // called it a reversal — and a pullback gets the scalp only, no swing.
+        const d1 = snap.candles?.['1D']?.trend;
+        const against1D = d1 && ((dec.side === 'buy' && d1 === 'down') || (dec.side === 'sell' && d1 === 'up'));
+        const pullback = against1D && dec.daily !== 'reversal';
+        if (pullback && dec.swingTakeProfit != null) {
+          console.log(`talon-autotrade: ${sym} ${dec.side} runs against the 1D ${d1} trend and wasn't called a reversal — pullback, scalp only`);
+          dec.swingTakeProfit = undefined;
+        }
+        if (against1D) decisions.push(`${sym}: against the daily ${d1} trend — ${pullback ? 'read as a PULLBACK, scalp only' : 'read as a REVERSAL, full pair'}`);
         const lv = guardStop({ symbol: sym, side: dec.side, entry: price, stopLoss: dec.stopLoss, takeProfit: dec.takeProfit, swingTakeProfit: dec.swingTakeProfit, snap });
         if (lv.skip) { console.log(`talon-autotrade: skipped ${sym} ${dec.side} — ${lv.skip}`); decisions.push(`${sym}: skipped — ${lv.skip}`); continue; }
         if (lv.widened) console.log(`talon-autotrade: ${sym} ${lv.note}`);

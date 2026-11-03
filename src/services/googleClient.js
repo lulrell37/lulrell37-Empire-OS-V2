@@ -3,6 +3,7 @@
 // token via getFreshGoogleToken(). Scopes granted at login: drive, gmail
 // (readonly + send), calendar, tasks.
 import{getFreshGoogleToken}from './googleAuth';
+import{parseWhen}from './when';
 import{loadBackend,loadGoogleToken}from './keyStore';
 import*as FileSystem from 'expo-file-system';
 
@@ -216,15 +217,36 @@ export async function calendarList({startISO,days=7}={}){
   return `Calendar (next ${days} days):\n`+rows.join('\n');
 }
 
-export async function calendarCreate({title,startISO,minutes=60}){
+// Whatever the persona wrote ("2026-11-06T15:00", "Friday 3pm", date and time
+// split, a bare date = all day) in the phone's own time. Same reading as the
+// server's (src/services/when.js mirrors server/when.js).
+export async function calendarCreate({title,startISO,minutes=60,location,notes}){
   if(!title||!startISO)throw new Error('need a title and a start time');
-  const start=new Date(startISO);
-  if(isNaN(start))throw new Error('bad start time: '+startISO);
-  const end=new Date(start.getTime()+(minutes||60)*60000);
-  await gapi('/calendar/v3/calendars/primary/events',{method:'POST',json:{
-    summary:title,start:{dateTime:start.toISOString()},end:{dateTime:end.toISOString()},
-  }});
-  return `Calendar: "${title}" set for ${start.toLocaleString('en-US',{weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}.`;
+  const raw=String(startISO).trim();
+  const now=new Date();
+  const ev={summary:title};
+  if(location)ev.location=location;
+  if(notes)ev.description=notes;
+  let start,allDay=false,dateStr=null;
+  if(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}.*([zZ]|[+-]\d{2}:?\d{2})$/.test(raw))start=new Date(raw);
+  else{
+    const w=parseWhen(raw,{y:now.getFullYear(),m:now.getMonth()+1,d:now.getDate(),wd:now.getDay()});
+    if(!w)throw new Error(`couldn't read "${raw}" as a date/time — use e.g. 2026-11-06T15:00 or "Friday 3pm"`);
+    if(w.allDay){allDay=true;dateStr=`${w.y}-${String(w.m).padStart(2,'0')}-${String(w.d).padStart(2,'0')}`;}
+    else start=new Date(w.y,w.m-1,w.d,w.hh,w.mm);
+  }
+  if(allDay){
+    const n=new Date(Date.parse(dateStr+'T00:00:00Z')+86400000).toISOString().slice(0,10);
+    ev.start={date:dateStr};ev.end={date:n};
+  }else{
+    if(isNaN(start))throw new Error('bad start time: '+startISO);
+    const end=new Date(start.getTime()+(minutes||60)*60000);
+    ev.start={dateTime:start.toISOString()};ev.end={dateTime:end.toISOString()};
+  }
+  await gapi('/calendar/v3/calendars/primary/events',{method:'POST',json:ev});
+  const when=allDay?`${new Date(dateStr+'T12:00:00Z').toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric',timeZone:'UTC'})} (all day)`
+    :start.toLocaleString('en-US',{weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
+  return `Calendar: "${title}" set for ${when}.`;
 }
 
 export async function calendarDelete(eventId){
@@ -234,9 +256,10 @@ export async function calendarDelete(eventId){
 }
 
 // --- Drive ("notes" = text/plain or text/markdown files + Google Docs) --------
-// Notes are written into a dedicated "Empire OS Notes" folder as .md files so a
-// Google-Drive-synced Obsidian vault can point straight at that folder. The
-// folder id is resolved once per launch. `.md` in the filename is what Obsidian
+// New notes go straight into My Drive (no folder) as .md files; he files them
+// wherever he wants with [MOVE_NOTE], and an edit never moves a note back.
+// The "Empire OS Notes" folder is only used by [SYNC_NOTES] when he asks for
+// it (Obsidian). The folder id is resolved once per launch. `.md` in the filename is what Obsidian
 // keys on; the Drive mimeType is text/markdown to match.
 const NOTES_FOLDER='Empire OS Notes';
 let notesFolderId=null;
@@ -263,20 +286,6 @@ async function getNotesFolderId(){
   });
   notesFolderId=made.id;
   return notesFolderId;
-}
-
-// Move a note file into the notes folder and give it a .md name, in place.
-// Best-effort — a failure here never blocks the write that triggered it.
-async function ensureFiledAsNote(file){
-  const fid=await getNotesFolderId();
-  const parents=file.parents||[];
-  const inFolder=parents.includes(fid);
-  const hasMd=/\.md$/i.test(file.name||'');
-  if(inFolder&&hasMd)return;
-  const query={fields:'id'};
-  if(!inFolder){query.addParents=fid;if(parents.length)query.removeParents=parents.join(',');}
-  const patch=hasMd?{}:{name:mdName(baseName(file.name))};
-  await gapi(`/drive/v3/files/${file.id}`,{method:'PATCH',json:patch,query});
 }
 
 const noteDate=f=>f.modifiedTime?String(f.modifiedTime).slice(0,10):'';
@@ -375,13 +384,10 @@ export async function driveFindByName(name){
   // Prefer an exact (case-insensitive) title match — with or without the .md
   // extension — over Drive's loose "contains" search, so editing "Trip Plan"
   // doesn't land on "Trip Plan — Backup" instead. Among exact matches, prefer
-  // the copy already in the notes folder.
+  // the first (no folder is preferred — he files notes where he likes).
   const want=clean.toLowerCase();
-  const exact=files.filter(f=>baseName(f.name).toLowerCase()===want);
-  if(exact.length){
-    let fid=null;try{fid=await findNotesFolderId();}catch{}
-    return exact.find(f=>fid&&(f.parents||[]).includes(fid))||exact[0];
-  }
+  const exact=files.filter(f=>baseName(f.name).toLowerCase()===want&&f.mimeType!=='application/vnd.google-apps.folder');
+  if(exact.length)return exact[0];
   return files[0]||null;
 }
 
@@ -432,10 +438,8 @@ export function sliceDoc(header,full,page,refName){
 export async function driveCreate({title,content}){
   if(!title)throw new Error('no title');
   const clean=baseName(title);
-  let parents;
-  try{parents=[await getNotesFolderId()];}catch{/* fall back to My Drive root */}
   const boundary='empireos'+Date.now();
-  const meta={name:mdName(clean),mimeType:'text/markdown',...(parents?{parents}:{})};
+  const meta={name:mdName(clean),mimeType:'text/markdown'};
   const body=
     `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n`+
     `--${boundary}\r\nContent-Type: text/markdown\r\n\r\n${content||''}\r\n`+
@@ -457,8 +461,6 @@ export async function driveSaveNote({title,content}){
   const existing=await driveFindByName(clean).catch(()=>null);
   if(existing){
     await driveUpdate({fileId:existing.id,content});
-    // migrate-on-touch: older notes drift into the folder + .md as they're edited
-    await ensureFiledAsNote(existing).catch(()=>{});
     return `Drive: note "${clean}" updated  [id:${existing.id}]`;
   }
   return driveCreate({title:clean,content});
@@ -471,6 +473,41 @@ export async function driveUpdate({fileId,content}){
     headers:{'Content-Type':'text/markdown'},body:content||'',
   });
   return 'Drive: note updated.';
+}
+
+// [MOVE_NOTE: note | folder] — file a note into a Drive folder ("Business/Plans"
+// walks nested folders, creating any that don't exist; "My Drive" = the top).
+// Mirrors driveMoveNote in server/google.js.
+export async function driveMoveNote({ref,folder}){
+  const file=/^[A-Za-z0-9_-]{20,}$/.test(String(ref||'').trim())
+    ?await gapi(`/drive/v3/files/${encodeURIComponent(ref.trim())}`,{query:{fields:'id,name,parents'}})
+    :await driveFindByName(ref);
+  if(!file)throw new Error(`no note named "${ref}"`);
+  const target=String(folder||'').trim();
+  if(!target)throw new Error('move it where? give a folder name');
+  let parent=(await gapi('/drive/v3/files/root',{query:{fields:'id'}})).id;
+  let made=[];
+  if(!/^(my drive|root|home|top)$/i.test(target)){
+    for(const seg of target.split('/').map(s=>s.trim()).filter(Boolean)){
+      const esc=seg.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+      const hit=await gapi('/drive/v3/files',{query:{q:`trashed=false and mimeType='application/vnd.google-apps.folder' and name='${esc}' and '${parent}' in parents`,pageSize:1,fields:'files(id)'}});
+      let id=hit.files&&hit.files[0]&&hit.files[0].id;
+      if(!id&&made.length===0&&target.indexOf('/')<0){
+        // A single name: an existing folder of that name anywhere in Drive.
+        const any=await gapi('/drive/v3/files',{query:{q:`trashed=false and mimeType='application/vnd.google-apps.folder' and name='${esc}'`,pageSize:1,fields:'files(id)'}});
+        id=any.files&&any.files[0]&&any.files[0].id;
+      }
+      if(!id){
+        const f=await gapi('/drive/v3/files',{method:'POST',json:{name:seg,mimeType:'application/vnd.google-apps.folder',parents:[parent]},query:{fields:'id'}});
+        id=f.id;made.push(seg);
+      }
+      parent=id;
+    }
+  }
+  if((file.parents||[]).includes(parent))return `Drive: "${baseName(file.name)}" is already in ${/^(my drive|root|home|top)$/i.test(target)?'My Drive':`"${target}"`}.`;
+  const from=(file.parents||[]).join(',');
+  await gapi(`/drive/v3/files/${file.id}`,{method:'PATCH',json:{},query:{addParents:parent,...(from?{removeParents:from}:{}),fields:'id'}});
+  return `Drive: "${baseName(file.name)}" moved to ${/^(my drive|root|home|top)$/i.test(target)?'My Drive':`"${target}"`}${made.length?` (new folder${made.length>1?'s':''}: ${made.join(', ')})`:''}.`;
 }
 
 export async function driveDelete(fileId){

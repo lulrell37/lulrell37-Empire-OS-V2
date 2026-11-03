@@ -16,12 +16,12 @@ const nameOf = (sym) => NAMES[sym] ? `${NAMES[sym]} (${sym})` : sym;
 const money = (n) => (n == null ? '—' : `${n < 0 ? '-' : '+'}$${Math.abs(Number(n)).toFixed(2)}`);
 const px = (n) => (n == null || n === '' ? '—' : String(n));
 
-async function sendFromAra(text) {
+async function sendFromAra(text, spoken = text) {
   const telegram = require('./telegram');
   const ara = telegram.botFor('ara');
   if (!ara || !ara.isConfigured()) return false;
   // Same as a reply to him: she says it, then the text (with the exact numbers).
-  const { ogg } = await require('./personaVoice').voiceNote('ara', text.replace(/\*\*/g, ''))
+  const { ogg } = await require('./personaVoice').voiceNote('ara', String(spoken).replace(/\*\*/g, ''))
     .catch((e) => { console.error('trade alert voice failed:', e.message); return { ogg: null }; });
   if (ogg) await ara.sendVoice(telegram.OWNER_ID, ogg).catch((e) => console.error('trade alert sendVoice failed:', e.message));
   await ara.sendMessage(telegram.OWNER_ID, text);
@@ -33,8 +33,8 @@ async function sendFromAra(text) {
 // Flags every alert on a live account, so a real-money trade never reads like a demo one.
 const acct = () => (require('./tradeLocker').tlStatus().env === 'live' ? ' · 🔴 LIVE' : '');
 
-function notify(text) {
-  sendFromAra(text).catch((e) => console.error('trade alert failed:', e.message));
+function notify(text, spoken) {
+  sendFromAra(text, spoken || text).catch((e) => console.error('trade alert failed:', e.message));
 }
 
 function tradeOpened({ symbol, side, qty, entry, stopLoss, takeProfit, rationale, setup, swingTarget, copies = 1 }) {
@@ -65,9 +65,9 @@ function tradeClosed(t) {
   const entry = Number(t.entry_fill ?? t.entry_ref), exit = Number(t.exit_price), sl = Number(t.stop_loss), tp = Number(t.take_profit);
   const tol = Math.max(Math.abs(entry) * 3e-4, Math.abs(entry - sl) * 0.15 || 0);
   const nearAny = [sl, tp, entry].some((x) => isFinite(x) && Math.abs(exit - x) <= tol);
-  const odd = t.exit_price != null && isFinite(exit) && isFinite(entry) && !nearAny
+  const odd = t.closed_by !== 'owner' && t.exit_price != null && isFinite(exit) && isFinite(entry) && !nearAny
     ? `\n🚨 **T.A.L.O.N. → A.R.A.: I didn't close this one.** It closed at ${px(t.exit_price)}, nowhere near its stop (${px(t.stop_loss)}) or target (${px(t.take_profit)}) — a manual close, a margin stop-out or the broker. Worth a look in TradeLocker.` : '';
-  notify(`${icon} **T.A.L.O.N. closed ${String(t.side).toUpperCase()} ${nameOf(t.symbol)}${kind}** — ${word}${hit}.\n`
+  notify(`${icon} **T.A.L.O.N. closed ${String(t.side).toUpperCase()} ${nameOf(t.symbol)}${kind}**${t.closed_by === 'owner' ? ' on your order' : ''} — ${word}${hit}.\n`
     + `Entry ${px(t.entry_fill ?? t.entry_ref)} → Exit ${px(t.exit_price)} · P/L ${money(t.realized_pl)}${t.pl_estimated ? ' (est.)' : ''}`
     + `${t.r_multiple != null ? ` · ${t.r_multiple}R` : ''}${odd}`);
 }

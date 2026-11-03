@@ -24,7 +24,7 @@ app.get('/', (req, res) => res.status(200).send('ok'));
 
 app.get('/health', (req, res) => {
   const { subscriptionStatus, creditStatus } = require('./llm');
-  res.json({ ok: true, service: 'empire-os-backend', ts: Date.now(), ai: { claudeSubscription: subscriptionStatus(), credits: creditStatus() } });
+  res.json({ ok: true, service: 'empire-os-backend', ts: Date.now(), code: require('./redeploy').codeInfo(), ai: { claudeSubscription: subscriptionStatus(), credits: creditStatus() } });
 });
 
 // AI proxy: no body parser — the request body is streamed straight through.
@@ -71,6 +71,8 @@ const PORT = process.env.PORT || 3000;
 db.init()
   .then(() => {
     app.listen(PORT, '0.0.0.0', () => console.log(`Empire OS backend listening on :${PORT}`));
+    // After a redeploy (or a fall back), A.R.A. says so — once the bots are up.
+    setTimeout(() => require('./redeploy').onBoot().catch((e) => console.error('redeploy report failed:', e.message)), 15000);
     startNudgeCron();
     startReminderCron();
     startDailyBriefingCron();

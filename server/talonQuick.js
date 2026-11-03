@@ -1,5 +1,5 @@
 // T.A.L.O.N.'s quick scalps — a second playbook on the 5m chart, separate from
-// the 1D/4H trend-pullback setups in talonBrain.js. Runs on every 5-min
+// the 4H/1H trend-pullback setups in talonBrain.js. Runs on every 5-min
 // auto-trade tick (the cron fires 20s after each 5m close).
 //
 //   1. BIAS (1H + 15m). Both trend the same way (last close vs SMA20), and the
@@ -28,7 +28,7 @@
 // don't count toward MAX_PAIRS. TALON_QUICK=off stops it.
 const { tlHistory, tlQuote, tlSnapshot, tlFormatSnapshot, tlPlaceOrder, tlModifyPosition, summarizeBars, MAX_QTY } = require('./tradeLocker');
 const { allTrades, recordTradeOpen, TRADER_ID } = require('./tradeJournal');
-const { upsertSyncRow, saveMemory } = require('./syncStore');
+const { upsertSyncRow, saveMemory, getSetting, setSetting } = require('./syncStore');
 const { tradeOpened, orderRejected } = require('./talonAlerts');
 const { claudeText } = require('./llm');
 const { SYMBOLS } = require('./talonBrain');
@@ -43,6 +43,27 @@ const MIN_R = 1.5, MAX_R = 3, BE_AT_R = 1;
 const CRYPTO = /^(BTC|ETH|SOL|XRP|LTC|DOGE|ADA|BNB)/;
 
 let lastRun = null; // surfaced by GET /trade/status
+
+// Every time the filter fires, what happened next (the brain's call, a skip, the
+// entry) — kept in app_settings.talon_quick_log (last 40) so "why no quick
+// scalps?" has a real answer ([QUICK_LOG] for T.A.L.O.N. / A.R.A.).
+async function logQuick(sym, side, outcome) {
+  try {
+    const raw = await getSetting('talon_quick_log', '[]');
+    const list = Array.isArray(raw) ? raw : JSON.parse(raw || '[]');
+    list.push({ at: Date.now(), sym, side, outcome: String(outcome).slice(0, 200) });
+    await setSetting('talon_quick_log', JSON.stringify(list.slice(-40)));
+  } catch (e) { console.error('talon-quick: log failed —', e.message); }
+}
+async function quickLogText() {
+  const raw = await getSetting('talon_quick_log', '[]').catch(() => '[]');
+  let list = [];
+  try { list = Array.isArray(raw) ? raw : JSON.parse(raw || '[]'); } catch { /* */ }
+  const t = (ms) => new Date(ms).toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  const now = lastRun ? `LAST 5-MIN CHECK (${t(lastRun.at)} ET): ${Object.entries(lastRun).filter(([k]) => k !== 'at').map(([k, v]) => `${k}: ${v}`).join(' · ')}` : 'No quick-scalp check has run since the server started.';
+  if (!list.length) return `${now}\nThe 5m filter hasn't fired since logging started.`;
+  return `${now}\nEVERY TIME THE 5M FILTER FIRED (newest last):\n${list.map((x) => `${t(x.at)} ${x.sym} ${String(x.side || '').toUpperCase()} → ${x.outcome}`).join('\n')}`;
+}
 
 function etParts(now = new Date()) {
   const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false })
@@ -130,8 +151,9 @@ function findSetup({ sym, bars5, s15, s1h, quote }) {
 async function confirm({ sym, setup, snapText, bars5 }) {
   const { side, entry, dist, stopLoss, atr, ema: E, swingHi } = setup;
   const minTp = +(entry + setup.dir * MIN_R * dist).toFixed(2);
-  const sys = `You are T.A.L.O.N., running UNATTENDED, on your QUICK-SCALP desk — separate from your 1D/4H setups. A coded 5m filter just flagged a ${side.toUpperCase()} on ${sym}: 1H and 15m trend agree, price pulled back into the 5m EMA20 and the 5m bar that just closed rejected back in the trend direction. The stop is already set by code at ${stopLoss} (${dist.toFixed(2)} from entry ~${entry}) — beyond the key-level zone at ${+setup.zone.toFixed(2)} plus a 5m ATR.
-Your job: (a) say whether this is a clean continuation or a trap — "none" if price is pinned under/over a nearby 15m or 1H level in the trade's way, the 15m bars are choppy and overlapping, the move is late in an exhausted leg, or (gold) the dollar is moving against it; (b) if it's clean, the target: the next clear 5m/15m structure level in the trade direction. It must be at least ${MIN_R}R (${minTp} or further); if the nearest level in the way is closer than that, answer "none". One 0.02 position, held to stop or target.
+  const sys = `You are T.A.L.O.N., running UNATTENDED, on your QUICK-SCALP desk — separate from your 4H/1H setups. A coded 5m filter just flagged a ${side.toUpperCase()} on ${sym}: 1H and 15m trend agree, price pulled back into the 5m EMA20 and the 5m bar that just closed rejected back in the trend direction. The stop is already set by code at ${stopLoss} (${dist.toFixed(2)} from entry ~${entry}) — beyond the key-level zone at ${+setup.zone.toFixed(2)} plus a 5m ATR.
+The filter has already done the checking — your default is to TAKE it. Answer "none" only for a concrete, nameable reason: a specific 15m or 1H level sitting in the way closer than ${MIN_R}R (${minTp}), or price already in the middle of a sharp reversal against the trade. "Could be choppy" or general caution is not a reason — he wants these trades taken. If you pass, the rationale must name the level or the move.
+Target: the next clear 5m/15m structure level in the trade direction, at least ${MIN_R}R (${minTp} or further) — if structure is unclear, use ${minTp} itself. One 0.02 position, held to stop or target.
 Reply with ONLY a JSON object, no prose, no code fence:
 {"action":"enter"|"none","takeProfit":<price>,"rationale":"<=120 chars"}`;
   const recent = bars5.slice(-12).map((b) => `${+b.o.toFixed(2)}/${+b.h.toFixed(2)}/${+b.l.toFixed(2)}/${+b.c.toFixed(2)}`).join('  ');
@@ -188,28 +210,29 @@ async function quickTick({ marketOpen }) {
       const quote = await tlQuote(sym);
       const setup = findSetup({ sym, bars5, s15: summarizeBars(h15), s1h: summarizeBars(h1), quote });
       if (setup.skip) { out[sym] = setup.skip; continue; }
-      if (trades.some((t) => t.status === 'open' && t.symbol === sym && t.side !== setup.side)) { out[sym] = `${setup.side} would go against an open position`; continue; }
+      if (trades.some((t) => t.status === 'open' && t.symbol === sym && t.side !== setup.side)) { out[sym] = `${setup.side} would go against an open position`; await logQuick(sym, setup.side, out[sym]); continue; }
       const snap = await tlSnapshot(sym);
       const dec = await confirm({ sym, setup, snapText: tlFormatSnapshot(snap), bars5 });
-      if (dec.action !== 'enter') { out[sym] = `filter fired, brain passed — ${dec.rationale || 'no reason given'}`; console.log(`talon-quick: ${sym} ${setup.side} passed — ${dec.rationale || ''}`); continue; }
+      if (dec.action !== 'enter') { out[sym] = `filter fired, brain passed — ${dec.rationale || 'no reason given'}`; await logQuick(sym, setup.side, out[sym]); console.log(`talon-quick: ${sym} ${setup.side} passed — ${dec.rationale || ''}`); continue; }
       const { dir, entry, dist, stopLoss } = setup;
       let tp = Number(dec.takeProfit);
-      if (!isFinite(tp) || (tp - entry) * dir < MIN_R * dist - 1e-9) { out[sym] = `target ${dec.takeProfit} under ${MIN_R}R — skipped`; continue; }
+      if (!isFinite(tp) || (tp - entry) * dir < MIN_R * dist - 1e-9) { out[sym] = `target ${dec.takeProfit} under ${MIN_R}R — skipped`; await logQuick(sym, setup.side, out[sym]); continue; }
       if ((tp - entry) * dir > MAX_R * dist) tp = +(entry + dir * MAX_R * dist).toFixed(2);
       const rationale = `quick 5m — ${dec.rationale || 'EMA20 pullback rejection'}`.slice(0, 400);
       let s;
       try { s = await tlPlaceOrder({ symbol: sym, side: setup.side, qty: MAX_QTY, stopLoss, takeProfit: tp, minStop: false }); }
-      catch (e) { orderRejected({ symbol: sym, side: `${setup.side} (quick scalp)`, error: e.message }); out[sym] = `order rejected — ${e.message}`; continue; }
+      catch (e) { orderRejected({ symbol: sym, side: `${setup.side} (quick scalp)`, error: e.message }); out[sym] = `order rejected — ${e.message}`; await logQuick(sym, setup.side, out[sym]); continue; }
       await recordTradeOpen({ symbol: sym, side: s.side, qty: s.qty, entry, stopLoss, takeProfit: tp, rationale, orderId: s.orderId,
         setup: 'quick', auto: true, setupId: `${sym}-q-${Date.now()}`, alert: false }).catch(() => {});
       tradeOpened({ symbol: sym, side: s.side, qty: s.qty, entry, stopLoss, takeProfit: tp, rationale, setup: 'quick' });
       await saveMemory(TRADER_ID, `[quick scalp] opened ${s.side} ${sym} @ ~${entry} · SL ${stopLoss} TP ${tp} — ${rationale}`).catch(() => {});
       console.log(`talon-quick: ${s.side.toUpperCase()} ${s.qty} ${sym} @ ~${entry} · SL ${stopLoss} TP ${tp} (${((tp - entry) * dir / dist).toFixed(1)}R) — ${dec.rationale || ''}`);
       out[sym] = `entered ${s.side} @ ~${entry}`;
-    } catch (e) { out[sym] = `error — ${e.message}`; console.error(`talon-quick: ${sym} failed —`, e.message); }
+      await logQuick(sym, s.side, `ENTERED @ ~${entry} · SL ${stopLoss} · TP ${tp}`);
+    } catch (e) { out[sym] = `error — ${e.message}`; console.error(`talon-quick: ${sym} failed —`, e.message); if (/claude|anthropic|xai|credit|api/i.test(e.message)) await logQuick(sym, '', out[sym]); }
   }
   lastRun = { at: Date.now(), ...out };
   return out;
 }
 
-module.exports = { quickTick, findSetup, status: () => lastRun };
+module.exports = { quickTick, findSetup, quickLogText, status: () => lastRun };
