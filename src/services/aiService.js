@@ -1,4 +1,4 @@
-import{emotionFor,isFlat,stripCues,cuedFor,ARA_VOICE,ARA_SCRIPT}from './voiceCues';
+import{emotionFor,isFlat,stripCues,cuedFor,ARA_VOICE,ARA_SCRIPT,speakNames}from './voiceCues';
 import{loadKeys,loadBackend,loadGoogleToken}from './keyStore';
 import{getPersonaMemory,getMemoriesByPersona,savePersonaMemory,getHudState,getTasks,trackApiUsage,getCustomPrompt,getUpcomingDates,getSetting}from './database';
 import*as FileSystem from 'expo-file-system';
@@ -869,7 +869,7 @@ export async function textToSpeech(text,voiceId,personaName,opts={}){
   if(!be&&!k?.elevenlabs){lastTtsFailReason='no ElevenLabs key set (Settings → API Keys → ELEVENLABS)';return null;}
   if(!voiceId){lastTtsFailReason='persona has no voice id configured';return null;}
   // Command tags out (always UPPERCASE); lowercase voice cues stay for v4.
-  const withCues=cuedFor(text).replace(/\[[A-Z][A-Z0-9_]*(?::[^\]]*)?\]/g,'').replace(/[*#`]/g,'').trim().substring(0,2000);
+  const withCues=speakNames(cuedFor(text)).replace(/\[[A-Z][A-Z0-9_]*(?::[^\]]*)?\]/g,'').replace(/[*#`]/g,'').trim().substring(0,2000);
   if(!stripCues(withCues))return null;
   const flat=isFlat(personaName);
   const tiers=TTS_LADDER.filter((t,i)=>i===TTS_LADDER.length-1||!ttsRejected.has(t.model))
@@ -926,9 +926,16 @@ export async function transcribeAudio(audioUri){
   formData.append('temperature','0');
   // A neutral priming sentence — Whisper is less likely to drop the final word
   // of a short clip when it isn't starting cold.
-  formData.append('prompt','Okay. Here is what I need you to do.');
+  // ...plus the persona names as vocabulary, so "Ara" isn't heard as "Aura".
+  formData.append('prompt','A.R.A., Ara, J.A.R.V.I.S., T.A.L.O.N., S.E.L.E.N.E., A.I.S.H.A., H.A.V.E.N. Okay. Here is what I need you to do.');
   const res=await fetch(base+'/v1/audio/transcriptions',{method:'POST',headers:{...auth},body:formData});
   if(!res.ok){const e=await res.text();throw new Error('Whisper: '+e.substring(0,100));}
   const d=await res.json();
-  return d.text?.trim()||'';
+  return fixNames(d.text||'');
+}
+
+// Speech-to-text keeps hearing "Ara" as "Aura" — he never means aura.
+// Mirrors fixNames in server/llm.js.
+export function fixNames(text){
+  return String(text||'').replace(/\baura(?=\b|'s)/gi,'Ara').trim();
 }

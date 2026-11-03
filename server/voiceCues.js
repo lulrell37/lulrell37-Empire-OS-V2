@@ -29,4 +29,23 @@ function stripCues(text) {
     .replace(/[ \t]{2,}/g, ' ').replace(/ +([,.!?…])/g, '$1').replace(/^[ \t]+/gm, '').trim();
 }
 
-module.exports = { EMOTION, emotionFor, isFlat, stripCues };
+// Persona names said as names, not spelled out: "J.A.R.V.I.S." / "JARVIS" ->
+// "Jarvis" before any voice reads it (the TTS spelled the dotted forms letter
+// by letter). Only the persona names — "U.S." and other acronyms are left
+// alone. Mirrors speakNames in src/services/voiceCues.js.
+const SPOKEN_NAMES = ['ara', 'jarvis', 'selene', 'scribe', 'hook', 'stephanie', 'sage', 'wire', 'rogue', 'scout', 'nova', 'pulse', 'atlas', 'talon', 'haven', 'aisha', 'abraham', 'batman', 'andrew', 'pen', 'forge', 'herald'];
+const NAME_RES = SPOKEN_NAMES.map((n) => [
+  new RegExp(`\\b${n.toUpperCase().split('').join('\\.\\s?')}\\.?(?![A-Za-z])`, 'g'), // A.R.A. / A. R. A.
+  new RegExp(`\\b${n.toUpperCase()}\\b`, 'g'), // ARA (all caps)
+  n[0].toUpperCase() + n.slice(1),
+]);
+function speakNames(text) {
+  let s = String(text || '');
+  // A name ending a sentence keeps its full stop ("…and Aisha.") so the pause stays.
+  for (const [dotted, caps, word] of NAME_RES) {
+    s = s.replace(dotted, (m, at, all) => word + (m.endsWith('.') && /^(\s*$|\s*\n|\s+[A-Z])/.test(all.slice(at + m.length)) ? '.' : '')).replace(caps, word);
+  }
+  return s.replace(/\s*→\s*/g, ' to ');
+}
+
+module.exports = { EMOTION, emotionFor, isFlat, stripCues, speakNames };

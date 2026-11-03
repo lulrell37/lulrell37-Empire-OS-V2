@@ -217,7 +217,8 @@ async function transcribe(buffer, filename = 'voice.ogg') {
   form.append('file', new Blob([buffer]), filename);
   form.append('model', 'whisper-1');
   form.append('language', 'en');
-  form.append('prompt', 'Okay. Here is what I need you to do.');
+  // The persona names as vocabulary, so "Ara" isn't heard as "Aura".
+  form.append('prompt', 'A.R.A., Ara, J.A.R.V.I.S., T.A.L.O.N., S.E.L.E.N.E., A.I.S.H.A., H.A.V.E.N. Okay. Here is what I need you to do.');
   const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
     method: 'POST',
     headers: { authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
@@ -225,7 +226,13 @@ async function transcribe(buffer, filename = 'voice.ogg') {
   });
   if (!res.ok) throw new Error(`whisper ${res.status}: ${(await res.text()).slice(0, 160)}`);
   const d = await res.json();
-  return (d.text || '').trim();
+  return fixNames(d.text || '');
 }
 
-module.exports = { CLAUDE_MODEL, keyFor, WEB_SEARCH_TOOL, claudeText, creditStatus, subscriptionStatus, openaiCompatText, geminiText, chatAs, webResearch, transcribe };
+// Speech-to-text keeps hearing "Ara" as "Aura" — he never means aura.
+// Mirrors fixNames in src/services/aiService.js.
+function fixNames(text) {
+  return String(text || '').replace(/\baura(?=\b|'s)/gi, 'Ara').trim();
+}
+
+module.exports = { CLAUDE_MODEL, keyFor, WEB_SEARCH_TOOL, claudeText, creditStatus, subscriptionStatus, openaiCompatText, geminiText, chatAs, webResearch, transcribe, fixNames };

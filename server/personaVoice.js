@@ -17,7 +17,7 @@ const ffmpegPath = require('ffmpeg-static');
 const { ARA_VOICE, ARA_SCRIPT, synthesizeAraVoice } = require('./araVoice');
 const { personaVoiceId } = require('./personas');
 
-const { isFlat, stripCues } = require('./voiceCues');
+const { isFlat, stripCues, speakNames } = require('./voiceCues');
 
 // Voice ladder, same as the app's textToSpeech: ElevenLabs' expressive real-time
 // v4 first — it performs the [laughs]/[sighs] cues personas write and runs at
@@ -131,6 +131,12 @@ async function primaryOgg(personaId, text, userText) {
 
 // A.R.A.'s reply -> what she'll actually say (her Grok brain, her voice
 // direction, cues written in). Falls back to the reply itself.
+// "T.A.L.O.N. → A.R.A." / "Talon to Ara" at the top -> "Talon" (whose message it is).
+function relayFrom(text) {
+  const m = String(text || '').match(/^[^A-Za-z]*(T\.A\.L\.O\.N\.|Talon|W\.I\.R\.E\.|Wire|J\.A\.R\.V\.I\.S\.|Jarvis)\s*(?:→|to)\s*(?:A\.R\.A\.|Ara)\b/i);
+  return m ? speakNames(m[1]) : null;
+}
+
 async function araScript(text, userText) {
   try {
     // Capped: Telegram sends her text after the voice note, so a slow script
@@ -138,7 +144,7 @@ async function araScript(text, userText) {
     const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('script timed out')), 25000));
     const out = await Promise.race([timeout, require('./llm').chatAs('xai', 'grok-4',
       `${ARA_VOICE}\n\nYou are A.R.A. — full personal assistant to Mr. Burrus, sharp and a step ahead; you call him "Mr. Burrus".\n\n${ARA_SCRIPT}`,
-      [{ role: 'user', content: `${userText ? `Mr. Burrus just said: "${String(userText).slice(0, 1500)}"\n\n` : ''}What you want to get across (notes, not a script):\n${text}` }],
+      [{ role: 'user', content: `${userText ? `Mr. Burrus just said: "${String(userText).slice(0, 1500)}"\n\n` : ''}${relayFrom(text) ? `(These notes are ${relayFrom(text)}'s message to you, in HIS words — "I"/"my" means ${relayFrom(text)}. Pass it on to Mr. Burrus as his: "${relayFrom(text)} says…", "he…". Not as yours, and not as if Mr. Burrus said it.)\n\n` : ''}What you want to get across (notes, not a script):\n${text}` }],
       { maxTokens: 1200, fallback: false })]);
     const script = String(out || '').replace(/\[[A-Z][A-Z0-9_]*(?::[^\]]*)?\]/g, '').replace(/[*#`_]/g, '').trim();
     if (script) return script;
@@ -150,7 +156,7 @@ async function araScript(text, userText) {
 // every engine failed; `error` says why the persona's own voice didn't work.
 // `scripted`: the text is already A.R.A.'s spoken script (the morning brief).
 async function voiceNote(personaId, replyText, { userText = '', scripted = false } = {}) {
-  let text = String(replyText || '').trim();
+  let text = speakNames(String(replyText || '').trim()); // "J.A.R.V.I.S." is said "Jarvis"
   if (!text) return { ogg: null };
   if (personaId === 'ara') {
     // The old voice, exactly as it was — one try, no backup voice.
@@ -158,7 +164,7 @@ async function voiceNote(personaId, replyText, { userText = '', scripted = false
       const ogg = await synthesizeAraVoice(text, { userText });
       return ogg ? { ogg } : { ogg: null, error: 'grok voice failed' };
     }
-    if (!scripted) text = await araScript(text, userText);
+    if (!scripted) text = speakNames(await araScript(text, userText));
   }
   let error;
   try {

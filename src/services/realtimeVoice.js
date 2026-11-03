@@ -26,7 +26,7 @@ import{playOpts,speechRate}from './voiceSpeed';
 import{Audio}from 'expo-av';
 import*as FileSystem from 'expo-file-system';
 import{loadKeys}from './keyStore';
-import{personaSystemPrompt,queryMemory}from './aiService';
+import{personaSystemPrompt,queryMemory,fixNames}from './aiService';
 import{ARA_VOICE}from './voiceCues';
 import{getHudState}from './database';
 
@@ -129,7 +129,7 @@ export async function startAraLive(opts={}){
   if(!keys?.grok)throw new Error('Grok API key needed for A.R.A. LIVE. Add one in Settings.');
   onState?.('connecting');
   const instructions=ARA_VOICE+'\n\n'+(await personaSystemPrompt('ara'))
-    +`\n\n[LIVE VOICE CALL: you are on a real-time voice call with Mr. Burrus — everything is spoken and heard live, not read. Talk naturally and conversationally, short turns, the way a person on a call does. Keep HER VOICE from the top the whole call — warm, soft, slightly seductive, unhurried, feeling it out loud — never a flat read. Don't write bracketed voice cues here — just do it with your voice. You will not receive [SAVE_NOTE], [REMEMBER] or other write-side tags here — if he asks you to save or remember something mid-call, tell him you'll get it down and note it in the regular chat, don't pretend to write it. You DO have read_hud and query_memory as live tools — use them instead of guessing when the answer depends on current state or something from your history with him.]`;
+    +`\n\n[LIVE VOICE CALL: you are on a real-time voice call with Mr. Burrus — everything is spoken and heard live, not read. Talk naturally and conversationally, short turns, the way a person on a call does. Keep HER VOICE from the top the whole call — warm, soft, slightly seductive, unhurried, feeling it out loud — never a flat read. Don't write bracketed voice cues here — just do it with your voice. You will not receive [SAVE_NOTE], [REMEMBER] or other write-side tags here — if he asks you to save or remember something mid-call, tell him you'll get it down and note it in the regular chat, don't pretend to write it. You DO have read_hud and query_memory as live tools — use them instead of guessing when the answer depends on current state or something from your history with him. If you hear "Aura", that's him saying your name — A.R.A. — never correct him or ask who Aura is. Say every persona's name as a name — Talon, Jarvis, Selene, Aisha — never spelled out letter by letter. When you pass on what another persona told you, it's theirs: "Talon says he…", never as your own and never as if he said it.]`;
   return new Promise((resolve,reject)=>{
     const socket=new WebSocket(
       'wss://api.x.ai/v1/realtime?model=grok-voice-latest',
@@ -181,12 +181,12 @@ export async function startAraLive(opts={}){
           break;
         case'conversation.item.input_audio_transcription.updated':{
           const t=event.content?.[0]?.transcript||event.transcript;
-          if(t)onUserText?.(t,false);
+          if(t)onUserText?.(fixNames(t),false);
           break;
         }
         case'conversation.item.input_audio_transcription.completed':{
           const t=event.content?.[0]?.transcript||event.transcript;
-          if(t)onUserText?.(t,true);
+          if(t)onUserText?.(fixNames(t),true);
           break;
         }
         case'response.output_audio.delta':

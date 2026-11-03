@@ -3,6 +3,7 @@
 // TTS otherwise. Item 2 builds the streaming voice-synced pipeline; this is the
 // simple fire-and-forget path.
 import{Audio}from 'expo-av';
+import{speakNames}from './voiceCues';
 import{playOpts,speechRate}from './voiceSpeed';
 import*as Speech from 'expo-speech';
 import{textToSpeech}from './aiService';
@@ -20,7 +21,7 @@ export async function stopSpeaking(){
 
 export async function speak(text,voiceId,personaName){
   await stopSpeaking();
-  const clean=String(text||'').replace(/\[[^\]]*\]/g,'').replace(/[*#`_]/g,'').trim();
+  const clean=speakNames(String(text||'')).replace(/\[[^\]]*\]/g,'').replace(/[*#`_]/g,'').trim();
   if(!clean)return;
   let uri=null;
   try{

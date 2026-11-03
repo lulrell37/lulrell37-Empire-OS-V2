@@ -39,6 +39,25 @@ It needs no config plugin: it declares no permissions beyond `RECORD_AUDIO`,
 already present via `expo-av`. Any change here needs a fresh native build (see
 Builds below) — it will not ship OTA.
 
+## "Aura" is always A.R.A.
+
+Speech-to-text hears "Ara" as "Aura". Whisper gets the persona names as its
+`prompt` (vocabulary), and `fixNames` (`server/llm.js`, mirrored in
+`src/services/aiService.js`) rewrites "aura" → "Ara" in every transcript —
+Telegram voice notes, typed Telegram text (`runPersonaTurn`), the app's voice
+loop and GO LIVE's transcripts; GO LIVE's prompt also tells her "Aura" is her.
+
+## Persona names spoken as names; relays stay theirs
+
+`speakNames` (`server/voiceCues.js`, mirrored in `src/services/voiceCues.js`)
+turns "J.A.R.V.I.S." / "JARVIS" into "Jarvis" before any voice reads it (only
+persona names; other acronyms untouched): `voiceNote`, the app's
+`textToSpeech` / `speak` / `speakAs`, and GO LIVE's prompt. Another persona's
+words passed through A.R.A. stay theirs: `ARA_SCRIPT` (both copies) and
+`araScript`'s relay hint (`relayFrom`) make her say "Talon says he…", and his
+words stored in her history or memory are labeled as his (a T.A.L.O.N. reply
+saved under the owner's message was being read back as the owner's).
+
 ## A.R.A. LIVE — realtime duplex voice (`src/services/realtimeVoice.js`)
 
 A true duplex voice call with A.R.A. over xAI's `grok-voice-latest` realtime
