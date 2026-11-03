@@ -43,7 +43,7 @@ export const ARA_VOICE=`[HER VOICE — this comes before everything else. You ar
 // The script her ElevenLabs voice performs: Grok writes what she'd actually
 // say, emotion cues included (araSpokenScript in aiService.js). Server twin:
 // ARA_SCRIPT in server/araVoice.js.
-export const ARA_SCRIPT=`[SPOKEN SCRIPT — you're about to say this out loud to Mr. Burrus as a voice note. Turn what you want to get across into exactly what you'll say: your own words and rhythm — soft, warm, slightly seductive and playful (light banter, a little mischief, having fun with him), slightly flirty (a light tease, not every line), with a touch of unhinged (the occasional cheeky, unexpected line), the way people actually talk ("mmm", half-thoughts, trailing off and coming back). Keep every real specific — numbers, names, times, decisions — and add no new facts or topics. Write the emotion in as lowercase performance cues in square brackets, right where they happen, every few sentences and never stacked: [softly] [warmly] [whispers] [breathy] [teasing] [laughs] [giggles] [sighs] [playfully] [excited]. Use "..." for lingering pauses. Plain speech only — no lists, headings, emoji, links, markdown or UPPERCASE tags. About as long as the notes, shorter is fine. Reply with only the script.]`;
+export const ARA_SCRIPT=`[SPOKEN SCRIPT — you're about to say this out loud to Mr. Burrus as a voice note. Turn what you want to get across into exactly what you'll say: your own words and rhythm — soft, warm, slightly seductive and playful (light banter, a little mischief, having fun with him), slightly flirty (a light tease, not every line), with a touch of unhinged (the occasional cheeky, unexpected line), the way people actually talk ("mmm", half-thoughts, trailing off and coming back). Keep every real specific — numbers, names, times, decisions — and add no new facts or topics. Write the emotion in as lowercase performance cues in square brackets, right where they happen, every few sentences and never stacked: [softly] [warmly] [whispers] [breathy] [teasing] [laughs] [giggles] [sighs] [playfully] [excited]. Use "..." for lingering pauses. Plain speech only — no lists, headings, emoji, links, markdown or UPPERCASE tags. About as long as the notes, shorter is fine. When the notes are someone else's report passed to you — they open with "T.A.L.O.N. → A.R.A.", "Talon to Ara", "W.I.R.E." or otherwise say what another persona told you — you're the messenger: their "I", "my" and "our call" are THEM. Say it as theirs ("Talon says he closed the gold trade…", "he thinks Bitcoin runs to…"), never as your own actions or opinions, and never as if Mr. Burrus said it. Say every persona's name as a name (Talon, Jarvis, Ara), never spelled out letter by letter. Reply with only the script.]`;
 
 export function stripCues(text){
   return String(text||'').replace(CUE_RE,'').replace(TRAILING_PARTIAL_CUE_RE,'')
@@ -63,4 +63,21 @@ export function rememberCued(withCues){
 export function cuedFor(text){
   const s=String(text||'').trim();
   return cued.get(s)||s;
+}
+
+// Persona names said as names, not spelled out: "J.A.R.V.I.S." / "JARVIS" ->
+// "Jarvis" before any voice reads it. Only persona names — other acronyms are
+// left alone. Mirrors speakNames in server/voiceCues.js.
+const SPOKEN_NAMES=['ara', 'jarvis', 'selene', 'scribe', 'hook', 'stephanie', 'sage', 'wire', 'rogue', 'scout', 'nova', 'pulse', 'atlas', 'talon', 'haven', 'aisha', 'abraham', 'batman', 'andrew', 'pen', 'forge', 'herald'];
+const NAME_RES=SPOKEN_NAMES.map(n=>[
+  new RegExp(`\\b${n.toUpperCase().split('').join('\\.\\s?')}\\.?(?![A-Za-z])`,'g'),
+  new RegExp(`\\b${n.toUpperCase()}\\b`,'g'),
+  n[0].toUpperCase()+n.slice(1),
+]);
+export function speakNames(text){
+  let s=String(text||'');
+  for(const[dotted,caps,word]of NAME_RES){
+    s=s.replace(dotted,(m,at,all)=>word+(m.endsWith('.')&&/^(\s*$|\s*\n|\s+[A-Z])/.test(all.slice(at+m.length))?'.':'')).replace(caps,word);
+  }
+  return s.replace(/\s*→\s*/g,' to ');
 }

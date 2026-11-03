@@ -8,6 +8,7 @@
 // a voice id, A.R.A.'s Grok voice for her, native TTS as the last resort — all
 // at the voice-speed setting.
 import{Audio}from 'expo-av';
+import{speakNames}from './voiceCues';
 import*as Speech from 'expo-speech';
 import*as FileSystem from 'expo-file-system';
 import{transcribeAudio,textToSpeech}from './aiService';
@@ -158,7 +159,7 @@ async function grokVoiceUri(text,signal){
 // Speak `text` as `personaId`. Resolves when playback finishes or is aborted.
 export async function speakAs(personaId,text,{signal}={}){
   await stopSpeaking();
-  const clean=String(text||'').replace(/\[[^\]]*\]/g,'').replace(/[*#`_]/g,'').trim();
+  const clean=speakNames(String(text||'')).replace(/\[[^\]]*\]/g,'').replace(/[*#`_]/g,'').trim();
   if(!clean||signal?.aborted)return;
   const p=getPersona(personaId);
   let uri=null;

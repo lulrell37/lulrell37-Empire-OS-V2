@@ -38,7 +38,7 @@ function once(key) {
 
 function relay(text, memory = true) {
   araNote(text);
-  if (memory) saveMemory('ara', `[T.A.L.O.N. heads-up] ${text.replace(/\*\*/g, '')}`.slice(0, 1500)).catch(() => {});
+  if (memory) saveMemory('ara', `[T.A.L.O.N.'s heads-up to you — his words, his "I" is T.A.L.O.N.] ${text.replace(/\*\*/g, '')}`.slice(0, 1500)).catch(() => {});
 }
 
 async function priceOf(sym, side) {

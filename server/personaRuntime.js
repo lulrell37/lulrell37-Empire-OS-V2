@@ -563,7 +563,7 @@ async function runInjections(text, persona = 'ara', { convo = '', depth = 0, sin
       if (name === 'READ_HUD') return `HUD:\n${await readHud()}`;
       if (name === 'BUILD_STATUS') return `BUILD PIPELINE:\n${await buildStatus()}`;
       if (CODE_TAGS.has(name) && ['jarvis', 'ara'].includes(persona)) return `${name}${arg ? ` "${arg}"` : ''}:\n${await codeTag(name, arg)}`;
-      if (name === 'TALON_UPDATE' && ['ara', 'talon'].includes(persona)) return `T.A.L.O.N.'S MARKET UPDATE (just now — pass it on in your own words, keep his prices):\n${await require('./talonUpdate').updateForAra()}`;
+      if (name === 'TALON_UPDATE' && ['ara', 'talon'].includes(persona)) return `T.A.L.O.N.'S MARKET UPDATE (just now, in HIS words — his "I"/"my"/"our" is T.A.L.O.N. Pass it on as his: "Talon says…", "he expects…", keep his prices; not as your own call, and not as if Mr. Burrus said it):\n${await require('./talonUpdate').updateForAra()}`;
       if (name === 'QUICK_LOG' && ['ara', 'talon'].includes(persona)) return `QUICK-SCALP DESK:\n${await require('./talonQuick').quickLogText()}`;
       if (name === 'TRADE_POSITIONS' && ['ara', 'talon'].includes(persona)) return `OPEN POSITIONS:\n${await require('./talonCommands').positionsText()}`;
       if (name === 'TALON_RUN' && ['ara', 'talon'].includes(persona)) return `T.A.L.O.N. SCAN (run just now):\n${talonRunLine(await require('./talonAutoTrade').tick({ force: true }))}`;
@@ -576,7 +576,7 @@ async function runInjections(text, persona = 'ara', { convo = '', depth = 0, sin
         if (depth > 1) return `RELAY_TO "${ref}": not from inside a relay — answer with what you have.`;
         // Mr. Burrus didn't ask for them — answer it yourself.
         if (!relayAllowed(asked, id, persona)) return `RELAY_TO "${ref}": not sent — Mr. Burrus didn't ask you to bring ${ROSTER[id].name} in. Answer it yourself from your own knowledge; don't mention the hand-off.`;
-        return `YOU ASKED ${ROSTER[id].name}: "${msg}"\n${ROSTER[id].name} REPLIED:\n${await relayToPersona(id, msg, { from: persona, convo, depth: depth + 1, sink, asked })}`;
+        return `YOU ASKED ${ROSTER[id].name}: "${msg}"\n${ROSTER[id].name} REPLIED (their words — their "I" is ${ROSTER[id].name}; tell Mr. Burrus what ${ROSTER[id].name} said/did, not as yours):\n${await relayToPersona(id, msg, { from: persona, convo, depth: depth + 1, sink, asked })}`;
       }
       return '';
     } catch (e) {
@@ -996,6 +996,7 @@ async function saveMessage(persona, role, content) {
 // the owner — used for the final reply and for background job results. Returns
 // { text, effects }.
 async function runPersonaTurn(personaId, userText, deliver) {
+  userText = require('./llm').fixNames(userText); // "Aura" is always A.R.A.
   const persona = ROSTER[personaId] ? personaId : 'ara';
   const p = ROSTER[persona];
   const [ctx, gs, custom, mem] = await Promise.all([
@@ -1069,7 +1070,9 @@ async function runPersonaTurn(personaId, userText, deliver) {
   // history — otherwise the next turn ("no, not a trade scan") has only her
   // summary to go on and no idea what A.T.L.A.S. or the web actually said.
   const lookedUp = looked.join('\n\n').slice(0, 2500);
-  await saveMessage(persona, 'user', lookedUp ? `${userText}\n\n[what you looked up / were told while answering this:\n${lookedUp}\n]` : userText);
+  // Labeled as NOT his words — a persona's "I think gold…" sitting under his
+  // message was being read back later as something he'd said.
+  await saveMessage(persona, 'user', lookedUp ? `${userText}\n\n[NOT Mr. Burrus's words — what you looked up and what other personas told you while answering the line above. Each persona's "I"/"my" is that persona (T.A.L.O.N.'s "I" is T.A.L.O.N.), never him:\n${lookedUp}\n]` : userText);
   await saveMessage(persona, 'assistant', footer ? `${clean}\n\n${footer}` : clean);
   // "[on Telegram]" lets the app pick these out (its local table has no
   // `source` column) for its RECENT ON TELEGRAM block — the mirror of the

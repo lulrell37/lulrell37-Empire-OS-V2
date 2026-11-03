@@ -88,7 +88,7 @@ async function runMarketUpdate() {
   const u = await buildUpdate();
   if (!u.text) return u;
   const sent = await sendFromAra(u.text);
-  await saveMemory('ara', `[T.A.L.O.N. market update] ${u.body}`.slice(0, 1500)).catch(() => {});
+  await saveMemory('ara', `[T.A.L.O.N.'s market update to you — his words, his "I" is T.A.L.O.N., not you or Mr. Burrus] ${u.body}`.slice(0, 1500)).catch(() => {});
   return { sent };
 }
 
