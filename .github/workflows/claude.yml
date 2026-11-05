@@ -1,0 +1,36 @@
+# Runs Claude Code in CI when J.A.R.V.I.S. / A.R.A. file a build request
+# ([BUILD_REQUEST] → issue with "@claude"), or when an answer comes back as an
+# issue comment ([BUILD_REPLY]). Claude implements the change on a branch, opens
+# a PR and comments back; server/buildAgent.js polls the issue/PR.
+#
+# Repo setup (one time):
+#   - Secret CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token` — runs on the
+#     owner's Claude subscription)
+#   - Settings > Actions > General > "Allow GitHub Actions to create and approve
+#     pull requests"
+#
+# Auth: the workflow's own GITHUB_TOKEN (github_token below), so the Claude
+# GitHub App doesn't need to be installed. Permissions are granted below.
+name: Claude Code
+on:
+  issues:
+    types: [opened]
+  issue_comment:
+    types: [created]
+jobs:
+  claude:
+    if: contains(github.event.issue.body, '@claude') || contains(github.event.comment.body, '@claude')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ github.token }}
