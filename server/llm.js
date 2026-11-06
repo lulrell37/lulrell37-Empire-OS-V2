@@ -144,7 +144,8 @@ async function grokFallback(system, msgs, { maxTokens, search }) {
 // post. Bills per post fetched (not de-duplicated) on top of tokens, so `maxTurns`
 // caps the search rounds. X_SEARCH_MODEL overrides the model; grok-4 is the backup
 // because the id is the same one the rest of this file calls.
-async function xSearch(system, prompt, { days = 3, maxTurns = 8, maxTokens = 2500 } = {}) {
+// `web` adds live web search; `x: false` drops X, for when that's switched off.
+async function xSearch(system, prompt, { days = 3, maxTurns = 8, maxTokens = 2500, web = false, x = true, timeoutMs = 180000 } = {}) {
   if (!keyFor('xai')) throw new Error('no XAI_API_KEY');
   const from = new Date(Date.now() - days * 86400e3).toISOString().slice(0, 10);
   const models = [process.env.X_SEARCH_MODEL || 'grok-4.7', 'grok-4'];
@@ -156,9 +157,9 @@ async function xSearch(system, prompt, { days = 3, maxTurns = 8, maxTokens = 250
       body: JSON.stringify({
         model, max_output_tokens: maxTokens, max_turns: maxTurns,
         input: [{ role: 'system', content: system }, { role: 'user', content: prompt }],
-        tools: [{ type: 'x_search', from_date: from }],
+        tools: [...(x ? [{ type: 'x_search', from_date: from }] : []), ...(web ? [{ type: 'web_search' }] : [])],
       }),
-      signal: AbortSignal.timeout(180000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     if (!res.ok) {
       last = new Error(`xai ${res.status}: ${(await res.text()).slice(0, 200)}`);

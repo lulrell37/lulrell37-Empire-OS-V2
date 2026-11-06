@@ -104,6 +104,16 @@ assert(validatePick(raw({ horizon: 'long', exitBy: date(900) }), snap({ atr: 4 }
   assert.strictEqual(cleanHandle('bad){x}'), '');
 }
 
+// W.O.K.E. runs on Grok, in both copies, and the two copies of his method match.
+{
+  const { ROSTER, WOKE_METHOD } = require('../personas');
+  assert.strictEqual(ROSTER.woke.api, 'xai');
+  assert.ok(WOKE_METHOD.includes('THEORY'));
+  const app = require('fs').readFileSync(require('path').join(__dirname, '../../src/personas/personas.js'), 'utf8');
+  assert.ok(app.includes(WOKE_METHOD), 'app copy of WOKE_METHOD drifted');
+  assert.ok(/role:'Truth Analyst',api:'grok'/.test(app));
+}
+
 // W.O.K.E.'s spoken line.
 assert.strictEqual(bottomLine('**Tariffs**\n**Real:** x\n**Bottom line:** Mostly true, oversold.'), 'Mostly true, oversold.');
 assert.strictEqual(bottomLine('Just one line'), 'Just one line');

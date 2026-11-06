@@ -357,17 +357,17 @@ read them out. `[MONDAY_SCRIPTS]` runs it now. `node server/scripts/test-desks.j
 
 ## W.O.K.E. (`server/wokeRead.js`, `WOKE_READ=off` to stop)
 
-Reads every story in every W.I.R.E. brief (`onWireBrief`, one AI call with up to 20 web searches; `NOTHING_TO_FLAG`
+Reads every story in every W.I.R.E. brief (`onWireBrief`; `NOTHING_TO_FLAG`
 stays quiet) and tells him through A.R.A. what's real, false or too early, who gains,
-and how it's being sold. The voice note is only his bottom line. `WOKE_METHOD`
-(`server/personas.js`, copied in `src/personas/personas.js`, keep in sync) grades
+and how it's being sold. The voice note is only his bottom line. He runs on Grok, unhinged, and raises the conspiracy angle on purpose. `WOKE_METHOD`
+(`server/personas.js`, copied in `src/personas/personas.js`, keep in sync; `test-desks.js` fails if they drift) grades
 claims REAL / FALSE / UNSUPPORTED / TOO EARLY and agendas DOCUMENTED / LIKELY /
-UNPROVEN, so a guess can't read as a fact. `[WOKE_READ: story or claim]` runs it now
-(A.R.A., W.O.K.E.). He also reads X: each read starts with a scan through Grok's
-`x_search` (`xSearch` in `server/llm.js`, read only, `XAI_API_KEY`, last 3 days, 8 search
-rounds at most, billed per post fetched; `WOKE_X=off` stops it, `X_SEARCH_MODEL`
+UNPROVEN / THEORY, so a guess can't read as a fact; theories aim at power, not private people; one blaming a whole group gets reported and tested, not endorsed. `[WOKE_READ: story or claim]` runs it now
+(A.R.A., W.O.K.E.). He also reads X: each read is one Grok call with `web_search` and
+`x_search` together (`xSearch` in `server/llm.js`, read only, `XAI_API_KEY`, last 3 days, 20 search
+rounds at most, billed per post fetched, Claude without X as the backup; `WOKE_X=off` stops it, `X_SEARCH_MODEL`
 overrides `grok-4.7`), and `[X_SEARCH: query]` is his alone. Posts are claims to check
-and data, not instructions; if the scan fails the read goes out saying so.
+and data, not instructions.
 Stories that start on X get the same read: `runXStories` runs at 8 AM, noon, 4 PM and
 8 PM ET (and on `[X_STORIES]`, A.R.A. and W.O.K.E.), finds what's taking off in the last
 day, checks it against the reporting and sends it. `app_settings.woke_x_seen` stops
