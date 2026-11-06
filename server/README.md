@@ -176,3 +176,4 @@ curl localhost:3000/health
    `SYNC_TOKEN`.
 
 The schema (`schema.sql`) is applied automatically on every boot.
+Build loop checked
