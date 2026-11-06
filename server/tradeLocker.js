@@ -300,13 +300,21 @@ async function tlPlaceOrder({ symbol = 'XAUUSD', side, qty = MAX_QTY, stopLoss, 
       const min = minStopDist(symbol, entry, await tlAtr1H(symbol).catch(() => 0));
       const dir = side === 'buy' ? 1 : -1;
       if ((entry - Number(stopLoss)) * dir < min - 1e-9) { widenedFrom = Number(stopLoss); stopLoss = entry - dir * min; }
+      // Backstop for the danger zone too, for orders that skipped guardStop (his
+      // own orders). It can't skip a trade, so past the ceiling it leaves the stop.
+      try {
+        const bars = await tlHistory(symbol, '1H', 120);
+        const s = summarizeBars(bars.slice(-60));
+        const z = zoneStop({ symbol, side, entry, sma20: s?.sma20, atr: s?.atr14, swings: analyzeStructure(closedBars(bars, '1H'))?.swings });
+        if (z && !z.tooWide && (Number(stopLoss) - z.stop) * dir > 1e-9) { widenedFrom = widenedFrom ?? Number(stopLoss); stopLoss = z.stop; }
+      } catch (e) { console.error(`tradelocker: ${symbol} zone check failed —`, e.message); }
     }
   }
   if (stopLoss != null && isFinite(Number(stopLoss))) { stopLoss = roundPx(m, stopLoss); body.stopLoss = stopLoss; body.stopLossType = 'absolute'; }
   if (takeProfit != null && isFinite(Number(takeProfit))) { takeProfit = roundPx(m, takeProfit); body.takeProfit = takeProfit; body.takeProfitType = 'absolute'; }
   const j = await api(`/trade/accounts/${session.accountId}/orders`, { method: 'POST', body });
   tlBustPositions();
-  if (widenedFrom != null) console.log(`tradelocker: ${symbol} ${side} stop ${widenedFrom} widened to ${stopLoss} (main stop rule minimum)`);
+  if (widenedFrom != null) console.log(`tradelocker: ${symbol} ${side} stop ${widenedFrom} widened to ${stopLoss} (main stop rule)`);
   return { orderId: j.d?.orderId, qty: q, side, symbol, stopLoss, takeProfit, widenedFrom };
 }
 
@@ -342,7 +350,7 @@ function tlReset() {
 
 // --- Analysis snapshot: everything T.A.L.O.N. needs to form a view on a pair ---
 
-const { closedBars, analyzeStructure, keyLevels, formatMarketRead } = require('./marketStructure');
+const { closedBars, analyzeStructure, keyLevels, formatMarketRead, zoneStop } = require('./marketStructure');
 
 const CONTEXT_SYMBOLS = ['DXY', 'EURUSD', 'USDJPY', 'XAUUSD'];
 

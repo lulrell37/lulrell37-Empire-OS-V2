@@ -107,6 +107,23 @@ const flat = (p, n) => Array.from({ length: n }, () => [p, p + 1, p - 1, p]);
   assert(lv.some((l) => l.label === 'Round' && l.price === 110));
   assert(lv.some((l) => l.label === 'Major round' && l.price === 100));
 }
+// The stop's danger zone.
+{
+  const swings = [{ type: 'low', price: 4006 }, { type: 'high', price: 4030 }];
+  const z = ms.zoneStop({ symbol: 'XAUUSD', side: 'buy', entry: 4012, sma20: 4004, atr: 5, swings });
+  assert.strictEqual(z.boundary, 4000, 'furthest of SMA20, round number and swing');
+  assert.strictEqual(z.stop, 3999);
+  assert.strictEqual(z.tooWide, false);
+  // A sell looks up, and a level on the profit side doesn't count.
+  const s = ms.zoneStop({ symbol: 'XAUUSD', side: 'sell', entry: 3990, sma20: 3980, atr: 5, swings: [{ type: 'high', price: 3996 }] });
+  assert.strictEqual(s.boundary, 4000);
+  assert.strictEqual(s.stop, 4001);
+  // The most recent swing is the one that counts.
+  assert.strictEqual(ms.zoneStop({ symbol: 'BTCUSD', side: 'buy', entry: 100400, atr: 100, swings: [{ type: 'low', price: 99000 }, { type: 'low', price: 100300 }] }).boundary, 100300);
+  assert.strictEqual(ms.zoneStop({ symbol: 'XAUUSD', side: 'buy', entry: 4012, sma20: 3970, atr: 5 }).tooWide, true, 'past gold $35');
+  assert.strictEqual(ms.zoneStop({ symbol: 'EURUSD', side: 'buy', entry: 1.1 }), null, 'gold and Bitcoin only');
+}
+
 // Too little history is null, not a crash; the read then stays empty.
 assert.strictEqual(ms.analyzeStructure(mk(flat(100, 5))), null);
 assert.strictEqual(ms.formatMarketRead({ structure: null, levels: [], price: 100 }), '');

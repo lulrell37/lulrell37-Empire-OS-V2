@@ -9,7 +9,7 @@
 // an `accNum` header. Account state / positions come back as bare arrays whose
 // column order is fixed by /trade/config (hardcoded below from the docs).
 import{loadTradeCreds,loadBackend}from './keyStore';
-import{closedBars,analyzeStructure,keyLevels,chartModel,formatMarketRead}from './marketStructure';
+import{closedBars,analyzeStructure,keyLevels,chartModel,formatMarketRead,zoneStop}from './marketStructure';
 
 // Hand the TradeLocker login to the backend once, so the server-side T.A.L.O.N.
 // auto-trade loop and W.I.R.E.'s news-trade hand-off can reach the account
@@ -342,6 +342,13 @@ export async function tlPlaceOrder({symbol='XAUUSD',side,qty=MAX_QTY,stopLoss,ta
     const min=minStopDist(symbol,entry,await atr1H(symbol).catch(()=>0));
     const dir=side==='buy'?1:-1;
     if((entry-Number(stopLoss))*dir<min-1e-9){widenedFrom=Number(stopLoss);stopLoss=entry-dir*min;}
+    // And clear of the danger zone. Mirrors server/tradeLocker.js: this can't skip a
+    // trade, so past the ceiling it leaves the stop alone.
+    try{
+      const bars=await tlHistory(String(symbol).toUpperCase(),'1H',120);
+      const z=zoneStop({symbol,side,entry,sma20:summarizeBars(bars.slice(-60))?.sma20,atr:await atr1H(symbol).catch(()=>0),swings:analyzeStructure(closedBars(bars,'1H'))?.swings});
+      if(z&&!z.tooWide&&(Number(stopLoss)-z.stop)*dir>1e-9){widenedFrom=widenedFrom??Number(stopLoss);stopLoss=z.stop;}
+    }catch{}
   }
   // On the instrument's own price precision, so the broker doesn't drop an off-tick stop.
   const px=v=>+Number(v).toFixed(m.pricePrecision??2);

@@ -325,6 +325,37 @@ function keyLevels({ symbol, daily = [], m15 = [], price, now = Date.now() }) {
   return out;
 }
 
+// --- the stop's danger zone ------------------------------------------------------
+
+const ZONE_ROUND = { XAUUSD: 50, BTCUSD: 500 };
+const ZONE_BUFFER = 0.2; // × 1H ATR past the zone's far side
+const STOP_CEILING = { XAUUSD: () => 35, BTCUSD: (px) => px * 0.03 };
+
+// Where a main-rule stop has to be to clear the danger zone: the furthest of the 1H
+// SMA20, the round number nearest entry and the last 1H swing, whichever of them are
+// on the risk side, plus a buffer. Price wicks into those levels for the stops
+// resting there, so a stop can pass the flat minimum and still be in harm's way.
+// tooWide = past the skip ceiling (gold $35 / Bitcoin 3%). Null when there's nothing
+// to check. Quick scalps and add-ons don't use this.
+function zoneStop({ symbol, side, entry, sma20, atr = 0, swings = [] }) {
+  const sym = String(symbol || '').toUpperCase();
+  const step = ZONE_ROUND[sym];
+  const px0 = Number(entry);
+  if (!step || !isFinite(px0) || !px0) return null;
+  const dir = side === 'buy' ? 1 : -1;
+  const onRisk = (v) => isFinite(v) && (px0 - v) * dir > 0;
+  const swing = [...swings].reverse().find((s) => s.type === (dir > 0 ? 'low' : 'high') && onRisk(s.price));
+  const levels = [
+    { name: 'SMA20', price: Number(sma20) },
+    { name: 'round number', price: Math.round(px0 / step) * step },
+    { name: '1H swing', price: swing ? swing.price : NaN },
+  ].filter((l) => l.price && onRisk(l.price));
+  if (!levels.length) return null;
+  const far = levels.reduce((a, l) => ((px0 - l.price) * dir > (px0 - a.price) * dir ? l : a));
+  const stop = far.price - dir * ZONE_BUFFER * (Number(atr) || 0);
+  return { stop, boundary: far.price, level: far.name, dist: Math.abs(px0 - stop), tooWide: Math.abs(px0 - stop) > STOP_CEILING[sym](px0) };
+}
+
 // --- text for the brain -------------------------------------------------------
 
 const barsAgo = (st, i) => {
@@ -474,5 +505,5 @@ function chartModel({ symbol, tf, bars, structure: st, levels = [], positions = 
 }
 
 module.exports = {
-  TF_MS, closedBars, analyzeStructure, keyLevels, killZone, formatTimeframe, formatMarketRead, chartModel, TRADING_KNOWLEDGE,
+  TF_MS, closedBars, analyzeStructure, zoneStop, keyLevels, killZone, formatTimeframe, formatMarketRead, chartModel, TRADING_KNOWLEDGE,
 };

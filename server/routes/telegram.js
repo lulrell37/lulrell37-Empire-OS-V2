@@ -18,7 +18,7 @@ const { runPending, cancelPending } = require('../personaTools');
 const { transcribe } = require('../llm');
 const { voiceNote } = require('../personaVoice');
 const { describePhotos, describeVideo } = require('../vision');
-const { sendMedia } = require('../telegramMedia');
+const { sendMedia, confirmScript } = require('../telegramMedia');
 
 const r = express.Router();
 
@@ -221,6 +221,11 @@ async function handleMessages(personaId, bot, msgs) {
       if (failed.length) await deliver(failed.map((w) => `⚠️ ${w}`).join('\n'));
     }
     for (const c of confirms || []) {
+      // Read out word for word (scripted: no rewrite pass, since he's approving
+      // exactly this), then the card, so the buttons land last. A voice failure
+      // leaves the card as it was.
+      const { ogg } = await voiceNote(personaId, confirmScript(c), { scripted: true }).catch(() => ({ ogg: null }));
+      if (ogg) await bot.sendVoice(chatId, ogg).catch((e) => console.error(`tg ${personaId} confirm voice:`, e.message));
       await bot.sendMessage(chatId, `${c.label}?\n\n${c.detail}`, {
         reply_markup: { inline_keyboard: [[
           { text: '✅ Confirm', callback_data: `ok:${c.id}` },

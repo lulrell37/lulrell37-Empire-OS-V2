@@ -134,7 +134,8 @@ and `relayAllowed` lets a calendar/email hand-off to her through. A.R.A. also ha
 targets, dates, HUD edits (score, routine, Batman Protocol, word/verse/fact),
 the leads pipeline, the council, and THE FIRM (`[PROJECT_START]`, `[DELEGATE]`
 runs the specialists server-side). Send-email and deletes become `tg_pending`
-rows and need a Confirm tap (inline buttons → `callback_query`). Each reply
+rows and need a Confirm tap (inline buttons → `callback_query`); every card is read out word for word
+as a voice note first (`confirmScript`). Each reply
 carries a ✓/⚠️ receipt per write, and the prompt carries a live Google status
 line (`googleStatus()`, also `GET /google/status`) so a persona never claims a
 Drive save that fell back to the app's notes. Replies go out as Telegram HTML (markdown links are tappable), and every
@@ -277,7 +278,10 @@ market update (the update ends in a `LEVELS:` JSON line, stripped and saved to
 itself failing (`systemFault`/`systemOk`). `tradeClosed` flags a close nowhere
 near the stop, target or break-even as one he didn't make.
 **The main stop rule's minimum is on every order except quick scalps and add-ons** — gold $10 /
-Bitcoin 0.8% and 1.2× the 1H ATR14 from entry (`minStopDist`, server and app `tradeLocker.js`).
+Bitcoin 0.8% and 1.2× the 1H ATR14 from entry (`minStopDist`, server and app `tradeLocker.js`),
+and clear of the danger zone: past the furthest of the 1H SMA20, the nearest $50 / $500 and the last
+1H swing by 0.2× ATR (`zoneStop`). `guardStop` skips a setup or news trade if that passes gold $35 /
+Bitcoin 3%; `tlPlaceOrder` is the backstop for his own orders and can't skip, so it leaves the stop.
 Setups and news trades size their stop to it up front, and both `tlPlaceOrder`s widen any closer
 stop as a backstop (chat trades say so); quick scalps and add-ons keep their own stops (`minStop: false`).
 Stops are never optional: both `tlPlaceOrder`s round stop/target to the
