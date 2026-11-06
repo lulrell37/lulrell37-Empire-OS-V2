@@ -22,6 +22,8 @@ stub('db', {
     }
     if (/SELECT env FROM trade_creds WHERE id/.test(sql)) return { rows: slots[args[0]] ? [slots[args[0]]] : [] };
     if (/INSERT INTO tg_pending/.test(sql)) { calls.push('card'); return { rows: [] }; }
+    if (/INSERT INTO trade_creds .* SELECT/.test(sql)) { slots[args[0]] = { ...slots[args[3]], id: args[0], env: args[1] }; return { rows: [] }; }
+    if (/DELETE FROM trade_creds WHERE id/.test(sql)) { delete slots[args[0]]; return { rows: [] }; }
     return { rows: [] };
   },
 });
@@ -43,9 +45,11 @@ stub('talonAlerts', new Proxy({}, { get: () => () => {} }));
 // The two brokers. Each has its own positions; the live one shouldn't get orders.
 const open = { live: [['p1', 1, 1, 'buy', 0.02, 4000, 0, 0, Date.now(), 12, 0]], demo: [] };
 const orders = [];
+let rejectLogin = null;
 global.fetch = async (url, opts = {}) => {
   const env = /live\.tradelocker/.test(url) ? 'live' : 'demo';
   const ok = (body) => ({ ok: true, status: 200, headers: { get: () => null }, text: async () => JSON.stringify(body), json: async () => body });
+  if (/auth\/jwt\/token/.test(url) && env === rejectLogin) return { ok: false, status: 401, headers: { get: () => null }, text: async () => 'bad login' };
   if (/auth\/jwt\/token/.test(url)) return ok({ accessToken: `t-${env}`, refreshToken: 'r' });
   if (/all-accounts/.test(url)) return ok({ accounts: [{ id: `${env}-acct`, accNum: 1, accountBalance: 1000 }] });
   if (/\/positions/.test(url)) return ok({ d: { positions: open[env] } });
@@ -78,6 +82,21 @@ const goLive = async () => {
 const order = () => tl.tlPlaceOrder({ symbol: 'XAUUSD', side: 'buy', stopLoss: 3950, takeProfit: 4100, minStop: false });
 
 (async () => {
+  // Right after a restart the session hasn't logged in and reads 'demo' by default.
+  // On a live login he must still say live.
+  slots = { 1: login(1, 'live'), 3: login(3, 'live') };
+  settings.talon_account = 'live';
+  settings.talon_live = '1';
+  assert.strictEqual(tl.tlStatus().env, 'demo', 'fresh session default this test relies on');
+  assert.match(await tl.tlAccountLine(), /^LIVE \(real money\)/);
+  assert.match(await cmd.positionsText(), /^ACCOUNT: LIVE \(real money\)/);
+  // Demo asked for with no demo login: never reads as demo.
+  settings.talon_account = 'demo';
+  settings.talon_live = '0';
+  assert.match(await tl.tlAccountLine(), /He is NOT on demo: demo was asked for but he couldn't log in/);
+  slots = { 1: login(1, 'demo'), 2: login(2, 'demo') };
+  assert.strictEqual(await tl.tlAccountLine(), 'DEMO (practice money)');
+
   // Both logins saved: demo runs at once from live, with no Confirm card.
   reset();
   slots = { 1: login(1, 'live'), 2: login(2, 'demo'), 3: login(3, 'live') };
@@ -104,16 +123,44 @@ const order = () => tl.tlPlaceOrder({ symbol: 'XAUUSD', side: 'buy', stopLoss: 3
   assert.strictEqual(tl.tlStatus().env, 'live');
   assert.strictEqual((await allTrades()).length, 1, 'parked trade is managed again back on its account');
 
-  // No demo login saved: he can't reach demo, but live trading still stops.
+  // One login for both sides: with no demo login saved, the live one is reused on demo.
   reset();
   slots = { 1: login(1, 'live'), 3: login(3, 'live') };
   await goLive();
   r = await cmd.writeTag({ name: 'TRADE_ACCOUNT', arg: 'demo' });
-  assert.strictEqual(settings.talon_live, '0', 'must disarm even with no demo login');
+  assert.match(r.ok, /now on the DEMO account/);
+  assert.strictEqual(slots[2].env, 'demo');
+  assert.strictEqual(slots[2].email, 'live@x', 'same login');
+  assert.strictEqual(slots[3].env, 'live', 'the live login is untouched');
+  assert.strictEqual(tl.tlStatus().env, 'demo');
+  assert.strictEqual(tl.tlStatus().accountId, 'demo-acct');
+  await order();
+  assert.deepStrictEqual(orders, ['demo']);
+  // And back: going live still waits for the tap.
+  r = await cmd.writeTag({ name: 'TRADE_ACCOUNT', arg: 'live' });
+  assert.ok(r.confirm);
+  await cmd.runAction('account', { env: 'live' });
+  assert.strictEqual(tl.tlStatus().env, 'live');
+
+  // The login doesn't work on demo: live trading still stops, and it doesn't claim he moved.
+  reset();
+  slots = { 1: login(1, 'live'), 3: login(3, 'live') };
+  await goLive();
+  rejectLogin = 'demo';
+  r = await cmd.writeTag({ name: 'TRADE_ACCOUNT', arg: 'demo' });
+  rejectLogin = null;
+  assert.strictEqual(settings.talon_live, '0', 'must disarm even when demo won\'t log in');
   assert.match(r.ok, /LIVE trading is OFF/);
   assert.match(r.ok, /NOT on demo/, 'must not claim he moved');
+  assert.ok(!slots[2], 'a login that failed there is not kept');
   await assert.rejects(order(), /isn't armed/);
   assert.deepStrictEqual(orders, []);
+
+  // Nothing saved at all.
+  reset();
+  slots = {};
+  r = await cmd.writeTag({ name: 'TRADE_ACCOUNT', arg: 'demo' });
+  assert.match(r.ok, /no TradeLocker login on the server at all/);
 
   // The order-level gate holds for a path that skipped every other check.
   reset();
