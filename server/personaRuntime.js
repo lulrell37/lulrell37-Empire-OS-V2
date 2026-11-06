@@ -131,7 +131,8 @@ async function gatherContext() {
 
   const reminders = await require('./reminders').upcoming(8).catch(() => []);
   const trading = await require('./talonAutoTrade').status().catch(() => null);
-  return { businesses, tasks, leadTally, openTrades, builds, hud, dates, councilLast, project, reminders, trading };
+  const talonAccount = await require('./tradeLocker').tlAccountLine().catch(() => null);
+  return { talonAccount, businesses, tasks, leadTally, openTrades, builds, hud, dates, councilLast, project, reminders, trading };
 }
 
 function upcomingDates(dates, days = 21) {
@@ -483,6 +484,14 @@ function systemPrompt(ctx, gs, custom, mem) {
 }
 
 // System prompt for a non-A.R.A. persona running its own bot.
+// For whoever can talk about T.A.L.O.N.'s account: the fact itself, every turn, so
+// neither of them answers "are you on demo?" from memory or earlier chat.
+function accountFact(id, ctx) {
+  if (!['ara', 'talon'].includes(id)) return '';
+  const who = id === 'talon' ? 'YOUR ACCOUNT' : 'T.A.L.O.N.\'S ACCOUNT';
+  return `[${who} RIGHT NOW: ${(ctx && ctx.talonAccount) || 'unknown, the check failed, so say you can\'t confirm it'}. Read from the server this turn. It's the only source for which account he's on: never say demo or live from memory or earlier chat, and if he just asked for a switch, say so only from its receipt.]`;
+}
+
 function personaSystemPrompt(personaId, ctx, gs, custom, mem) {
   return [
     custom ? `${custom}\n\n${TG_FRAME}` : `${personaTgIdentity(personaId)}\n\nYou are talking to Mr. Burrus over Telegram (text), away from the Empire OS app — keep replies tight and mobile-readable. Reply directly to what he just said; no status-briefing preamble. There is a live context block below — read from it, don't invent numbers.`,
@@ -496,6 +505,7 @@ function personaSystemPrompt(personaId, ctx, gs, custom, mem) {
     googleLine(gs),
     `[THE EMPIRE — the other personas. Only when Mr. Burrus asks you to bring someone in — he names them or says to check with / run it by someone — do you use [RELAY_TO]. Otherwise answer it yourself from your own knowledge and lane, even if it's someone else's specialty (asked about trading, give your own take — don't go get T.A.L.O.N.). This overrides any hand-off instruction elsewhere in your prompt.\n${rosterLines()}\n]`,
     faithBlock(personaId),
+    accountFact(personaId, ctx),
     `[LIVE CONTEXT:\n${contextBlock(ctx)}\n]`,
     `[THE CURRENT MOMENT — right now it is ${momentET()} (America/New_York); Mr. Burrus is in Waldorf, MD. This is authoritative; chat history and memory may be hours or days old.]`,
   ].filter(Boolean).join('\n\n');
@@ -847,6 +857,7 @@ async function relayToPersona(id, message, { from = 'ara', convo = '', depth = 1
     id === 'jarvis' ? await empireOsBrief() : '',
     id === 'talon' ? RELAY_TOOLS.replace(HAND_TRADES, TALON_HAND_TRADES) : RELAY_TOOLS,
     googleLine(gs),
+    accountFact(id, ctx),
     ctx ? `[EMPIRE CONTEXT:\n${contextBlock(ctx, { trading: id === 'ara' })}\n]` : '',
     convo ? `[THE CONVERSATION YOU'RE BEING PULLED INTO — Mr. Burrus and ${(ROSTER[from] && ROSTER[from].name) || from}, most recent last:\n${convo}\n]` : '',
     `[THE CURRENT MOMENT — ${momentET()} (America/New_York).]`,

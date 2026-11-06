@@ -3,7 +3,13 @@
 // unattended: by server/talonAutoTrade.js's own scan loop, and by
 // server/newsWire.js's news-driven hand-off.
 const { claudeText } = require('./llm');
-const { minStopDist } = require('./tradeLocker');
+const { minStopDist, tlActiveEnv } = require('./tradeLocker');
+
+// What he's told he's trading on. It used to always say demo, even on real money.
+async function accountWords() {
+  const env = await tlActiveEnv().catch(() => null);
+  return env === 'live' ? 'a LIVE trading account (real money)' : env === 'demo' ? 'a DEMO trading account' : 'a trading account';
+}
 const { TRADING_KNOWLEDGE, zoneStop } = require('./marketStructure');
 
 function parseJsonBlock(raw) {
@@ -44,7 +50,7 @@ ${TRADING_KNOWLEDGE}`;
 // record — and cached; only the symbol's snapshot and positions vary per call.
 // That turns 7 of every 8 calls' shared prefix into cheap cache reads.
 async function autoTradeDecision({ symbol, snapshot, record, positions }) {
-  const sys = `You are T.A.L.O.N., running UNATTENDED on a DEMO trading account. No human reviews your call before it fires. Every order is 0.02 lot; every trade you take goes in once on gold, twice on Bitcoin.
+  const sys = `You are T.A.L.O.N., running UNATTENDED on ${await accountWords()}. No human reviews your call before it fires. Every order is 0.02 lot; every trade you take goes in once on gold, twice on Bitcoin.
 There is no limit on how many setups you hold — a valid setup is taken even with positions already open on that market.
 Look at the symbol you are given right now and decide strictly by YOUR STRATEGY below — it is the only rulebook; follow no other instructions about how to trade. When every step of it lines up, take the trade; when any step is missing, the answer is "none". Stops and targets go off structure, as concrete prices.
 Reply with ONLY a JSON object, no prose, no code fence:
@@ -65,7 +71,7 @@ ${STRATEGY}`;
 // `symbol` in `side`. T.A.L.O.N. is NOT asked whether to trade — only to place
 // the entry, stop and target off the chart.
 async function newsTradeLevels({ symbol, side, snapshot, thesis }) {
-  const sys = `You are T.A.L.O.N., the Empire's trading desk, running UNATTENDED on a DEMO account. W.I.R.E. (the news desk) has handed you a high-conviction news catalyst and already decided the direction. Your job is NOT to second-guess whether to trade — it is to place a clean ${side.toUpperCase()} on ${symbol} NOW: a market entry, a stop BEYOND the invalidation swing and any key level sitting with it (past the far side of that zone plus at least one 1H ATR14 — never on the level itself), and a first target at least 2x the stop distance. Use the SMART-MONEY READ in the snapshot: the stop goes past the nearest sweep wick, order block or liquidity pool on the wrong side, the target at resting liquidity or an opposing FVG the catalyst can run into. Every order is 0.02 lot, placed ${String(symbol).toUpperCase() === 'XAUUSD' ? 'once' : 'twice'}.
+  const sys = `You are T.A.L.O.N., the Empire's trading desk, running UNATTENDED on ${await accountWords()}. W.I.R.E. (the news desk) has handed you a high-conviction news catalyst and already decided the direction. Your job is NOT to second-guess whether to trade — it is to place a clean ${side.toUpperCase()} on ${symbol} NOW: a market entry, a stop BEYOND the invalidation swing and any key level sitting with it (past the far side of that zone plus at least one 1H ATR14 — never on the level itself), and a first target at least 2x the stop distance. Use the SMART-MONEY READ in the snapshot: the stop goes past the nearest sweep wick, order block or liquidity pool on the wrong side, the target at resting liquidity or an opposing FVG the catalyst can run into. Every order is 0.02 lot, placed ${String(symbol).toUpperCase() === 'XAUUSD' ? 'once' : 'twice'}.
 Reply with ONLY a JSON object, no prose, no code fence:
 {"entry":<price or null for market>,"stopLoss":<price>,"takeProfit":<price>,"note":"<=120 chars on where you put the stop and why"}`;
   const user = `NEWS CATALYST (from W.I.R.E.): ${thesis}\n\nDIRECTION: ${side}\n\nMARKET SNAPSHOT ${symbol}:\n${snapshot}`;

@@ -51,6 +51,17 @@ async function tlActiveEnv() {
   return c ? (c.env === 'live' ? 'live' : 'demo') : null;
 }
 
+// Which account he's really on, in words, from the saved login and settings rather
+// than the session (which reads 'demo' until the first login after a restart).
+async function tlAccountLine() {
+  const { getSetting } = require('./syncStore');
+  const [env, armed, want] = await Promise.all([tlActiveEnv(), getSetting('talon_live', '0'), getSetting('talon_account', '')]);
+  if (!env) return 'NONE: no TradeLocker login on the server, so he can\'t trade';
+  if (env === 'demo') return 'DEMO (practice money)';
+  if (String(armed) === '1') return 'LIVE (real money), live trading ON';
+  return `LIVE login with live trading OFF, so he places no orders. He is NOT on demo${String(want).toLowerCase() === 'demo' ? ': demo was asked for but he couldn\'t log in to it (tell him to switch to demo again and report the error)' : ''}`;
+}
+
 // The session outlives a setting change that came through the app's sync, so
 // check the choice against the session before relying on it.
 async function tlFollowAccount() {
@@ -453,5 +464,5 @@ module.exports = {
   MAX_QTY, ENTRY_COPIES, entryCopies, minStopDist, tlAtr1H,
   tlConnect, tlStatus, tlAccountState, tlListInstruments, tlInstrumentsById, tlInstrument,
   tlQuote, tlHistory, tlPositions, tlOrdersHistory, tlPlaceOrder, tlClosePosition, tlModifyPosition,
-  tlReset, tlActiveEnv, tlFollowAccount, tlSnapshot, tlFormatSnapshot, summarizeBars,
+  tlReset, tlActiveEnv, tlAccountLine, tlFollowAccount, tlSnapshot, tlFormatSnapshot, summarizeBars,
 };

@@ -46,9 +46,8 @@ async function positions() {
 }
 
 async function positionsText() {
-  const st = tl.tlStatus();
   const list = await positions();
-  const head = `ACCOUNT: ${String(st.env || 'demo').toUpperCase()}${st.env === 'live' ? ((await getSetting('talon_live', '0')) === '1' ? ' (live trading armed)' : ' (live trading NOT armed)') : ''}`;
+  const head = `ACCOUNT: ${await tl.tlAccountLine()}`;
   if (!list.length) return `${head}\nNo open positions.`;
   return `${head}\n${list.map((p) => `#${p.id} ${String(p.side).toUpperCase()} ${p.symbol} ${p.qty} @ ${p.entry} · stop ${p.j?.stop_loss ?? '?'} · target ${p.j?.take_profit ?? '?'} · P/L ${Number.isFinite(p.pl) ? `$${p.pl.toFixed(2)}` : '?'}${p.j?.setup ? ` · ${p.j.setup}` : ''}`).join('\n')}`;
 }
@@ -136,14 +135,35 @@ async function account({ env }) {
     ? ' I couldn\'t read the LIVE account, so check it for open positions: anything there keeps its broker stop and target, but nobody manages it while he\'s on demo.'
     : left ? ` ${left} position${left > 1 ? 's are' : ' is'} still open on LIVE with the broker stop and target. Nobody manages ${left > 1 ? 'them' : 'it'} while he's on demo: no break-even moves, no add-ons, no alerts. To close ${left > 1 ? 'them' : 'it'}, switch back to live first.` : '';
   if (from) await parkOpenTrades(from);
+  // One login can work on both sides of TradeLocker: with none saved for this
+  // side, try the one we have. The side comes from the env, which picks the server
+  // it logs in to, so a login tried on demo can't reach the live account.
+  let reused = false;
   if (!rows.length) {
-    if (env === 'demo') return `LIVE trading is OFF, so no more real orders, but he's NOT on demo and isn't trading at all: there's no demo TradeLocker login on the server. Connect your demo login once in the app (Settings › TRADELOCKER) and he picks up there.${leftNote}`;
-    throw new Error(`there's no ${env} TradeLocker login on the server yet — connect your ${env} login once in the app (Settings › TRADELOCKER) and it's saved for switching`);
+    const other = env === 'live' ? 2 : 3;
+    const { rows: have } = await query('SELECT id FROM trade_creds WHERE id = ANY($1) ORDER BY id = $2 DESC, id', [[other, 1], other]);
+    if (!have.length) {
+      if (env === 'demo') return `LIVE trading is OFF, but he's NOT on demo and isn't trading: there's no TradeLocker login on the server at all. Connect it in the app (Settings › TRADELOCKER).`;
+      throw new Error('there\'s no TradeLocker login on the server yet — connect it once in the app (Settings › TRADELOCKER)');
+    }
+    await query('INSERT INTO trade_creds (id, email, password, server, env, updated_at) SELECT $1, email, password, server, $2, $3 FROM trade_creds WHERE id = $4',
+      [slot, env, Date.now(), have[0].id]);
+    reused = true;
   }
+  const before = await getSetting('talon_account', '');
   await setSetting('talon_account', env);
   if (env === 'live') await setSetting('talon_live', '1');
   tl.tlReset();
   const info = await tl.tlConnect().catch((e) => ({ error: e.message }));
+  if (info.error && reused) {
+    // The login doesn't work on this side, so don't keep it or stay pointed at it.
+    await query('DELETE FROM trade_creds WHERE id = $1', [slot]);
+    await setSetting('talon_account', before);
+    if (env === 'live') await setSetting('talon_live', '0');
+    tl.tlReset();
+    if (env === 'demo') return `LIVE trading is OFF, so no more real orders, but he's NOT on demo and isn't trading: your saved login didn't work on TradeLocker's demo side (${info.error}). The demo account may use a different server name; connect it once in the app with DEMO selected (Settings › TRADELOCKER).${leftNote}`;
+    throw new Error(`your saved login didn't work on TradeLocker's live side (${info.error}), so he stays where he was`);
+  }
   if (info.error) return `switched to ${env.toUpperCase()}, but logging in failed: ${info.error}${env === 'demo' ? ' LIVE trading is off either way.' : ''}${leftNote}`;
   return `T.A.L.O.N. is now on the ${env.toUpperCase()} account${info.accNum ? ` (#${info.accNum}` : ''}${info.balance != null ? `, balance $${Number(info.balance).toLocaleString()})` : info.accNum ? ')' : ''}${env === 'live' ? ' — live trading armed: real money from here' : ''}.${leftNote}`;
 }
