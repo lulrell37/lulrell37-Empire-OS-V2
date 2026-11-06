@@ -10,13 +10,14 @@
 //
 // On the demo account they run at once. On a LIVE account — and switching TO
 // live — every one waits for his Confirm tap (tg_pending), like a sent email.
+// Switching to demo always runs at once, from either account.
 // Every change lands in the trade journal too, so ensureStop / the near-stop
 // watch / the close alerts all work off the new levels, and a close he ordered
 // isn't reported as "I didn't close this one".
 const { query } = require('./db');
 const { syncedRows, upsertSyncRow, getSetting, setSetting, newId } = require('./syncStore');
 const tl = require('./tradeLocker');
-const { recordTradeOpen } = require('./tradeJournal');
+const { recordTradeOpen, parkOpenTrades } = require('./tradeJournal');
 
 const SYMS = ['XAUUSD', 'BTCUSD'];
 const NAME = { XAUUSD: 'gold', BTCUSD: 'Bitcoin' };
@@ -123,17 +124,28 @@ async function modify({ ids, stop, target, breakeven }) {
 // Which saved login is active: trade_creds row 2 = demo, 3 = live (routes/trade.js
 // keeps both as the app pushes them); the choice is the `talon_account` setting.
 async function account({ env }) {
+  // Off live before anything else can fail: whatever happens below, he can't
+  // place another real order.
+  if (env === 'demo') await setSetting('talon_live', '0');
   const slot = env === 'live' ? 3 : 2;
   const { rows } = await query('SELECT env FROM trade_creds WHERE id = $1', [slot]);
+  const from = await tl.tlActiveEnv().catch(() => null);
+  // What he's leaving behind, while the session can still see that account.
+  const left = from === 'live' && env === 'demo' ? await tl.tlPositions().then((p) => p.length).catch(() => null) : 0;
+  const leftNote = left === null
+    ? ' I couldn\'t read the LIVE account, so check it for open positions: anything there keeps its broker stop and target, but nobody manages it while he\'s on demo.'
+    : left ? ` ${left} position${left > 1 ? 's are' : ' is'} still open on LIVE with the broker stop and target. Nobody manages ${left > 1 ? 'them' : 'it'} while he's on demo: no break-even moves, no add-ons, no alerts. To close ${left > 1 ? 'them' : 'it'}, switch back to live first.` : '';
+  if (from) await parkOpenTrades(from);
   if (!rows.length) {
+    if (env === 'demo') return `LIVE trading is OFF, so no more real orders, but he's NOT on demo and isn't trading at all: there's no demo TradeLocker login on the server. Connect your demo login once in the app (Settings › TRADELOCKER) and he picks up there.${leftNote}`;
     throw new Error(`there's no ${env} TradeLocker login on the server yet — connect your ${env} login once in the app (Settings › TRADELOCKER) and it's saved for switching`);
   }
   await setSetting('talon_account', env);
-  await setSetting('talon_live', env === 'live' ? '1' : '0');
+  if (env === 'live') await setSetting('talon_live', '1');
   tl.tlReset();
   const info = await tl.tlConnect().catch((e) => ({ error: e.message }));
-  if (info.error) return `switched to ${env.toUpperCase()}, but logging in failed: ${info.error}`;
-  return `T.A.L.O.N. is now on the ${env.toUpperCase()} account${info.accNum ? ` (#${info.accNum}` : ''}${info.balance != null ? `, balance $${Number(info.balance).toLocaleString()})` : info.accNum ? ')' : ''}${env === 'live' ? ' — live trading armed: real money from here' : ''}`;
+  if (info.error) return `switched to ${env.toUpperCase()}, but logging in failed: ${info.error}${env === 'demo' ? ' LIVE trading is off either way.' : ''}${leftNote}`;
+  return `T.A.L.O.N. is now on the ${env.toUpperCase()} account${info.accNum ? ` (#${info.accNum}` : ''}${info.balance != null ? `, balance $${Number(info.balance).toLocaleString()})` : info.accNum ? ')' : ''}${env === 'live' ? ' — live trading armed: real money from here' : ''}.${leftNote}`;
 }
 
 const RUN = { enter, close, modify, account };
@@ -194,8 +206,10 @@ async function writeTag({ name, arg }) {
     if (name === 'TRADE_ACCOUNT') {
       const env = /live|real/i.test(p[0]) ? 'live' : /demo|paper|practice/i.test(p[0]) ? 'demo' : null;
       if (!env) return { warn: 'TRADE_ACCOUNT: live or demo?' };
-      // Going live always waits for his tap; back to demo is the safe direction.
-      return act('account', 'T.A.L.O.N.: switch to the LIVE account (real money)', 'Auto-trade, W.I.R.E.\'s news trades and anything you order will place real orders.', { env }, { confirm: env === 'live' });
+      // Back to demo is the safe direction: never a card, even from the live
+      // account, or he stays live until someone taps it.
+      if (env === 'demo') return { ok: `T.A.L.O.N.: ${await runAction('account', { env })}` };
+      return propose('account', 'T.A.L.O.N.: switch to the LIVE account (real money)', 'Auto-trade, W.I.R.E.\'s news trades and anything you order will place real orders.', { env });
     }
   } catch (e) {
     return { warn: `${name} failed — ${e.message}` };

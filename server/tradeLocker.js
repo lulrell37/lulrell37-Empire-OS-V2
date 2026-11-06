@@ -45,6 +45,21 @@ async function loadTradeCreds() {
   return rows[0] || null;
 }
 
+// Which account the saved choice points at right now ('live', 'demo', or null).
+async function tlActiveEnv() {
+  const c = await loadTradeCreds();
+  return c ? (c.env === 'live' ? 'live' : 'demo') : null;
+}
+
+// The session outlives a setting change that came through the app's sync, so
+// check the choice against the session before relying on it.
+async function tlFollowAccount() {
+  const env = await tlActiveEnv();
+  if (!env || !session.accountId || env === session.env) return;
+  await require('./tradeJournal').parkOpenTrades(session.env);
+  tlReset();
+}
+
 // A single hung socket serializes behind everything else on the one request
 // chain (see `api`) — cap every request so a dropped connection can't wedge
 // the whole cycle.
@@ -281,7 +296,13 @@ async function tlOrdersHistory() {
 const roundPx = (m, v) => +Number(v).toFixed(m?.pricePrecision ?? 2);
 
 async function tlPlaceOrder({ symbol = 'XAUUSD', side, qty = MAX_QTY, stopLoss, takeProfit, minStop = true }) {
+  await tlFollowAccount();
   await ensureAccount();
+  // The last gate before real money, for every path into here. If the setting
+  // can't be read this throws too, so no order goes out on a guess.
+  if (session.env === 'live' && String(await require('./syncStore').getSetting('talon_live', '0')) !== '1') {
+    throw new Error('this is the LIVE account and live trading isn\'t armed, so no order was placed');
+  }
   if (side !== 'buy' && side !== 'sell') throw new Error('side must be buy or sell');
   const q = Math.min(Math.max(Number(qty) || 0, 0), MAX_QTY);
   if (!q) throw new Error('qty must be > 0');
@@ -432,5 +453,5 @@ module.exports = {
   MAX_QTY, ENTRY_COPIES, entryCopies, minStopDist, tlAtr1H,
   tlConnect, tlStatus, tlAccountState, tlListInstruments, tlInstrumentsById, tlInstrument,
   tlQuote, tlHistory, tlPositions, tlOrdersHistory, tlPlaceOrder, tlClosePosition, tlModifyPosition,
-  tlReset, tlSnapshot, tlFormatSnapshot, summarizeBars,
+  tlReset, tlActiveEnv, tlFollowAccount, tlSnapshot, tlFormatSnapshot, summarizeBars,
 };

@@ -54,7 +54,7 @@ turns "J.A.R.V.I.S." / "JARVIS" into "Jarvis" before any voice reads it (only
 persona names; other acronyms untouched): `voiceNote`, the app's
 `textToSpeech` / `speak` / `speakAs`, and GO LIVE's prompt. Another persona's
 words passed through A.R.A. stay theirs: `ARA_SCRIPT` (both copies) and
-`araScript`'s relay hint (`relayFrom`) make her say "Talon says he…", and his
+`araScript`'s relay hint (`relayFrom`, `relayHint`, which recognizes every persona off `ROSTER` and gives their real pronouns and role; the script pass in both copies also carries the team list) make her say "Talon says he…", and his
 words stored in her history or memory are labeled as his (a T.A.L.O.N. reply
 saved under the owner's message was being read back as the owner's).
 
@@ -247,7 +247,7 @@ be removed. Account switching: `POST /trade/creds` also keeps one login per
 type (`trade_creds` rows 2 = demo, 3 = live; row 1 = last pushed), and the
 synced `talon_account` setting picks which one `loadTradeCreds` uses (a new or
 changed login from the app makes itself active; the app re-posting the same
-login on start doesn't). `[TRADE_ACCOUNT]` sets `talon_account` + `talon_live`.
+login on start doesn't). `[TRADE_ACCOUNT]` sets `talon_account` + `talon_live`. Going to demo runs at once from either account, with no Confirm card, and A.R.A. can emit it herself; it disarms `talon_live` first, so with no demo login saved he stops rather than staying live. Both `tlPlaceOrder`s refuse a live order unless armed, `tlFollowAccount` picks up a choice that arrived through sync, and the app's `[TRADE_ACCOUNT: demo]` writes those two settings. Open trades on the account he left are listed in `app_settings.talon_parked_trades`; `allTrades` hides them until he's back there (they aren't visible from the other account and would otherwise be booked as closed), and they keep only their broker stop and target meanwhile. `node server/scripts/test-account-switch.js` covers this.
 **Live account:** demo by default; Settings › Trading › LIVE TRADING (needs a
 connected live TradeLocker login, confirm dialog) writes `talon_live` = `1`
 (synced), which lets the auto-trade loop and W.I.R.E.'s news trades place

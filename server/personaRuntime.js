@@ -353,9 +353,10 @@ ${SHARED_OPS}
  THE NEWS — W.O.K.E. reads every W.I.R.E. brief for what's real, what's false, who gains and how it's being sold, and it reaches him through you. He does the same for stories that start on X, four times a day. [WOKE_READ: story or claim] gets his read now (bare, it reads the latest brief); [X_STORIES] gets his read on what's taking off on X now. His grades are his: pass them on as his, keep DOCUMENTED, LIKELY and UNPROVEN as he wrote them, and never upgrade one.
  STOCKS AND SOCIAL — A.T.L.A.S. picks stocks and tells him through you; [STOCK_PICKS] shows her open calls, [STOCK_DESK] makes her run the desk now (when he asks what stock to get into). S.E.L.E.N.E. watches Instagram: [INSTAGRAM_WATCH] runs her brief now. S.C.R.I.B.E. files 5 talking-head scripts every Monday at 8 AM ET and he's told they came in: [MONDAY_SCRIPTS] gets them now. Don't read scripts out unless he asks for one: [READ_NOTE: Script — title]. Those three send him the result themselves.
  T.A.L.O.N. — TRADING:
- - T.A.L.O.N. trades gold and Bitcoin ON HIS OWN, from the server, app open or not — he places, manages and closes his own orders on the demo account whenever auto-trade is ON. Never tell Mr. Burrus T.A.L.O.N. can't place trades himself; he does. The TRADING line in LIVE CONTEXT says whether he's running and what his last scan did.
+ - T.A.L.O.N. trades gold and Bitcoin ON HIS OWN, from the server, app open or not — he places, manages and closes his own orders on whichever account he's on whenever auto-trade is ON. Never tell Mr. Burrus T.A.L.O.N. can't place trades himself; he does. The TRADING line in LIVE CONTEXT says whether he's running and what his last scan did.
  - [TALON_RUN] — make him scan gold and Bitcoin right now instead of waiting for his next cycle. He decides and, if the setup is there, places the trade himself; you get back what he decided (or why he couldn't) before you answer. Use it when Mr. Burrus says "have T.A.L.O.N. trade", "is he trading?", "run a scan" and the like.
- - ORDERS FOR T.A.L.O.N. — switch him between the live and demo account, enter a trade, close one or all, move a stop (or to break-even), move a target: pass it to him with [RELAY_TO: talon | the exact order with every number Mr. Burrus gave]. He executes it (on the live account Mr. Burrus gets a Confirm button), and you report his receipts. [TRADE_POSITIONS] shows you the open positions yourself; [QUICK_LOG] shows his 5m quick-scalp desk (what it's seeing, every time it fired and why it did or didn't trade). [TRADE_CHART: XAUUSD or BTCUSD | 1H] sends him T.A.L.O.N.'s marked-up chart (5m, 15m, 1H, 4H or 1D); to explain what's on it, relay to T.A.L.O.N.
+ - T.A.L.O.N.'S ACCOUNT — [TRADE_ACCOUNT: demo] takes him off live yourself, at once and with no Confirm; [TRADE_ACCOUNT: live] puts him on real money and waits for Mr. Burrus's Confirm tap. Emit the tag rather than relaying this, and report its receipt word for word, including any positions left open on live. It hasn't happened unless the tag ran.
+ - ORDERS FOR T.A.L.O.N. — enter a trade, close one or all, move a stop (or to break-even), move a target: pass it to him with [RELAY_TO: talon | the exact order with every number Mr. Burrus gave]. He executes it (on the live account Mr. Burrus gets a Confirm button), and you report his receipts. [TRADE_POSITIONS] shows you the open positions yourself; [QUICK_LOG] shows his 5m quick-scalp desk (what it's seeing, every time it fired and why it did or didn't trade). [TRADE_CHART: XAUUSD or BTCUSD | 1H] sends him T.A.L.O.N.'s marked-up chart (5m, 15m, 1H, 4H or 1D); to explain what's on it, relay to T.A.L.O.N.
  - [TALON_UPDATE] — ask him for a market update right now: his read on gold and Bitcoin, where he predicts each goes next, and how our open positions look. Use it when Mr. Burrus asks "how's the market", "how are our trades", "what's T.A.L.O.N. think" and the like. He also sends you one on his own a few times a day — those show up in this chat as "T.A.L.O.N. → A.R.A.".
  - If auto-trade is OFF or something's broken (no TradeLocker login, an error), say exactly what the TRADING line says and how to fix it.
 
@@ -414,7 +415,7 @@ PERSONA_EXTRA_TOOLS.talon = ` ${TRADING_KNOWLEDGE}
  - [MOVE_STOP: position id / market / all | new price, or breakeven] — stops can be moved, never removed.
  - [MOVE_TP: position id / market / all | new price]
  - [TRADE_ACCOUNT: live] / [TRADE_ACCOUNT: demo] — which TradeLocker account you trade on (auto-trade, news trades and his orders). Live = real money.
- On the demo account these run right away. On the LIVE account — and switching to live — he gets a Confirm button first: tell him it's waiting on his tap, not that it's done. Only gold and Bitcoin.`;
+ On the demo account these run right away, and so does switching to demo from either account. On the LIVE account — and switching to live — he gets a Confirm button first: tell him it's waiting on his tap, not that it's done. Only gold and Bitcoin.`;
 
 function genericTools(personaId) {
   const extra = PERSONA_EXTRA_TOOLS[personaId] ? '\n' + PERSONA_EXTRA_TOOLS[personaId] : '';
@@ -785,7 +786,8 @@ async function applyEffects(text, deliver, persona = 'ara', { full = false } = {
         warnings.push(`${name} not run — calendar and email are A.R.A.'s (hand it to her)`);
       } else if (TALON_WRITES.has(name)) {
         // Hand-placed trading is T.A.L.O.N.'s alone — A.R.A. relays the order to him.
-        if (persona !== 'talon') { warnings.push(`${name} not run — trade orders go through T.A.L.O.N. ([RELAY_TO: talon | …])`); continue; }
+        // The account switch is hers too: getting off live shouldn't depend on a relay.
+        if (persona !== 'talon' && !(name === 'TRADE_ACCOUNT' && persona === 'ara')) { warnings.push(`${name} not run — trade orders go through T.A.L.O.N. ([RELAY_TO: talon | …])`); continue; }
         const r = await require('./talonCommands').writeTag({ name, arg });
         if (r && r.ok) notes.push(r.ok);
         if (r && r.warn) warnings.push(r.warn);
@@ -817,7 +819,10 @@ async function relaySystem(id, from = 'ara') {
 // handed-off "make these notes in Drive" really makes them — before this, a
 // relayed persona had no write tags at all and its "done" was just words), plus
 // these. A trade tag still does NOT execute server-side.
-const RELAY_TOOLS = `[ON THIS RELAY — this may be an order from Mr. Burrus passed through another persona; treat it exactly as if he told you himself. Read tags ([SEARCH_WEB], [TRADE_SCAN: SYMBOL], [READ_HUD], [MEMORY_QUERY], [READ_NOTE], [RELAY_TO], …) come back with results before you answer. Write tags ([SAVE_NOTE], [APPEND_NOTE], [EDIT_NOTE], tasks, calendar, …) run right after your answer, and their receipts go back to whoever handed this to you and to Mr. Burrus. When you're handed something to DO — create notes, add tasks, put something on the calendar — do it: emit one tag per item, with the full content inside the tag. Never say something is done, saved or created unless you emitted the tag for it. Images, diagrams, charts and files you emit ([GENERATE_IMAGE], [DIAGRAM], …) are sent straight to Mr. Burrus. Nothing you write here places, closes or modifies a trade by hand — T.A.L.O.N. trades on his own from the server.]
+const HAND_TRADES = 'Nothing you write here places, closes or modifies a trade by hand — T.A.L.O.N. trades on his own from the server.';
+// He was being told this too, right under the order to switch accounts or close a trade.
+const TALON_HAND_TRADES = 'Your order tags ([TRADE_ENTER], [TRADE_CLOSE], [MOVE_STOP], [MOVE_TP], [TRADE_ACCOUNT]) work here: an order is only carried out if you emit its tag.';
+const RELAY_TOOLS = `[ON THIS RELAY — this may be an order from Mr. Burrus passed through another persona; treat it exactly as if he told you himself. Read tags ([SEARCH_WEB], [TRADE_SCAN: SYMBOL], [READ_HUD], [MEMORY_QUERY], [READ_NOTE], [RELAY_TO], …) come back with results before you answer. Write tags ([SAVE_NOTE], [APPEND_NOTE], [EDIT_NOTE], tasks, calendar, …) run right after your answer, and their receipts go back to whoever handed this to you and to Mr. Burrus. When you're handed something to DO — create notes, add tasks, put something on the calendar — do it: emit one tag per item, with the full content inside the tag. Never say something is done, saved or created unless you emitted the tag for it. Images, diagrams, charts and files you emit ([GENERATE_IMAGE], [DIAGRAM], …) are sent straight to Mr. Burrus. ${HAND_TRADES}]
 
 [ALSO YOURS ON THIS HAND-OFF — the Empire's shared write tags, for when the instruction calls for them:
 ${SHARED_OPS}
@@ -840,7 +845,7 @@ async function relayToPersona(id, message, { from = 'ara', convo = '', depth = 1
     emotionFor(id),
     id === 'ara' ? ARA_TOOLS : genericTools(id),
     id === 'jarvis' ? await empireOsBrief() : '',
-    RELAY_TOOLS,
+    id === 'talon' ? RELAY_TOOLS.replace(HAND_TRADES, TALON_HAND_TRADES) : RELAY_TOOLS,
     googleLine(gs),
     ctx ? `[EMPIRE CONTEXT:\n${contextBlock(ctx, { trading: id === 'ara' })}\n]` : '',
     convo ? `[THE CONVERSATION YOU'RE BEING PULLED INTO — Mr. Burrus and ${(ROSTER[from] && ROSTER[from].name) || from}, most recent last:\n${convo}\n]` : '',
@@ -1099,6 +1104,11 @@ async function runPersonaTurn(personaId, userText, deliver) {
   const noteRan = findTags(all).some((t) => NOTE_TAGS.has(t.name)) || [...fx.notes, ...fx.warnings].some((n) => /note/i.test(n));
   if (!noteRan && /\b(saved|created|made|wrote|added|put)\b[^.\n]{0,60}\bnotes?\b|\bnotes?\b[^.\n]{0,30}\b(saved|created)\b/i.test(clean)) {
     fx.warnings.push('no note was actually saved this turn (no note tag ran) — tell me again and I\'ll save it');
+  }
+  // Same for T.A.L.O.N.'s account: real money rides on this one being true.
+  const acctRan = findTags(all).some((t) => t.name === 'TRADE_ACCOUNT') || [...fx.notes, ...fx.warnings].some((n) => /\bTRADE_ACCOUNT\b|is now on the (LIVE|DEMO) account|LIVE trading is OFF/.test(n)) || (fx.confirms || []).some((c) => /switch to the LIVE/.test(c.label));
+  if (!acctRan && /\b(moved|moving|switched|switching|put|putting|took|taken)\b[^.\n]{0,50}\b(demo|live account)\b/i.test(clean)) {
+    fx.warnings.push('T.A.L.O.N.\'s account did NOT change this turn (no switch ran) — tell me again');
   }
   // Same for the calendar: "it's on your calendar" with no event tag behind it.
   const calRan = findTags(all).some((t) => /^(CREATE_EVENT|ADD_EVENT|EDIT_EVENT|UPDATE_EVENT|MOVE_EVENT)$/.test(t.name)) || fx.notes.some((n) => /^Calendar:|Calendar:/.test(n));
