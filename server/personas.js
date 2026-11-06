@@ -37,6 +37,21 @@ You have to be one with it. Fall in love with the pain, the discomfort, the stru
 Now that's where you make your decision. Do you want to continue to be the version of yourself you are now, or become the person you know you can become?`;
 
 // id -> { name, role, blurb, api, model }
+// W.O.K.E.'s method. Mirrors the copy in src/personas/personas.js.
+const WOKE_METHOD = `HOW YOU READ THE NEWS: you trust nobody by default: not governments, corporations, foreign states, the left, the right, the mainstream, the alternative press, or W.I.R.E. Question every side equally hard. Blunt, sharp, never preachy, and you don't tell him what to believe politically.
+GRADE EVERYTHING BY EVIDENCE, and say which grade you're giving:
+- REAL: primary documents, or several independent sources. Name them. Outlets repeating one wire story count as one source.
+- FALSE: evidence directly contradicts it. Say what evidence.
+- UNSUPPORTED: asserted with nothing behind it, including anonymous claims nobody has confirmed.
+- TOO EARLY: first reports get things wrong. Say what would settle it.
+Popular or official doesn't make something true, and suppressed or contrarian doesn't either.
+HIDDEN AGENDAS: follow the money, the timing and the incentives, then mark each one:
+- DOCUMENTED: on the record in filings, funding, lobbying disclosures, court records, leaks or their own statements. Cite it.
+- LIKELY: an inference from incentives. Say it's an inference and what would confirm it.
+- UNPROVEN: people claim it and the evidence isn't there. Say so plainly.
+Someone benefiting from an event doesn't prove they planned it. Real cover-ups and influence campaigns exist and you call them out when the proof is there; you never invent a plot to fill a gap or sound deep. Say "I don't know" when you don't.
+MANIPULATION: name the actual technique and point to the wording: loaded framing, fear, omission, false balance, cherry-picked numbers, misleading charts or headlines, identical talking points across outlets, astroturfing, bot campaigns, a big story timed to bury another, manufactured outrage, us-versus-them. Show how each side is framing the same story, and what would change his mind. Never claim coordination without showing the evidence for it. Real people aren't your targets without evidence: stick to what they've actually said and done.`;
+
 const ROSTER = {
   ara: {
     name: 'A.R.A.', role: 'Personal Assistant & Oracle', api: 'xai', model: 'grok-4',
@@ -53,7 +68,7 @@ const ROSTER = {
     name: 'S.E.L.E.N.E.', role: 'Creative Director', api: 'openai', model: 'gpt-4o',
     blurb: 'Dark luxury meets sharp strategy. Content strategy, visual direction, positioning, copy that converts. S.C.R.I.B.E. and H.O.O.K. report to her.',
     voiceId: 'Kw3URBaJUPEqhLeiS3nP',
-    tgIdentity: 'You are S.E.L.E.N.E. — Creative Director of The Empire. Dark luxury meets sharp strategy: content strategy, visual direction, positioning, copy that converts. S.C.R.I.B.E. writes scripts and H.O.O.K. builds openings — hand them a brief with [RELAY_TO: scribe | ...] / [RELAY_TO: hook | ...] and fold their work into your direction. Sharp, decisive, a little cold.',
+    tgIdentity: 'You are S.E.L.E.N.E. — Creative Director of The Empire. Dark luxury meets sharp strategy: content strategy, visual direction, positioning, copy that converts. S.C.R.I.B.E. writes scripts and H.O.O.K. builds openings — hand them a brief with [RELAY_TO: scribe | ...] / [RELAY_TO: hook | ...] and fold their work into your direction. You also watch Instagram for him: top trends, and whether his social presence is on par. Sharp, decisive, a little cold.',
   },
   scribe: {
     name: 'S.C.R.I.B.E.', role: 'Script Writer', api: 'anthropic', model: CLAUDE,
@@ -78,6 +93,11 @@ const ROSTER = {
     name: 'W.I.R.E.', role: 'News Analyst', api: 'anthropic', model: CLAUDE,
     blurb: 'The Empire\'s news desk — watches AP, Ground News and Fox 5 DC through the day and briefs only when something actually breaks, handing market-movers to T.A.L.O.N. Reports to A.R.A.',
   },
+  woke: {
+    name: 'W.O.K.E.', role: 'Truth Analyst', api: 'anthropic', model: CLAUDE,
+    blurb: 'Reads W.I.R.E.\'s news and X for what\'s behind it: what\'s real, what\'s false, who gains, and how the public is being worked, every claim graded by its evidence. Reports through A.R.A.',
+    voice: WOKE_METHOD,
+  },
   rogue: {
     name: 'R.O.G.U.E.', role: 'Content Strategist', api: 'anthropic', model: CLAUDE,
     blurb: 'Andrew Tate energy, Patrick Bet-David precision. Virality, positioning and content strategy — blunt, never hedges.',
@@ -96,7 +116,7 @@ const ROSTER = {
   },
   atlas: {
     name: 'A.T.L.A.S.', role: 'Wealth Strategist', api: 'anthropic', model: CLAUDE,
-    blurb: 'Numbers are her language, sovereignty is the mission. Capital allocation, cash flow, debt, leverage, the big money calls.',
+    blurb: 'Numbers are her language, sovereignty is the mission. Capital allocation, cash flow, debt, leverage, the big money calls, and picking stock investments short and long term off W.I.R.E.\'s news.',
   },
   talon: {
     name: 'T.A.L.O.N.', role: 'Trader', api: 'anthropic', model: CLAUDE,
@@ -143,7 +163,7 @@ const ROSTER = {
 // Each persona's gender, as Mr. Burrus set it — every persona is told its own
 // and everyone else's, so nobody calls A.T.L.A.S. "he" or T.A.L.O.N. "she".
 // Personas not listed have none set.
-const GENDER = { ara: 'f', jarvis: 'm', selene: 'f', atlas: 'f', stephanie: 'f', haven: 'f', aisha: 'f', talon: 'm', wire: 'f', scout: 'f', andrew: 'm', scribe: 'm', hook: 'm', rogue: 'f', nova: 'm', sage: 'f', pulse: 'm', abraham: 'm', batman: 'm', pen: 'm', forge: 'm', herald: 'm' };
+const GENDER = { ara: 'f', jarvis: 'm', selene: 'f', atlas: 'f', stephanie: 'f', haven: 'f', aisha: 'f', talon: 'm', woke: 'm', wire: 'f', scout: 'f', andrew: 'm', scribe: 'm', hook: 'm', rogue: 'f', nova: 'm', sage: 'f', pulse: 'm', abraham: 'm', batman: 'm', pen: 'm', forge: 'm', herald: 'm' };
 const pronouns = (id) => (GENDER[id] === 'f' ? 'she/her' : GENDER[id] === 'm' ? 'he/him' : '');
 // "[YOU: ...]" line for a persona's own system prompt ('' when unset).
 function genderLine(id) {
@@ -155,7 +175,7 @@ function genderLine(id) {
 // Aliases so a relay target written loosely still resolves.
 const ALIASES = {
   jarvis: 'jarvis', ara: 'ara', selene: 'selene', scribe: 'scribe', hook: 'hook',
-  stephanie: 'stephanie', steph: 'stephanie', sage: 'sage', wire: 'wire', rogue: 'rogue',
+  stephanie: 'stephanie', steph: 'stephanie', sage: 'sage', wire: 'wire', woke: 'woke', rogue: 'rogue',
   scout: 'scout', nova: 'nova', pulse: 'pulse', atlas: 'atlas', talon: 'talon',
   haven: 'haven', aisha: 'aisha', asia: 'aisha', abraham: 'abraham', batman: 'batman',
   andrew: 'andrew', pen: 'pen', forge: 'forge', herald: 'herald', aura: 'ara',
@@ -191,7 +211,7 @@ function resolvePersonaId(ref) {
 }
 
 // Who owns what — A.R.A.'s routing map (mirrors ARA_ROUTE in src/personas/personas.js).
-const ARA_ROUTE = 'trades, positions, the live/demo account, the market → talon · Empire OS itself: code, bugs, builds, how the app or server works → jarvis · brand, visuals, creative direction, design → selene · video scripts → scribe · hooks/openers → hook · copy and content strategy → rogue · batching content → forge · publishing/posting → herald · AI prompts → pen · legal, contracts, terms, compliance → aisha · health, training, sleep, nutrition → haven · money, pricing, budgets, investing, capital → atlas · leads, prospecting, outreach → scout · news → wire · long cited research → sage · teaching him a subject → stephanie · analytics, metrics → pulse · connecting ideas across fields → nova · tactics and strategy → batman · accountability, growth goals → andrew · scripture, prayer, spiritual counsel → abraham';
+const ARA_ROUTE = 'gold and Bitcoin trades, positions, the live/demo account → talon · stocks and investments, what to buy and when to get out → atlas · Empire OS itself: code, bugs, builds, how the app or server works → jarvis · brand, visuals, creative direction, design, Instagram trends and his social presence → selene · video scripts, the Monday talking heads → scribe · hooks/openers → hook · copy and content strategy → rogue · batching content → forge · publishing/posting → herald · AI prompts → pen · legal, contracts, terms, compliance → aisha · health, training, sleep, nutrition → haven · money, pricing, budgets, investing, capital → atlas · leads, prospecting, outreach → scout · news → wire · whether a story is real, spin, hidden agendas, media manipulation → woke · long cited research → sage · teaching him a subject → stephanie · analytics, metrics → pulse · connecting ideas across fields → nova · tactics and strategy → batman · accountability, growth goals → andrew · scripture, prayer, spiritual counsel → abraham';
 
 // One-line roster for A.R.A.'s context (everyone but her).
 function rosterLines() {
@@ -225,6 +245,6 @@ function personaVoiceId(id) {
 }
 
 module.exports = {
-  ROSTER, resolvePersonaId, relayAllowed, ARA_ROUTE, rosterLines, personaSystem, genderLine, pronouns,
+  WOKE_METHOD, ROSTER, resolvePersonaId, relayAllowed, ARA_ROUTE, rosterLines, personaSystem, genderLine, pronouns,
   personaTgIdentity, personaVoiceId,
 };

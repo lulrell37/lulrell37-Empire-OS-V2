@@ -85,6 +85,10 @@ db.init()
     startNewsWireCron();
     startScoutOutreachCron();
     startAutoAtlasCron();
+    startAtlasInvestCron();
+    startSeleneTrendsCron();
+    startMondayScriptsCron();
+    startWokeXCron();
     registerTelegramWebhook();
   })
   .catch((e) => {
@@ -266,6 +270,42 @@ function startScoutOutreachCron() {
 // A.T.L.A.S. unprompted money review — ports src/services/autoAtlas.js. Ticks
 // every 30 min; self-paces to `auto_atlas_interval_hours`. AUTO_ATLAS=off
 // disables this instance's cron.
+// A.T.L.A.S.'s stock desk (server/atlasInvest.js): four reads through the trading
+// day, plus a no-AI watch on open calls through market hours. ATLAS_PICKS=off stops it.
+function startAtlasInvestCron() {
+  if (process.env.ATLAS_PICKS === 'off') return console.log('A.T.L.A.S. stock desk cron disabled (ATLAS_PICKS=off)');
+  const desk = require('./atlasInvest');
+  const ET = { timezone: 'America/New_York' };
+  const run = (trigger) => () => desk.runDesk({ trigger }).then((r) => console.log(`stock desk (${trigger}):`, r.text ? 'sent' : JSON.stringify(r))).catch((e) => console.error('stock desk failed:', e.message));
+  cron.schedule('5 9 * * 1-5', run('morning'), ET);
+  cron.schedule('30 11,13,15 * * 1-5', run('midday'), ET);
+  cron.schedule('*/15 9-16 * * 1-5', () => desk.watchPicks().catch((e) => console.error('stock watch failed:', e.message)), ET);
+  console.log('A.T.L.A.S. stock desk cron scheduled (09:05, 11:30, 13:30, 15:30 ET weekdays, watch every 15m)');
+}
+
+// S.E.L.E.N.E.'s Instagram watch (server/seleneTrends.js). SELENE_TRENDS=off stops it.
+function startSeleneTrendsCron() {
+  if (process.env.SELENE_TRENDS === 'off') return console.log('S.E.L.E.N.E. Instagram watch cron disabled (SELENE_TRENDS=off)');
+  cron.schedule('0 7 * * 1,4', () => require('./seleneTrends').runInstagramWatch().then((r) => console.log('instagram watch:', r.text ? 'sent' : JSON.stringify(r))).catch((e) => console.error('instagram watch failed:', e.message)), { timezone: 'America/New_York' });
+  console.log('S.E.L.E.N.E. Instagram watch cron scheduled (07:00 ET Mon + Thu)');
+}
+
+// W.O.K.E. on stories that start on X (server/wokeRead.js). WOKE_X=off stops it.
+function startWokeXCron() {
+  if (process.env.WOKE_X === 'off') return console.log('W.O.K.E. X stories cron disabled (WOKE_X=off)');
+  if (!process.env.XAI_API_KEY) return console.log('W.O.K.E. X stories cron off (no XAI_API_KEY)');
+  cron.schedule('0 8,12,16,20 * * *', () => require('./wokeRead').runXStories().then((r) => console.log('woke x stories:', r.text ? 'sent' : JSON.stringify(r))).catch((e) => console.error('woke x stories failed:', e.message)), { timezone: 'America/New_York' });
+  console.log('W.O.K.E. X stories cron scheduled (08:00, 12:00, 16:00, 20:00 ET)');
+}
+
+// S.C.R.I.B.E.'s 5 Monday scripts (server/scribeMonday.js). The later slots are
+// retries: one successful run a Monday, so a failed call doesn't cost him the week.
+function startMondayScriptsCron() {
+  if (process.env.MONDAY_SCRIPTS === 'off') return console.log('S.C.R.I.B.E. Monday scripts cron disabled (MONDAY_SCRIPTS=off)');
+  cron.schedule('0 8,10,12,14 * * 1', () => require('./scribeMonday').runMondayScripts().then((r) => console.log('monday scripts:', JSON.stringify(r))).catch((e) => console.error('monday scripts failed:', e.message)), { timezone: 'America/New_York' });
+  console.log('S.C.R.I.B.E. Monday scripts cron scheduled (08:00 ET Mondays, retries to 14:00)');
+}
+
 function startAutoAtlasCron() {
   if (process.env.AUTO_ATLAS === 'off') return console.log('A.T.L.A.S. auto-review cron disabled (AUTO_ATLAS=off)');
   if (!process.env.ANTHROPIC_API_KEY) return console.log('A.T.L.A.S. auto-review cron off (no ANTHROPIC_API_KEY)');

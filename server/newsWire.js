@@ -135,6 +135,11 @@ MONEY|<one line>
       await pushAlert(`newswire:${todayET()}-${pollSlot()}`, 'W.I.R.E. — news brief', lead.slice(0, 160), { kind: 'news' }).catch(() => {});
     }
 
+    // A.T.L.A.S. reads every brief for her stock desk (throttled in there).
+    require('./atlasInvest').onWireBrief(brief).catch((e) => console.error('newswire->atlas failed', e.message));
+    // W.O.K.E. reads it for what's behind it.
+    require('./wokeRead').onWireBrief(brief).catch((e) => console.error('newswire->woke failed', e.message));
+
     if (impacts.length) await newsTradeHandoff(impacts).catch((e) => console.error('newswire: hand-off failed', e.message));
     return { ok: true, headlines: headlines.length, impacts: impacts.length };
   } catch (e) {

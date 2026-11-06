@@ -11,6 +11,7 @@ export default function ChartOverlay({spec,accent='#E8C98A',onClose}){
   const[box,setBox]=useState({w:320,h:240});
   const type=spec?.type||'line';
   const series=spec?.series||[];
+  if(type==='candles')return <CandleChart spec={spec} accent={accent} onClose={onClose} box={box} setBox={setBox}/>;
 
   return(
     <View style={s.wrap}>
@@ -38,6 +39,63 @@ export default function ChartOverlay({spec,accent='#E8C98A',onClose}){
         </ScrollView>
       )}
     </View>
+  );
+}
+
+// T.A.L.O.N.'s marked-up chart. Draws marketStructure.chartModel: zones (FVG,
+// order block), lines (liquidity, key levels, BOS/CHoCH, positions), sweep marks,
+// candles, then the labels in the right-hand margin.
+function CandleChart({spec,accent,onClose,box,setBox}){
+  const m=spec.model;
+  return(
+    <View style={s.wrap}>
+      <View style={s.head}>
+        <View style={{flex:1}}>
+          <Text style={[s.title,{color:accent}]} numberOfLines={1}>{spec.title}</Text>
+          <Text style={s.sub} numberOfLines={1}>{m?.subtitle}</Text>
+        </View>
+        <TouchableOpacity style={s.close} onPress={onClose}><Text style={s.closeT}>CLOSE ✕</Text></TouchableOpacity>
+      </View>
+      <View style={s.canvas} onLayout={e=>{const{width,height}=e.nativeEvent.layout;setBox({w:width,h:height});}}>
+        {m?<CandleSvg m={m} box={box}/>:<Text style={s.empty}>No chart data.</Text>}
+      </View>
+    </View>
+  );
+}
+
+function CandleSvg({m,box}){
+  const PAD={l:4,r:4,t:8,b:8};
+  const w=Math.max(80,box.w),h=Math.max(80,box.h);
+  const iw=w-PAD.l-PAD.r,ih=h-PAD.t-PAD.b;
+  const x=v=>PAD.l+((v+1)/(m.xMax+1))*iw;
+  const y=v=>PAD.t+ih-((v-m.yMin)/(m.yMax-m.yMin))*ih;
+  const cw=Math.max(1,(iw/(m.xMax+1))*0.64);
+  return(
+    <Svg width={w} height={h}>
+      {m.zones.map((z,i)=><Rect key={'z'+i} x={x(z.x1)} y={y(z.y2)} width={Math.max(1,x(z.x2)-x(z.x1))} height={Math.max(1,y(z.y1)-y(z.y2))} fill={z.color} opacity={z.opacity}/>)}
+      {m.lines.map((l,i)=>(
+        <G key={'l'+i}>
+          <Line x1={x(l.x1)} y1={y(l.y)} x2={x(l.x2)} y2={y(l.y)} stroke={l.color} strokeWidth={l.width||1} strokeDasharray={l.dash?'3,3':undefined} opacity={l.dash?0.7:1}/>
+          {!!l.text&&<SvgText x={(x(l.x1)+x(l.x2))/2} y={y(l.y)-3} fill={l.color} fontSize={7} fontFamily="monospace" textAnchor="middle">{l.text}</SvgText>}
+        </G>
+      ))}
+      {m.candles.map(c=>(
+        <G key={'c'+c.x}>
+          <Line x1={x(c.x)} y1={y(c.h)} x2={x(c.x)} y2={y(c.l)} stroke={c.color} strokeWidth={0.8}/>
+          <Rect x={x(c.x)-cw/2} y={y(Math.max(c.o,c.c))} width={cw} height={Math.max(0.8,Math.abs(y(c.o)-y(c.c)))} fill={c.color}/>
+        </G>
+      ))}
+      {m.marks.map((k,i)=>{
+        const py=y(k.y),d=k.up?1:-1,tip=py+d*3;
+        return(
+          <G key={'m'+i}>
+            <Path d={`M ${x(k.x)},${tip} L ${x(k.x)-3},${tip+d*5} L ${x(k.x)+3},${tip+d*5} Z`} fill={k.color}/>
+            <SvgText x={x(k.x)} y={tip+d*(k.up?13:9)} fill={k.color} fontSize={7} fontFamily="monospace" textAnchor="middle">{k.text}</SvgText>
+          </G>
+        );
+      })}
+      {m.labels.map((l,i)=><SvgText key={'t'+i} x={x(m.xLabel)} y={y(l.y)+3} fill={l.color} fontSize={7} fontFamily="monospace">{l.text}</SvgText>)}
+    </Svg>
   );
 }
 
@@ -142,6 +200,7 @@ const s=StyleSheet.create({
   wrap:{flex:1,padding:12},
   head:{flexDirection:'row',alignItems:'center',justifyContent:'space-between',marginBottom:8},
   title:{fontFamily:'monospace',fontSize:11,fontWeight:'700',letterSpacing:2,flex:1},
+  sub:{fontFamily:'monospace',fontSize:8,color:'#777',marginTop:2},
   close:{borderWidth:1,borderColor:'#333',borderRadius:4,paddingHorizontal:8,paddingVertical:4},
   closeT:{fontFamily:'monospace',fontSize:8,color:'#888',letterSpacing:1},
   canvas:{flex:1,borderWidth:1,borderColor:'#141210',borderRadius:8,backgroundColor:'#060504',overflow:'hidden'},

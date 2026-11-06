@@ -140,6 +140,40 @@ async function grokFallback(system, msgs, { maxTokens, search }) {
     .flatMap((o) => o.content || []).filter((c) => c.type === 'output_text').map((c) => c.text).join('\n').trim();
 }
 
+// Live X (Twitter) search through Grok's x_search tool. Read only: nothing here can
+// post. Bills per post fetched (not de-duplicated) on top of tokens, so `maxTurns`
+// caps the search rounds. X_SEARCH_MODEL overrides the model; grok-4 is the backup
+// because the id is the same one the rest of this file calls.
+async function xSearch(system, prompt, { days = 3, maxTurns = 8, maxTokens = 2500 } = {}) {
+  if (!keyFor('xai')) throw new Error('no XAI_API_KEY');
+  const from = new Date(Date.now() - days * 86400e3).toISOString().slice(0, 10);
+  const models = [process.env.X_SEARCH_MODEL || 'grok-4.7', 'grok-4'];
+  let last;
+  for (const model of [...new Set(models)]) {
+    const res = await fetch(`${PROVIDER.xai.base}/v1/responses`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${keyFor('xai')}` },
+      body: JSON.stringify({
+        model, max_output_tokens: maxTokens, max_turns: maxTurns,
+        input: [{ role: 'system', content: system }, { role: 'user', content: prompt }],
+        tools: [{ type: 'x_search', from_date: from }],
+      }),
+      signal: AbortSignal.timeout(180000),
+    });
+    if (!res.ok) {
+      last = new Error(`xai ${res.status}: ${(await res.text()).slice(0, 200)}`);
+      if (res.status === 400 || res.status === 404) continue; // model id gone: try the backup
+      throw last;
+    }
+    const d = await res.json();
+    const u = d.usage?.server_side_tool_usage_details || {};
+    console.log(`x-search: ${model}, ${u.x_posts_fetched ?? '?'} posts, ${u.x_users_fetched ?? 0} profiles`);
+    return (d.output || []).filter((o) => o.type === 'message')
+      .flatMap((o) => o.content || []).filter((c) => c.type === 'output_text').map((c) => c.text).join('\n').trim();
+  }
+  throw last;
+}
+
 // OpenAI-compatible chat endpoint (xAI + OpenAI). `messages` is the full array
 // (system message included by the caller).
 async function openaiCompatText(provider, model, messages, maxTokens) {
@@ -235,4 +269,4 @@ function fixNames(text) {
   return String(text || '').replace(/\baura(?=\b|'s)/gi, 'Ara').trim();
 }
 
-module.exports = { CLAUDE_MODEL, keyFor, WEB_SEARCH_TOOL, claudeText, creditStatus, subscriptionStatus, openaiCompatText, geminiText, chatAs, webResearch, transcribe, fixNames };
+module.exports = { CLAUDE_MODEL, keyFor, WEB_SEARCH_TOOL, claudeText, creditStatus, subscriptionStatus, openaiCompatText, geminiText, chatAs, webResearch, xSearch, transcribe, fixNames };

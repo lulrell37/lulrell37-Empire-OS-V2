@@ -24,7 +24,7 @@ import{scanTags}from '../services/noteCommands';
 import{playOpts,speechRate,applyRate,onVoiceSpeedChange,voiceRate,setVoiceSpeed,VOICE_SPEED_MIN,VOICE_SPEED_MAX}from '../services/voiceSpeed';
 import SpeedSlider from '../components/SpeedSlider';
 import{driveUploadFile,googleConnected}from '../services/googleClient';
-import{getMessages,saveMessage,getAllPersonaPics,savePersonaMemory,getSetting,setSetting,getExpenseSummary,addBuildJob,updateBuildJob,getBuildJob,getBuildJobByIssue,getBuildJobs,deleteBuildJob,buildJobRepo,DEFAULT_BUILD_REPO,getCustomPrompt,getAllLeads,addClipJob,addWatchJob,getActiveWatchJobs,getActiveClipJobs,getActiveBuildJobs,getClipJobs,getWatchJobs,getGeneratingContentItems,getUnreadPersonas,getUnreadMessages,markPersonaRead,getContentItems,getContentTally,getContentPages,updateContentItem,getHudState}from '../services/database';
+import{getMessages,saveMessage,getAllPersonaPics,savePersonaMemory,getSetting,setSetting,getExpenseSummary,addBuildJob,updateBuildJob,getBuildJob,getBuildJobByIssue,getBuildJobs,deleteBuildJob,buildJobRepo,DEFAULT_BUILD_REPO,getCustomPrompt,getAllLeads,addClipJob,addWatchJob,getActiveWatchJobs,getActiveClipJobs,getActiveBuildJobs,getClipJobs,getWatchJobs,getGeneratingContentItems,getUnreadPersonas,getUnreadMessages,markPersonaRead,getContentItems,getContentTally,getContentPages,updateContentItem,getHudState,getOpenTrades}from '../services/database';
 import{compileBatch,publishContent,contentStatusLine}from '../services/socialPublish';
 import{pollContentJobs}from '../services/contentJobs';
 import{speak as speakOneShot}from '../services/voice';
@@ -34,7 +34,7 @@ import{pollClipJobs}from '../services/clipJobs';
 import{pollWatchJobs}from '../services/watchJobs';
 import{refreshNewsBrief}from '../services/newsWire';
 import{jobProgress}from '../services/jobEta';
-import{tlSnapshot,tlFormatSnapshot,tlPlaceOrder,tlClosePosition,tlModifyPosition,tlPositions,MAX_QTY,MAX_OPEN_POSITIONS}from '../services/tradeLocker';
+import{tlChartModel,tlSnapshot,tlFormatSnapshot,tlPlaceOrder,tlClosePosition,tlModifyPosition,tlPositions,MAX_QTY,MAX_OPEN_POSITIONS}from '../services/tradeLocker';
 import{recordTradeOpen,reconcileOpenTrades,traderJournalBlock,setStrategy,setTradeReview,TRADER_ID}from '../services/tradeJournal';
 import{loadKeys,loadGitHubToken}from '../services/keyStore';
 import useEmpireStore from '../store/useEmpireStore';
@@ -1757,6 +1757,14 @@ export default function CommandScreen({navigation,route}){
           onShowArtifact:({kind,open,raw})=>{
             if(isGroup)return;
             let art;
+            if(kind==='tradeChart'){
+              getOpenTrades().catch(()=>[]).then(open=>tlChartModel(raw,open.map(t=>({symbol:t.symbol,label:t.setup||t.side,entry:t.entry_fill??t.entry_ref,stop:t.be_stop??t.stop_loss,target:t.take_profit})))).then(model=>{
+                setArtifact({kind:'chart',spec:{type:'candles',title:model.title,model},persona:pid});
+                if(viewRef.current==='viz'){setCanvasChip(null);}
+                else{setCanvasChip({persona:pid,kind:'chart'});}
+              }).catch(e=>pushSystemMsg(`— ⚠️ chart failed: ${e.message} —`));
+              return;
+            }
             if(kind==='chart'){const spec=parseChartSpec(raw||'');if(!spec.valid)return;art={kind:'chart',spec,persona:pid};}
             else art={kind,open,persona:pid};
             setArtifact(art);

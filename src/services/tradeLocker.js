@@ -9,6 +9,7 @@
 // an `accNum` header. Account state / positions come back as bare arrays whose
 // column order is fixed by /trade/config (hardcoded below from the docs).
 import{loadTradeCreds,loadBackend}from './keyStore';
+import{closedBars,analyzeStructure,keyLevels,chartModel,formatMarketRead}from './marketStructure';
 
 // Hand the TradeLocker login to the backend once, so the server-side T.A.L.O.N.
 // auto-trade loop and W.I.R.E.'s news-trade hand-off can reach the account
@@ -403,10 +404,21 @@ export async function tlSnapshot(symbol='XAUUSD'){
     tlAccountState().catch(()=>null),
     tlPositions().catch(()=>[]),
   ]);
-  const candles={};
+  const candles={},closed={};
   for(const tf of['1D','4H','1H','15m']){
-    try{candles[tf]=summarizeBars(await tlHistory(sym,tf,60));}catch{candles[tf]=null;}
+    try{
+      const bars=await tlHistory(sym,tf,tf==='15m'?192:120);
+      candles[tf]=summarizeBars(bars.slice(-60));
+      closed[tf]=closedBars(bars,tf);
+    }catch{candles[tf]=null;}
   }
+  // Never let the chart read cost him a scan.
+  let structure=null,levels=null;
+  try{
+    structure={};
+    for(const tf of['4H','1H','15m'])if(closed[tf])structure[tf]=analyzeStructure(closed[tf]);
+    levels=keyLevels({symbol:sym,daily:closed['1D']||[],m15:closed['15m']||[],price:Number(quote?.mid)});
+  }catch{structure=null;}
   const context={};
   const isCrypto=/BTC|ETH|SOL|XRP|DOGE|USDT|USDC/.test(sym);
   if(!isCrypto){
@@ -415,7 +427,7 @@ export async function tlSnapshot(symbol='XAUUSD'){
       try{const q=await tlQuote(s);if(q.mid!=null)context[s]=+q.mid.toFixed(5);}catch{}
     }
   }
-  return{symbol:sym,quote,state,positions,candles,context,ts:Date.now()};
+  return{symbol:sym,quote,state,positions,candles,structure,levels,context,ts:Date.now()};
 }
 
 export function tlFormatSnapshot(snap){
@@ -428,7 +440,31 @@ export function tlFormatSnapshot(snap){
     const c=candles[tf];if(!c){L.push(`${tf}: no data`);continue;}
     L.push(`${tf}: last ${c.last}, ${c.changePct>=0?'+':''}${c.changePct}% over window, trend ${c.trend} (SMA20 ${c.sma20}), range ${c.rangeLow}–${c.rangeHigh}; recent bars ${c.recent.map(b=>`${b.o}/${b.h}/${b.l}/${b.c}`).join('  ')}`);
   }
+  const read=formatMarketRead({structure:snap.structure,levels:snap.levels,price:Number(quote.mid)});
+  if(read)L.push(read);
   if(context&&Object.keys(context).length)L.push(`Cross-market: ${Object.entries(context).map(([k,v])=>`${k} ${v}`).join(', ')} (read dollar direction / risk tone from these)`);
   if(positions?.length)L.push(`Open positions (all pairs): ${positions.map(p=>`#${p.id} ${p.side} ${p.qty} @ ${p.avgPrice} (uP/L ${p.unrealizedPl})`).join('; ')}`);
   return L.join('\n');
+}
+
+// [TRADE_CHART: XAUUSD | 1H] in the app: the marked-up chart's drawing model for
+// ChartOverlay. Same model as the Telegram PNG (server/talonChart.js). Read-only.
+const CHART_TFS={'5M':'5m','15M':'15m','1H':'1H','4H':'4H','1D':'1D',D:'1D',H1:'1H',H4:'4H',M15:'15m',M5:'5m'};
+const CHART_ALIAS={GOLD:'XAUUSD',XAU:'XAUUSD',BTC:'BTCUSD',BITCOIN:'BTCUSD',XBT:'BTCUSD'};
+export async function tlChartModel(arg,positions=[]){
+  const parts=String(arg||'').split(/[|,\s]+/).map(x=>x.trim().toUpperCase()).filter(Boolean);
+  const tfAt=parts.findIndex(p=>CHART_TFS[p]);
+  const tf=tfAt>=0?CHART_TFS[parts[tfAt]]:'1H';
+  const raw=parts.find((_,i)=>i!==tfAt)||'XAUUSD';
+  const symbol=CHART_ALIAS[raw]||raw.replace(/[^A-Z0-9]/g,'');
+  const[bars,daily,m15,quote]=await Promise.all([
+    tlHistory(symbol,tf,150),
+    tlHistory(symbol,'1D',120).catch(()=>[]),
+    tlHistory(symbol,'15m',192).catch(()=>[]),
+    tlQuote(symbol).catch(()=>null),
+  ]);
+  if(!bars?.length)throw new Error(`no ${tf} candles for ${symbol}`);
+  const price=Number(quote?.mid??bars[bars.length-1].c);
+  return chartModel({symbol,tf,bars,structure:analyzeStructure(closedBars(bars,tf)),positions:positions.filter(p=>p.symbol===symbol),
+    levels:keyLevels({symbol,daily:closedBars(daily,'1D'),m15:closedBars(m15,'15m'),price})});
 }

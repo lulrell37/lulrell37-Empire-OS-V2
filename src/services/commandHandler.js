@@ -243,6 +243,10 @@ export async function handleCommands(response,personaId,callbacks={}){
   for(const m of response.matchAll(/\[SHOW_CHART:\s*([^\]]+)\]/gi)){
     if(m[1]?.trim())callbacks.onShowArtifact?.({kind:'chart',raw:m[1].trim()});
   }
+  // [TRADE_CHART: XAUUSD | 1H] — T.A.L.O.N.'s marked-up candlestick chart.
+  for(const m of response.matchAll(/\[TRADE_CHART(?::\s*([^\]]*))?\]/gi)){
+    callbacks.onShowArtifact?.({kind:'tradeChart',raw:(m[1]||'').trim()});
+  }
   for(const m of response.matchAll(/\[SHOW_NOTE:\s*([^\]]+)\]/gi)){
     if(m[1]?.trim())callbacks.onShowArtifact?.({kind:'notes',open:m[1].trim()});
   }
@@ -257,7 +261,7 @@ export async function handleCommands(response,personaId,callbacks={}){
   // surface on the canvas too. Deliberately narrow — a bare [READ_NOTE] (reading
   // one note for its own reasoning) does NOT surface anything; only [LIST_NOTES]
   // / [SEARCH_DRIVE] ("show me my notes") and [READ_TASKS] do.
-  if(!/\[SHOW_(?:CHART:|NOTE:|NOTES\]|TASKS\]|ANALYTICS\])/i.test(response)){
+  if(!/\[(?:SHOW_(?:CHART:|NOTE:|NOTES\]|TASKS\]|ANALYTICS\])|TRADE_CHART)/i.test(response)){
     if(/\[LIST_NOTES(?::[^\]]*)?\]|\[SEARCH_DRIVE:/i.test(response))callbacks.onShowArtifact?.({kind:'notes'});
     else if(/\[READ_TASKS\]/i.test(response))callbacks.onShowArtifact?.({kind:'tasks'});
   }
@@ -430,7 +434,7 @@ export function stripCommands(text){
     .replace(/\[REMEMBER:[^\]]*\]/gi,'').replace(/\[UNPIN_MEMORY:[^\]]*\]/gi,'')
     .replace(/\[EDIT_CLIP:[^\]]*\]/gi,'')
     .replace(/\[WATCH_VIDEO:[^\]]*\]/gi,'')
-    .replace(/\[SHOW_CHART:[^\]]*\]/gi,'').replace(/\[SHOW_NOTE:[^\]]*\]/gi,'')
+    .replace(/\[SHOW_CHART:[^\]]*\]/gi,'').replace(/\[TRADE_CHART(?::[^\]]*)?\]/gi,'').replace(/\[SHOW_NOTE:[^\]]*\]/gi,'')
     .replace(/\[SHOW_NOTES\]/gi,'').replace(/\[SHOW_TASKS\]/gi,'')
     .replace(/\[SHOW_ANALYTICS\]/gi,'').replace(/\[OPEN_ANALYTICS\]/gi,'')
     .replace(/\[SHOW_NEWS\]/gi,'').replace(/\[NEWS_BRIEF\]/gi,'')

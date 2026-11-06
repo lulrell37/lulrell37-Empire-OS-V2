@@ -35,7 +35,7 @@ function floor2Desks(){
     ['scribe','hook','sage','wire','scout'],
     ['nova','pulse','talon','abraham','batman'],
     ['andrew','pen','muse1','muse2','muse3'],
-    ['forge','herald'],
+    ['forge','herald','woke'],
   ];
   const zs=[5,1,-3,-7];
   const desks=[];

@@ -32,6 +32,7 @@ const { upsertSyncRow, saveMemory, getSetting, setSetting } = require('./syncSto
 const { tradeOpened, orderRejected } = require('./talonAlerts');
 const { claudeText } = require('./llm');
 const { SYMBOLS } = require('./talonBrain');
+const { analyzeStructure, formatTimeframe } = require('./marketStructure');
 
 const BAR = 5 * 60e3;
 const STOP = {
@@ -153,11 +154,11 @@ async function confirm({ sym, setup, snapText, bars5 }) {
   const minTp = +(entry + setup.dir * MIN_R * dist).toFixed(2);
   const sys = `You are T.A.L.O.N., running UNATTENDED, on your QUICK-SCALP desk — separate from your 4H/1H setups. A coded 5m filter just flagged a ${side.toUpperCase()} on ${sym}: 1H and 15m trend agree, price pulled back into the 5m EMA20 and the 5m bar that just closed rejected back in the trend direction. The stop is already set by code at ${stopLoss} (${dist.toFixed(2)} from entry ~${entry}) — beyond the key-level zone at ${+setup.zone.toFixed(2)} plus a 5m ATR.
 The filter has already done the checking — your default is to TAKE it. Answer "none" only for a concrete, nameable reason: a specific 15m or 1H level sitting in the way closer than ${MIN_R}R (${minTp}), or price already in the middle of a sharp reversal against the trade. "Could be choppy" or general caution is not a reason — he wants these trades taken. If you pass, the rationale must name the level or the move.
-Target: the next clear 5m/15m structure level in the trade direction, at least ${MIN_R}R (${minTp} or further) — if structure is unclear, use ${minTp} itself. One 0.02 position, held to stop or target.
+Target: the next clear 5m/15m structure level in the trade direction (resting liquidity, an opposing FVG or order block, from the SMART-MONEY READ and 5m read below), at least ${MIN_R}R (${minTp} or further) — if structure is unclear, use ${minTp} itself. One 0.02 position, held to stop or target.
 Reply with ONLY a JSON object, no prose, no code fence:
 {"action":"enter"|"none","takeProfit":<price>,"rationale":"<=120 chars"}`;
   const recent = bars5.slice(-12).map((b) => `${+b.o.toFixed(2)}/${+b.h.toFixed(2)}/${+b.l.toFixed(2)}/${+b.c.toFixed(2)}`).join('  ');
-  const user = `MARKET SNAPSHOT ${sym}:\n${snapText}\n5m: EMA20 ${E.toFixed(2)}, ATR14 ${atr.toFixed(2)}, 2-hour ${side === 'buy' ? 'high' : 'low'} ${swingHi}; last 12 bars o/h/l/c ${recent}`;
+  const user = `MARKET SNAPSHOT ${sym}:\n${snapText}\n5m: EMA20 ${E.toFixed(2)}, ATR14 ${atr.toFixed(2)}, 2-hour ${side === 'buy' ? 'high' : 'low'} ${swingHi}; last 12 bars o/h/l/c ${recent}\n${formatTimeframe('5m', analyzeStructure(bars5), entry)}`;
   const raw = await claudeText(sys, [{ role: 'user', content: user }], { maxTokens: 250 });
   const m = String(raw || '').match(/\{[\s\S]*\}/);
   try { return m ? JSON.parse(m[0]) : { action: 'none' }; } catch { return { action: 'none' }; }

@@ -133,7 +133,7 @@ async function primaryOgg(personaId, text, userText) {
 // direction, cues written in). Falls back to the reply itself.
 // "T.A.L.O.N. → A.R.A." / "Talon to Ara" at the top -> "Talon" (whose message it is).
 function relayFrom(text) {
-  const m = String(text || '').match(/^[^A-Za-z]*(T\.A\.L\.O\.N\.|Talon|W\.I\.R\.E\.|Wire|J\.A\.R\.V\.I\.S\.|Jarvis)\s*(?:→|to)\s*(?:A\.R\.A\.|Ara)\b/i);
+  const m = String(text || '').match(/^[^A-Za-z]*(T\.A\.L\.O\.N\.|Talon|W\.I\.R\.E\.|Wire|J\.A\.R\.V\.I\.S\.|Jarvis|A\.T\.L\.A\.S\.|Atlas|S\.E\.L\.E\.N\.E\.|Selene|S\.C\.R\.I\.B\.E\.|Scribe|W\.O\.K\.E\.|Woke)\s*(?:→|to)\s*(?:A\.R\.A\.|Ara)\b/i);
   return m ? speakNames(m[1]) : null;
 }
 

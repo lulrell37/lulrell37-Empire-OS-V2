@@ -33,7 +33,7 @@ function stripCues(text) {
 // "Jarvis" before any voice reads it (the TTS spelled the dotted forms letter
 // by letter). Only the persona names — "U.S." and other acronyms are left
 // alone. Mirrors speakNames in src/services/voiceCues.js.
-const SPOKEN_NAMES = ['ara', 'jarvis', 'selene', 'scribe', 'hook', 'stephanie', 'sage', 'wire', 'rogue', 'scout', 'nova', 'pulse', 'atlas', 'talon', 'haven', 'aisha', 'abraham', 'batman', 'andrew', 'pen', 'forge', 'herald'];
+const SPOKEN_NAMES = ['ara', 'jarvis', 'selene', 'scribe', 'hook', 'stephanie', 'sage', 'wire', 'woke', 'rogue', 'scout', 'nova', 'pulse', 'atlas', 'talon', 'haven', 'aisha', 'abraham', 'batman', 'andrew', 'pen', 'forge', 'herald'];
 const NAME_RES = SPOKEN_NAMES.map((n) => [
   new RegExp(`\\b${n.toUpperCase().split('').join('\\.\\s?')}\\.?(?![A-Za-z])`, 'g'), // A.R.A. / A. R. A.
   new RegExp(`\\b${n.toUpperCase()}\\b`, 'g'), // ARA (all caps)

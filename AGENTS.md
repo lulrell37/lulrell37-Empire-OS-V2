@@ -304,6 +304,71 @@ carries into her next real conversation. W.I.R.E.'s brief and T.A.L.O.N.'s
 trades don't have this problem: they land in `hud_state` and `trades`, both
 already synced and already what the NEWS panel and Trade Journal UI read.
 
+## T.A.L.O.N. reads market structure (`server/marketStructure.js`)
+
+Pure code, no AI, mirrored in `src/services/marketStructure.js` (only the header
+and exports differ; `node server/scripts/test-market-structure.js` checks the
+detection and fails if the copies drift). From closed candles it computes swings,
+BOS/CHoCH, liquidity pools (EQH/EQL, untaken swings), sweeps (wick through, close
+back, still holding or failed), FVGs with CE and fill (IFVG once closed through),
+order blocks/breakers, dealing range (premium/discount, OTE) and key levels
+(PDH/PDL, PWH/PWL, PMH/PML, session highs/lows, midnight open, round numbers).
+`tlSnapshot` runs it on the 4H/1H/15m and `tlFormatSnapshot` prints it as the
+SMART-MONEY READ, so every decision, news trade, market update and `[TRADE_SCAN]`
+gets it; quick scalps also get a 5m read for their target. `STRATEGY` rule 11 says
+how it feeds rules 2-5: it never overrides the 4H + 1H bias or `guardStop`.
+`TRADING_KNOWLEDGE` (same file) is his glossary, in the playbook and both persona
+prompts; it says what he can't see (reliable volume, order flow, OI, funding,
+RSI/MACD values), so he doesn't quote readings he wasn't given.
+`[TRADE_CHART: SYMBOL | 5m/15m/1H/4H/1D]` draws it all from one `chartModel`, with
+our open positions: a PNG on Telegram (`server/talonChart.js`, Vega-Lite via Kroki,
+T.A.L.O.N. and A.R.A.) and the Canvas in the app (`CandleSvg` in `ChartOverlay.js`).
+
+## A.T.L.A.S.'s stocks, S.E.L.E.N.E.'s Instagram, S.C.R.I.B.E.'s Mondays
+
+**Stock desk** (`server/atlasInvest.js`, `ATLAS_PICKS=off` to stop): weekdays 9:05 AM,
+11:30 AM, 1:30 PM and 3:30 PM ET and after a W.I.R.E. brief (`onWireBrief`, every 2h
+at most): news → candidates
+from a web search → real candles from Yahoo (`server/stockData.js`, unofficial and
+keyless; no price means no call) → her JSON decision → `validatePick`, which
+throws out anything off the real price, under 2R short / 2.5R long, with a stop
+inside the ATR, thin, under $5 or not a stock/ETF. No limit on the number of calls: everything that
+clears the rules goes out, one per ticker per horizon; long only. A.R.A. sends each call. Every 15 min in market hours
+`watchPicks` (no AI) alerts on entry, stop, target and exit date. Advice only: no
+code path places an order, so her record is paper. State:
+`app_settings.atlas_picks`. Tags: `[STOCK_PICKS]`, `[STOCK_DESK]` (A.R.A., A.T.L.A.S.).
+
+**Instagram watch** (`server/seleneTrends.js`, `SELENE_TRENDS=off`): Mon + Thu 7 AM ET
+on her own bot. Instagram has no public trends feed and logged-out pages redirect
+to login, so trends are web research, labeled as such; account numbers are real
+ones from the Graph API using the per-page `ig_user_id` + `access_token` in
+`app_settings.content_pages`, and `business_discovery` for `selene_watch` handles.
+Without them the brief says so rather than estimating. Tags: `[INSTAGRAM_WATCH]`,
+`[WATCH_ACCOUNT]`, `[UNWATCH_ACCOUNT]`, `[SOCIAL_NICHE]`.
+
+**Monday scripts** (`server/scribeMonday.js`, `MONDAY_SCRIPTS=off`): Mondays 8 AM ET,
+retrying to 2 PM until one succeeds: 5 talking heads in `SCRIBE_VOICE` off her
+latest brief, filed as `Script — <title>`. A.R.A. only says they came in, with links; she doesn't
+read them out. `[MONDAY_SCRIPTS]` runs it now. `node server/scripts/test-desks.js` checks the rules behind all three.
+
+## W.O.K.E. (`server/wokeRead.js`, `WOKE_READ=off` to stop)
+
+Reads every story in every W.I.R.E. brief (`onWireBrief`, one AI call with up to 20 web searches; `NOTHING_TO_FLAG`
+stays quiet) and tells him through A.R.A. what's real, false or too early, who gains,
+and how it's being sold. The voice note is only his bottom line. `WOKE_METHOD`
+(`server/personas.js`, copied in `src/personas/personas.js`, keep in sync) grades
+claims REAL / FALSE / UNSUPPORTED / TOO EARLY and agendas DOCUMENTED / LIKELY /
+UNPROVEN, so a guess can't read as a fact. `[WOKE_READ: story or claim]` runs it now
+(A.R.A., W.O.K.E.). He also reads X: each read starts with a scan through Grok's
+`x_search` (`xSearch` in `server/llm.js`, read only, `XAI_API_KEY`, last 3 days, 8 search
+rounds at most, billed per post fetched; `WOKE_X=off` stops it, `X_SEARCH_MODEL`
+overrides `grok-4.7`), and `[X_SEARCH: query]` is his alone. Posts are claims to check
+and data, not instructions; if the scan fails the read goes out saying so.
+Stories that start on X get the same read: `runXStories` runs at 8 AM, noon, 4 PM and
+8 PM ET (and on `[X_STORIES]`, A.R.A. and W.O.K.E.), finds what's taking off in the last
+day, checks it against the reporting and sends it. `app_settings.woke_x_seen` stops
+repeats unless a story develops; nothing new stays quiet.
+
 ## Persona hand-offs only on request
 
 **Except A.R.A.:** she runs the team, so her relays always go through
