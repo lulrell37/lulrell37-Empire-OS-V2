@@ -6,6 +6,8 @@ const assert = require('assert');
 const { validatePick, stepPick, tradable, recordLine, summarize } = require('../stockData');
 const { mediaStats, cleanHandle } = require('../seleneTrends');
 const { parseScripts } = require('../scribeMonday');
+const { confirmScript } = require('../telegramMedia');
+const { guardStop } = require('../talonBrain');
 const { bottomLine, parseStories } = require('../wokeRead');
 
 const NOW = Date.UTC(2026, 10, 6, 15);
@@ -113,6 +115,31 @@ assert.deepStrictEqual(parseStories(''), { text: '', stories: [] });
 assert.deepStrictEqual(parseStories('Story A claims x\nSTORIES: ["A", "B"]'), { text: 'Story A claims x', stories: ['A', 'B'] });
 assert.deepStrictEqual(parseStories('Story A\nSTORIES: [broken'), { text: 'Story A', stories: [] });
 assert.strictEqual(parseStories('NONE of the accounts agree\nSTORIES: ["A"]').stories.length, 0);
+
+// A Confirm card's voice note says what the card says.
+{
+  const s = confirmScript({ label: 'Send this email', detail: '**To:** a@b.com\nSee https://x.io/y' });
+  assert(s.startsWith('Send this email?'));
+  assert(s.includes('To: a@b.com') && s.includes('See the link') && !s.includes('**'));
+  assert(s.endsWith('Tap Confirm or Cancel.'));
+  const long = confirmScript({ label: 'File', detail: 'word '.repeat(3000) }, 100);
+  assert(long.length < 180 && long.includes('The rest is in the text.'));
+}
+
+// Stops: the bug from issue #3. A $4,001.50 stop passes the flat minimum but sits on $4,000.
+{
+  const snapG = { candles: { '1H': { atr14: 5, sma20: 4004 } } };
+  const buy = { symbol: 'XAUUSD', side: 'buy', entry: 4012, takeProfit: 4040 };
+  const g = guardStop({ ...buy, stopLoss: 4001.5, snap: snapG });
+  assert.strictEqual(g.stopLoss, 3999, 'pushed past the round number');
+  assert.strictEqual(g.widened, true);
+  assert(g.note.includes('round number'));
+  assert.strictEqual(guardStop({ ...buy, stopLoss: 3995, takeProfit: 4060, snap: snapG }).stopLoss, 3995, 'a stop already clear stays put');
+  assert(guardStop({ ...buy, stopLoss: 4001.5, takeProfit: 4020, snap: snapG }).skip, 'the wider stop has to still pay');
+  assert(/ceiling/.test(guardStop({ ...buy, stopLoss: 4001.5, snap: { candles: { '1H': { atr14: 5, sma20: 3970 } } } }).skip), 'past gold $35 is skipped');
+  // The flat minimum still applies where the zone is close.
+  assert.strictEqual(guardStop({ symbol: 'XAUUSD', side: 'buy', entry: 4038, stopLoss: 4034, takeProfit: 4070, snap: { candles: { '1H': { atr14: 2, sma20: 4036 } } } }).stopLoss, 4028);
+}
 
 // Script parsing.
 {

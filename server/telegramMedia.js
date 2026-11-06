@@ -57,6 +57,14 @@ function forSpeech(text) {
     .trim();
 }
 
+// What a Confirm card says out loud: the same content as the text. Very long ones
+// (a build spec, an email) stop at the cap and point to the text.
+function confirmScript({ label, detail }, cap = 5000) {
+  const full = forSpeech(`${label}?\n\n${detail || ''}`);
+  const body = full.length > cap ? `${full.slice(0, cap).replace(/\s+\S*$/, '')}. The rest is in the text.` : full;
+  return `${body}\n\nTap Confirm or Cancel.`;
+}
+
 // Markdown images in the reply become photos; returns the text without them.
 function pullMarkdownImages(text) {
   const media = [];
@@ -248,4 +256,4 @@ const MEDIA_TOOLS = ` LINKS, PHOTOS, DIAGRAMS, FILES — there's no limit on wha
  - [SEND_LOCATION: latitude | longitude] — drop a map pin.
  Several in one reply is fine; they arrive right after your text. Don't say "I can't send images/links" — you can.`;
 
-module.exports = { MEDIA_TAGS, MEDIA_TOOLS, toTelegramHtml, forSpeech, pullMarkdownImages, mediaFromTags, sendMedia };
+module.exports = { MEDIA_TAGS, MEDIA_TOOLS, toTelegramHtml, forSpeech, confirmScript, pullMarkdownImages, mediaFromTags, sendMedia };

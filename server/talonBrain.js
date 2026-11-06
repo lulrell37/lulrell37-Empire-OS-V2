@@ -4,7 +4,7 @@
 // server/newsWire.js's news-driven hand-off.
 const { claudeText } = require('./llm');
 const { minStopDist } = require('./tradeLocker');
-const { TRADING_KNOWLEDGE } = require('./marketStructure');
+const { TRADING_KNOWLEDGE, zoneStop } = require('./marketStructure');
 
 function parseJsonBlock(raw) {
   const m = String(raw || '').match(/\{[\s\S]*\}/);
@@ -21,7 +21,7 @@ const STRATEGY = `GOLD + BITCOIN TREND-PULLBACK PLAYBOOK. You trade exactly two 
 1. BIAS (4H + 1H). Trade only in the direction the 4H and the 1H agree on. Bullish = price above SMA20 on both 4H and 1H with the 4H trend up; bearish = below on both with the 4H trend down. If 4H and 1H disagree, there is no trade — "none". The 1D is background only: never a reason to skip on its own, but a setup that runs straight into a major daily level inside its targets needs that level respected (target short of it).
 2. LOCATION (1H). Never chase an extended candle. Enter on a pullback into value on the 1H: a retest of the 1H SMA20, a prior broken high/low, or the edge of the recent 1H range — in the bias direction.
 3. TRIGGER (15m). The pullback has to be rejected: a 15m close back in the bias direction (a higher low in an uptrend, a lower high in a downtrend). No rejection yet = wait.
-4. STOP. BEYOND the key level, never on it. Find the swing that invalidates the idea (the pullback low for a buy, the high for a sell) and every level sitting in that zone with it — the SMA20, a round number, a prior broken high/low. The stop goes past the FAR side of that whole zone, plus a buffer of at least one 1H ATR14 (shown in the snapshot) — gold never less than about $10 from entry, Bitcoin never less than about 0.8%. Price wicks into key levels to grab the stops sitting on them; yours must not be one of them. If the honest stop would be wider than roughly gold $35 / Bitcoin 3% from entry, skip it; the location is wrong.
+4. STOP. BEYOND the key level, never on it. Find the swing that invalidates the idea (the pullback low for a buy, the high for a sell) and every level sitting in that zone with it — the SMA20, a round number, a prior broken high/low. The stop goes past the FAR side of that whole zone, plus a buffer of at least one 1H ATR14 (shown in the snapshot) — gold never less than about $10 from entry, Bitcoin never less than about 0.8%. Price wicks into key levels to grab the stops sitting on them; yours must not be one of them. Code also moves any stop past the furthest of the 1H SMA20, the nearest $50 (gold) or $500 (Bitcoin) and the last 1H swing, so account for that when you check your targets. If the honest stop would be wider than roughly gold $35 / Bitcoin 3% from entry, skip it; the location is wrong.
 5. TARGETS — every setup is a SCALP + SWING pair: two positions, same entry, same stop. SCALP target ("takeProfit"): the next clear 15m structure level in the bias direction, at least 1x the stop distance — the quick move; the swing carries the payoff. SWING target ("swingTakeProfit"): the next clear 4H structure level beyond it, at least 3x the stop distance — the bigger move the 4H trend is pointing at. If no 4H level gives 3R, leave swingTakeProfit out: the setup goes in as a scalp only, and then the scalp target must be at least 2x the stop distance (aim it at the next 1H level) — under that, skip the setup.
 6. HOLD. Once you're in, the trade runs to its stop or its target. You never close a position early — not on a 4H flip, not on a pullback, not on a feeling; the stop is already where the idea is wrong. The only management is moving the stop to break-even ("breakevenIds") once a position is about 1R in profit. When the scalp of a pair pays, the swing's stop goes to break-even automatically — you don't need to ask.
 7. GOLD SPECIFICS. Gold moves inverse to the dollar and with risk-off fear: read the cross-market quotes (EURUSD up / USDJPY down = weaker dollar = tailwind for gold buys). The cleanest moves come in the London open and New York morning (about 3 AM-12 PM ET); avoid fresh entries in the 5-6 PM ET rollover.
@@ -74,8 +74,9 @@ Reply with ONLY a JSON object, no prose, no code fence:
 }
 
 // The stop rule (4) enforced in code, whatever the model wrote: at least the
-// floor (gold $10 / Bitcoin 0.8%) and 1.2x the 1H ATR14 from entry. A stop
-// inside that is pushed out to it; if the targets then pay too little (scalp
+// floor (gold $10 / Bitcoin 0.8%) and 1.2x the 1H ATR14 from entry, and clear of
+// the danger zone (zoneStop). A stop inside that is pushed out to it, or the trade
+// is skipped if the zone would take it past gold $35 / Bitcoin 3%; if the targets then pay too little (scalp
 // 1R beside a 3R swing, or 2R alone) the trade is skipped rather than taken
 // on a worse ratio. Returns the levels to send,
 // or { skip } with the reason.
@@ -89,6 +90,12 @@ function guardStop({ symbol, side, entry, stopLoss, takeProfit, swingTakeProfit,
   let dist = Math.abs(px - sl);
   let stop = sl, widened = false;
   if (dist < minDist) { dist = minDist; stop = +(px - dir * minDist).toFixed(2); widened = true; }
+  // And clear of the danger zone, not just far enough away on paper.
+  const zone = zoneStop({ symbol, side, entry: px, sma20: snap?.candles?.['1H']?.sma20, atr, swings: snap?.structure?.['1H']?.swings });
+  if (zone && (stop - zone.stop) * dir > 0) {
+    if (zone.tooWide) return { skip: `clearing the ${zone.level} at ${zone.boundary} needs a ${zone.dist.toFixed(2)} stop, past the ceiling; the location is wrong` };
+    stop = +zone.stop.toFixed(2); dist = Math.abs(px - stop); widened = true;
+  }
   // The swing half of a pair: past the scalp target and at least 3R off the
   // final stop, or it's dropped and the setup goes in as a scalp only.
   const sw = Number(swingTakeProfit);
@@ -101,7 +108,7 @@ function guardStop({ symbol, side, entry, stopLoss, takeProfit, swingTakeProfit,
   const minR = swing != null ? 1 : 2;
   if (Math.abs(tp - px) < minR * dist) return { skip: `stop needs ${dist.toFixed(2)} of room (1H ATR ${atr.toFixed(2)}) and scalp target ${tp} pays under ${minR}R${swing == null ? ' with no valid swing' : ''}` };
   return { stopLoss: stop, takeProfit: tp, swingTakeProfit: swing, widened, swingNote,
-    note: widened ? `stop widened ${sl} → ${stop} (min ${minDist.toFixed(2)} from entry)` : '' };
+    note: widened ? `stop widened ${sl} → ${stop} (min ${minDist.toFixed(2)} from entry${zone && Math.abs(stop - +zone.stop.toFixed(2)) < 1e-9 ? `, past the ${zone.level} at ${zone.boundary}` : ''})` : '' };
 }
 
 module.exports = { SYMBOLS, STRATEGY, autoTradeDecision, newsTradeLevels, guardStop };
