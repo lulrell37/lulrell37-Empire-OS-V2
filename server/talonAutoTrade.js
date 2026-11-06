@@ -5,7 +5,7 @@
 // is that the TradeLocker session now survives between cycles (a long-lived
 // process instead of a memory-only session that resets on every cold app open).
 const { getSetting, setSetting, saveMemory } = require('./syncStore');
-const { tlStatus, tlConnect, tlSnapshot, tlFormatSnapshot, tlPlaceOrder, tlModifyPosition, tlPositions, tlInstrumentsById, tlQuote, MAX_QTY, entryCopies } = require('./tradeLocker');
+const { tlStatus, tlConnect, tlFollowAccount, tlSnapshot, tlFormatSnapshot, tlPlaceOrder, tlModifyPosition, tlPositions, tlInstrumentsById, tlQuote, MAX_QTY, entryCopies } = require('./tradeLocker');
 const { autoTradeDecision, guardStop, SYMBOLS } = require('./talonBrain');
 const { reconcileOpenTrades, formatTradeRecord, recordTradeOpen, allTrades, TRADER_ID } = require('./tradeJournal');
 const { orderRejected, araNote, tradeOpened, addedOn } = require('./talonAlerts');
@@ -54,6 +54,7 @@ async function tick({ force = false } = {}) {
     if ((await getSetting('auto_trade', '0')) !== '1') return { skipped: 'auto-trade is OFF (Settings › Trading)' };
     const due = force || await dueNow();
     if (due) await setSetting('talon_last_cycle_at', String(Date.now()));
+    await tlFollowAccount().catch((e) => console.error('talon-autotrade: account check failed —', e.message));
     let st = tlStatus();
     if (!st.connected) {
       try { await tlConnect(); st = tlStatus(); }

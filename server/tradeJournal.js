@@ -7,8 +7,8 @@
 // it exists to fix historical rows from an old client-side P/L-mapping bug,
 // which either already ran on-device or doesn't apply to rows this cron creates.
 const crypto = require('crypto');
-const { syncedRows, upsertSyncRow } = require('./syncStore');
-const { tlPositions, tlOrdersHistory, tlInstrumentsById, tlModifyPosition, tlQuote, tlClosePosition } = require('./tradeLocker');
+const { syncedRows, upsertSyncRow, getSetting, setSetting } = require('./syncStore');
+const { tlPositions, tlOrdersHistory, tlInstrumentsById, tlModifyPosition, tlQuote, tlClosePosition, tlActiveEnv } = require('./tradeLocker');
 const alerts = require('./talonAlerts');
 
 const TRADER_ID = 'talon';
@@ -38,8 +38,30 @@ function inferSetup(rationale = '') {
   return 'other';
 }
 
+// Open trades left on the other account when he switches, { sync_id: 'live' | 'demo' }.
+// Each account's positions aren't visible from the other, so without this a live
+// trade would look closed the moment he moved to demo: booked with a made-up
+// result and alerted, while really still open.
+async function parkedTrades() {
+  const raw = await getSetting('talon_parked_trades', '{}').catch(() => '{}');
+  try { const m = typeof raw === 'string' ? JSON.parse(raw || '{}') : raw; return m && typeof m === 'object' ? m : {}; } catch { return {}; }
+}
+
+// Call before the account changes, with the account being left.
+async function parkOpenTrades(fromEnv) {
+  const parked = await parkedTrades();
+  const next = {};
+  for (const t of await syncedRows('trades')) {
+    if (t.persona === TRADER_ID && t.status === 'open') next[t.sync_id] = parked[t.sync_id] || fromEnv;
+  }
+  await setSetting('talon_parked_trades', JSON.stringify(next));
+}
+
+// Everything except open trades sitting on the account he isn't on, so the
+// journal, add-ons, watch and quick desk only act on what they can actually see.
 async function allTrades() {
-  return (await syncedRows('trades')).filter((t) => t.persona === TRADER_ID);
+  const [rows, parked, env] = await Promise.all([syncedRows('trades'), parkedTrades(), tlActiveEnv().catch(() => null)]);
+  return rows.filter((t) => t.persona === TRADER_ID && !(t.status === 'open' && env && parked[t.sync_id] && parked[t.sync_id] !== env));
 }
 
 // --- strategy note ----------------------------------------------------------
@@ -297,4 +319,4 @@ async function formatTradeRecord() {
   return L.join('\n');
 }
 
-module.exports = { TRADER_ID, STRATEGY_TITLE, allTrades, getStrategy, recordTradeOpen, reconcileOpenTrades, tradeRecord, formatTradeRecord };
+module.exports = { TRADER_ID, STRATEGY_TITLE, allTrades, parkOpenTrades, getStrategy, recordTradeOpen, reconcileOpenTrades, tradeRecord, formatTradeRecord };

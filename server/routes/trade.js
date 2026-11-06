@@ -13,6 +13,7 @@ r.post('/creds', async (req, res) => {
     return res.status(400).json({ error: 'email, password and server are required' });
   }
   try {
+    const before = await require('../tradeLocker').tlActiveEnv();
     await query(
       `INSERT INTO trade_creds (id, email, password, server, env, updated_at)
          VALUES (1, $1, $2, $3, $4, $5)
@@ -35,7 +36,10 @@ r.post('/creds', async (req, res) => {
          server = EXCLUDED.server, env = EXCLUDED.env, updated_at = EXCLUDED.updated_at`,
       [slot, email, password, server, e, Date.now()],
     );
-    if (!same) await require('../syncStore').setSetting('talon_account', e);
+    if (!same) {
+      if (before && before !== e) await require('../tradeJournal').parkOpenTrades(before);
+      await require('../syncStore').setSetting('talon_account', e);
+    }
     // Drop the old session so the next call logs in on the new login — a
     // demo -> live switch otherwise keeps refreshing the demo token.
     require('../tradeLocker').tlReset();

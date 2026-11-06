@@ -133,8 +133,26 @@ async function primaryOgg(personaId, text, userText) {
 // direction, cues written in). Falls back to the reply itself.
 // "T.A.L.O.N. → A.R.A." / "Talon to Ara" at the top -> "Talon" (whose message it is).
 function relayFrom(text) {
-  const m = String(text || '').match(/^[^A-Za-z]*(T\.A\.L\.O\.N\.|Talon|W\.I\.R\.E\.|Wire|J\.A\.R\.V\.I\.S\.|Jarvis|A\.T\.L\.A\.S\.|Atlas|S\.E\.L\.E\.N\.E\.|Selene|S\.C\.R\.I\.B\.E\.|Scribe|W\.O\.K\.E\.|Woke)\s*(?:→|to)\s*(?:A\.R\.A\.|Ara)\b/i);
-  return m ? speakNames(m[1]) : null;
+  // Every persona, dotted or plain, off the roster so a new one can't be missed.
+  const { ROSTER } = require('./personas');
+  const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const names = Object.entries(ROSTER).filter(([id]) => id !== 'ara').flatMap(([id, p]) => [esc(p.name), esc(id)]);
+  const m = String(text || '').match(new RegExp(`^[^A-Za-z]*(${names.join('|')})\\s*(?:→|to)\\s*(?:A\\.R\\.A\\.|Ara\\b)`, 'i'));
+  return m ? speakNames(m[1]).replace(/\.$/, '') : null; // alone, the name keeps its last dot
+}
+
+// Who a relayed message belongs to, for her script pass: it sees no roster, so it
+// gets told here, with that persona's real pronouns.
+function relayHint(text) {
+  const who = relayFrom(text);
+  if (!who) return '';
+  const { ROSTER, resolvePersonaId, pronouns } = require('./personas');
+  const id = resolvePersonaId(who);
+  const she = pronouns(id) === 'she/her';
+  const [He, him, his] = she ? ['She', 'her', 'her'] : ['He', 'him', 'his'];
+  const role = ROSTER[id] ? `, the Empire's ${ROSTER[id].role}` : '';
+  const word = id === 'woke' ? ' "Woke" here is his name, not the ordinary word.' : '';
+  return `(These notes are ${who}'s message to you, in ${his.toUpperCase()} words — "I"/"my" means ${who}. ${who} is a separate persona${role}, a ${she ? 'woman' : 'man'} (${she ? 'she/her' : 'he/him'}): not you, not Mr. Burrus, and not any other persona the message mentions.${word} ${He} is talking to you, and you're passing it on to Mr. Burrus as ${his}: "${who} says…", "${she ? 'she' : 'he'}…". Not as yours, and not as if Mr. Burrus said it. Keep ${him} as the one speaking throughout.)\n\n`;
 }
 
 async function araScript(text, userText) {
@@ -143,8 +161,8 @@ async function araScript(text, userText) {
     // mustn't hold the reply up — past 25s she just voices the reply as written.
     const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('script timed out')), 25000));
     const out = await Promise.race([timeout, require('./llm').chatAs('xai', 'grok-4',
-      `${ARA_VOICE}\n\nYou are A.R.A. — full personal assistant to Mr. Burrus, sharp and a step ahead; you call him "Mr. Burrus".\n\n${ARA_SCRIPT}`,
-      [{ role: 'user', content: `${userText ? `Mr. Burrus just said: "${String(userText).slice(0, 1500)}"\n\n` : ''}${relayFrom(text) ? `(These notes are ${relayFrom(text)}'s message to you, in HIS words — "I"/"my" means ${relayFrom(text)}. Pass it on to Mr. Burrus as his: "${relayFrom(text)} says…", "he…". Not as yours, and not as if Mr. Burrus said it.)\n\n` : ''}What you want to get across (notes, not a script):\n${text}` }],
+      `${ARA_VOICE}\n\nYou are A.R.A. — full personal assistant to Mr. Burrus, sharp and a step ahead; you call him "Mr. Burrus".\n\n[THE TEAM, for who's who and their pronouns:\n${require('./personas').rosterLines()}\n]\n\n${ARA_SCRIPT}`,
+      [{ role: 'user', content: `${userText ? `Mr. Burrus just said: "${String(userText).slice(0, 1500)}"\n\n` : ''}${relayHint(text)}What you want to get across (notes, not a script):\n${text}` }],
       { maxTokens: 1200, fallback: false })]);
     const script = String(out || '').replace(/\[[A-Z][A-Z0-9_]*(?::[^\]]*)?\]/g, '').replace(/[*#`_]/g, '').trim();
     if (script) return script;
@@ -187,4 +205,4 @@ async function synthesizePersonaVoice(personaId, replyText, opts = {}) {
   return (await voiceNote(personaId, replyText, opts)).ogg;
 }
 
-module.exports = { synthesizePersonaVoice, voiceNote, tempoArgs };
+module.exports = { synthesizePersonaVoice, voiceNote, tempoArgs, relayHint };

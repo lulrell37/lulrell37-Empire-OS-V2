@@ -191,7 +191,7 @@ ${personaId==='ara'?` EMAIL: [READ_EMAIL] | [SEND_EMAIL: to | subject | body] (M
     const g=PERSONA_GENDER[personaId];
     if(g)sys+=`\n\n[YOU: you are ${g==='f'?'a woman — she/her':'a man — he/him'}. The other personas' genders are in the roster below; always use the right pronouns for each of them.]`;
     const roster=PERSONA_LIST.filter(x=>x.id!==personaId).map(x=>` - ${x.name} (${x.id}) — ${x.role}${pronounsOf(x.id)?` · ${pronounsOf(x.id)}`:''}`).join('\n');
-    if(roster&&personaId==='ara')sys+=`\n\n[THE EMPIRE — you run the team. When Mr. Burrus tells you to DO something that's another persona's job, send it to whoever owns it with [RELAY_TO: id | the full instruction, every detail he gave] — he never has to name them. WHO OWNS WHAT: ${ARA_ROUTE}. Everyday things you have your own tags for (notes, tasks, calendar, email, reminders, the HUD) you just do yourself. A question or an opinion you answer yourself, unless he names someone or it needs their live tools. Several jobs → several RELAY_TO tags in one reply. A relay is synchronous: the app asks them and hands you their real answer and receipts in this same turn — report what they actually did. This overrides any hand-off instruction elsewhere in your prompt.\n${roster}\n]`;
+    if(roster&&personaId==='ara')sys+=`\n\n[THE EMPIRE — you run the team. When Mr. Burrus tells you to DO something that's another persona's job, send it to whoever owns it with [RELAY_TO: id | the full instruction, every detail he gave] — he never has to name them. WHO OWNS WHAT: ${ARA_ROUTE}. Everyday things you have your own tags for (notes, tasks, calendar, email, reminders, the HUD) you just do yourself. A question or an opinion you answer yourself, unless he names someone or it needs their live tools. To take T.A.L.O.N. off the live account, emit [TRADE_ACCOUNT: demo] yourself instead of relaying. Several jobs → several RELAY_TO tags in one reply. A relay is synchronous: the app asks them and hands you their real answer and receipts in this same turn — report what they actually did. This overrides any hand-off instruction elsewhere in your prompt.\n${roster}\n]`;
     else if(roster)sys+=`\n\n[THE EMPIRE — the other personas who serve Mr. Burrus alongside you. Know them and refer to them by name. Only when Mr. Burrus asks you to bring someone in — he names them or says to check with / run it by someone — do you use [RELAY_TO: id | message]. Otherwise answer it yourself from your own knowledge and lane, even if it's someone else's specialty (asked about trading, give your own take — don't go get T.A.L.O.N.). This overrides any hand-off instruction elsewhere in your prompt. A relay is synchronous: the app actually asks them and hands you their real answer back in this same turn before you respond to Mr. Burrus — so ask a complete, specific question (not "I'll check with X and get back to you"), then use what they say. Don't guess at what another persona would say; relay to them and wait for it.\n${roster}\n]`;
     if(personaId==='ara'){
       sys+=`\n\n[REMINDERS: when Mr. Burrus says "remind me…", emit [REMIND_ME: what to remind him | YYYY-MM-DD HH:MM] — a real notification on his phone at that time (24h clock, his Eastern time; "+20m" / "+2h" also work). Work out the exact time from the current time above. The tag is what sets it — never say a reminder is set without it.]`;
@@ -831,10 +831,12 @@ export function getLastTtsFailReason(){return lastTtsFailReason;}
 export async function araSpokenScript(text,{userText='',convo=''}={},signal=null){
   try{
     const k=await ensureKeys();
-    const{getPersona}=await import('../personas/personas');
+    const{getPersona,PERSONA_LIST,pronounsOf}=await import('../personas/personas');
     let base=getPersona('ara').system;
     try{base=(await getCustomPrompt('ara'))||base;}catch{}
-    const sys=`${ARA_VOICE}\n\n${base}\n\n${ARA_SCRIPT}`;
+    // Who's who: a report she's passing on belongs to whoever it opens with.
+    const team=PERSONA_LIST.filter(x=>x.id!=='ara').map(x=>` - ${x.name} (${x.id}) — ${x.role}${pronounsOf(x.id)?` · ${pronounsOf(x.id)}`:''}`).join('\n');
+    const sys=`${ARA_VOICE}\n\n${base}\n\n[THE TEAM, for who's who and their pronouns:\n${team}\n]\n\n${ARA_SCRIPT}`;
     const user=(convo?`Recent conversation:\n${convo}\n\n`:'')+(userText?`Mr. Burrus just said: "${userText}"\n\n`:'')+`What you want to get across (notes, not a script):\n${cuedFor(text)}`;
     const out=await withGrokRoutes(k?.grok,async({base:url,auth})=>{
       const res=await fetch(url+'/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json',...auth},signal,

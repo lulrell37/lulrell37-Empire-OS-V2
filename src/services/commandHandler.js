@@ -13,6 +13,7 @@ import{noteCommands,stripNoteTags}from './noteCommands';
 import{scheduleReminder}from './reminders';
 import{openApp,openWebpage}from './appLauncher';
 import useEmpireStore from '../store/useEmpireStore';
+import{scheduleSync}from './sync';
 const HUD_PANELS=['briefing','businesses','tasks','routine','batman','daily'];
 const PANEL_ALIASES=[['brief','briefing'],['business','businesses'],['revenue','businesses'],['empire','businesses'],['task','tasks'],['routine','routine'],['morning','routine'],['batman','batman'],['protocol','batman'],['training','batman'],['daily','daily'],['word','daily'],['verse','daily'],['fact','daily']];
 function resolvePanel(s){
@@ -47,6 +48,18 @@ export async function handleCommands(response,personaId,callbacks={}){
     for(const m of response.matchAll(/\[TRADE_BREAKEVEN:\s*([A-Za-z0-9]+)\s*(?:\|\s*([0-9.]+))?\]/gi)){
       const off=m[2]?parseFloat(m[2]):0;
       callbacks.onTradeBreakeven?.({id:m[1].trim(),offset:isNaN(off)?0:off});
+    }
+    // [TRADE_ACCOUNT: demo] — off live from the app. The server is the one trading:
+    // it picks these synced settings up on its next 5-minute check. Going to live
+    // stays on Telegram, where it gets a Confirm tap.
+    for(const m of response.matchAll(/\[TRADE_ACCOUNT:\s*([^\]]+)\]/gi)){
+      if(!['ara','talon'].includes(personaId))continue;
+      if(/demo|paper|practice/i.test(m[1])){
+        await setSetting('talon_live','0');
+        await setSetting('talon_account','demo');
+        scheduleSync(0);
+        callbacks.onNotes?.(['✓ LIVE trading off: no more real orders from the app, and T.A.L.O.N. moves to demo on the server within 5 minutes. Needs a demo login saved on the server, or he stops instead. Anything open on live keeps its broker stop and target, unmanaged.']);
+      }else callbacks.onNotes?.(['⚠️ Not switched: going live needs the Confirm tap, so tell A.R.A. on Telegram.']);
     }
   }catch(e){try{require('./crashLog').logCrash('handleCommands:trade',String(e&&e.message||e));}catch{}}
   for(const m of response.matchAll(/\[ADD_TASK:\s*([^|\]]+?)(?:\|([^|\]]+))?(?:\|([^\]]+))?\]/gi)){
@@ -422,7 +435,7 @@ export function stripCommands(text){
     .replace(/\[READ_CALENDAR\]/gi,'').replace(/\[READ_EMAIL\]/gi,'')
     .replace(/\[MEMORY_QUERY:[^\]]*\]/gi,'').replace(/\[DEEP_RESEARCH:[^\]]*\]/gi,'')
     .replace(/\[TRADE_SCAN(?::[^\]]*)?\]/gi,'').replace(/\[TRADE_PROPOSE:[^\]]*\]/gi,'').replace(/\[TRADE_CLOSE:[^\]]*\]/gi,'')
-    .replace(/\[TRADE_BREAKEVEN:[^\]]*\]/gi,'')
+    .replace(/\[TRADE_BREAKEVEN:[^\]]*\]/gi,'').replace(/\[TRADE_ACCOUNT:[^\]]*\]/gi,'')
     .replace(/\[STRATEGY_UPDATE:[\s\S]*?\]/gi,'').replace(/\[TRADE_REVIEW:[^\]]*\]/gi,'')
     .replace(/\[ADD_EXPENSE:[^\]]*\]/gi,'').replace(/\[ADD_DATE:[^\]]*\]/gi,'').replace(/\[REMIND_ME:[^\]]*\]/gi,'').replace(/\[EXPENSE_SUMMARY\]/gi,'')
     .replace(/\[LEAD_ADD:[^\]]*\]/gi,'').replace(/\[LEAD_UPDATE:[^\]]*\]/gi,'').replace(/\[LEAD_LOG:[^\]]*\]/gi,'')

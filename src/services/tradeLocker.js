@@ -9,6 +9,7 @@
 // an `accNum` header. Account state / positions come back as bare arrays whose
 // column order is fixed by /trade/config (hardcoded below from the docs).
 import{loadTradeCreds,loadBackend}from './keyStore';
+import{getSetting}from './database';
 import{closedBars,analyzeStructure,keyLevels,chartModel,formatMarketRead,zoneStop}from './marketStructure';
 
 // Hand the TradeLocker login to the backend once, so the server-side T.A.L.O.N.
@@ -329,6 +330,9 @@ async function atr1H(symbol){
 // closer than the main rule's minimum (or on the wrong side) is pushed out to it.
 export async function tlPlaceOrder({symbol='XAUUSD',side,qty=MAX_QTY,stopLoss,takeProfit}){
   await ensureAccount();
+  // The phone holds its own login, so a chat trade could reach live after he'd
+  // been moved to demo on the server. Same gate as the server's tlPlaceOrder.
+  if(session.env==='live'&&((await getSetting('talon_live','0'))!=='1'||(await getSetting('talon_account',''))==='demo'))throw new Error('T.A.L.O.N. is off the LIVE account, so no order was placed');
   if(side!=='buy'&&side!=='sell')throw new Error('side must be buy or sell');
   const q=Math.min(Math.max(Number(qty)||0,0),MAX_QTY);
   if(!q)throw new Error('qty must be > 0');
