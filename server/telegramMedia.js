@@ -14,10 +14,11 @@
 //   [DIAGRAM: mermaid source]          flowchart / sequence / mind map… as a PNG
 //   [CHART: Chart.js config JSON]      bar / line / pie… as a PNG (QuickChart)
 //   [SEND_LOCATION: lat | lon]         a map pin
+//   [TRADE_CHART: SYMBOL | timeframe]  a marked-up candlestick chart (server/talonChart.js)
 // A markdown image in the reply — ![alt](url) — is sent as a photo too.
 
 const MEDIA_TAGS = new Set(['SEND_PHOTO', 'SEND_IMAGE', 'SEND_FILE', 'SEND_DOCUMENT', 'SEND_VIDEO', 'SEND_AUDIO',
-  'GENERATE_IMAGE', 'DIAGRAM', 'CHART', 'SEND_LOCATION']);
+  'GENERATE_IMAGE', 'DIAGRAM', 'CHART', 'SEND_LOCATION', 'TRADE_CHART']);
 
 // --- text -------------------------------------------------------------------
 
@@ -82,7 +83,7 @@ function mediaFromTags(tags) {
     const key = `${name}:${arg}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    if (name === 'GENERATE_IMAGE' || name === 'DIAGRAM' || name === 'CHART') out.push({ name, arg });
+    if (name === 'GENERATE_IMAGE' || name === 'DIAGRAM' || name === 'CHART' || name === 'TRADE_CHART') out.push({ name, arg });
     else {
       const [url, caption] = splitArg(arg);
       out.push({ name, url, caption });
@@ -208,6 +209,12 @@ async function sendMedia(bot, chatId, items) {
           await bot.sendChatAction(chatId, 'upload_photo');
           await bot.sendFile(chatId, 'photo', await renderChart(it.arg), { filename: 'chart.png' });
           break;
+        case 'TRADE_CHART': {
+          await bot.sendChatAction(chatId, 'upload_photo');
+          const c = await require('./talonChart').buildChart(it.arg);
+          await bot.sendFile(chatId, 'photo', c.png, { filename: `${c.symbol}-${c.tf}.png`, caption: c.caption });
+          break;
+        }
         case 'SEND_LOCATION': {
           const lat = parseFloat(it.url);
           const lon = parseFloat(it.caption);

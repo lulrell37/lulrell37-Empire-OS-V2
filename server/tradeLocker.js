@@ -342,6 +342,8 @@ function tlReset() {
 
 // --- Analysis snapshot: everything T.A.L.O.N. needs to form a view on a pair ---
 
+const { closedBars, analyzeStructure, keyLevels, formatMarketRead } = require('./marketStructure');
+
 const CONTEXT_SYMBOLS = ['DXY', 'EURUSD', 'USDJPY', 'XAUUSD'];
 
 function summarizeBars(bars) {
@@ -372,9 +374,24 @@ async function tlSnapshot(symbol = 'XAUUSD') {
     tlPositions().catch(() => []),
   ]);
   const candles = {};
+  const closed = {};
   for (const tf of ['1D', '4H', '1H', '15m']) {
-    try { candles[tf] = summarizeBars(await tlHistory(sym, tf, 60)); } catch { candles[tf] = null; }
+    try {
+      // The structure read needs more history than the summary's 60 bars; 15m
+      // gets two full days so every session's high and low is in view.
+      const bars = await tlHistory(sym, tf, tf === '15m' ? 192 : 120);
+      candles[tf] = summarizeBars(bars.slice(-60));
+      closed[tf] = closedBars(bars, tf);
+    } catch { candles[tf] = null; }
   }
+  // Never let the chart read cost him a scan.
+  let structure = null, levels = null;
+  try {
+    const price = Number(quote?.mid);
+    structure = {};
+    for (const tf of ['4H', '1H', '15m']) if (closed[tf]) structure[tf] = analyzeStructure(closed[tf]);
+    levels = keyLevels({ symbol: sym, daily: closed['1D'] || [], m15: closed['15m'] || [], price });
+  } catch (e) { console.error(`tradelocker: structure read failed for ${sym} —`, e.message); structure = null; }
   const context = {};
   const isCrypto = /BTC|ETH|SOL|XRP|DOGE|USDT|USDC/.test(sym);
   if (!isCrypto) {
@@ -383,7 +400,7 @@ async function tlSnapshot(symbol = 'XAUUSD') {
       try { const q = await tlQuote(s); if (q.mid != null) context[s] = +q.mid.toFixed(5); } catch {}
     }
   }
-  return { symbol: sym, quote, state, positions, candles, context, ts: Date.now() };
+  return { symbol: sym, quote, state, positions, candles, structure, levels, context, ts: Date.now() };
 }
 
 function tlFormatSnapshot(snap) {
@@ -396,6 +413,8 @@ function tlFormatSnapshot(snap) {
     const c = candles[tf]; if (!c) { L.push(`${tf}: no data`); continue; }
     L.push(`${tf}: last ${c.last}, ${c.changePct >= 0 ? '+' : ''}${c.changePct}% over window, trend ${c.trend} (SMA20 ${c.sma20}), ATR14 ${c.atr14}, range ${c.rangeLow}–${c.rangeHigh}; recent bars ${c.recent.map((b) => `${b.o}/${b.h}/${b.l}/${b.c}`).join('  ')}`);
   }
+  const read = formatMarketRead({ structure: snap.structure, levels: snap.levels, price: Number(quote.mid) });
+  if (read) L.push(read);
   if (context && Object.keys(context).length) L.push(`Cross-market: ${Object.entries(context).map(([k, v]) => `${k} ${v}`).join(', ')} (read dollar direction / risk tone from these)`);
   if (positions?.length) L.push(`Open positions (all pairs): ${positions.map((p) => `#${p.id} ${p.side} ${p.qty} @ ${p.avgPrice} (uP/L ${p.unrealizedPl})`).join('; ')}`);
   return L.join('\n');

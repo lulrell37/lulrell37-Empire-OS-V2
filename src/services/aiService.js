@@ -161,10 +161,10 @@ ${personaId==='ara'?` EMAIL: [READ_EMAIL] | [SEND_EMAIL: to | subject | body] (M
     sys+=`\n\n[LIVE HUD DATA:\nEmpire Score: ${hud.empire_score}%\nStreak: ${hud.streak} days\nWord of Day: ${hud.word_of_day||'Not set'}\nVerse of Day: ${hud.verse_of_day||'Not set'}\nFact of Day: ${hud.fact_of_day||'Not set'}\nMorning Routine (${routineCount}/${routineItems.length}): ${routineList}\nBatman Protocol Today: ${todayBat?`${todayBat.label} — ${todayBat.desc}`:'Not set'}\nOpen Tasks (${tasks.length}): ${openTasks||'none'}${upcoming}\n]`;
     // W.I.R.E.'s latest news brief — she works off it, and A.R.A./N.O.V.A. read
     // it so they're never behind the news without waiting for a relay.
-    if((personaId==='wire'||personaId==='ara'||personaId==='nova')&&hud.news_brief){
+    if((personaId==='wire'||personaId==='woke'||personaId==='ara'||personaId==='nova')&&hud.news_brief){
       const ago=hud.news_updated_at?Math.max(0,Math.round((Date.now()-hud.news_updated_at)/60000)):null;
       const when=ago==null?'':ago<60?`${ago} min ago`:`${Math.round(ago/60)}h ago`;
-      sys+=`\n\n[LATEST NEWS BRIEF — W.I.R.E.${when?`, ${when}`:''}${hud.news_slot?` (${hud.news_slot})`:''}:\n${String(hud.news_brief).slice(0,personaId==='wire'?4000:800)}\n]`;
+      sys+=`\n\n[LATEST NEWS BRIEF — W.I.R.E.${when?`, ${when}`:''}${hud.news_slot?` (${hud.news_slot})`:''}:\n${String(hud.news_brief).slice(0,personaId==='wire'||personaId==='woke'?4000:800)}\n]`;
     }
   }
   try{

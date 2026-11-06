@@ -56,7 +56,7 @@ const THEME_BY_ID={
   jarvis:'engineer',
   selene:'creative',scribe:'creative',hook:'creative',rogue:'creative',
   stephanie:'academic',sage:'academic',pen:'academic',
-  wire:'news',
+  wire:'news',woke:'news',
   scout:'outreach',andrew:'outreach',
   nova:'analytics',pulse:'analytics',
   atlas:'finance',talon:'finance',

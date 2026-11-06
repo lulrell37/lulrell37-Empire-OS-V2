@@ -68,7 +68,7 @@ export function cuedFor(text){
 // Persona names said as names, not spelled out: "J.A.R.V.I.S." / "JARVIS" ->
 // "Jarvis" before any voice reads it. Only persona names — other acronyms are
 // left alone. Mirrors speakNames in server/voiceCues.js.
-const SPOKEN_NAMES=['ara', 'jarvis', 'selene', 'scribe', 'hook', 'stephanie', 'sage', 'wire', 'rogue', 'scout', 'nova', 'pulse', 'atlas', 'talon', 'haven', 'aisha', 'abraham', 'batman', 'andrew', 'pen', 'forge', 'herald'];
+const SPOKEN_NAMES=['ara', 'jarvis', 'selene', 'scribe', 'hook', 'stephanie', 'sage', 'wire', 'woke', 'rogue', 'scout', 'nova', 'pulse', 'atlas', 'talon', 'haven', 'aisha', 'abraham', 'batman', 'andrew', 'pen', 'forge', 'herald'];
 const NAME_RES=SPOKEN_NAMES.map(n=>[
   new RegExp(`\\b${n.toUpperCase().split('').join('\\.\\s?')}\\.?(?![A-Za-z])`,'g'),
   new RegExp(`\\b${n.toUpperCase()}\\b`,'g'),
