@@ -494,6 +494,8 @@ edits an event in place — A.R.A. only, no confirm (deletes still confirm).
 
 ## Telegram reply guards
 
+Telegram blips (502/503/504, timeouts) are retried in `tg()` (`server/telegram.js`, 3 tries): reads that change nothing (`SAFE_METHODS`: `getFile`, `sendChatAction`, …) and voice-note downloads on any of them; sends only on 429, since a timed-out send may have been delivered. `node server/scripts/test-telegram-retry.js`.
+
 A reply's media tags (`[GENERATE_IMAGE]`, `[DIAGRAM]`, `[CHART]`, `[SEND_*]`) are
 sent by `routes/telegram.js` after the text via `sendMedia`. Persona turns run at
 `maxTokens: 4000`; a tag that never closes (reply cut off mid-note) still runs

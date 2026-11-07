@@ -62,20 +62,48 @@ function chunk(text, max = 3900) {
 }
 
 // Build the API surface for one bot token.
+// Retries for Telegram's blips (see tg() below): 3 tries, ~1s then ~2.5s apart.
+const TG_TRIES = 3;
+const SAFE_METHODS = new Set(['getFile', 'getMe', 'getWebhookInfo', 'sendChatAction', 'setWebhook', 'answerCallbackQuery']);
+const retryDelay = (attempt) => [1000, 2500, 5000][attempt] || 5000;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
 function makeBot(personaId, token) {
   const API = token ? `https://api.telegram.org/bot${token}` : null;
   const secret = secretFor(personaId);
 
+  // Telegram has short blips (502/503/504, timeouts). Reads that change nothing
+  // (SAFE_METHODS) are retried on any of them; a send is retried only on 429
+  // ("too many requests" = it wasn't delivered), since a timed-out send may have
+  // gone through and a retry would send it twice.
   async function tg(method, params) {
     if (!API) throw new Error(`telegram bot "${personaId}" has no token`);
-    const res = await fetch(`${API}/${method}`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(params || {}),
-    });
-    const d = await res.json().catch(() => ({}));
-    if (!d.ok) throw new Error(`telegram ${method}: ${d.description || res.status}`);
-    return d.result;
+    const safe = SAFE_METHODS.has(method);
+    let last;
+    for (let attempt = 0; attempt < TG_TRIES; attempt++) {
+      let res, d;
+      try {
+        res = await fetch(`${API}/${method}`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(params || {}),
+          signal: safe ? AbortSignal.timeout(30000) : undefined,
+        });
+        d = await res.json().catch(() => ({}));
+      } catch (e) {
+        last = new Error(`telegram ${method}: ${e.name === 'TimeoutError' ? 'timed out' : e.message}`);
+        if (!safe) throw last;
+        await sleep(retryDelay(attempt));
+        continue;
+      }
+      if (d.ok) return d.result;
+      last = new Error(`telegram ${method}: ${d.description || res.status}`);
+      const wait = res.status === 429 ? Math.min(15000, (Number(d.parameters && d.parameters.retry_after) || 1) * 1000) : null;
+      if (wait != null) { await sleep(wait); continue; }
+      if (safe && res.status >= 500) { await sleep(retryDelay(attempt)); continue; }
+      throw last;
+    }
+    throw last;
   }
 
   async function sendChatAction(chatId, action = 'typing') {
@@ -141,9 +169,20 @@ function makeBot(personaId, token) {
 
   async function downloadFile(fileId) {
     const f = await tg('getFile', { file_id: fileId });
-    const res = await fetch(`https://api.telegram.org/file/bot${token}/${f.file_path}`);
-    if (!res.ok) throw new Error(`telegram file download ${res.status}`);
-    return Buffer.from(await res.arrayBuffer());
+    let last;
+    for (let attempt = 0; attempt < TG_TRIES; attempt++) {
+      try {
+        const res = await fetch(`https://api.telegram.org/file/bot${token}/${f.file_path}`, { signal: AbortSignal.timeout(60000) });
+        if (res.ok) return Buffer.from(await res.arrayBuffer());
+        last = new Error(`telegram file download ${res.status}`);
+        if (res.status < 500 && res.status !== 429) throw last;
+      } catch (e) {
+        if (e === last) throw e;
+        last = new Error(`telegram file download: ${e.name === 'TimeoutError' ? 'timed out' : e.message}`);
+      }
+      await sleep(retryDelay(attempt));
+    }
+    throw last;
   }
 
   async function setWebhook(baseUrl) {
