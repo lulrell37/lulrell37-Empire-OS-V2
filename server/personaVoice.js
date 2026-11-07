@@ -31,8 +31,8 @@ const EL_LADDER = [
 const FLAT_SETTINGS = { stability: 0.8, similarity_boost: 0.8, style: 0, use_speaker_boost: true }; // isFlat personas: even, no cues
 // A.R.A.: looser than the rest so the seductive range comes through.
 const ARA_SETTINGS = {
-  eleven_v4_turbo: { stability: 0.2, similarity_boost: 0.8 },
-  eleven_flash_v2_5: { stability: 0.25, similarity_boost: 0.8, style: 0.7, use_speaker_boost: true },
+  eleven_v4_turbo: { stability: 0.35, similarity_boost: 0.8 },
+  eleven_flash_v2_5: { stability: 0.4, similarity_boost: 0.8, style: 0.7, use_speaker_boost: true },
 };
 const elRejected = new Set();
 
@@ -237,7 +237,7 @@ async function voiceNote(personaId, replyText, { userText = '', scripted = false
       const ogg = await synthesizeAraVoice(text, { userText });
       return ogg ? { ogg } : { ogg: null, error: 'grok voice failed' };
     }
-    if (!scripted) text = speakNames(await araScript(text, userText, { relay })).replace(/\[softly\]\s*/gi, ''); // not in her voice, though the shared EMOTION block offers it
+    if (!scripted) text = speakNames(await araScript(text, userText, { relay })).replace(/\[(?:breathy|breathily)\]\s*/gi, ''); // not in her voice, though the shared EMOTION block offers it
   }
   let error;
   try {

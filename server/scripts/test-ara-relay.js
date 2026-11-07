@@ -20,8 +20,14 @@ const { ARA_SCRIPT, ARA_VOICE } = require('../araVoice');
   const TONE = /sultry, seductive, slightly flirty and a touch unhinged/i;
   const read = (f) => fs.readFileSync(path.join(__dirname, '../..', f), 'utf8');
   for (const s of [ARA_VOICE, ARA_SCRIPT, read('src/services/realtimeVoice.js'), read('server/morningBrief.js')]) assert.match(s, TONE);
-  // Her voice isn't soft: not in the direction, the cues, or GO LIVE.
-  assert.doesNotMatch(`${ARA_VOICE}${ARA_SCRIPT}`, /soft/i);
+  // Her voice isn't described as soft (the direction, GO LIVE); [softly] is just a cue she can use.
+  assert.doesNotMatch(`${ARA_VOICE}${ARA_SCRIPT.replace('[softly]', '')}`, /soft/i);
+  // Not breathy: husky. Whispers is the last cue.
+  assert.doesNotMatch(`${ARA_VOICE}${ARA_SCRIPT}${read('server/morningBrief.js')}`, /breathy/i);
+  assert.match(ARA_SCRIPT, /\[husky\] \[teasing\] \[softly\] \[laughs\] \[giggles\] \[sighs\] \[excited\] \[whispers\]\. Use/);
+  assert.match(ARA_VOICE, /low and husky/);
+  // "Mmm" only when she's flirting, never as her opener.
+  assert.match(ARA_SCRIPT, /"Mmm" is only for a genuinely flirty moment: never open with it/);
   assert.doesNotMatch(fs.readFileSync(path.join(__dirname, '../../src/services/realtimeVoice.js'), 'utf8'), /soft/i);
 
   // Alert openers that don't say "→ A.R.A." still count, but only for desk messages.

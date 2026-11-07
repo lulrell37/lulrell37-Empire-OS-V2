@@ -730,7 +730,7 @@ export default function CommandScreen({navigation,route}){
     const userText=(ctx?.userText||'').trim();
     const turns=(ctx?.turns||[]).filter(t=>t&&t.content&&t.content!==text&&t.content!==userText).slice(-6);
     const convo=turns.map(t=>`${t.role==='assistant'?'A.R.A.':'Mr. Burrus'}: ${String(t.content).slice(0,1500)}`).join('\n');
-    const script=(await araSpokenScript(text,{userText,convo})).replace(/\[softly\]\s*/gi,''); // not in her voice, though the shared EMOTION block offers it
+    const script=(await araSpokenScript(text,{userText,convo})).replace(/\[(?:breathy|breathily)\]\s*/gi,''); // not in her voice, though the shared EMOTION block offers it
     const uri=await textToSpeech(script,getPersona('ara').elevenlabsVoiceId,'A.R.A.',{maxChars:4000}); // room for a long message's detailed summary
     if(!uri)throw new Error(getLastTtsFailReason()||'Ara voice failed');
     await audioModeForPlayback();
