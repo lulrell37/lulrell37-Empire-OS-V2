@@ -19,6 +19,18 @@ function looksLikeFailure(body){
   return /claude encountered an error|reached maximum number of turns|execution failed|\berror after \d/i.test(String(body||''));
 }
 
+// What actually happened, from the failure comment. Quick deaths never reached the
+// model, so "make it smaller" would be wrong advice.
+function failureText(body){
+  const b=String(body||'');
+  const reason=(b.match(/^Reason:\s*(.+)$/m)||[])[1];
+  const why=reason?` Reason: ${reason.trim().slice(0,300)}`:'';
+  if(/maximum number of turns|error_max_turns/i.test(b))return `Claude Code ran out of turns.${why} Re-file the request smaller, or tell me to retry.`;
+  const secs=(b.match(/error after (\d+)s\b/i)||[])[1];
+  if(secs&&Number(secs)<60)return `Claude Code died after ${secs}s, before doing any work, so the size of the request isn't the problem.${why||' Usually that means its sign-in or usage limit, so check the Actions log.'} Tell me to retry and I'll run it again.`;
+  return `Claude Code stopped before finishing.${why} Tell me to retry, or check the Actions log.`;
+}
+
 export async function pollBuildJobs(){
   let jobs;
   try{jobs=await getActiveBuildJobs();}catch{return[];}
@@ -36,7 +48,7 @@ export async function pollBuildJobs(){
         const lastClaude=claudeMsgs[claudeMsgs.length-1];
         if(lastClaude&&looksLikeFailure(lastClaude.body)&&job.state!=='pr_open'&&job.state!=='pushed'){
           await updateBuildJob(job.id,{state:'failed'});
-          events.push({type:'failed',job,text:'Claude Code stopped before finishing (likely ran out of turns). Re-file the request — smaller if it was a big one.'});
+          events.push({type:'failed',job,text:failureText(lastClaude.body)});
           continue;
         }
         if(lastClaude&&looksLikeQuestion(lastClaude.body)&&job.state!=='pr_open'&&job.state!=='pushed'){

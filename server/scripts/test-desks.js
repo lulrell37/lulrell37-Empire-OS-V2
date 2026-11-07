@@ -10,6 +10,28 @@ const { confirmScript } = require('../telegramMedia');
 const { guardStop } = require('../talonBrain');
 const { bottomLine, parseStories } = require('../wokeRead');
 
+// A.R.A.'s voice: the two copies match, and only a direct order from the owner to
+// J.A.R.V.I.S. can switch between ElevenLabs and Grok.
+{
+  const fs = require('fs');
+  const path = require('path');
+  const { voiceToggleAllowed } = require('../personas');
+  const { ARA_VOICE } = require('../araVoice');
+  const { failureText } = require('../buildAgent');
+  const app = fs.readFileSync(path.join(__dirname, '../../src/services/voiceCues.js'), 'utf8');
+  assert(app.includes(`ARA_VOICE=\`${ARA_VOICE}\``), 'ARA_VOICE drifted from the app copy');
+  assert(ARA_VOICE.includes('sultry'));
+  assert(voiceToggleAllowed('jarvis', "Switch Ara's voice to Grok"));
+  for (const p of ['talon', 'ara', 'selene', 'wire']) assert(!voiceToggleAllowed(p, "Switch Ara's voice to Grok"), p);
+  assert(!voiceToggleAllowed('jarvis', ''), 'a relay has no owner text');
+  assert(!voiceToggleAllowed('jarvis', 'how is the build going'), 'he has to have asked');
+  const quick = failureText(9, '**Claude encountered an error after 0s**');
+  assert(/before doing any work/.test(quick) && !/turns/.test(quick), quick);
+  assert(/Reason: limit hit/.test(failureText(9, '**Claude encountered an error after 0s**\n\nReason: limit hit')));
+  assert(/ran out of turns/.test(failureText(9, 'Reason: error_max_turns')));
+  assert(!/turns/.test(failureText(9, '**Claude encountered an error after 5m 2s**')));
+}
+
 const NOW = Date.UTC(2026, 10, 6, 15);
 const DAY = 86400e3;
 const date = (d) => new Date(NOW + d * DAY).toISOString().slice(0, 10);

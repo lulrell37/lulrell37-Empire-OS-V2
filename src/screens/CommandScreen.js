@@ -1746,6 +1746,7 @@ export default function CommandScreen({navigation,route}){
           }
         }
         const cmdCallbacks={
+          ownerText:text,
           onNotes:(lines)=>{for(const line of lines)pushSystemMsg(line);},
           onTradePropose:(prop)=>sendTrade({...prop,pid}),
           onTradeClose:(id)=>closePosition(id),
