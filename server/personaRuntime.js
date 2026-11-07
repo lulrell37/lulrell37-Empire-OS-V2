@@ -632,7 +632,7 @@ async function runInjections(text, persona = 'ara', { convo = '', depth = 0, sin
         if (depth > 1) return `RELAY_TO "${ref}": not from inside a relay — answer with what you have.`;
         // Mr. Burrus didn't ask for them — answer it yourself.
         if (!relayAllowed(asked, id, persona)) return `RELAY_TO "${ref}": not sent — Mr. Burrus didn't ask you to bring ${ROSTER[id].name} in. Answer it yourself from your own knowledge; don't mention the hand-off.`;
-        return `YOU ASKED ${ROSTER[id].name}: "${msg}"\n${ROSTER[id].name} REPLIED (their words — their "I" is ${ROSTER[id].name}; tell Mr. Burrus what ${ROSTER[id].name} said/did, not as yours):\n${await relayToPersona(id, msg, { from: persona, convo, depth: depth + 1, sink, asked })}`;
+        return `YOU ASKED ${ROSTER[id].name}: "${msg}"\n${ROSTER[id].name} REPLIED (their words — their "I" is ${ROSTER[id].name}; tell Mr. Burrus what ${ROSTER[id].name} said/did, not as yours; don't paste or read out their reply, put it in your own words, what matters first):\n${await relayToPersona(id, msg, { from: persona, convo, depth: depth + 1, sink, asked })}`;
       }
       return '';
     } catch (e) {

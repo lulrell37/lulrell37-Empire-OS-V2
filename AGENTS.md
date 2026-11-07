@@ -58,6 +58,12 @@ words passed through A.R.A. stay theirs: `ARA_SCRIPT` (both copies) and
 words stored in her history or memory are labeled as his (a T.A.L.O.N. reply
 saved under the owner's message was being read back as the owner's).
 
+She also doesn't read a relay out on her ElevenLabs voice: she catches him up on it
+in her own sentences, far shorter, because the full message is in the chat. Alerts
+from the desks (`sendFromAra`, `relay: true`) count as relays when a persona is named
+on their first line. If Grok can't write the script, Claude does; if neither can, she
+says whose message it is and gives only the start (`relayFallback`). `node server/scripts/test-ara-relay.js` covers this.
+
 ## A.R.A. LIVE — realtime duplex voice (`src/services/realtimeVoice.js`)
 
 A true duplex voice call with A.R.A. over xAI's `grok-voice-latest` realtime

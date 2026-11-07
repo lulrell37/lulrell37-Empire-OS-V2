@@ -21,7 +21,7 @@ async function sendFromAra(text, spoken = text) {
   const ara = telegram.botFor('ara');
   if (!ara || !ara.isConfigured()) return false;
   // Same as a reply to him: she says it, then the text (with the exact numbers).
-  const { ogg } = await require('./personaVoice').voiceNote('ara', String(spoken).replace(/\*\*/g, ''))
+  const { ogg } = await require('./personaVoice').voiceNote('ara', String(spoken).replace(/\*\*/g, ''), { relay: true })
     .catch((e) => { console.error('trade alert voice failed:', e.message); return { ogg: null }; });
   if (ogg) await ara.sendVoice(telegram.OWNER_ID, ogg).catch((e) => console.error('trade alert sendVoice failed:', e.message));
   await ara.sendMessage(telegram.OWNER_ID, text);
