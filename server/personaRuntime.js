@@ -18,7 +18,7 @@
 const crypto = require('crypto');
 const { query } = require('./db');
 const { chatAs, claudeText, webResearch } = require('./llm');
-const { ROSTER, resolvePersonaId, relayAllowed, ARA_ROUTE, rosterLines, personaSystem, personaTgIdentity, genderLine } = require('./personas');
+const { ROSTER, resolvePersonaId, relayAllowed, voiceToggleAllowed, ARA_ROUTE, rosterLines, personaSystem, personaTgIdentity, genderLine } = require('./personas');
 const { saveDriveNote, googleStatus, gTaskComplete } = require('./google');
 const tools = require('./personaTools');
 const { mem0Remember, mem0Search, mem0All, mem0Line, mem0Health } = require('./mem0');
@@ -384,6 +384,7 @@ const PERSONA_EXTRA_TOOLS = {
  - When a PR is ready you'll both hear about it here. Say what it does; only on his yes, [BUILD_MERGE: #issue] — he confirms with a tap and it's merged into main. What that sets off depends on what the PR touched, and the merge receipt says which: app files start the APK build on their own (EAS — the new APK reaches his phone when it finishes); server-only changes build no APK and go live only on a [REDEPLOY]; a PR touching both needs both. Tell him which it is from the receipt.
  - [REDEPLOY] — restart the backend onto the latest merged main (he confirms with a tap; ~1-2 min; bots and T.A.L.O.N. pause then come back; a version that won't start falls back to the current one; A.R.A. tells him when it's live and what changed). Offer it after merging anything that touches the server, or whenever he asks to redeploy / ship the server. Never claim it's live yourself — A.R.A.'s message is the confirmation.
  - [BUILD_CANCEL: #issue] — drop a build he no longer wants.
+ - [ARA_VOICE_TRAITS: on|off] — switch the slow, sultry layer of A.R.A.'s voice, only when Mr. Burrus tells you to himself. Say it's done only from the receipt.
  - Be honest about the loop: not instant, you're the messenger between Mr. Burrus and Claude Code, and every run bills his Anthropic key.`,
 };
 
@@ -703,7 +704,7 @@ const GOOGLE_WRITES = new Set(['MOVE_NOTE', 'MOVE_FILE', 'ADD_EVENT', 'EDIT_EVEN
 // landed somewhere other than asked, and actions waiting on the owner's tap.
 // `full` — a persona carrying out an instruction Mr. Burrus passed through
 // A.R.A. (or another persona) gets her whole write set for it.
-async function applyEffects(text, deliver, persona = 'ara', { full = false } = {}) {
+async function applyEffects(text, deliver, persona = 'ara', { full = false, ownerText = '' } = {}) {
   const notes = [];
   const warnings = [];
   const confirms = [];
@@ -792,6 +793,11 @@ async function applyEffects(text, deliver, persona = 'ara', { full = false } = {
       } else if (name === 'DEEP_RESEARCH' && arg) {
         notes.push('deep research started');
         runDeepResearch(arg, deliver, persona);
+      } else if (name === 'ARA_VOICE_TRAITS') {
+        const v = arg.trim().toLowerCase();
+        if (!voiceToggleAllowed(persona, ownerText)) warnings.push('ARA_VOICE_TRAITS not run — only Mr. Burrus can order that, directly to J.A.R.V.I.S.');
+        else if (v !== 'on' && v !== 'off') warnings.push('ARA_VOICE_TRAITS needs on or off');
+        else { await setSetting('ara_voice_traits', v); notes.push(`A.R.A.'s slow, sultry voice layer is ${v}`); }
       } else if (ARA_ONLY_WRITES.has(name) && persona !== 'ara') {
         warnings.push(`${name} not run — calendar and email are A.R.A.'s (hand it to her)`);
       } else if (TALON_WRITES.has(name)) {
@@ -1093,7 +1099,7 @@ async function runPersonaTurn(personaId, userText, deliver) {
   }
 
   // Side-effect tags fire once, from anywhere across the rounds (deduped).
-  const fx = await applyEffects(replies.join('\n'), deliver, persona)
+  const fx = await applyEffects(replies.join('\n'), deliver, persona, { ownerText: userText })
     .catch((e) => ({ notes: [], warnings: [`actions failed: ${e.message}`], confirms: [] }));
   fx.notes.push(...sink.notes);
   fx.warnings.push(...sink.warnings);

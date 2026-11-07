@@ -137,6 +137,17 @@ async function cancelBuild(n) {
 // --- poller ------------------------------------------------------------------
 
 const isFailure = (b) => /claude encountered an error|reached maximum number of turns|execution failed|\berror after \d/i.test(String(b || ''));
+// What actually happened, from the failure comment. Quick deaths never reached the
+// model, so "make it smaller" would be wrong advice.
+function failureText(n, body) {
+  const b = String(body || '');
+  const reason = (b.match(/^Reason:\s*(.+)$/m) || [])[1];
+  const why = reason ? ` Reason: ${reason.trim().slice(0, 300)}` : '';
+  if (/maximum number of turns|error_max_turns/i.test(b)) return `Build #${n}: Claude Code ran out of turns.${why} Re-file it smaller, or tell me to retry.`;
+  const secs = (b.match(/error after (\d+)s\b/i) || [])[1];
+  if (secs && Number(secs) < 60) return `Build #${n}: Claude Code died after ${secs}s, before doing any work, so the size of the request isn't the problem.${why || ' Usually that means its sign-in or usage limit, so check the Actions log.'} Tell me to retry and I'll run it again.`;
+  return `Build #${n}: Claude Code stopped before finishing.${why} Tell me to retry, or check the Actions log.`;
+}
 const isQuestion = (b) => !/github\.com\/[^\s]+\/pull\/\d+/.test(b) && !isFailure(b) && String(b || '').includes('?');
 
 // One pass over open jobs. Returns [{ n, kind, text }] for each new thing to
@@ -170,7 +181,7 @@ async function pollBuildJobs() {
         say(n, 'pr_open', `pr:${pr.prNumber}`, `Build #${n} is ready — PR #${pr.prNumber}: "${pr.title}" ${pr.url}\nSay the word and I'll merge it and start the APK build.`);
       } else if (last && isFailure(last.body)) {
         await patchJob(n, { state: 'failed' });
-        say(n, 'failed', `fail:${last.id}`, `Build #${n}: Claude Code stopped before finishing (likely ran out of turns). Re-file it — smaller if it was a big one.`);
+        say(n, 'failed', `fail:${last.id}`, failureText(n, last.body));
       } else if (last && isQuestion(last.body)) {
         await patchJob(n, { state: 'question', question: last.body.slice(0, 1200), last_comment_id: last.id });
         say(n, 'question', `q:${last.id}`, `Claude Code has a question on build #${n}:\n\n${last.body.trim().slice(0, 1500)}`);
@@ -205,4 +216,4 @@ async function pollAndNotify() {
   }
 }
 
-module.exports = { configured, fileBuildRequest, replyToBuild, mergeBuild, cancelBuild, pollBuildJobs, pollAndNotify, REPO, gh };
+module.exports = { failureText, configured, fileBuildRequest, replyToBuild, mergeBuild, cancelBuild, pollBuildJobs, pollAndNotify, REPO, gh };

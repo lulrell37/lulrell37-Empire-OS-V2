@@ -112,6 +112,8 @@ and Telegram (`synthesizeAraVoice` in `server/araVoice.js`) back on it. Keep
 `ARA_VOICE` / `ARA_SCRIPT` in sync between `src/services/voiceCues.js` and
 `server/araVoice.js`.
 
+**Sultry layer, owner's switch:** `ARA_VOICE` is `ARA_VOICE_BASE` + `ARA_SULTRY` (slow, low, drawn-out), and every voice path reads it through `araVoiceFor(traits)`. `[ARA_VOICE_TRAITS: on|off]` writes the synced `app_settings.ara_voice_traits` (default on) and switches that layer only. `voiceToggleAllowed` (`server/personas.js`, `src/personas/personas.js`, keep in sync) lets it through only for J.A.R.V.I.S., on a message Mr. Burrus sent him directly that mentions her voice: only the owner's own turn passes `ownerText`, so relays, the council and the loops can't. `test-desks.js` fails if the two voice copies drift.
+
 ## Backend (`server/`)
 
 Node/Express on a Replit Reserved VM (always-on: nudge/briefing/council crons).
@@ -159,6 +161,8 @@ bot's token is `TELEGRAM_BOT_TOKEN[_PERSONA]`; all locked to `TELEGRAM_OWNER_ID`
 webhook at `/telegram/webhook/:persona/:secret`. Voice notes both ways: Whisper
 in (`OPENAI_API_KEY`); out is ElevenLabs for everyone, A.R.A. scripted by Grok first (`server/personaVoice.js`,
 `ELEVENLABS_API_KEY`), OGG/Opus via bundled `ffmpeg-static`. See `server/README.md`.
+
+**Build failures say why:** `claude.yml` sets no turn limit and hides the action's output, so when a run fails it posts the result's real reason as a `Reason:` line, and `failureText` (`server/buildAgent.js`, mirrored in `src/services/buildJobs.js`) reports it. A run that dies inside a minute never did any work, so it says retry, not "make it smaller". `[BUILD_REPLY]` re-runs a failed job.
 
 **S.C.O.U.T. signals** — `server/autoScout.js` + `server/scoutSignals.js` are an
 always-on cron (`SCOUT_CRON=on`) that walks the metro×segment grid

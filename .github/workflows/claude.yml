@@ -30,7 +30,25 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 1
-      - uses: anthropics/claude-code-action@v1
+      - id: claude
+        uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ github.token }}
+      # The action hides its output, so its own comment only says "encountered an
+      # error". Post the real reason; J.A.R.V.I.S.'s poller reads the Reason line.
+      - name: Report why the run failed
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ github.event.issue.number }}
+          LOG: ${{ steps.claude.outputs.execution_file }}
+        run: |
+          reason="no run log, so it failed before Claude started"
+          secs=0
+          if [ -n "$LOG" ] && [ -f "$LOG" ]; then
+            reason=$(jq -r '[.[] | select(.type == "result")] | last | (.result // .subtype // "no detail") | tostring | gsub("\\s+"; " ") | .[0:300]' "$LOG")
+            secs=$(jq -r '[.[] | select(.type == "result")] | last | ((.duration_ms // 0) / 1000 | floor)' "$LOG")
+          fi
+          printf '**Claude encountered an error after %ss**\n\nReason: %s\n' "$secs" "$reason" > failure.md
+          gh issue comment "$ISSUE" --repo "$GITHUB_REPOSITORY" --body-file failure.md

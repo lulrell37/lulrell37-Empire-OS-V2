@@ -10,6 +10,33 @@ const { confirmScript } = require('../telegramMedia');
 const { guardStop } = require('../talonBrain');
 const { bottomLine, parseStories } = require('../wokeRead');
 
+// A.R.A.'s voice: the two copies match, off removes only the sultry layer, and
+// only a direct order from the owner to J.A.R.V.I.S. gets through the gate.
+{
+  const fs = require('fs');
+  const path = require('path');
+  const { voiceToggleAllowed } = require('../personas');
+  const { ARA_VOICE, ARA_VOICE_BASE, ARA_SULTRY, araVoiceFor } = require('../araVoice');
+  const { failureText } = require('../buildAgent');
+  const app = fs.readFileSync(path.join(__dirname, '../../src/services/voiceCues.js'), 'utf8');
+  assert(app.includes(`ARA_VOICE_BASE=\`${ARA_VOICE_BASE}\``), 'ARA_VOICE_BASE drifted from the app copy');
+  assert(app.includes(`ARA_SULTRY=\`${ARA_SULTRY}\``), 'ARA_SULTRY drifted from the app copy');
+  assert(ARA_VOICE.includes(ARA_SULTRY) && ARA_VOICE.endsWith(']'));
+  assert(!ARA_VOICE_BASE.includes('sultry'));
+  assert.strictEqual(araVoiceFor('off'), ARA_VOICE_BASE);
+  assert.strictEqual(araVoiceFor('on'), ARA_VOICE);
+  assert.strictEqual(araVoiceFor(undefined), ARA_VOICE);
+  assert(voiceToggleAllowed('jarvis', "Turn off Ara's sultry voice"));
+  for (const p of ['talon', 'ara', 'selene', 'wire']) assert(!voiceToggleAllowed(p, "Turn off Ara's sultry voice"), p);
+  assert(!voiceToggleAllowed('jarvis', ''), 'a relay has no owner text');
+  assert(!voiceToggleAllowed('jarvis', 'how is the build going'), 'he has to have asked');
+  const quick = failureText(9, '**Claude encountered an error after 0s**');
+  assert(/before doing any work/.test(quick) && !/turns/.test(quick), quick);
+  assert(/Reason: limit hit/.test(failureText(9, '**Claude encountered an error after 0s**\n\nReason: limit hit')));
+  assert(/ran out of turns/.test(failureText(9, 'Reason: error_max_turns')));
+  assert(!/turns/.test(failureText(9, '**Claude encountered an error after 5m 2s**')));
+}
+
 const NOW = Date.UTC(2026, 10, 6, 15);
 const DAY = 86400e3;
 const date = (d) => new Date(NOW + d * DAY).toISOString().slice(0, 10);

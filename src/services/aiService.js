@@ -1,4 +1,4 @@
-import{emotionFor,isFlat,stripCues,cuedFor,ARA_VOICE,ARA_SCRIPT,speakNames}from './voiceCues';
+import{emotionFor,isFlat,stripCues,cuedFor,araVoiceFor,ARA_SCRIPT,speakNames}from './voiceCues';
 import{loadKeys,loadBackend,loadGoogleToken}from './keyStore';
 import{getPersonaMemory,getMemoriesByPersona,savePersonaMemory,getHudState,getTasks,trackApiUsage,getCustomPrompt,getUpcomingDates,getSetting}from './database';
 import*as FileSystem from 'expo-file-system';
@@ -836,7 +836,9 @@ export async function araSpokenScript(text,{userText='',convo=''}={},signal=null
     try{base=(await getCustomPrompt('ara'))||base;}catch{}
     // Who's who: a report she's passing on belongs to whoever it opens with.
     const team=PERSONA_LIST.filter(x=>x.id!=='ara').map(x=>` - ${x.name} (${x.id}) — ${x.role}${pronounsOf(x.id)?` · ${pronounsOf(x.id)}`:''}`).join('\n');
-    const sys=`${ARA_VOICE}\n\n${base}\n\n[THE TEAM, for who's who and their pronouns:\n${team}\n]\n\n${ARA_SCRIPT}`;
+    let traits='on';
+    try{traits=await getSetting('ara_voice_traits','on');}catch{}
+    const sys=`${araVoiceFor(traits)}\n\n${base}\n\n[THE TEAM, for who's who and their pronouns:\n${team}\n]\n\n${ARA_SCRIPT}`;
     const user=(convo?`Recent conversation:\n${convo}\n\n`:'')+(userText?`Mr. Burrus just said: "${userText}"\n\n`:'')+`What you want to get across (notes, not a script):\n${cuedFor(text)}`;
     const out=await withGrokRoutes(k?.grok,async({base:url,auth})=>{
       const res=await fetch(url+'/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json',...auth},signal,

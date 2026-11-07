@@ -14,7 +14,7 @@
 // uses the bundled ffmpeg-static binary (same as araVoice.js).
 const { spawn } = require('child_process');
 const ffmpegPath = require('ffmpeg-static');
-const { ARA_VOICE, ARA_SCRIPT, synthesizeAraVoice } = require('./araVoice');
+const { araVoiceFor, ARA_SCRIPT, synthesizeAraVoice } = require('./araVoice');
 const { personaVoiceId } = require('./personas');
 
 const { isFlat, stripCues, speakNames } = require('./voiceCues');
@@ -160,8 +160,9 @@ async function araScript(text, userText) {
     // Capped: Telegram sends her text after the voice note, so a slow script
     // mustn't hold the reply up — past 25s she just voices the reply as written.
     const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('script timed out')), 25000));
+    const traits = await require('./syncStore').getSetting('ara_voice_traits', 'on').catch(() => 'on');
     const out = await Promise.race([timeout, require('./llm').chatAs('xai', 'grok-4',
-      `${ARA_VOICE}\n\nYou are A.R.A. — full personal assistant to Mr. Burrus, sharp and a step ahead; you call him "Mr. Burrus".\n\n[THE TEAM, for who's who and their pronouns:\n${require('./personas').rosterLines()}\n]\n\n${ARA_SCRIPT}`,
+      `${araVoiceFor(traits)}\n\nYou are A.R.A. — full personal assistant to Mr. Burrus, sharp and a step ahead; you call him "Mr. Burrus".\n\n[THE TEAM, for who's who and their pronouns:\n${require('./personas').rosterLines()}\n]\n\n${ARA_SCRIPT}`,
       [{ role: 'user', content: `${userText ? `Mr. Burrus just said: "${String(userText).slice(0, 1500)}"\n\n` : ''}${relayHint(text)}What you want to get across (notes, not a script):\n${text}` }],
       { maxTokens: 1200, fallback: false })]);
     const script = String(out || '').replace(/\[[A-Z][A-Z0-9_]*(?::[^\]]*)?\]/g, '').replace(/[*#`_]/g, '').trim();
