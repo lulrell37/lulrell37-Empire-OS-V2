@@ -387,8 +387,12 @@ turn (`courseTag` in `server/personaRuntime.js`). Roadmap ticks edit the Doc in 
 via the Docs API `replaceAllText` (formatting kept; the existing `drive` scope covers
 it). State: `app_settings.stephanie_course` + `stephanie_done_weeks` (done = ticked in
 the roadmap or in that list). Her Telegram prompt carries the live course every turn;
-A.R.A.'s morning brief has a WHERE YOU LEFT OFF section (`briefSection`). Telegram
-only — the app's chat with her doesn't run these tags. `node server/scripts/test-stephanie-course.js`.
+A.R.A.'s morning brief has a WHERE YOU LEFT OFF section (`briefSection`). The app runs
+the same tracker, not a copy: `src/services/stephanieCourse.js` calls the server
+(`server/routes/stephanie.js`: `GET /stephanie/course` → live status + her tool lines,
+`POST` runs a tag with his message as `asked`), its result goes into her prompt
+(`buildSys`) and the second pass (`CommandScreen`), so the app and Telegram can't drift.
+Without a linked backend she says the tracker can't be reached. `node server/scripts/test-stephanie-course.js`.
 
 ## W.O.K.E. (`server/wokeRead.js`, `WOKE_READ=off` to stop)
 

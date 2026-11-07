@@ -20,6 +20,7 @@ import{handleCommands,stripCommands}from '../services/commandHandler';
 import{cuedFor,ARA_VOICE}from '../services/voiceCues';
 import{reportIssue,clearIssueKey,notify}from '../services/report';
 import{googleReadInjections,googleWriteCommands}from '../services/googleCommands';
+import{courseInjections}from '../services/stephanieCourse';
 import{scanTags}from '../services/noteCommands';
 import{playOpts,speechRate,applyRate,onVoiceSpeedChange,voiceRate,setVoiceSpeed,VOICE_SPEED_MIN,VOICE_SPEED_MAX}from '../services/voiceSpeed';
 import SpeedSlider from '../components/SpeedSlider';
@@ -1698,6 +1699,11 @@ export default function CommandScreen({navigation,route}){
           const gReads=await googleReadInjections(response,pid);
           if(gReads.length){toolLabel='◇ checking Google…';injections.push(...gReads);}
         }catch(e){/* never let a Google read break the turn */}
+        // S.T.E.P.H.A.N.I.E.'s course tags run on the server's tracker (shared with Telegram).
+        try{
+          const cr=await courseInjections(response,pid,text);
+          if(cr.length){toolLabel='◇ updating the course…';injections.push(...cr);}
+        }catch(e){/* never let the course break the turn */}
         // [RELAY_TO: id | message] — actually ask that persona and wait for their
         // real answer before this persona answers Mr. Burrus. One-shot, no
         // history. Their own command tags DO run (notes, tasks, calendar, … —

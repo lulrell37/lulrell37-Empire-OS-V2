@@ -226,6 +226,10 @@ ${personaId==='ara'?` EMAIL: [READ_EMAIL] | [SEND_EMAIL: to | subject | body] (M
       }
     }catch{}
   }
+  // S.T.E.P.H.A.N.I.E.'s course — the server's tracker, shared with her Telegram bot.
+  if(personaId==='stephanie'){
+    try{const{courseContext}=await import('./stephanieCourse');sys+=await courseContext();}catch{}
+  }
   const lastUser=[...convo].reverse().find(m=>m?.role==='user'&&m?.content);
   const memQuery=lastUser?.content||'';
   // Semantic recall from Mem0 — a short list of the facts relevant to what

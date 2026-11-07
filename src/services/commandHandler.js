@@ -429,6 +429,7 @@ export function stripCommands(text){
     .replace(/\[DELETE_TASK:[^\]]*\]/gi,'').replace(/\[TASK_EDIT:[^\]]*\]/gi,'')
     .replace(/\[SAVE_NOTE:[^\]]*\]/gi,'').replace(/\[OPEN_APP:[^\]]*\]/gi,'').replace(/\[OPEN_WEBPAGE:[^\]]*\]/gi,'')
     .replace(/\[READ_NOTE:[^\]]*\]/gi,'').replace(/\[ADD_REVENUE:[^\]]*\]/gi,'')
+    .replace(/\[(?:COURSE_STATUS|COURSE_START|LESSON_DONE|LESSON_UNDO|COURSE_DONE|ROADMAP_CHECK|ROADMAP_UNCHECK)(?::[^\]]*)?\]/gi,'')
     .replace(/\[READ_HUD\]/gi,'').replace(/\[UPDATE_HUD:[^\]]*\]/gi,'')
     .replace(/\[UPDATE_SCORE:[^\]]*\]/gi,'').replace(/\[ROUTINE_DONE:[^\]]*\]/gi,'')
     .replace(/\[ROUTINE_ADD:[^\]]*\]/gi,'').replace(/\[ROUTINE_REMOVE:[^\]]*\]/gi,'')

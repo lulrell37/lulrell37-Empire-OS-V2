@@ -106,6 +106,26 @@ const c = require('../stephanieCourse');
   assert.strictEqual(out, '', 'only S.T.E.P.H.A.N.I.E. checks lessons');
   out = await runInjections('[COURSE_STATUS]', 'ara', { asked: '' });
   assert.match(out, /Lessons \(1\/4 done\)/, 'A.R.A. can read where he is');
+  // The app's door to the same tracker: GET status + tools, POST a tag.
+  {
+    const express = require('express');
+    const app = express();
+    app.use(express.json());
+    app.use('/stephanie', require('../routes/stephanie'));
+    const srv = app.listen(0);
+    const url = `http://127.0.0.1:${srv.address().port}/stephanie/course`;
+    try {
+      const g = await (await fetch(url)).json();
+      assert.match(g.status, /Lessons \(1\/4 done\)/);
+      assert.strictEqual(g.tools, c.COURSE_TOOLS, 'the app gets the same tool lines as Telegram');
+      const post = (body) => fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }).then((r) => r.json());
+      assert.match((await post({ tag: 'LESSON_DONE', arg: '2' })).text, /only on Mr\. Burrus's own word/);
+      assert.match((await post({ tag: 'LESSON_DONE', arg: '2', asked: 'yes, done' })).text, /Checked off lesson 2/);
+      assert.match(notes[curTitle], /- \[x\] 2\./, 'checked in the same note Telegram reads');
+      assert.ok((await post({ tag: 'SAVE_NOTE' })).error, 'only course tags');
+    } finally { srv.close(); }
+  }
+
   console.log('stephanie course: all passed');
   process.exit(0);
 })().catch((e) => { console.error(e); process.exit(1); });
