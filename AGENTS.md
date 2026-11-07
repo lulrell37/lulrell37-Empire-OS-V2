@@ -104,7 +104,7 @@ Keep the two EMOTION blocks in sync.
 Except J.A.R.V.I.S.: `emotionFor()` gives him a STEADY block instead (composed,
 no cues), and his ElevenLabs voice runs cue-free at high stability (`isFlat()`).
 
-A.R.A.'s voice is ElevenLabs voice `rtx7URANE3SCNaOJwq5w` (looser `ARA_SETTINGS`
+A.R.A.'s voice is ElevenLabs voice `cpYoYR8FdKZd8Hpux2dU` (looser `ARA_SETTINGS`
 for range). Every voiced reply goes through a script pass first: her Grok brain,
 with `ARA_VOICE` (warm, sultry, slightly seductive, playful, slightly flirty and a touch unhinged) + `ARA_SCRIPT`,
 rewrites the reply as what she'd say out loud with lowercase emotion cues, and
@@ -152,7 +152,7 @@ persona can send media (`server/telegramMedia.js`): `[SEND_PHOTO]`,
 `[CHART]` (Chart.js via QuickChart), `[SEND_FILE]`/`[SEND_VIDEO]`/`[SEND_AUDIO]`,
 `[SEND_LOCATION]`; `[WEATHER]` is a keyless Open-Meteo read. ElevenLabs voice
 notes retry, fall back to OpenAI TTS, and say so in the chat when none went out
-(`voiceNote()` in `server/personaVoice.js`). Still app-only: opening apps on
+(A.R.A. tries her Grok voice before OpenAI; `voiceNote()` in `server/personaVoice.js`). Still app-only: opening apps on
 the phone, 3D Lab, HUD panel layout, the Canvas, hand-placed trades and
 clips/video watch. J.A.R.V.I.S. (and A.R.A.) run the Claude Code build loop
 from Telegram too (`server/buildAgent.js`, needs `GITHUB_TOKEN` — the same PAT

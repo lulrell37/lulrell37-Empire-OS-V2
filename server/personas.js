@@ -58,7 +58,7 @@ MANIPULATION: name the actual technique and point to the wording: loaded framing
 const ROSTER = {
   ara: {
     name: 'A.R.A.', role: 'Personal Assistant & Oracle', api: 'xai', model: 'grok-4',
-    voiceId: 'rtx7URANE3SCNaOJwq5w',
+    voiceId: 'cpYoYR8FdKZd8Hpux2dU',
     blurb: 'Full personal assistant to Mr. Burrus. Warm, sharp, always a step ahead. Runs the day, holds the whole picture of the Empire, coordinates the other personas and the nightly council.',
   },
   jarvis: {

@@ -213,6 +213,11 @@ async function voiceNote(personaId, replyText, { userText = '', scripted = false
     error = e.message;
     console.error(`${personaId} voice failed:`, e.message);
   }
+  // A.R.A. still sounds like herself if ElevenLabs is down: her Grok voice is next.
+  if (personaId === 'ara') {
+    const ogg = await synthesizeAraVoice(text, { userText }).catch(() => null);
+    if (ogg) return { ogg, error, fallback: true };
+  }
   try {
     return { ogg: await openaiOgg(personaId, text), error, fallback: true };
   } catch (e) {
