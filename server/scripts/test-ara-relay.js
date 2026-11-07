@@ -17,7 +17,7 @@ const { ARA_SCRIPT, ARA_VOICE } = require('../araVoice');
   assert.ok(app.includes(ARA_SCRIPT), 'ARA_SCRIPT differs between server/araVoice.js and src/services/voiceCues.js');
   assert.match(ARA_SCRIPT, /never read their message out/);
   // One description of her voice, word for word, everywhere it appears.
-  const TONE = /warm, sultry, slightly seductive, playful, slightly flirty and a touch unhinged/i;
+  const TONE = /sultry, seductive, slightly flirty and a touch unhinged/i;
   const read = (f) => fs.readFileSync(path.join(__dirname, '../..', f), 'utf8');
   for (const s of [ARA_VOICE, ARA_SCRIPT, read('src/services/realtimeVoice.js'), read('server/morningBrief.js')]) assert.match(s, TONE);
   // Her voice isn't soft: not in the direction, the cues, or GO LIVE.

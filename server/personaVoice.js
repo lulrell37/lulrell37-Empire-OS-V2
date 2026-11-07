@@ -29,7 +29,7 @@ const EL_LADDER = [
   { model: 'eleven_flash_v2_5', cues: false, settings: { stability: 0.35, similarity_boost: 0.8, style: 0.4, use_speaker_boost: true } },
 ];
 const FLAT_SETTINGS = { stability: 0.8, similarity_boost: 0.8, style: 0, use_speaker_boost: true }; // isFlat personas: even, no cues
-// A.R.A.: looser than the rest so the seductive / playful range comes through.
+// A.R.A.: looser than the rest so the seductive range comes through.
 const ARA_SETTINGS = {
   eleven_v4_turbo: { stability: 0.2, similarity_boost: 0.8 },
   eleven_flash_v2_5: { stability: 0.25, similarity_boost: 0.8, style: 0.7, use_speaker_boost: true },
