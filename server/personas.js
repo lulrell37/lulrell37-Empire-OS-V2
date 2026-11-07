@@ -198,10 +198,10 @@ const TRADE_ORDER = /\b(close|exit|enter|buy|sell|long|short|move (the |my |his 
 // A.R.A. runs the team: she sends anything to whoever owns it without him
 // naming them (`from` === 'ara'). Everyone else keeps the gate.
 const CAL_MAIL = /\b(calendar|schedule|scheduled|event|meeting|appointment|email|e-mail|emails|inbox|gmail|mail)\b/;
-// A.R.A.'s voice-trait switch: J.A.R.V.I.S. only, and only on a message Mr. Burrus
-// sent him directly. A relay, the council or an autonomous loop has no ownerText,
-// so it can't reach this. Keep in sync with the other copy.
-const VOICE_TOGGLE = /\b(voice|sultry|traits?)\b/i;
+// Which voice A.R.A. uses, ElevenLabs or Grok: J.A.R.V.I.S. only, and only on a message
+// Mr. Burrus sent him directly. A relay, the council or an autonomous loop has no
+// ownerText, so it can't reach this. Keep in sync with the other copy.
+const VOICE_TOGGLE = /\b(voice|grok|eleven ?labs)\b/i;
 const voiceToggleAllowed = (persona, ownerText) => persona === 'jarvis' && VOICE_TOGGLE.test(String(ownerText || ''));
 
 function relayAllowed(userText, id, from) {

@@ -112,7 +112,7 @@ and Telegram (`synthesizeAraVoice` in `server/araVoice.js`) back on it. Keep
 `ARA_VOICE` / `ARA_SCRIPT` in sync between `src/services/voiceCues.js` and
 `server/araVoice.js`.
 
-**Sultry layer, owner's switch:** `ARA_VOICE` is `ARA_VOICE_BASE` + `ARA_SULTRY` (slow, low, drawn-out), and every voice path reads it through `araVoiceFor(traits)`. `[ARA_VOICE_TRAITS: on|off]` writes the synced `app_settings.ara_voice_traits` (default on) and switches that layer only. `voiceToggleAllowed` (`server/personas.js`, `src/personas/personas.js`, keep in sync) lets it through only for J.A.R.V.I.S., on a message Mr. Burrus sent him directly that mentions her voice: only the owner's own turn passes `ownerText`, so relays, the council and the loops can't. `test-desks.js` fails if the two voice copies drift.
+**Owner's voice switch:** `[ARA_VOICE_ENGINE: elevenlabs|grok]` writes the same synced `app_settings.ara_voice` as Settings › AI › A.R.A.'s Voice. `voiceToggleAllowed` (`server/personas.js`, `src/personas/personas.js`, keep in sync) lets it through only for J.A.R.V.I.S., on a message Mr. Burrus sent him directly that mentions her voice: only the owner's own turn passes `ownerText`, so relays, the council and the loops can't.
 
 ## Backend (`server/`)
 

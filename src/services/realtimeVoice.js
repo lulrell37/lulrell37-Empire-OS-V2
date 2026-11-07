@@ -27,8 +27,8 @@ import{Audio}from 'expo-av';
 import*as FileSystem from 'expo-file-system';
 import{loadKeys}from './keyStore';
 import{personaSystemPrompt,queryMemory,fixNames}from './aiService';
-import{araVoiceFor}from './voiceCues';
-import{getHudState,getSetting}from './database';
+import{ARA_VOICE}from './voiceCues';
+import{getHudState}from './database';
 
 const SAMPLE_RATE=24000; // must match the session's audio.input/output format below
 const LIVE_AUDIO_OPTS={
@@ -128,9 +128,7 @@ export async function startAraLive(opts={}){
   const keys=await loadKeys();
   if(!keys?.grok)throw new Error('Grok API key needed for A.R.A. LIVE. Add one in Settings.');
   onState?.('connecting');
-  let traits='on';
-  try{traits=await getSetting('ara_voice_traits','on');}catch{}
-  const instructions=araVoiceFor(traits)+'\n\n'+(await personaSystemPrompt('ara'))
+  const instructions=ARA_VOICE+'\n\n'+(await personaSystemPrompt('ara'))
     +`\n\n[LIVE VOICE CALL: you are on a real-time voice call with Mr. Burrus — everything is spoken and heard live, not read. Talk naturally and conversationally, short turns, the way a person on a call does. Keep HER VOICE from the top the whole call — warm, soft, slightly seductive, unhurried, feeling it out loud — never a flat read. Don't write bracketed voice cues here — just do it with your voice. You will not receive [SAVE_NOTE], [REMEMBER] or other write-side tags here — if he asks you to save or remember something mid-call, tell him you'll get it down and note it in the regular chat, don't pretend to write it. You DO have read_hud and query_memory as live tools — use them instead of guessing when the answer depends on current state or something from your history with him. If you hear "Aura", that's him saying your name — A.R.A. — never correct him or ask who Aura is. Say every persona's name as a name — Talon, Jarvis, Selene, Aisha — never spelled out letter by letter. When you pass on what another persona told you, it's theirs: "Talon says he…", never as your own and never as if he said it.]`;
   return new Promise((resolve,reject)=>{
     const socket=new WebSocket(

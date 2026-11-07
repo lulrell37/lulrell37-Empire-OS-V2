@@ -384,7 +384,7 @@ const PERSONA_EXTRA_TOOLS = {
  - When a PR is ready you'll both hear about it here. Say what it does; only on his yes, [BUILD_MERGE: #issue] — he confirms with a tap and it's merged into main. What that sets off depends on what the PR touched, and the merge receipt says which: app files start the APK build on their own (EAS — the new APK reaches his phone when it finishes); server-only changes build no APK and go live only on a [REDEPLOY]; a PR touching both needs both. Tell him which it is from the receipt.
  - [REDEPLOY] — restart the backend onto the latest merged main (he confirms with a tap; ~1-2 min; bots and T.A.L.O.N. pause then come back; a version that won't start falls back to the current one; A.R.A. tells him when it's live and what changed). Offer it after merging anything that touches the server, or whenever he asks to redeploy / ship the server. Never claim it's live yourself — A.R.A.'s message is the confirmation.
  - [BUILD_CANCEL: #issue] — drop a build he no longer wants.
- - [ARA_VOICE_TRAITS: on|off] — switch the slow, sultry layer of A.R.A.'s voice, only when Mr. Burrus tells you to himself. Say it's done only from the receipt.
+ - [ARA_VOICE_ENGINE: elevenlabs|grok] — switch which voice A.R.A. uses, only when Mr. Burrus tells you to himself. Say it's done only from the receipt.
  - Be honest about the loop: not instant, you're the messenger between Mr. Burrus and Claude Code, and every run bills his Anthropic key.`,
 };
 
@@ -793,11 +793,11 @@ async function applyEffects(text, deliver, persona = 'ara', { full = false, owne
       } else if (name === 'DEEP_RESEARCH' && arg) {
         notes.push('deep research started');
         runDeepResearch(arg, deliver, persona);
-      } else if (name === 'ARA_VOICE_TRAITS') {
-        const v = arg.trim().toLowerCase();
-        if (!voiceToggleAllowed(persona, ownerText)) warnings.push('ARA_VOICE_TRAITS not run — only Mr. Burrus can order that, directly to J.A.R.V.I.S.');
-        else if (v !== 'on' && v !== 'off') warnings.push('ARA_VOICE_TRAITS needs on or off');
-        else { await setSetting('ara_voice_traits', v); notes.push(`A.R.A.'s slow, sultry voice layer is ${v}`); }
+      } else if (name === 'ARA_VOICE_ENGINE') {
+        const v = arg.trim().toLowerCase().replace(/\s+/g, '');
+        if (!voiceToggleAllowed(persona, ownerText)) warnings.push('ARA_VOICE_ENGINE not run — only Mr. Burrus can order that, directly to J.A.R.V.I.S.');
+        else if (v !== 'elevenlabs' && v !== 'grok') warnings.push('ARA_VOICE_ENGINE needs elevenlabs or grok');
+        else { await setSetting('ara_voice', v); notes.push(`A.R.A.'s voice is now ${v === 'grok' ? 'Grok' : 'ElevenLabs'}`); }
       } else if (ARA_ONLY_WRITES.has(name) && persona !== 'ara') {
         warnings.push(`${name} not run — calendar and email are A.R.A.'s (hand it to her)`);
       } else if (TALON_WRITES.has(name)) {

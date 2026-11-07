@@ -17,7 +17,7 @@ import{autoTraderBusy}from '../services/autoTrader';
 import{autoScoutBusy}from '../services/autoScout';
 import{autoAtlasBusy}from '../services/autoAtlas';
 import{handleCommands,stripCommands}from '../services/commandHandler';
-import{cuedFor,araVoiceFor}from '../services/voiceCues';
+import{cuedFor,ARA_VOICE}from '../services/voiceCues';
 import{reportIssue,clearIssueKey,notify}from '../services/report';
 import{googleReadInjections,googleWriteCommands}from '../services/googleCommands';
 import{scanTags}from '../services/noteCommands';
@@ -653,9 +653,7 @@ export default function CommandScreen({navigation,route}){
     // wording, her delivery, same substance — anchored to what Mr. Burrus asked.
     let base=getPersona('ara').system;
     try{base=(await getCustomPrompt('ara'))||base;}catch{}
-    let traits='on';
-    try{traits=await getSetting('ara_voice_traits','on');}catch{}
-    const araInstructions=`${araVoiceFor(traits)}\n\n${base}\n\n[VOICE MODE: you're talking with Mr. Burrus out loud, not reading. You'll get what he just said and NOTES on what you want to get across — notes, not a script. Never recite them. Talk to him the way you naturally would: your own words and rhythm, looser and shorter than the notes, the way people actually speak (half-thoughts, "mm", "okay so", trailing off, coming back to it). Keep every real specific: numbers, names, times, decisions. Add no new topics or information. If the notes are a list, just talk him through it; never say "first, second" or read headings.]`;
+    const araInstructions=`${ARA_VOICE}\n\n${base}\n\n[VOICE MODE: you're talking with Mr. Burrus out loud, not reading. You'll get what he just said and NOTES on what you want to get across — notes, not a script. Never recite them. Talk to him the way you naturally would: your own words and rhythm, looser and shorter than the notes, the way people actually speak (half-thoughts, "mm", "okay so", trailing off, coming back to it). Keep every real specific: numbers, names, times, decisions. Add no new topics or information. If the notes are a list, just talk him through it; never say "first, second" or read headings.]`;
     const userText=(ctx?.userText||'').trim();
     const turns=(ctx?.turns||[]).filter(t=>t&&t.content&&t.content!==text&&t.content!==userText).slice(-6);
     const convoBits=turns.map(t=>`${t.role==='assistant'?'A.R.A.':'Mr. Burrus'}: ${String(t.content).slice(0,1500)}`).join('\n');

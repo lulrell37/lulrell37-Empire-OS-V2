@@ -63,13 +63,13 @@ export async function handleCommands(response,personaId,callbacks={}){
       }else callbacks.onNotes?.(['⚠️ Not switched: going live needs the Confirm tap, so tell A.R.A. on Telegram.']);
     }
   }catch(e){try{require('./crashLog').logCrash('handleCommands:trade',String(e&&e.message||e));}catch{}}
-  // [ARA_VOICE_TRAITS: on|off] — only a direct order from Mr. Burrus to J.A.R.V.I.S.
+  // [ARA_VOICE_ENGINE: elevenlabs|grok] — only a direct order from Mr. Burrus to J.A.R.V.I.S.
   // Only his own send() passes ownerText; relays and the council never do.
-  for(const m of response.matchAll(/\[ARA_VOICE_TRAITS:\s*([^\]]*)\]/gi)){
-    const v=m[1].trim().toLowerCase();
-    if(!voiceToggleAllowed(personaId,callbacks.ownerText))callbacks.onNotes?.(['⚠️ Voice traits not changed: only Mr. Burrus can order that, directly to J.A.R.V.I.S.']);
-    else if(v!=='on'&&v!=='off')callbacks.onNotes?.(['⚠️ Voice traits not changed: it needs on or off.']);
-    else{await setSetting('ara_voice_traits',v);scheduleSync(0);callbacks.onNotes?.([`✓ A.R.A.'s slow, sultry voice layer is ${v}.`]);}
+  for(const m of response.matchAll(/\[ARA_VOICE_ENGINE:\s*([^\]]*)\]/gi)){
+    const v=m[1].trim().toLowerCase().replace(/\s+/g,'');
+    if(!voiceToggleAllowed(personaId,callbacks.ownerText))callbacks.onNotes?.(['⚠️ Voice not changed: only Mr. Burrus can order that, directly to J.A.R.V.I.S.']);
+    else if(v!=='elevenlabs'&&v!=='grok')callbacks.onNotes?.(['⚠️ Voice not changed: it needs elevenlabs or grok.']);
+    else{await setSetting('ara_voice',v);scheduleSync(0);callbacks.onNotes?.([`✓ A.R.A.'s voice is now ${v==='grok'?'Grok':'ElevenLabs'}.`]);}
   }
   for(const m of response.matchAll(/\[ADD_TASK:\s*([^|\]]+?)(?:\|([^|\]]+))?(?:\|([^\]]+))?\]/gi)){
     const title=m[1]?.trim();if(!title)continue;
@@ -444,7 +444,7 @@ export function stripCommands(text){
     .replace(/\[READ_CALENDAR\]/gi,'').replace(/\[READ_EMAIL\]/gi,'')
     .replace(/\[MEMORY_QUERY:[^\]]*\]/gi,'').replace(/\[DEEP_RESEARCH:[^\]]*\]/gi,'')
     .replace(/\[TRADE_SCAN(?::[^\]]*)?\]/gi,'').replace(/\[TRADE_PROPOSE:[^\]]*\]/gi,'').replace(/\[TRADE_CLOSE:[^\]]*\]/gi,'')
-    .replace(/\[TRADE_BREAKEVEN:[^\]]*\]/gi,'').replace(/\[TRADE_ACCOUNT:[^\]]*\]/gi,'').replace(/\[ARA_VOICE_TRAITS:[^\]]*\]/gi,'')
+    .replace(/\[TRADE_BREAKEVEN:[^\]]*\]/gi,'').replace(/\[TRADE_ACCOUNT:[^\]]*\]/gi,'').replace(/\[ARA_VOICE_ENGINE:[^\]]*\]/gi,'')
     .replace(/\[STRATEGY_UPDATE:[\s\S]*?\]/gi,'').replace(/\[TRADE_REVIEW:[^\]]*\]/gi,'')
     .replace(/\[ADD_EXPENSE:[^\]]*\]/gi,'').replace(/\[ADD_DATE:[^\]]*\]/gi,'').replace(/\[REMIND_ME:[^\]]*\]/gi,'').replace(/\[EXPENSE_SUMMARY\]/gi,'')
     .replace(/\[LEAD_ADD:[^\]]*\]/gi,'').replace(/\[LEAD_UPDATE:[^\]]*\]/gi,'').replace(/\[LEAD_LOG:[^\]]*\]/gi,'')
