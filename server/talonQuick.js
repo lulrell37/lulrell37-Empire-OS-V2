@@ -18,6 +18,14 @@
 //   5. TARGET: his brain confirms the setup and picks the next 5m/15m level —
 //      at least 1.5R (else no trade), capped at 3R. Stop goes to break-even at
 //      +1R. Otherwise held to stop or target, like everything else.
+//   6. ENTRY back at the zone, not the confirmation close: by the time the
+//      rejection bar closes, price has often run. So unless it's still sitting
+//      at the 5m EMA20 (within 0.15 ATR), the order is a LIMIT at the EMA20
+//      (limitPlan), the stop where rule 4 put it (floored again from the better
+//      price) and R measured from the limit. It rests up to 3 bars (15 min) and
+//      is cancelled if it hasn't filled, or if price reaches the target or the
+//      stop first. It goes in the journal and the alert when it fills
+//      (pendingTick; app_settings.talon_quick_pending).
 //
 // The filter is code (no AI cost); the brain is called only when it fires.
 // Limits: one 0.02 position, one quick scalp open per market at a time, never
@@ -26,10 +34,11 @@
 // (data releases). Two quick losses in a row on a market → 1 hour off it;
 // three in a day → done there for the day. No add-ons, no doubling, and they
 // don't count toward MAX_PAIRS. TALON_QUICK=off stops it.
-const { tlHistory, tlQuote, tlSnapshot, tlFormatSnapshot, tlPlaceOrder, tlModifyPosition, summarizeBars, MAX_QTY } = require('./tradeLocker');
+const { tlHistory, tlQuote, tlSnapshot, tlFormatSnapshot, tlPlaceOrder, tlModifyPosition, tlCancelOrder, tlOrderState, summarizeBars, MAX_QTY } = require('./tradeLocker');
 const { allTrades, recordTradeOpen, TRADER_ID } = require('./tradeJournal');
 const { upsertSyncRow, saveMemory, getSetting, setSetting } = require('./syncStore');
-const { tradeOpened, orderRejected } = require('./talonAlerts');
+const alerts = require('./talonAlerts');
+const { orderRejected } = alerts;
 const { claudeText } = require('./llm');
 const { SYMBOLS } = require('./talonBrain');
 const { analyzeStructure, formatTimeframe } = require('./marketStructure');
@@ -41,6 +50,8 @@ const STOP = {
 };
 const ROUND = { XAUUSD: 10, BTCUSD: 1000 }; // round numbers that act as levels
 const MIN_R = 1.5, MAX_R = 3, BE_AT_R = 1;
+const AT_ZONE_ATR = 0.15; // within this of the EMA20, the market price is already the zone
+const LIMIT_BARS = 3;      // a limit rests this many 5m bars, then it's cancelled
 const CRYPTO = /^(BTC|ETH|SOL|XRP|LTC|DOGE|ADA|BNB)/;
 
 let lastRun = null; // surfaced by GET /trade/status
@@ -148,6 +159,81 @@ function findSetup({ sym, bars5, s15, s1h, quote }) {
   return { side: dir > 0 ? 'buy' : 'sell', dir, entry: +px.toFixed(2), dist, stopLoss: +(px - dir * dist).toFixed(2), atr, ema: E, swingHi, zone: far };
 }
 
+// Rule 6: where the order goes. Already at the EMA20 → market at the quote.
+// Otherwise a limit at the EMA20, the stop kept beyond the zone (pushed out to
+// the floor if the better price brought it too close) and the target re-checked
+// for 1.5R and capped at 3R from the limit. Returns { limit|null, entry,
+// stopLoss, dist, takeProfit } or { skip }.
+function limitPlan({ sym, setup, takeProfit }) {
+  const { dir, entry: px, stopLoss, atr, ema: E } = setup;
+  const cfg = STOP[sym] || STOP.BTCUSD;
+  const away = (px - E) * dir;
+  let limit = null, entry = px, stop = stopLoss;
+  if (away > AT_ZONE_ATR * atr) {
+    limit = +E.toFixed(2); entry = limit;
+    if ((entry - stop) * dir < cfg.floor(entry)) stop = +(entry - dir * cfg.floor(entry)).toFixed(2);
+  }
+  const dist = (entry - stop) * dir;
+  if (!(dist > 0)) return { skip: 'stop not below the entry' };
+  let tp = Number(takeProfit);
+  if (!isFinite(tp) || (tp - entry) * dir < MIN_R * dist - 1e-9) return { skip: `target ${takeProfit} under ${MIN_R}R` };
+  if ((tp - entry) * dir > MAX_R * dist) tp = +(entry + dir * MAX_R * dist).toFixed(2);
+  return { limit, entry, stopLoss: stop, dist, takeProfit: tp };
+}
+
+async function loadPending() {
+  const raw = await getSetting('talon_quick_pending', '[]').catch(() => '[]');
+  try { const l = Array.isArray(raw) ? raw : JSON.parse(raw || '[]'); return Array.isArray(l) ? l : []; } catch { return []; }
+}
+const savePending = (list) => setSetting('talon_quick_pending', JSON.stringify(list));
+
+// Every tick: each resting quick limit is filled (→ journal + alert), gone, or
+// still waiting — cancelled once it's had its 3 bars, or once price has hit the
+// target or the stop without it (the move happened without us).
+async function pendingTick() {
+  const list = await loadPending();
+  if (!list.length) return list;
+  const keep = [];
+  for (const p of list) {
+    const dir = p.side === 'buy' ? 1 : -1;
+    let st;
+    try { st = await tlOrderState(p.orderId); } catch (e) { console.error(`talon-quick: limit ${p.orderId} check failed —`, e.message); keep.push(p); continue; }
+    if (st.state === 'filled') {
+      const entry = st.avgPrice ?? p.limit;
+      await recordTradeOpen({ symbol: p.sym, side: p.side, qty: p.qty, entry, stopLoss: p.stopLoss, takeProfit: p.takeProfit, rationale: p.rationale,
+        orderId: p.orderId, setup: 'quick', auto: true, setupId: p.setupId, alert: false }).catch(() => {});
+      alerts.tradeOpened({ symbol: p.sym, side: p.side, qty: p.qty, entry, stopLoss: p.stopLoss, takeProfit: p.takeProfit, rationale: p.rationale, setup: 'quick', limitFilled: true });
+      await saveMemory(TRADER_ID, `[quick scalp] limit filled ${p.side} ${p.sym} @ ${entry} · SL ${p.stopLoss} TP ${p.takeProfit} — ${p.rationale}`).catch(() => {});
+      await logQuick(p.sym, p.side, `LIMIT FILLED @ ${entry} · SL ${p.stopLoss} · TP ${p.takeProfit}`);
+      console.log(`talon-quick: limit ${p.side} ${p.sym} filled @ ${entry}`);
+      continue;
+    }
+    if (st.state === 'gone') {
+      await logQuick(p.sym, p.side, `limit @ ${p.limit} ended unfilled (${st.status})`);
+      alerts.limitEnded({ symbol: p.sym, side: p.side, limit: p.limit, why: `the broker shows it ${String(st.status).toLowerCase()}, unfilled` });
+      continue;
+    }
+    let why = Date.now() >= p.expiresAt ? `not filled in ${LIMIT_BARS} bars` : null;
+    if (!why) {
+      const q = await tlQuote(p.sym).catch(() => null);
+      const px = Number(q?.mid);
+      if (isFinite(px) && (px - p.takeProfit) * dir >= 0) why = `price reached the target ${p.takeProfit} without it`;
+      else if (isFinite(px) && (p.stopLoss - px) * dir >= 0) why = `price hit the stop ${p.stopLoss} before it filled`;
+    }
+    if (!why) { keep.push(p); continue; }
+    try { await tlCancelOrder(p.orderId); }
+    catch (e) {
+      // It may have filled in the meantime: look again next tick rather than lose it.
+      console.error(`talon-quick: cancel ${p.orderId} failed —`, e.message); keep.push(p); continue;
+    }
+    await logQuick(p.sym, p.side, `limit @ ${p.limit} cancelled — ${why}`);
+    alerts.limitEnded({ symbol: p.sym, side: p.side, limit: p.limit, why: `cancelled, ${why}` });
+    console.log(`talon-quick: limit ${p.side} ${p.sym} @ ${p.limit} cancelled — ${why}`);
+  }
+  await savePending(keep).catch((e) => console.error('talon-quick: pending save failed —', e.message));
+  return keep;
+}
+
 // Rule 5: his brain looks at the setup the filter found and picks the target.
 async function confirm({ sym, setup, snapText, bars5 }) {
   const { side, entry, dist, stopLoss, atr, ema: E, swingHi } = setup;
@@ -199,10 +285,13 @@ async function quickTick({ marketOpen }) {
   const trades = await allTrades();
   const mine = trades.filter((t) => t.auto && t.setup === 'quick');
   await manage(mine.filter((t) => t.status === 'open')).catch((e) => console.error('talon-quick: manage failed —', e.message));
+  const pending = await pendingTick().catch((e) => { console.error('talon-quick: pending check failed —', e.message); return []; });
   const out = {};
   for (const sym of SYMBOLS) {
-    const why = sessionOk(sym, marketOpen)
+    const resting = pending.find((p) => p.sym === sym);
+    const why = (resting ? `a quick limit ${resting.side} @ ${resting.limit} is waiting to fill` : null)
       || (mine.some((t) => t.status === 'open' && t.symbol === sym) ? 'a quick scalp is already open' : null)
+      || sessionOk(sym, marketOpen)
       || discipline(sym, mine);
     if (why) { out[sym] = why; continue; }
     try {
@@ -215,17 +304,29 @@ async function quickTick({ marketOpen }) {
       const snap = await tlSnapshot(sym);
       const dec = await confirm({ sym, setup, snapText: tlFormatSnapshot(snap), bars5 });
       if (dec.action !== 'enter') { out[sym] = `filter fired, brain passed — ${dec.rationale || 'no reason given'}`; await logQuick(sym, setup.side, out[sym]); console.log(`talon-quick: ${sym} ${setup.side} passed — ${dec.rationale || ''}`); continue; }
-      const { dir, entry, dist, stopLoss } = setup;
-      let tp = Number(dec.takeProfit);
-      if (!isFinite(tp) || (tp - entry) * dir < MIN_R * dist - 1e-9) { out[sym] = `target ${dec.takeProfit} under ${MIN_R}R — skipped`; await logQuick(sym, setup.side, out[sym]); continue; }
-      if ((tp - entry) * dir > MAX_R * dist) tp = +(entry + dir * MAX_R * dist).toFixed(2);
+      const plan = limitPlan({ sym, setup, takeProfit: dec.takeProfit });
+      if (plan.skip) { out[sym] = `${plan.skip} — skipped`; await logQuick(sym, setup.side, out[sym]); continue; }
+      const { dir } = setup;
+      const { entry, dist, stopLoss, takeProfit: tp, limit } = plan;
       const rationale = `quick 5m — ${dec.rationale || 'EMA20 pullback rejection'}`.slice(0, 400);
       let s;
-      try { s = await tlPlaceOrder({ symbol: sym, side: setup.side, qty: MAX_QTY, stopLoss, takeProfit: tp, minStop: false }); }
+      try { s = await tlPlaceOrder({ symbol: sym, side: setup.side, qty: MAX_QTY, stopLoss, takeProfit: tp, minStop: false, limitPrice: limit }); }
       catch (e) { orderRejected({ symbol: sym, side: `${setup.side} (quick scalp)`, error: e.message }); out[sym] = `order rejected — ${e.message}`; await logQuick(sym, setup.side, out[sym]); continue; }
+      if (limit != null) {
+        // Rests at the zone; the journal and the alert wait for the fill (pendingTick).
+        const list = await loadPending();
+        list.push({ orderId: s.orderId, sym, side: s.side, qty: s.qty, limit, stopLoss, takeProfit: tp, rationale,
+          setupId: `${sym}-q-${Date.now()}`, placedAt: Date.now(), expiresAt: Date.now() + LIMIT_BARS * BAR - 30e3 });
+        await savePending(list).catch(() => {});
+        console.log(`talon-quick: LIMIT ${s.side.toUpperCase()} ${s.qty} ${sym} @ ${limit} (close was ${setup.entry}) · SL ${stopLoss} TP ${tp} (${((tp - entry) * dir / dist).toFixed(1)}R) — ${dec.rationale || ''}`);
+        out[sym] = `limit ${s.side} @ ${limit} placed (close was ${setup.entry})`;
+        await logQuick(sym, s.side, `LIMIT @ ${limit} (close ${setup.entry}) · SL ${stopLoss} · TP ${tp} · ${LIMIT_BARS} bars to fill`);
+        alerts.limitPlaced({ symbol: sym, side: s.side, qty: s.qty, limit, marketPrice: setup.entry, stopLoss, takeProfit: tp, rationale, minutes: LIMIT_BARS * 5 });
+        continue;
+      }
       await recordTradeOpen({ symbol: sym, side: s.side, qty: s.qty, entry, stopLoss, takeProfit: tp, rationale, orderId: s.orderId,
         setup: 'quick', auto: true, setupId: `${sym}-q-${Date.now()}`, alert: false }).catch(() => {});
-      tradeOpened({ symbol: sym, side: s.side, qty: s.qty, entry, stopLoss, takeProfit: tp, rationale, setup: 'quick' });
+      alerts.tradeOpened({ symbol: sym, side: s.side, qty: s.qty, entry, stopLoss, takeProfit: tp, rationale, setup: 'quick' });
       await saveMemory(TRADER_ID, `[quick scalp] opened ${s.side} ${sym} @ ~${entry} · SL ${stopLoss} TP ${tp} — ${rationale}`).catch(() => {});
       console.log(`talon-quick: ${s.side.toUpperCase()} ${s.qty} ${sym} @ ~${entry} · SL ${stopLoss} TP ${tp} (${((tp - entry) * dir / dist).toFixed(1)}R) — ${dec.rationale || ''}`);
       out[sym] = `entered ${s.side} @ ~${entry}`;
@@ -236,4 +337,4 @@ async function quickTick({ marketOpen }) {
   return out;
 }
 
-module.exports = { quickTick, findSetup, quickLogText, status: () => lastRun };
+module.exports = { quickTick, findSetup, limitPlan, pendingTick, quickLogText, status: () => lastRun };

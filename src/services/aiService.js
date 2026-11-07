@@ -1,4 +1,4 @@
-import{emotionFor,isFlat,stripCues,cuedFor,ARA_VOICE,ARA_SCRIPT,speakNames}from './voiceCues';
+import{emotionFor,isFlat,stripCues,cuedFor,ARA_VOICE,ARA_SCRIPT,ARA_LONG_CHARS,araLongHint,speakNames}from './voiceCues';
 import{loadKeys,loadBackend,loadGoogleToken}from './keyStore';
 import{getPersonaMemory,getMemoriesByPersona,savePersonaMemory,getHudState,getTasks,trackApiUsage,getCustomPrompt,getUpcomingDates,getSetting}from './database';
 import*as FileSystem from 'expo-file-system';
@@ -837,10 +837,10 @@ export async function araSpokenScript(text,{userText='',convo=''}={},signal=null
     // Who's who: a report she's passing on belongs to whoever it opens with.
     const team=PERSONA_LIST.filter(x=>x.id!=='ara').map(x=>` - ${x.name} (${x.id}) — ${x.role}${pronounsOf(x.id)?` · ${pronounsOf(x.id)}`:''}`).join('\n');
     const sys=`${ARA_VOICE}\n\n${base}\n\n[THE TEAM, for who's who and their pronouns:\n${team}\n]\n\n${ARA_SCRIPT}`;
-    const user=(convo?`Recent conversation:\n${convo}\n\n`:'')+(userText?`Mr. Burrus just said: "${userText}"\n\n`:'')+`What you want to get across (notes, not a script):\n${cuedFor(text)}`;
+    const user=(convo?`Recent conversation:\n${convo}\n\n`:'')+(userText?`Mr. Burrus just said: "${userText}"\n\n`:'')+araLongHint(text)+`What you want to get across (notes, not a script):\n${cuedFor(text)}`;
     const out=await withGrokRoutes(k?.grok,async({base:url,auth})=>{
       const res=await fetch(url+'/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json',...auth},signal,
-        body:JSON.stringify({model:'grok-4',max_tokens:1200,messages:[{role:'system',content:sys},{role:'user',content:user}]})});
+        body:JSON.stringify({model:'grok-4',max_tokens:String(text||'').length>ARA_LONG_CHARS?2200:1200,messages:[{role:'system',content:sys},{role:'user',content:user}]})});
       if(!res.ok)throw new Error(`Grok error: ${(await res.text()).substring(0,100)}`);
       const d=await res.json();
       if(d.usage)trackApiUsage('grok',d.usage.prompt_tokens||0,d.usage.completion_tokens||0).catch(()=>{});
@@ -871,7 +871,7 @@ export async function textToSpeech(text,voiceId,personaName,opts={}){
   if(!be&&!k?.elevenlabs){lastTtsFailReason='no ElevenLabs key set (Settings → API Keys → ELEVENLABS)';return null;}
   if(!voiceId){lastTtsFailReason='persona has no voice id configured';return null;}
   // Command tags out (always UPPERCASE); lowercase voice cues stay for v4.
-  const withCues=speakNames(cuedFor(text)).replace(/\[[A-Z][A-Z0-9_]*(?::[^\]]*)?\]/g,'').replace(/[*#`]/g,'').trim().substring(0,2000);
+  const withCues=speakNames(cuedFor(text)).replace(/\[[A-Z][A-Z0-9_]*(?::[^\]]*)?\]/g,'').replace(/[*#`]/g,'').trim().substring(0,opts.maxChars||2000);
   if(!stripCues(withCues))return null;
   const flat=isFlat(personaName);
   const tiers=TTS_LADDER.filter((t,i)=>i===TTS_LADDER.length-1||!ttsRejected.has(t.model))

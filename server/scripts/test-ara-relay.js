@@ -55,6 +55,23 @@ const { ARA_SCRIPT, ARA_VOICE } = require('../araVoice');
     assert.ok(said.startsWith('Message from Talon, Mr. Burrus. my gold call was wrong.'), said);
     assert.ok(said.length < 500 && said.endsWith('The rest is in the message.'), said);
 
+    // A long message: the writer is told to give a very detailed summary, with room for it.
+    const report = `Talon → Ara: here is my full read. ${'Gold held 2,410 and I moved my stop to 2,395. '.repeat(40)}`;
+    let seen;
+    llm.chatAs = async (api, model, sys, msgs, opts) => { seen = { user: msgs[0].content, opts }; return 'Talon walked me through it...'; };
+    await araScript(report, '');
+    assert.match(seen.user, /very detailed summary/);
+    assert.match(seen.user, /long message, about \d+ words/);
+    assert.strictEqual(seen.opts.maxTokens, 2200);
+    await araScript('Talon → Ara: gold hit target.', '');
+    assert.doesNotMatch(seen.user, /very detailed summary|long message/);
+    assert.match(seen.user, /far shorter than this/);
+    assert.strictEqual(seen.opts.maxTokens, 1200);
+    // Both writers down on a long one: the start plus the lines with numbers.
+    llm.chatAs = async () => { throw new Error('down'); };
+    const fb = await araScript(`Talon → Ara: quick note first, nothing major here at all, just context on where things stand today. ${'Nothing new to add on the overnight session so far. '.repeat(10)}\nGold stop moved to 2,395.\nBitcoin target 71,500.`, '');
+    assert.match(fb, /The key points: .*2,395.*71,500/);
+
     // Her own reply: one writer, and voiced as written if it fails.
     calls.length = 0;
     llm.chatAs = async (api) => { calls.push(api); throw new Error('down'); };
@@ -91,6 +108,30 @@ const { ARA_SCRIPT, ARA_VOICE } = require('../araVoice');
       if (realEl === undefined) delete process.env.ELEVENLABS_API_KEY; else process.env.ELEVENLABS_API_KEY = realEl;
       if (realAi !== undefined) process.env.OPENAI_API_KEY = realAi;
     }
+  }
+
+  // A long script is voiced in pieces and joined — never cut off at 4000 characters.
+  {
+    const { voiceNote } = require('../personaVoice');
+    const store = require('../syncStore');
+    const realSetting = store.getSetting, realFetch = global.fetch, realEl = process.env.ELEVENLABS_API_KEY;
+    const sent = [];
+    try {
+      store.getSetting = async (k, d) => d;
+      process.env.ELEVENLABS_API_KEY = 'test';
+      const script = 'This is one sentence of her summary. '.repeat(300); // ~11k chars
+      llm.chatAs = async () => script;
+      global.fetch = async (url, o) => { sent.push(JSON.parse(o.body).text); return { ok: false, status: 500, text: async () => 'stop here' }; };
+      await voiceNote('ara', `Talon → Ara: ${'x '.repeat(800)}`, { relay: true });
+      assert.ok(sent.length >= 1 && sent.every((t) => t.length <= 3800), 'pieces fit the TTS limit');
+    } finally {
+      store.getSetting = realSetting; llm.chatAs = real; global.fetch = realFetch;
+      if (realEl === undefined) delete process.env.ELEVENLABS_API_KEY; else process.env.ELEVENLABS_API_KEY = realEl;
+    }
+    const { ttsChunks } = require('../personaVoice');
+    const pieces = ttsChunks('This is one sentence of her summary. '.repeat(300));
+    assert.ok(pieces.length === 3 && pieces.every((p) => p.length <= 3800 && p.endsWith('.')), 'split on sentence ends');
+    assert.strictEqual(pieces.join(' '), 'This is one sentence of her summary. '.repeat(300).trim());
   }
 
   console.log('ara relay: all passed');

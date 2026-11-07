@@ -568,5 +568,5 @@ module.exports = {
   accessToken, googleLinked, googleStatus, readDriveNote, saveDriveNote, gmailSend,
   gmailList, gmailRead, calendarList, calendarCreate, calendarDelete,
   driveList, driveSearch, driveRead, driveFindByName, driveFile, driveRawText, driveUpdate, driveTrash, sheetCreate,
-  gTasksList, gTaskCreate, gTaskComplete, gTaskDelete, zonedDate,
+  gTasksList, gTaskCreate, gTaskComplete, gTaskDelete, zonedDate, gapi,
 };

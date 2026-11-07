@@ -14,7 +14,7 @@
 // uses the bundled ffmpeg-static binary (same as araVoice.js).
 const { spawn } = require('child_process');
 const ffmpegPath = require('ffmpeg-static');
-const { ARA_VOICE, ARA_SCRIPT, synthesizeAraVoice } = require('./araVoice');
+const { ARA_VOICE, ARA_SCRIPT, synthesizeAraVoice, araLongHint, ARA_LONG_CHARS } = require('./araVoice');
 const { personaVoiceId } = require('./personas');
 
 const { isFlat, stripCues, speakNames } = require('./voiceCues');
@@ -66,33 +66,52 @@ async function toOgg(inputBuffer) {
   });
 }
 
+// ElevenLabs and OpenAI take ~4000 characters a request. Longer text goes in
+// pieces split on sentence ends, and the MP3s are joined into one voice note,
+// so a long summary is never cut off partway.
+const TTS_CHUNK = 3800;
+function ttsChunks(text, max = TTS_CHUNK) {
+  const out = [];
+  let rest = String(text || '').trim();
+  while (rest.length > max) {
+    const head = rest.slice(0, max);
+    let cut = Math.max(head.lastIndexOf('. '), head.lastIndexOf('! '), head.lastIndexOf('? '), head.lastIndexOf('... '), head.lastIndexOf('\n'));
+    if (cut < max / 2) cut = head.lastIndexOf(' ');
+    if (cut < max / 2) cut = max - 1;
+    out.push(rest.slice(0, cut + 1).trim());
+    rest = rest.slice(cut + 1).trim();
+  }
+  if (rest) out.push(rest);
+  return out;
+}
+
 async function elevenLabsOgg(voiceId, text, { flat = false, personaId = '' } = {}) {
   const key = process.env.ELEVENLABS_API_KEY;
   if (!key || !voiceId) return null;
   const tiers = EL_LADDER.filter((t, i) => i === EL_LADDER.length - 1 || !elRejected.has(t.model))
     .map((t) => (flat ? { ...t, cues: false, settings: FLAT_SETTINGS }
       : personaId === 'ara' ? { ...t, settings: ARA_SETTINGS[t.model] || t.settings } : t));
-  for (const tier of tiers) {
-    const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
-      method: 'POST',
-      headers: { 'xi-api-key': key, 'content-type': 'application/json', accept: 'audio/mpeg' },
-      signal: AbortSignal.timeout(60000),
-      body: JSON.stringify({
-        text: (tier.cues ? String(text) : stripCues(text)).slice(0, 4000),
-        model_id: tier.model,
-        voice_settings: tier.settings,
-      }),
-    });
-    if (!res.ok) {
-      const detail = (await res.text()).slice(0, 160);
-      if ((res.status === 400 || res.status === 422) && tier.model !== tiers[tiers.length - 1].model) {
-        console.warn(`elevenlabs: ${tier.model} rejected (${res.status}: ${detail}) — falling back`);
-        elRejected.add(tier.model);
-        continue;
+  tiers: for (const tier of tiers) {
+    const parts = [];
+    for (const piece of ttsChunks(tier.cues ? String(text) : stripCues(text))) {
+      const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
+        method: 'POST',
+        headers: { 'xi-api-key': key, 'content-type': 'application/json', accept: 'audio/mpeg' },
+        signal: AbortSignal.timeout(60000),
+        body: JSON.stringify({ text: piece, model_id: tier.model, voice_settings: tier.settings }),
+      });
+      if (!res.ok) {
+        const detail = (await res.text()).slice(0, 160);
+        if ((res.status === 400 || res.status === 422) && tier.model !== tiers[tiers.length - 1].model) {
+          console.warn(`elevenlabs: ${tier.model} rejected (${res.status}: ${detail}) — falling back`);
+          elRejected.add(tier.model);
+          continue tiers;
+        }
+        throw new Error(`elevenlabs ${res.status}: ${detail}`);
       }
-      throw new Error(`elevenlabs ${res.status}: ${detail}`);
+      parts.push(Buffer.from(await res.arrayBuffer()));
     }
-    const mp3 = Buffer.from(await res.arrayBuffer());
+    const mp3 = Buffer.concat(parts);
     if (mp3.length < 1500) return null;
     return toOgg(mp3);
   }
@@ -105,14 +124,18 @@ const OPENAI_FALLBACK_VOICE = { ara: 'shimmer', selene: 'nova', stephanie: 'cora
 async function openaiOgg(personaId, text) {
   const key = process.env.OPENAI_API_KEY;
   if (!key) throw new Error('OPENAI_API_KEY not set');
-  const res = await fetch('https://api.openai.com/v1/audio/speech', {
-    method: 'POST',
-    headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
-    body: JSON.stringify({ model: 'gpt-4o-mini-tts', voice: OPENAI_FALLBACK_VOICE[personaId] || 'alloy', input: stripCues(text).slice(0, 4000), response_format: 'mp3' }),
-    signal: AbortSignal.timeout(60000),
-  });
-  if (!res.ok) throw new Error(`openai tts ${res.status}: ${(await res.text()).slice(0, 160)}`);
-  return toOgg(Buffer.from(await res.arrayBuffer()));
+  const parts = [];
+  for (const piece of ttsChunks(stripCues(text))) {
+    const res = await fetch('https://api.openai.com/v1/audio/speech', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'gpt-4o-mini-tts', voice: OPENAI_FALLBACK_VOICE[personaId] || 'alloy', input: piece, response_format: 'mp3' }),
+      signal: AbortSignal.timeout(60000),
+    });
+    if (!res.ok) throw new Error(`openai tts ${res.status}: ${(await res.text()).slice(0, 160)}`);
+    parts.push(Buffer.from(await res.arrayBuffer()));
+  }
+  return toOgg(Buffer.concat(parts));
 }
 
 async function primaryOgg(personaId, text, userText) {
@@ -156,28 +179,39 @@ function relayHint(text, loose = false) {
   const [He, him, his] = she ? ['She', 'her', 'her'] : ['He', 'him', 'his'];
   const role = ROSTER[id] ? `, the Empire's ${ROSTER[id].role}` : '';
   const word = id === 'woke' ? ' "Woke" here is his name, not the ordinary word.' : '';
-  return `(These notes are ${who}'s message to you, in ${his.toUpperCase()} words — "I"/"my" means ${who}. ${who} is a separate persona${role}, a ${she ? 'woman' : 'man'} (${she ? 'she/her' : 'he/him'}): not you, not Mr. Burrus, and not any other persona the message mentions.${word} ${He} is talking to you, and you're passing it on to Mr. Burrus as ${his}: "${who} says…", "${she ? 'she' : 'he'}…". Not as yours, and not as if Mr. Burrus said it. Keep ${him} as the one speaking throughout. Don't read it out: you've read it, now tell him about it in your own sentences and your own order, what matters first, far shorter than this. He gets the full message as text.)\n\n`;
+  return `(These notes are ${who}'s message to you, in ${his.toUpperCase()} words — "I"/"my" means ${who}. ${who} is a separate persona${role}, a ${she ? 'woman' : 'man'} (${she ? 'she/her' : 'he/him'}): not you, not Mr. Burrus, and not any other persona the message mentions.${word} ${He} is talking to you, and you're passing it on to Mr. Burrus as ${his}: "${who} says…", "${she ? 'she' : 'he'}…". Not as yours, and not as if Mr. Burrus said it. Keep ${him} as the one speaking throughout. Don't read it out: you've read it, now tell him about it in your own sentences and your own order, what matters first, ${String(text || '').length > ARA_LONG_CHARS ? 'as a very detailed summary: every point, every number and name, nothing he needs left out' : 'far shorter than this'}. He gets the full message as text.)\n\n`;
 }
 
 // Her script pass failed on someone else's message: say whose it is and give the
 // start of it, rather than reading the whole thing out as if it were hers.
+// A long one also gets its key lines (the ones with numbers in them), so he
+// still hears the levels and times.
 function relayFallback(text, who) {
   const body = String(text).replace(/^[^A-Za-z]*/, '').replace(new RegExp(`^${who}\\s*(?:→|to)\\s*Ara\\W*`, 'i'), '').trim();
-  const cut = body.length > 400 ? `${body.slice(0, 400).replace(/[^.!?]*$/, '') || body.slice(0, 400)} The rest is in the message.` : body;
-  return `Message from ${who}, Mr. Burrus. ${cut}`;
+  if (body.length <= 400) return `Message from ${who}, Mr. Burrus. ${body}`;
+  const start = body.slice(0, 400).replace(/[^.!?]*$/, '') || body.slice(0, 400);
+  let key = '';
+  for (const line of body.slice(start.length).split(/\n+|(?<=[.!?])\s+/)) {
+    const l = line.replace(/[*#`_•▪️-]+/g, ' ').replace(/\s+/g, ' ').trim();
+    if (!/\d/.test(l) || key.length + l.length > 1200) continue;
+    key += `${/[.!?]$/.test(l) ? l : `${l}.`} `;
+  }
+  return `Message from ${who}, Mr. Burrus. ${start}${key ? ` The key points: ${key.trim()}` : ''} The rest is in the message.`;
 }
 
 async function araScript(text, userText, { relay = false } = {}) {
   const who = relayFrom(text, relay);
+  const long = String(text || '').length > ARA_LONG_CHARS;
   // Capped: Telegram sends her text after the voice note, so a slow script
-  // mustn't hold the reply up — past 25s she just voices the reply as written.
+  // mustn't hold the reply up — past 25s (45s for a long message, which gets a
+  // detailed summary) she voices the reply as written.
   const write = (api, model) => {
     let timer;
-    const timeout = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('script timed out')), 25000); });
+    const timeout = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('script timed out')), long ? 45000 : 25000); });
     return Promise.race([timeout, require('./llm').chatAs(api, model,
       `${ARA_VOICE}\n\nYou are A.R.A. — full personal assistant to Mr. Burrus, sharp and a step ahead; you call him "Mr. Burrus".\n\n[THE TEAM, for who's who and their pronouns:\n${require('./personas').rosterLines()}\n]\n\n${ARA_SCRIPT}`,
-      [{ role: 'user', content: `${userText ? `Mr. Burrus just said: "${String(userText).slice(0, 1500)}"\n\n` : ''}${relayHint(text, relay)}What you want to get across (notes, not a script):\n${text}` }],
-      { maxTokens: 1200, fallback: false })]).finally(() => clearTimeout(timer));
+      [{ role: 'user', content: `${userText ? `Mr. Burrus just said: "${String(userText).slice(0, 1500)}"\n\n` : ''}${relayHint(text, relay)}${araLongHint(text)}What you want to get across (notes, not a script):\n${text}` }],
+      { maxTokens: long ? 2200 : 1200, fallback: false })]).finally(() => clearTimeout(timer));
   };
   const clean = (out) => String(out || '').replace(/\[[A-Z][A-Z0-9_]*(?::[^\]]*)?\]/g, '').replace(/[*#`_]/g, '').trim();
   // Her own reply can be voiced as written. A relay can't, so it gets a second writer.
@@ -231,4 +265,4 @@ async function synthesizePersonaVoice(personaId, replyText, opts = {}) {
   return (await voiceNote(personaId, replyText, opts)).ogg;
 }
 
-module.exports = { synthesizePersonaVoice, voiceNote, tempoArgs, relayHint, relayFrom, araScript };
+module.exports = { synthesizePersonaVoice, voiceNote, tempoArgs, relayHint, relayFrom, araScript, ttsChunks };

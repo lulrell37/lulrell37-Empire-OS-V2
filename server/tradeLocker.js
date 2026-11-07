@@ -306,7 +306,10 @@ async function tlOrdersHistory() {
 // order still fills.
 const roundPx = (m, v) => +Number(v).toFixed(m?.pricePrecision ?? 2);
 
-async function tlPlaceOrder({ symbol = 'XAUUSD', side, qty = MAX_QTY, stopLoss, takeProfit, minStop = true }) {
+// `limitPrice`: a resting limit order at that price (GTC) instead of a market
+// order — quick scalps wait back at the pullback zone rather than buying the
+// confirmation bar's close. Cancel with tlCancelOrder; tlOrderState says when it fills.
+async function tlPlaceOrder({ symbol = 'XAUUSD', side, qty = MAX_QTY, stopLoss, takeProfit, minStop = true, limitPrice = null }) {
   await tlFollowAccount();
   await ensureAccount();
   // The last gate before real money, for every path into here. If the setting
@@ -320,14 +323,17 @@ async function tlPlaceOrder({ symbol = 'XAUUSD', side, qty = MAX_QTY, stopLoss, 
   // Never a trade without a stop — same refusal as the app's tlPlaceOrder.
   if (stopLoss == null || !isFinite(Number(stopLoss))) throw new Error('no stop loss given — every trade needs one');
   const m = await tlInstrument(symbol);
-  const body = { tradableInstrumentId: m.id, routeId: m.tradeRouteId, side, qty: q, type: 'market', validity: 'IOC', price: 0 };
+  const limit = limitPrice != null && isFinite(Number(limitPrice)) && Number(limitPrice) > 0 ? roundPx(m, limitPrice) : null;
+  const body = limit != null
+    ? { tradableInstrumentId: m.id, routeId: m.tradeRouteId, side, qty: q, type: 'limit', validity: 'GTC', price: limit }
+    : { tradableInstrumentId: m.id, routeId: m.tradeRouteId, side, qty: q, type: 'market', validity: 'IOC', price: 0 };
   // Backstop for the main stop rule: a stop closer than the minimum (or on the
   // wrong side) is pushed out to it. Quick scalps and add-ons run their own
   // tighter stops and pass minStop: false.
   let widenedFrom = null;
   if (minStop && stopLoss != null && isFinite(Number(stopLoss))) {
-    const qt = await tlQuote(symbol).catch(() => null);
-    const entry = Number(qt?.mid ?? (side === 'buy' ? qt?.ask : qt?.bid));
+    const qt = limit != null ? null : await tlQuote(symbol).catch(() => null);
+    const entry = limit != null ? limit : Number(qt?.mid ?? (side === 'buy' ? qt?.ask : qt?.bid));
     if (isFinite(entry) && entry) {
       const min = minStopDist(symbol, entry, await tlAtr1H(symbol).catch(() => 0));
       const dir = side === 'buy' ? 1 : -1;
@@ -347,7 +353,48 @@ async function tlPlaceOrder({ symbol = 'XAUUSD', side, qty = MAX_QTY, stopLoss, 
   const j = await api(`/trade/accounts/${session.accountId}/orders`, { method: 'POST', body });
   tlBustPositions();
   if (widenedFrom != null) console.log(`tradelocker: ${symbol} ${side} stop ${widenedFrom} widened to ${stopLoss} (main stop rule)`);
-  return { orderId: j.d?.orderId, qty: q, side, symbol, stopLoss, takeProfit, widenedFrom };
+  return { orderId: j.d?.orderId, qty: q, side, symbol, stopLoss, takeProfit, widenedFrom, limitPrice: limit };
+}
+
+// Resting (unfilled) orders on the account.
+async function tlOrders() {
+  await ensureAccount();
+  const j = await api(`/trade/accounts/${session.accountId}/orders`);
+  const rows = j.d?.orders || [];
+  if (!Array.isArray(rows)) return [];
+  let cols = null;
+  try {
+    const cfg = (await api('/trade/config')).d?.ordersConfig;
+    const arr = Array.isArray(cfg) ? cfg : (cfg?.columns || cfg?.fields);
+    if (Array.isArray(arr) && arr.length) cols = arr.map((c) => String(c.id || c.key || c.name || c));
+  } catch {}
+  cols = cols || HISTORY_COLS_FALLBACK;
+  return rows.map((row) => {
+    if (!Array.isArray(row)) return row;
+    const o = {}; cols.forEach((c, i) => { o[c] = row[i]; });
+    return o;
+  });
+}
+
+async function tlCancelOrder(orderId) {
+  await ensureAccount();
+  await api(`/trade/orders/${orderId}`, { method: 'DELETE' });
+  tlBustPositions();
+  return { cancelled: orderId };
+}
+
+// A limit order's state: still resting ('pending'), 'filled' (with the fill
+// price and position), or 'gone' (cancelled, expired or rejected unfilled).
+async function tlOrderState(orderId) {
+  const id = String(orderId);
+  const resting = await tlOrders();
+  if (resting.some((o) => String(o.id) === id)) return { state: 'pending' };
+  const row = (await tlOrdersHistory()).find((o) => String(o.id) === id);
+  if (!row) return { state: 'pending' }; // not in history yet; look again next tick
+  const filled = Number(row.filledQty) > 0 || /fill/i.test(String(row.status || ''));
+  if (!filled) return { state: 'gone', status: String(row.status || 'unknown') };
+  const px = Number(row.avgPrice);
+  return { state: 'filled', avgPrice: isFinite(px) && px ? px : null, positionId: row.position != null ? String(row.position) : null };
 }
 
 async function tlClosePosition(positionId, qty = 0) {
@@ -463,6 +510,6 @@ function tlFormatSnapshot(snap) {
 module.exports = {
   MAX_QTY, ENTRY_COPIES, entryCopies, minStopDist, tlAtr1H,
   tlConnect, tlStatus, tlAccountState, tlListInstruments, tlInstrumentsById, tlInstrument,
-  tlQuote, tlHistory, tlPositions, tlOrdersHistory, tlPlaceOrder, tlClosePosition, tlModifyPosition,
+  tlQuote, tlHistory, tlPositions, tlOrdersHistory, tlPlaceOrder, tlClosePosition, tlModifyPosition, tlOrders, tlCancelOrder, tlOrderState,
   tlReset, tlActiveEnv, tlAccountLine, tlFollowAccount, tlSnapshot, tlFormatSnapshot, summarizeBars,
 };

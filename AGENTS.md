@@ -59,10 +59,16 @@ words stored in her history or memory are labeled as his (a T.A.L.O.N. reply
 saved under the owner's message was being read back as the owner's).
 
 She also doesn't read a relay out on her ElevenLabs voice: she catches him up on it
-in her own sentences, far shorter, because the full message is in the chat. Alerts
+in her own sentences, because the full message is in the chat. Short messages stay
+short; anything over `ARA_LONG_CHARS` (1200 characters, relay or her own reply) gets a
+very detailed summary instead — every point, number, level, name and time, ending with
+what he has to act on, up to ~550 words (`araLongHint`, in both `ARA_SCRIPT` copies;
+more script tokens and time for those). Long audio is voiced in sentence-split pieces
+joined into one note (`ttsChunks`), never cut off at the TTS limit; the app allows
+A.R.A.'s script 4000 characters. Alerts
 from the desks (`sendFromAra`, `relay: true`) count as relays when a persona is named
 on their first line. If Grok can't write the script, Claude does; if neither can, she
-says whose message it is and gives only the start (`relayFallback`). `node server/scripts/test-ara-relay.js` covers this.
+says whose message it is and gives the start, plus the lines with numbers on a long one (`relayFallback`). `node server/scripts/test-ara-relay.js` covers this.
 
 ## A.R.A. LIVE — realtime duplex voice (`src/services/realtimeVoice.js`)
 
@@ -228,7 +234,7 @@ low — never while price is still falling away from the TP; a new best price re
 one 0.02 position (`setup: 'add'`, `add_level`, not doubled by `ENTRY_COPIES`)
 that takes profit 1R past its entry, with the stop one step behind the armed step (first add's stop = the setup's entry), no
 cap on adds per setup, never within 1R of the target. It runs on every 5-min tick, with no AI calls.
-**Setups' bias is 4H + 1H** (`STRATEGY` rule 1). Rule 10 reads the 1D: a setup
+**Setups' location is checked in code** (`entryLocation` in `server/talonBrain.js`, run before `guardStop`): the price he'd actually get has to be within 0.5× the 1H ATR14 (`LOCATION_ATR`) of 1H value in the bias direction — the SMA20, a level broken that way (BOS/CHoCH retest), the dealing-range edge or OTE, or an unfilled FVG / order block / breaker pointing that way — or the "enter" is refused as a chase and logged in the cycle's decisions. News trades don't go through it. **Setups' bias is 4H + 1H** (`STRATEGY` rule 1). Rule 10 reads the 1D: a setup
 against the daily trend must be called a `"daily":"reversal"` by his brain to
 keep its swing — otherwise it's a pullback and goes in scalp-only (2R),
 enforced in `talonAutoTrade.js`. His market updates say with / pullback / reversal.
@@ -239,7 +245,7 @@ fire and its outcome is logged to `app_settings.talon_quick_log`, read with
 bar) and only when it fires one AI call to confirm and pick the target (1.5R min, capped at 3R).
 Stop beyond the key level, sized for the 5m: past the zone (5-bar swing, 5m EMA20, a round number
 with them) + one 5m ATR, min gold $3 / Bitcoin 0.3%; over gold $8 / Bitcoin 0.8% → skip; stop to
-break-even at +1R. One 0.02 position (`setup: 'quick'`), one open per
+break-even at +1R. Entry is back at the zone, not the confirmation close: unless price is still within 0.15 ATR of the 5m EMA20, the order is a GTC limit at the EMA20 (`limitPlan`; stop floored again from that price, R measured from it), resting 3 bars and cancelled if unfilled or if price reaches the target or stop first (`pendingTick`, `app_settings.talon_quick_pending`, `tlOrderState` / `tlCancelOrder` in `server/tradeLocker.js`); A.R.A. tells him when one goes in (`limitPlaced`), when it ends unfilled (`limitEnded`) and when it fills (`tradeOpened`, `limitFilled`); it's journaled only on the fill, and a resting one counts as that market's open quick scalp. One 0.02 position (`setup: 'quick'`), one open per
 market, never against an open position there; gold 3 AM-12 PM ET only, both off 8:25-8:45 AM ET
 weekdays; 2 quick losses in a row → 1 h off that market, 3 in a day → done for the day. No add-ons,
 not doubled, not counted in `MAX_PAIRS`, skipped by the near-stop watch.
@@ -257,7 +263,7 @@ be removed. Account switching: `POST /trade/creds` also keeps one login per
 type (`trade_creds` rows 2 = demo, 3 = live; row 1 = last pushed), and the
 synced `talon_account` setting picks which one `loadTradeCreds` uses (a new or
 changed login from the app makes itself active; the app re-posting the same
-login on start doesn't). `[TRADE_ACCOUNT]` sets `talon_account` + `talon_live`. Going to demo runs at once from either account, with no Confirm card, and A.R.A. can emit it herself; it disarms `talon_live` first. His login can work on both sides, so with none saved for that side `account()` tries the one we have (the env picks the server, so a login tried on demo can't reach live) and drops it if it fails, in which case he stops rather than staying live. Both `tlPlaceOrder`s refuse a live order unless armed, `tlFollowAccount` picks up a choice that arrived through sync, and the app's `[TRADE_ACCOUNT: demo]` writes those two settings. Open trades on the account he left are listed in `app_settings.talon_parked_trades`; `allTrades` hides them until he's back there (they aren't visible from the other account and would otherwise be booked as closed), and they keep only their broker stop and target meanwhile. `tlAccountLine` is the one statement of which account he's on, read from the saved login and settings (the session reads 'demo' until its first login): it goes in A.R.A.'s and his prompt every turn (`accountFact`), `[TRADE_POSITIONS]` and, as words, his brain's prompts, so no prompt hard-codes demo. `node server/scripts/test-account-switch.js` covers this.
+login on start doesn't). `[TRADE_ACCOUNT]` sets `talon_account` + `talon_live`. Going to demo runs at once from either account, with no Confirm card, and A.R.A. can emit it herself; it disarms `talon_live` first. His login can work on both sides, so with none saved for that side `account()` tries the one we have (the env picks the server, so a login tried on demo can't reach live) and drops it if it fails, in which case he stops rather than staying live. Both `tlPlaceOrder`s refuse a live order unless armed, `tlFollowAccount` picks up a choice that arrived through sync, and the app's `[TRADE_ACCOUNT: demo]` writes those two settings. Open trades on the account he left are listed in `app_settings.talon_parked_trades`; `allTrades` hides them until he's back there (they aren't visible from the other account and would otherwise be booked as closed), and they keep only their broker stop and target meanwhile. `tlAccountLine` is the one statement of which account he's on, read from the saved login and settings (the session reads 'demo' until its first login): it goes in A.R.A.'s and his prompt every turn (`accountFact`), `[TRADE_POSITIONS]` and, as words, his brain's prompts, so no prompt hard-codes demo. `node server/scripts/test-account-switch.js` covers this. `node server/scripts/test-talon-entries.js` covers the location gate and the quick-scalp limits.
 **Live account:** demo by default; Settings › Trading › LIVE TRADING (needs a
 connected live TradeLocker login, confirm dialog) writes `talon_live` = `1`
 (synced), which lets the auto-trade loop and W.I.R.E.'s news trades place
@@ -364,6 +370,25 @@ Without them the brief says so rather than estimating. Tags: `[INSTAGRAM_WATCH]`
 retrying to 2 PM until one succeeds: 5 talking heads in `SCRIBE_VOICE` off her
 latest brief, filed as `Script — <title>`. A.R.A. only says they came in, with links; she doesn't
 read them out. `[MONDAY_SCRIPTS]` runs it now. `node server/scripts/test-desks.js` checks the rules behind all three.
+
+## S.T.E.P.H.A.N.I.E.'s course (`server/stephanieCourse.js`)
+
+She teaches his "Learning Everything" roadmap (a Google Doc of `[ ] Week N: Topic`
+lines, 1736 weeks) one week at a time. A course is a Drive note `Course — Week N:
+Topic` listing every lesson under that topic as a checklist (lessons written by one
+Claude call when it starts); the note is the tracker. She asks at the end of each
+lesson whether it's complete and only on his yes emits `[LESSON_DONE: n|name]`; when
+the last one is checked she asks if the topic is done, and on his yes `[COURSE_DONE]`
+(refused while any lesson is unchecked) ticks the week in the roadmap and picks the
+next week **at random** from the weeks not done, with its own note. `[COURSE_START]`
+(random, or `: N`), `[LESSON_UNDO]`, `[ROADMAP_CHECK: N]` / `[ROADMAP_UNCHECK: N]`,
+`[COURSE_STATUS]` (A.R.A. can read it too). Checks need the owner's own message that
+turn (`courseTag` in `server/personaRuntime.js`). Roadmap ticks edit the Doc in place
+via the Docs API `replaceAllText` (formatting kept; the existing `drive` scope covers
+it). State: `app_settings.stephanie_course` + `stephanie_done_weeks` (done = ticked in
+the roadmap or in that list). Her Telegram prompt carries the live course every turn;
+A.R.A.'s morning brief has a WHERE YOU LEFT OFF section (`briefSection`). Telegram
+only — the app's chat with her doesn't run these tags. `node server/scripts/test-stephanie-course.js`.
 
 ## W.O.K.E. (`server/wokeRead.js`, `WOKE_READ=off` to stop)
 

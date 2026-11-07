@@ -6,7 +6,7 @@
 // process instead of a memory-only session that resets on every cold app open).
 const { getSetting, setSetting, saveMemory } = require('./syncStore');
 const { tlStatus, tlConnect, tlFollowAccount, tlActiveEnv, tlSnapshot, tlFormatSnapshot, tlPlaceOrder, tlModifyPosition, tlPositions, tlInstrumentsById, tlQuote, MAX_QTY, entryCopies } = require('./tradeLocker');
-const { autoTradeDecision, guardStop, SYMBOLS } = require('./talonBrain');
+const { autoTradeDecision, guardStop, entryLocation, SYMBOLS } = require('./talonBrain');
 const { reconcileOpenTrades, formatTradeRecord, recordTradeOpen, allTrades, TRADER_ID } = require('./tradeJournal');
 const { orderRejected, araNote, tradeOpened, addedOn } = require('./talonAlerts');
 const { pushAlert } = require('./pushSender');
@@ -150,6 +150,9 @@ async function tick({ force = false } = {}) {
           dec.swingTakeProfit = undefined;
         }
         if (against1D) decisions.push(`${sym}: against the daily ${d1} trend — ${pullback ? 'read as a PULLBACK, scalp only' : 'read as a REVERSAL, full pair'}`);
+        // Rule 2, enforced: the price he'd get has to be at 1H value, not mid-move.
+        const loc = entryLocation({ side: dec.side, entry: price, snap });
+        if (loc.skip) { console.log(`talon-autotrade: refused ${sym} ${dec.side} — ${loc.skip}`); decisions.push(`${sym}: refused — ${loc.skip}`); continue; }
         const lv = guardStop({ symbol: sym, side: dec.side, entry: price, stopLoss: dec.stopLoss, takeProfit: dec.takeProfit, swingTakeProfit: dec.swingTakeProfit, snap });
         if (lv.skip) { console.log(`talon-autotrade: skipped ${sym} ${dec.side} — ${lv.skip}`); decisions.push(`${sym}: skipped — ${lv.skip}`); continue; }
         if (lv.widened) console.log(`talon-autotrade: ${sym} ${lv.note}`);

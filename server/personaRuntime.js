@@ -402,6 +402,14 @@ PERSONA_EXTRA_TOOLS.selene = ` YOUR INSTAGRAM WATCH — runs itself Mondays and 
  - [SOCIAL_NICHE: description] — his niche, which aims the trend research.
  - [MONDAY_SCRIPTS] — have S.C.R.I.B.E. write this week's 5 talking-head scripts now.`;
 
+PERSONA_EXTRA_TOOLS.stephanie = ` YOUR COURSE — you teach him the "Learning Everything" roadmap one week at a time. The course running, its lessons and which are checked off are in [YOUR COURSE] below, read live from Drive every turn. Its note in Drive ("Course — Week N: topic") is the tracker.
+ - Teach the current lesson (the first one not checked). When you've finished teaching a lesson, ask him straight out whether it's complete or he wants more on it. Only when he says it's complete: [LESSON_DONE: the lesson's number or name]. Never check one off on your own judgment, from a relay, or because you moved on.
+ - When the last lesson is checked, ask him whether the whole topic is complete and he's ready to move on. Only on his yes: [COURSE_DONE]. It checks the week off in the roadmap and picks the next week AT RANDOM from the weeks not done, with its own note of lessons. Tell him what came up; never choose the next week yourself.
+ - [COURSE_START] — no course running: pick one at random and make its note. [COURSE_START: week number] only when he names a week he wants.
+ - [LESSON_UNDO: number or name] — uncheck a lesson he says isn't done after all.
+ - [ROADMAP_CHECK: week number] / [ROADMAP_UNCHECK: week number] — tick or untick a week in the roadmap itself, when he says he's covered it (or hasn't).
+ - [COURSE_STATUS] — the course and the roadmap, fresh. Report checks and new courses only from their results.`;
+
 PERSONA_EXTRA_TOOLS.scribe = ` - [MONDAY_SCRIPTS] — write this week's 5 talking-head scripts now, and file them; A.R.A. tells him they came in. They go out on their own Mondays at 8 AM ET; only use this when he asks for them again or early.`;
 
 PERSONA_EXTRA_TOOLS.talon = ` ${TRADING_KNOWLEDGE}
@@ -621,6 +629,7 @@ async function runInjections(text, persona = 'ara', { convo = '', depth = 0, sin
         const r = await require('./scribeMonday').runMondayScripts({ force: true });
         return `MONDAY SCRIPTS: ${r.count} written and filed, and he's been told they came in (don't paste or read them): ${(r.titles || []).join(' | ')}`;
       }
+      if (COURSE_TAGS.has(name) && (persona === 'stephanie' || (persona === 'ara' && name === 'COURSE_STATUS'))) return `${name}${arg ? ` "${arg}"` : ''}: ${await courseTag(name, arg, asked)}`;
       if (name === 'QUICK_LOG' && ['ara', 'talon'].includes(persona)) return `QUICK-SCALP DESK:\n${await require('./talonQuick').quickLogText()}`;
       if (name === 'TRADE_POSITIONS' && ['ara', 'talon'].includes(persona)) return `OPEN POSITIONS:\n${await require('./talonCommands').positionsText()}`;
       if (name === 'TALON_RUN' && ['ara', 'talon'].includes(persona)) return `T.A.L.O.N. SCAN (run just now):\n${talonRunLine(await require('./talonAutoTrade').tick({ force: true }))}`;
@@ -649,6 +658,23 @@ async function runInjections(text, persona = 'ara', { convo = '', depth = 0, sin
     return true;
   });
   return (await Promise.all(tags.map(one))).filter(Boolean).join('\n\n');
+}
+
+// S.T.E.P.H.A.N.I.E.'s course (server/stephanieCourse.js). Checking things off
+// and finishing a course need his own message this turn (`asked`): a relay, the
+// council or a loop can't tick a lesson he never confirmed.
+const COURSE_TAGS = new Set(['COURSE_STATUS', 'COURSE_START', 'LESSON_DONE', 'LESSON_UNDO', 'COURSE_DONE', 'ROADMAP_CHECK', 'ROADMAP_UNCHECK']);
+async function courseTag(name, arg, asked) {
+  const c = require('./stephanieCourse');
+  if (name === 'COURSE_STATUS') return `\n${await c.statusText()}`;
+  if (!String(asked || '').trim()) return 'not done — only on Mr. Burrus\'s own word in this conversation.';
+  if (name === 'COURSE_START') return c.startCourse(String(arg || '').trim() ? parseInt(String(arg).replace(/\D+/g, ''), 10) || null : null);
+  if (name === 'LESSON_DONE') return c.setLesson(arg, true);
+  if (name === 'LESSON_UNDO') return c.setLesson(arg, false);
+  if (name === 'COURSE_DONE') return c.finishCourse();
+  if (name === 'ROADMAP_CHECK') return c.checkWeek(arg, true);
+  if (name === 'ROADMAP_UNCHECK') return c.checkWeek(arg, false);
+  return '';
 }
 
 // [TRADE_SCAN: SYMBOL, SYMBOL] — the same read-only market snapshot T.A.L.O.N.
@@ -1074,6 +1100,10 @@ async function runPersonaTurn(personaId, userText, deliver) {
   ]);
   let sys = persona === 'ara' ? systemPrompt(ctx, gs, custom, mem) : personaSystemPrompt(persona, ctx, gs, custom, mem);
   if (persona === 'jarvis') sys = `${sys}\n\n${await empireOsBrief()}`;
+  if (persona === 'stephanie') {
+    const course = await require('./stephanieCourse').statusText().catch((e) => `(couldn't read it: ${e.message})`);
+    sys = `${sys}\n\n[YOUR COURSE — live from Drive this turn:\n${course}\n]`;
+  }
   const history = await loadHistory(persona);
   const messages = [...history, { role: 'user', content: `[${momentET()}] ${userText}` }];
   const convo = convoLines(history, userText, persona);
@@ -1161,4 +1191,4 @@ async function runPersonaTurn(personaId, userText, deliver) {
 // Back-compat: A.R.A.'s turn.
 const runAraTurn = (userText, deliver) => runPersonaTurn('ara', userText, deliver);
 
-module.exports = { runPersonaTurn, runAraTurn, gatherContext, contextBlock, applyEffects };
+module.exports = { runPersonaTurn, runAraTurn, gatherContext, contextBlock, applyEffects, runInjections };

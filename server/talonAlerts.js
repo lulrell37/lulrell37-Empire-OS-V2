@@ -37,16 +37,30 @@ function notify(text, spoken) {
   sendFromAra(text, spoken || text).catch((e) => console.error('trade alert failed:', e.message));
 }
 
-function tradeOpened({ symbol, side, qty, entry, stopLoss, takeProfit, rationale, setup, swingTarget, copies = 1 }) {
+function tradeOpened({ symbol, side, qty, entry, stopLoss, takeProfit, rationale, setup, swingTarget, copies = 1, limitFilled = false }) {
   const news = setup === 'news', quick = setup === 'quick';
   const pair = swingTarget != null;
   const n = (pair ? 2 : 1) * copies;
-  notify(`📈 **T.A.L.O.N. just opened ${pair ? 'a scalp + swing' : quick ? 'a quick 5m scalp' : 'a trade'}**${news ? ' (news-driven)' : ''}${acct()}, Mr. Burrus.\n`
-    + `**${String(side).toUpperCase()} ${nameOf(symbol)}** · ${n > 1 ? `${n} × ${qty}` : qty} lot @ ~${px(entry)}\n`
+  notify(`📈 **T.A.L.O.N. ${limitFilled ? 'got filled on his limit — ' : 'just opened '}${pair ? 'a scalp + swing' : quick ? 'a quick 5m scalp' : 'a trade'}**${news ? ' (news-driven)' : ''}${acct()}, Mr. Burrus.\n`
+    + `**${String(side).toUpperCase()} ${nameOf(symbol)}** · ${n > 1 ? `${n} × ${qty}` : qty} lot @ ${limitFilled ? '' : '~'}${px(entry)}\n`
     + (pair ? `Stop ${px(stopLoss)} · Scalp target ${px(takeProfit)} · Swing target ${px(swingTarget)} (stop to break-even when the scalp pays)`
       : `Stop ${px(stopLoss)} · Target ${px(takeProfit)}`)
     + `${quick ? ' (stop to break-even at +1R)' : ''}`
     + `${rationale ? `\nWhy: ${String(rationale).replace(/^(news|quick 5m) — /, '')}` : ''}`);
+}
+
+// A pending (limit) order he's put in — not a position yet. It's journaled and
+// alerted again (tradeOpened, limitFilled) only if it fills.
+function limitPlaced({ symbol, side, qty, limit, marketPrice, stopLoss, takeProfit, rationale, minutes }) {
+  notify(`⏳ **T.A.L.O.N. put in a pending order — a quick 5m scalp**${acct()}, Mr. Burrus.\n`
+    + `**${String(side).toUpperCase()} LIMIT ${nameOf(symbol)}** · ${qty} lot @ ${px(limit)} (price is ${px(marketPrice)} now)\n`
+    + `Stop ${px(stopLoss)} · Target ${px(takeProfit)} · cancelled if it isn't filled in ${minutes} minutes, or if price hits the target or stop first`
+    + `${rationale ? `\nWhy: ${String(rationale).replace(/^quick 5m — /, '')}` : ''}`);
+}
+
+// A pending order that ended without filling: cancelled by him, or by the broker.
+function limitEnded({ symbol, side, limit, why }) {
+  notify(`✖️ **T.A.L.O.N.'s pending ${String(side).toUpperCase()} LIMIT ${nameOf(symbol)} @ ${px(limit)} is off** — ${why}. No position was opened.`);
 }
 
 function addedOn({ symbol, side, qty, copies, step, entry, stopLoss, earlyTarget, takeProfit }) {
@@ -107,4 +121,4 @@ async function runDailyRecap() {
   return { sent, opened: opened.length, closed: closed.length, open: open.length };
 }
 
-module.exports = { sendFromAra, araNote: notify, tradeOpened, addedOn, tradeClosed, tradeLost, orderRejected, runDailyRecap };
+module.exports = { sendFromAra, araNote: notify, tradeOpened, limitPlaced, limitEnded, addedOn, tradeClosed, tradeLost, orderRejected, runDailyRecap };

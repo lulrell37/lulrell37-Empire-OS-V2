@@ -25,7 +25,7 @@ const SYMBOLS = ['XAUUSD', 'BTCUSD'];
 const STRATEGY = `GOLD + BITCOIN TREND-PULLBACK PLAYBOOK. You trade exactly two markets: XAUUSD (gold) and BTCUSD (Bitcoin). Nothing else, ever.
 
 1. BIAS (4H + 1H). Trade only in the direction the 4H and the 1H agree on. Bullish = price above SMA20 on both 4H and 1H with the 4H trend up; bearish = below on both with the 4H trend down. If 4H and 1H disagree, there is no trade — "none". The 1D is background only: never a reason to skip on its own, but a setup that runs straight into a major daily level inside its targets needs that level respected (target short of it).
-2. LOCATION (1H). Never chase an extended candle. Enter on a pullback into value on the 1H: a retest of the 1H SMA20, a prior broken high/low, or the edge of the recent 1H range — in the bias direction.
+2. LOCATION (1H). Never chase an extended candle. Enter on a pullback into value on the 1H: a retest of the 1H SMA20, a prior broken high/low, or the edge of the recent 1H range — in the bias direction. This is checked in code against the price you'd actually get: an entry more than half a 1H ATR14 away from every value level (these, plus the rule 11 zones) is refused as a chase, so if price has already left the zone, the answer is "none" — wait for the next pullback.
 3. TRIGGER (15m). The pullback has to be rejected: a 15m close back in the bias direction (a higher low in an uptrend, a lower high in a downtrend). No rejection yet = wait.
 4. STOP. BEYOND the key level, never on it. Find the swing that invalidates the idea (the pullback low for a buy, the high for a sell) and every level sitting in that zone with it — the SMA20, a round number, a prior broken high/low. The stop goes past the FAR side of that whole zone, plus a buffer of at least one 1H ATR14 (shown in the snapshot) — gold never less than about $10 from entry, Bitcoin never less than about 0.8%. Price wicks into key levels to grab the stops sitting on them; yours must not be one of them. Code also moves any stop past the furthest of the 1H SMA20, the nearest $50 (gold) or $500 (Bitcoin) and the last 1H swing, so account for that when you check your targets. If the honest stop would be wider than roughly gold $35 / Bitcoin 3% from entry, skip it; the location is wrong.
 5. TARGETS — every setup is a SCALP + SWING pair: two positions, same entry, same stop. SCALP target ("takeProfit"): the next clear 15m structure level in the bias direction, at least 1x the stop distance — the quick move; the swing carries the payoff. SWING target ("swingTakeProfit"): the next clear 4H structure level beyond it, at least 3x the stop distance — the bigger move the 4H trend is pointing at. If no 4H level gives 3R, leave swingTakeProfit out: the setup goes in as a scalp only, and then the scalp target must be at least 2x the stop distance (aim it at the next 1H level) — under that, skip the setup.
@@ -117,4 +117,38 @@ function guardStop({ symbol, side, entry, stopLoss, takeProfit, swingTakeProfit,
     note: widened ? `stop widened ${sl} → ${stop} (min ${minDist.toFixed(2)} from entry${zone && Math.abs(stop - +zone.stop.toFixed(2)) < 1e-9 ? `, past the ${zone.level} at ${zone.boundary}` : ''})` : '' };
 }
 
-module.exports = { SYMBOLS, STRATEGY, autoTradeDecision, newsTradeLevels, guardStop };
+// Rule 2 (LOCATION) enforced in code, whatever the model wrote: the price he'd
+// actually enter at has to be sitting at 1H value in the bias direction — within
+// LOCATION_ATR × the 1H ATR14 of one of: the 1H SMA20; a 1H level price broke
+// in that direction (a retest of the BOS / CHoCH); the edge of the 1H dealing
+// range or its OTE band; or an unfilled 1H FVG / fresh-or-tested order block /
+// breaker pointing that way. Nowhere near any of them = a chase, and the "enter"
+// is refused. Returns { ok, at } or { skip } naming the nearest level.
+const LOCATION_ATR = 0.5;
+function entryLocation({ side, entry, snap }) {
+  const px = Number(entry);
+  const dir = side === 'buy' ? 1 : -1;
+  const h1 = snap?.candles?.['1H'];
+  const atr = Number(h1?.atr14);
+  if (!isFinite(px) || !px || !(atr > 0)) return { skip: 'no 1H ATR / price to check the entry location against' };
+  const tol = LOCATION_ATR * atr;
+  const st = snap?.structure?.['1H'];
+  const zones = []; // { name, low, high }
+  const lvl = (name, p) => { if (isFinite(Number(p))) zones.push({ name, low: Number(p), high: Number(p) }); };
+  lvl('1H SMA20', h1.sma20);
+  for (const e of (st?.events || []).filter((x) => x.dir === dir).slice(-3)) lvl(`1H broken ${dir > 0 ? 'high' : 'low'} (${e.type})`, e.level);
+  if (st?.range) {
+    lvl(`1H range ${dir > 0 ? 'low' : 'high'}`, dir > 0 ? st.range.low : st.range.high);
+    if (Array.isArray(st.range.ote)) zones.push({ name: '1H OTE', low: Math.min(...st.range.ote), high: Math.max(...st.range.ote) });
+  }
+  for (const g of (st?.fvgs || []).filter((x) => x.dir === dir && x.status !== 'filled')) zones.push({ name: `1H ${g.status === 'inverted' ? 'IFVG' : 'FVG'}`, low: g.low, high: g.high });
+  for (const o of (st?.orderBlocks || []).filter((x) => x.dir === dir)) zones.push({ name: `1H ${o.kind === 'breaker' ? 'breaker' : 'order block'}`, low: o.low, high: o.high });
+  if (!zones.length) return { skip: 'no 1H value levels to check the entry against' };
+  const gap = (z) => (px < z.low ? z.low - px : px > z.high ? px - z.high : 0);
+  const best = zones.reduce((a, z) => (gap(z) < gap(a) ? z : a));
+  const where = (z) => (z.low === z.high ? `${z.name} ${+z.low.toFixed(2)}` : `${z.name} ${+z.low.toFixed(2)}–${+z.high.toFixed(2)}`);
+  if (gap(best) <= tol) return { ok: true, at: where(best) };
+  return { skip: `entry ${+px.toFixed(2)} isn't at 1H value — nearest is the ${where(best)}, ${gap(best).toFixed(2)} away (allowed ${tol.toFixed(2)} = ${LOCATION_ATR}× 1H ATR); that's a chase, not a pullback` };
+}
+
+module.exports = { SYMBOLS, STRATEGY, autoTradeDecision, newsTradeLevels, guardStop, entryLocation, LOCATION_ATR };
