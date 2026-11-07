@@ -4,6 +4,10 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const llm = require('../llm');
+// personaVoice takes its copy of this when it loads, so the stub goes in first.
+const araVoice = require('../araVoice');
+let grokVoice = async () => null;
+araVoice.synthesizeAraVoice = (...a) => grokVoice(...a);
 const { relayFrom, relayHint, araScript } = require('../personaVoice');
 const { ARA_SCRIPT, ARA_VOICE } = require('../araVoice');
 
@@ -57,6 +61,37 @@ const { ARA_SCRIPT, ARA_VOICE } = require('../araVoice');
     assert.strictEqual(await araScript('Your 3pm moved to 4.', ''), 'Your 3pm moved to 4.');
     assert.deepStrictEqual(calls, ['xai']);
   } finally { llm.chatAs = real; }
+
+  // ElevenLabs down: she falls to her own Grok voice; other personas don't.
+  {
+    const { voiceNote } = require('../personaVoice');
+    const store = require('../syncStore');
+    const realSetting = store.getSetting, realFetch = global.fetch, realEl = process.env.ELEVENLABS_API_KEY, realAi = process.env.OPENAI_API_KEY;
+    const grokCalls = [];
+    try {
+      store.getSetting = async (k, d) => d;
+      llm.chatAs = async () => 'Your 3pm moved to 4.';
+      process.env.ELEVENLABS_API_KEY = 'test';
+      delete process.env.OPENAI_API_KEY;
+      global.fetch = async () => { throw new Error('elevenlabs down'); };
+      grokVoice = async (t) => { grokCalls.push(t); return Buffer.from('grok'); };
+      const ara = await voiceNote('ara', 'Your 3pm moved to 4.');
+      assert.strictEqual(String(ara.ogg), 'grok');
+      assert.strictEqual(ara.fallback, true);
+      assert.deepStrictEqual(grokCalls, ['Your 3pm moved to 4.']);
+      grokCalls.length = 0;
+      const atlas = await voiceNote('atlas', 'Hello.');
+      assert.strictEqual(atlas.ogg, null);
+      assert.strictEqual(grokCalls.length, 0, 'only A.R.A. has the Grok backup');
+      // Grok down too: on to the last resort, not a crash.
+      grokVoice = async () => { throw new Error('grok down'); };
+      assert.strictEqual((await voiceNote('ara', 'Your 3pm moved to 4.')).ogg, null);
+    } finally {
+      store.getSetting = realSetting; llm.chatAs = real; global.fetch = realFetch;
+      if (realEl === undefined) delete process.env.ELEVENLABS_API_KEY; else process.env.ELEVENLABS_API_KEY = realEl;
+      if (realAi !== undefined) process.env.OPENAI_API_KEY = realAi;
+    }
+  }
 
   console.log('ara relay: all passed');
   process.exit(0);
