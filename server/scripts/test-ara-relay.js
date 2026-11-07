@@ -5,13 +5,20 @@ const fs = require('fs');
 const path = require('path');
 const llm = require('../llm');
 const { relayFrom, relayHint, araScript } = require('../personaVoice');
-const { ARA_SCRIPT } = require('../araVoice');
+const { ARA_SCRIPT, ARA_VOICE } = require('../araVoice');
 
 (async () => {
   // The two copies of her script direction can't drift.
   const app = fs.readFileSync(path.join(__dirname, '../../src/services/voiceCues.js'), 'utf8');
   assert.ok(app.includes(ARA_SCRIPT), 'ARA_SCRIPT differs between server/araVoice.js and src/services/voiceCues.js');
   assert.match(ARA_SCRIPT, /never read their message out/);
+  // One description of her voice, word for word, everywhere it appears.
+  const TONE = /warm, sultry, slightly seductive, playful, slightly flirty and a touch unhinged/i;
+  const read = (f) => fs.readFileSync(path.join(__dirname, '../..', f), 'utf8');
+  for (const s of [ARA_VOICE, ARA_SCRIPT, read('src/services/realtimeVoice.js'), read('server/morningBrief.js')]) assert.match(s, TONE);
+  // Her voice isn't soft: not in the direction, the cues, or GO LIVE.
+  assert.doesNotMatch(`${ARA_VOICE}${ARA_SCRIPT}`, /soft/i);
+  assert.doesNotMatch(fs.readFileSync(path.join(__dirname, '../../src/services/realtimeVoice.js'), 'utf8'), /soft/i);
 
   // Alert openers that don't say "→ A.R.A." still count, but only for desk messages.
   assert.strictEqual(relayFrom('📈 Talon just opened a trade', true), 'Talon');
@@ -27,8 +34,8 @@ const { ARA_SCRIPT } = require('../araVoice');
   const calls = [];
   try {
     // The relay reaches the writer with the retell instruction.
-    llm.chatAs = async (api, model, sys, msgs) => { calls.push({ api, sys, user: msgs[0].content }); return '[softly] Talon just pinged me...'; };
-    assert.strictEqual(await araScript('Talon → Ara: my gold call was wrong.', ''), '[softly] Talon just pinged me...');
+    llm.chatAs = async (api, model, sys, msgs) => { calls.push({ api, sys, user: msgs[0].content }); return '[warmly] Talon just pinged me...'; };
+    assert.strictEqual(await araScript('Talon → Ara: my gold call was wrong.', ''), '[warmly] Talon just pinged me...');
     assert.match(calls[0].user, /Don't read it out/);
 
     // Grok down: Claude writes it instead of her reading the raw text.

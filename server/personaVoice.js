@@ -203,7 +203,7 @@ async function voiceNote(personaId, replyText, { userText = '', scripted = false
       const ogg = await synthesizeAraVoice(text, { userText });
       return ogg ? { ogg } : { ogg: null, error: 'grok voice failed' };
     }
-    if (!scripted) text = speakNames(await araScript(text, userText, { relay }));
+    if (!scripted) text = speakNames(await araScript(text, userText, { relay })).replace(/\[softly\]\s*/gi, ''); // not in her voice, though the shared EMOTION block offers it
   }
   let error;
   try {
