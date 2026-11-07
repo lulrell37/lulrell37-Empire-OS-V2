@@ -1,0 +1,56 @@
+// A.R.A. catches him up on what another persona sent her; she doesn't read it out.
+// No network: the writers are stubbed. node server/scripts/test-ara-relay.js
+const assert = require('assert');
+const fs = require('fs');
+const path = require('path');
+const llm = require('../llm');
+const { relayFrom, relayHint, araScript } = require('../personaVoice');
+const { ARA_SCRIPT } = require('../araVoice');
+
+(async () => {
+  // The two copies of her script direction can't drift.
+  const app = fs.readFileSync(path.join(__dirname, '../../src/services/voiceCues.js'), 'utf8');
+  assert.ok(app.includes(ARA_SCRIPT), 'ARA_SCRIPT differs between server/araVoice.js and src/services/voiceCues.js');
+  assert.match(ARA_SCRIPT, /never read their message out/);
+
+  // Alert openers that don't say "→ A.R.A." still count, but only for desk messages.
+  assert.strictEqual(relayFrom('📈 Talon just opened a trade', true), 'Talon');
+  assert.strictEqual(relayFrom('📰 Wire — breaking news, Mr. Burrus.', true), 'Wire');
+  assert.strictEqual(relayFrom("🔒 Scalp paid — Talon's swing is safe", true), 'Talon');
+  assert.strictEqual(relayFrom('📈 Talon just opened a trade'), null);
+  assert.strictEqual(relayFrom("✅ Server's live on the new code, Mr. Burrus\nJarvis can file a fix", true), null);
+  assert.strictEqual(relayFrom('the wire transfer cleared', true), null);
+  assert.strictEqual(relayFrom('Talon → Ara: my gold call was wrong'), 'Talon');
+  assert.match(relayHint('📈 Talon just opened a trade', true), /Don't read it out/);
+
+  const real = llm.chatAs;
+  const calls = [];
+  try {
+    // The relay reaches the writer with the retell instruction.
+    llm.chatAs = async (api, model, sys, msgs) => { calls.push({ api, sys, user: msgs[0].content }); return '[softly] Talon just pinged me...'; };
+    assert.strictEqual(await araScript('Talon → Ara: my gold call was wrong.', ''), '[softly] Talon just pinged me...');
+    assert.match(calls[0].user, /Don't read it out/);
+
+    // Grok down: Claude writes it instead of her reading the raw text.
+    calls.length = 0;
+    llm.chatAs = async (api) => { calls.push(api); if (api === 'xai') throw new Error('no credit'); return 'Talon says the call was wrong.'; };
+    assert.strictEqual(await araScript('Talon → Ara: my gold call was wrong.', ''), 'Talon says the call was wrong.');
+    assert.deepStrictEqual(calls, ['xai', 'anthropic']);
+
+    // Both down: attributed and cut short, never the whole thing as hers.
+    llm.chatAs = async () => { throw new Error('down'); };
+    const long = `Talon → Ara: my gold call was wrong. ${'I moved my stop. '.repeat(60)}`;
+    const said = await araScript(long, '');
+    assert.ok(said.startsWith('Message from Talon, Mr. Burrus. my gold call was wrong.'), said);
+    assert.ok(said.length < 500 && said.endsWith('The rest is in the message.'), said);
+
+    // Her own reply: one writer, and voiced as written if it fails.
+    calls.length = 0;
+    llm.chatAs = async (api) => { calls.push(api); throw new Error('down'); };
+    assert.strictEqual(await araScript('Your 3pm moved to 4.', ''), 'Your 3pm moved to 4.');
+    assert.deepStrictEqual(calls, ['xai']);
+  } finally { llm.chatAs = real; }
+
+  console.log('ara relay: all passed');
+  process.exit(0);
+})().catch((e) => { console.error(e); process.exit(1); });

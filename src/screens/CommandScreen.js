@@ -1735,7 +1735,7 @@ export default function CommandScreen({navigation,route}){
                 ?`\nWHAT ${target.name.toUpperCase()}'S ACTIONS ACTUALLY DID (authoritative — report these, not their words):\n${receipts.join('\n')}`
                 :ran.length?`\n(${target.name} ran: ${ran.join(', ')})`
                 :`\n(${target.name} ran no actions — if they said something was saved or created, it wasn't.)`;
-              injections.push(`YOU ASKED ${target.name.toUpperCase()}: "${ask}"\n${target.name} REPLIED (their words — their "I" is ${target.name}; tell Mr. Burrus what ${target.name} said/did, not as yours): ${rClean}${what}`);
+              injections.push(`YOU ASKED ${target.name.toUpperCase()}: "${ask}"\n${target.name} REPLIED (their words — their "I" is ${target.name}; tell Mr. Burrus what ${target.name} said/did, not as yours; don't paste or read out their reply, put it in your own words, what matters first): ${rClean}${what}`);
               savePersonaMemory(targetId,`[relayed from ${p.name}] ${ask}\n${target.name}: ${rClean}`).catch(()=>{});
             }catch(e){
               if(e.name==='AbortError')break;

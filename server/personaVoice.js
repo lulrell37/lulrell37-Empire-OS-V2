@@ -132,19 +132,23 @@ async function primaryOgg(personaId, text, userText) {
 // A.R.A.'s reply -> what she'll actually say (her Grok brain, her voice
 // direction, cues written in). Falls back to the reply itself.
 // "T.A.L.O.N. → A.R.A." / "Talon to Ara" at the top -> "Talon" (whose message it is).
-function relayFrom(text) {
+// `loose` (messages that reach her from the desks, not her own replies): any
+// persona named on the first line — "Talon just opened…", "Wire — breaking news".
+function relayFrom(text, loose = false) {
   // Every persona, dotted or plain, off the roster so a new one can't be missed.
   const { ROSTER } = require('./personas');
   const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const names = Object.entries(ROSTER).filter(([id]) => id !== 'ara').flatMap(([id, p]) => [esc(p.name), esc(id)]);
-  const m = String(text || '').match(new RegExp(`^[^A-Za-z]*(${names.join('|')})\\s*(?:→|to)\\s*(?:A\\.R\\.A\\.|Ara\\b)`, 'i'));
+  const m = String(text || '').match(new RegExp(`^[^A-Za-z]*(${names.join('|')})\\s*(?:→|to)\\s*(?:A\\.R\\.A\\.|Ara\\b)`, 'i'))
+    // Names only, as written: "wire" or "scout" in lowercase is just a word.
+    || (loose && String(text || '').split('\n')[0].match(new RegExp(`(?<![A-Za-z])(${Object.entries(ROSTER).filter(([id]) => id !== 'ara').flatMap(([, p]) => [esc(p.name), esc(speakNames(p.name).replace(/\.$/, ''))]).join('|')})(?![A-Za-z])`)));
   return m ? speakNames(m[1]).replace(/\.$/, '') : null; // alone, the name keeps its last dot
 }
 
 // Who a relayed message belongs to, for her script pass: it sees no roster, so it
 // gets told here, with that persona's real pronouns.
-function relayHint(text) {
-  const who = relayFrom(text);
+function relayHint(text, loose = false) {
+  const who = relayFrom(text, loose);
   if (!who) return '';
   const { ROSTER, resolvePersonaId, pronouns } = require('./personas');
   const id = resolvePersonaId(who);
@@ -152,28 +156,45 @@ function relayHint(text) {
   const [He, him, his] = she ? ['She', 'her', 'her'] : ['He', 'him', 'his'];
   const role = ROSTER[id] ? `, the Empire's ${ROSTER[id].role}` : '';
   const word = id === 'woke' ? ' "Woke" here is his name, not the ordinary word.' : '';
-  return `(These notes are ${who}'s message to you, in ${his.toUpperCase()} words — "I"/"my" means ${who}. ${who} is a separate persona${role}, a ${she ? 'woman' : 'man'} (${she ? 'she/her' : 'he/him'}): not you, not Mr. Burrus, and not any other persona the message mentions.${word} ${He} is talking to you, and you're passing it on to Mr. Burrus as ${his}: "${who} says…", "${she ? 'she' : 'he'}…". Not as yours, and not as if Mr. Burrus said it. Keep ${him} as the one speaking throughout.)\n\n`;
+  return `(These notes are ${who}'s message to you, in ${his.toUpperCase()} words — "I"/"my" means ${who}. ${who} is a separate persona${role}, a ${she ? 'woman' : 'man'} (${she ? 'she/her' : 'he/him'}): not you, not Mr. Burrus, and not any other persona the message mentions.${word} ${He} is talking to you, and you're passing it on to Mr. Burrus as ${his}: "${who} says…", "${she ? 'she' : 'he'}…". Not as yours, and not as if Mr. Burrus said it. Keep ${him} as the one speaking throughout. Don't read it out: you've read it, now tell him about it in your own sentences and your own order, what matters first, far shorter than this. He gets the full message as text.)\n\n`;
 }
 
-async function araScript(text, userText) {
-  try {
-    // Capped: Telegram sends her text after the voice note, so a slow script
-    // mustn't hold the reply up — past 25s she just voices the reply as written.
-    const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('script timed out')), 25000));
-    const out = await Promise.race([timeout, require('./llm').chatAs('xai', 'grok-4',
+// Her script pass failed on someone else's message: say whose it is and give the
+// start of it, rather than reading the whole thing out as if it were hers.
+function relayFallback(text, who) {
+  const body = String(text).replace(/^[^A-Za-z]*/, '').replace(new RegExp(`^${who}\\s*(?:→|to)\\s*Ara\\W*`, 'i'), '').trim();
+  const cut = body.length > 400 ? `${body.slice(0, 400).replace(/[^.!?]*$/, '') || body.slice(0, 400)} The rest is in the message.` : body;
+  return `Message from ${who}, Mr. Burrus. ${cut}`;
+}
+
+async function araScript(text, userText, { relay = false } = {}) {
+  const who = relayFrom(text, relay);
+  // Capped: Telegram sends her text after the voice note, so a slow script
+  // mustn't hold the reply up — past 25s she just voices the reply as written.
+  const write = (api, model) => {
+    let timer;
+    const timeout = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('script timed out')), 25000); });
+    return Promise.race([timeout, require('./llm').chatAs(api, model,
       `${ARA_VOICE}\n\nYou are A.R.A. — full personal assistant to Mr. Burrus, sharp and a step ahead; you call him "Mr. Burrus".\n\n[THE TEAM, for who's who and their pronouns:\n${require('./personas').rosterLines()}\n]\n\n${ARA_SCRIPT}`,
-      [{ role: 'user', content: `${userText ? `Mr. Burrus just said: "${String(userText).slice(0, 1500)}"\n\n` : ''}${relayHint(text)}What you want to get across (notes, not a script):\n${text}` }],
-      { maxTokens: 1200, fallback: false })]);
-    const script = String(out || '').replace(/\[[A-Z][A-Z0-9_]*(?::[^\]]*)?\]/g, '').replace(/[*#`_]/g, '').trim();
-    if (script) return script;
-  } catch (e) { console.error('ara script failed:', e.message); }
-  return text;
+      [{ role: 'user', content: `${userText ? `Mr. Burrus just said: "${String(userText).slice(0, 1500)}"\n\n` : ''}${relayHint(text, relay)}What you want to get across (notes, not a script):\n${text}` }],
+      { maxTokens: 1200, fallback: false })]).finally(() => clearTimeout(timer));
+  };
+  const clean = (out) => String(out || '').replace(/\[[A-Z][A-Z0-9_]*(?::[^\]]*)?\]/g, '').replace(/[*#`_]/g, '').trim();
+  // Her own reply can be voiced as written. A relay can't, so it gets a second writer.
+  for (const [api, model] of who ? [['xai', 'grok-4'], ['anthropic', null]] : [['xai', 'grok-4']]) {
+    try {
+      const script = clean(await write(api, model));
+      if (script) return script;
+    } catch (e) { console.error(`ara script failed (${api}):`, e.message); }
+  }
+  return who ? relayFallback(text, who) : text;
 }
 
 // personaId + reply text -> { ogg, error, fallback }. `ogg` is null only when
 // every engine failed; `error` says why the persona's own voice didn't work.
 // `scripted`: the text is already A.R.A.'s spoken script (the morning brief).
-async function voiceNote(personaId, replyText, { userText = '', scripted = false } = {}) {
+// `relay`: it reached her from the desks, so a persona named up top owns it.
+async function voiceNote(personaId, replyText, { userText = '', scripted = false, relay = false } = {}) {
   let text = speakNames(String(replyText || '').trim()); // "J.A.R.V.I.S." is said "Jarvis"
   if (!text) return { ogg: null };
   if (personaId === 'ara') {
@@ -182,7 +203,7 @@ async function voiceNote(personaId, replyText, { userText = '', scripted = false
       const ogg = await synthesizeAraVoice(text, { userText });
       return ogg ? { ogg } : { ogg: null, error: 'grok voice failed' };
     }
-    if (!scripted) text = speakNames(await araScript(text, userText));
+    if (!scripted) text = speakNames(await araScript(text, userText, { relay }));
   }
   let error;
   try {
@@ -205,4 +226,4 @@ async function synthesizePersonaVoice(personaId, replyText, opts = {}) {
   return (await voiceNote(personaId, replyText, opts)).ogg;
 }
 
-module.exports = { synthesizePersonaVoice, voiceNote, tempoArgs, relayHint };
+module.exports = { synthesizePersonaVoice, voiceNote, tempoArgs, relayHint, relayFrom, araScript };
