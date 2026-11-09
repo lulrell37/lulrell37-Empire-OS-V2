@@ -29,6 +29,19 @@ function hourET() {
 const pollSlot = () => `${todayET()}-b${Math.floor(hourET() / POLL_EVERY_HOURS)}`;
 const inPollWindow = () => { const h = hourET(); return h >= DAY_START_HOUR && h < DAY_END_HOUR; };
 
+const asOf = () => new Intl.DateTimeFormat('en-US', { timeZone: TZ, dateStyle: 'full', timeStyle: 'short' }).format(new Date());
+const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+// How many days before `today` a story ran; null when it has no real date. Pure.
+function daysOld(date, today) {
+  if (!ISO_DAY.test(String(date || ''))) return null;
+  const d = (Date.parse(today) - Date.parse(date)) / 86400e3;
+  return Number.isFinite(d) ? d : null;
+}
+// A headline runs if it's from today or yesterday. Undated and future-dated don't.
+const freshHeadline = (h, today) => { const d = daysOld(h.date, today); return d === 0 || d === 1; };
+// A trade only ever comes off today's news: yesterday's is already in the price.
+const freshImpact = (i, today) => daysOld(i.published, today) === 0;
+
 function fingerprint(s) {
   return String(s || '').toLowerCase().replace(/[^a-z0-9 ]+/g, '').replace(/\s+/g, ' ').trim().slice(0, 70);
 }
@@ -52,14 +65,15 @@ function parseBrief(text) {
   const headSec = hIdx >= 0 ? raw.slice(hIdx + raw.slice(hIdx).indexOf('\n') + 1, mIdx >= 0 && mIdx > hIdx ? mIdx : undefined) : '';
   const impactSec = mIdx >= 0 ? raw.slice(mIdx + raw.slice(mIdx).indexOf('\n') + 1) : '';
   const headlines = headSec.split('\n').map((l) => l.trim()).filter(Boolean)
-    .map((l) => { const m = l.match(/^(TOP|DMV|MONEY)\s*\|\s*(.+)$/i); return m ? { tag: m[1].toUpperCase(), text: m[2].trim() } : null; })
+    .map((l) => { const m = l.match(/^(TOP|DMV|MONEY)\s*\|\s*(?:(\d{4}-\d{2}-\d{2})\s*\|\s*)?(.+)$/i); return m ? { tag: m[1].toUpperCase(), date: m[2] || null, text: m[3].trim() } : null; })
     .filter(Boolean);
   const impacts = impactSec.split('\n').map((l) => l.trim()).filter(Boolean).map((l) => {
     const p = l.split('|').map((x) => x.trim());
     if (p.length < 4) return null;
     const side = /^(buy|long)$/i.test(p[1]) ? 'buy' : /^(sell|short)$/i.test(p[1]) ? 'sell' : null;
     if (!side) return null;
-    return { symbol: p[0].toUpperCase().replace(/[^A-Z0-9.]/g, ''), side, horizon: p[2], confidence: (p[3] || '').toLowerCase(), thesis: (p[4] || p[3] || '').trim() };
+    const published = ISO_DAY.test(p[4] || '') ? p[4] : null;
+    return { symbol: p[0].toUpperCase().replace(/[^A-Z0-9.]/g, ''), side, horizon: p[2], confidence: (p[3] || '').toLowerCase(), published, thesis: ((published ? p[5] : p[4]) || p[3] || '').trim() };
   }).filter((x) => x && x.symbol);
   return { brief, headlines, impacts };
 }
@@ -72,15 +86,16 @@ async function refreshNewsBrief({ force = false, trigger = 'break' } = {}) {
   try {
     const seen = await loadSeen();
     let world = '', dmv = '', extra = '';
-    try { world = await webResearch('Top U.S. and world news right now — the biggest stories from apnews.com and ground.news: what happened, the key numbers, and how the coverage differs. List each with its source.'); }
+    const window24 = `Only stories published or substantially updated in the last 24 hours, as of ${asOf()}. Give each story's publish date. Leave out anything older or that you can't date.`;
+    try { world = await webResearch(`Top U.S. and world news right now — the biggest stories from apnews.com and ground.news: what happened, the key numbers, and how the coverage differs. List each with its source. ${window24}`); }
     catch (e) { console.error('newswire: search failed', e.message); return { error: e.message }; }
-    try { dmv = await webResearch('Top D.C., Maryland and Virginia (DMV) local news today from fox5dc.com — what happened and where.'); } catch {}
+    try { dmv = await webResearch(`Top D.C., Maryland and Virginia (DMV) local news today from fox5dc.com — what happened and where. ${window24}`); } catch {}
     if (trigger === 'poll') {
-      try { extra = await webResearch(`The single biggest developing story in the last few hours not already covered here: ${seen.slice(0, 12).join('; ')}. What just happened and what it means for markets.`); } catch {}
+      try { extra = await webResearch(`The single biggest developing story in the last few hours not already covered here: ${seen.slice(0, 12).join('; ')}. What just happened and what it means for markets. As of ${asOf()}; give its publish date and time.`); } catch {}
     }
 
     const user =
-`RAW WIRES — write Mr. Burrus's brief from these. Name sources. Do not invent anything not below.
+`RIGHT NOW IT IS ${asOf()}. RAW WIRES — write Mr. Burrus's brief from these. Name sources. Do not invent anything not below. Only run news from the last 24 hours and put each story's date in the brief, like (Nov 9). Anything older or undated stays out, however big it was, unless something new happened to it today; then lead with what's new. A thin brief beats a stale one.
 
 U.S. / WORLD (AP + Ground News):
 ${String(world).slice(0, 6000)}
@@ -99,20 +114,34 @@ OPPORTUNITIES — a concrete way to profit
 
 Then two machine trailers, exactly:
 ===HEADLINES===
-TOP|<one line>
-TOP|<one line>
-DMV|<one line>
-MONEY|<one line>
+TOP|<YYYY-MM-DD the story ran>|<one line>
+TOP|<YYYY-MM-DD>|<one line>
+DMV|<YYYY-MM-DD>|<one line>
+MONEY|<YYYY-MM-DD>|<one line>
 ===MARKETIMPACT===
-<SYMBOL>|<buy or sell>|<time horizon>|<high|med|low>|<one-line thesis>
+<SYMBOL>|<buy or sell>|<time horizon>|<high|med|low>|<YYYY-MM-DD the news came out>|<one-line thesis>
 (only instruments the account trades — XAUUSD XAGUSD EURUSD GBPUSD USDJPY GBPJPY AUDUSD BTCUSD indices crude; leave the section empty if nothing qualifies; mark 'high' ONLY when you would put money on it)`;
 
-    let out = '';
-    try { out = await chatAs('anthropic', null, 'You are W.I.R.E., the Empire\'s news desk — tight, factual, sourced.', [{ role: 'user', content: user }], { maxTokens: 1900 }); }
-    catch (e) { console.error('newswire: brief write failed', e.message); return { error: e.message }; }
-
-    const { brief, headlines, impacts } = parseBrief(out);
-    if (!brief) return { error: 'empty brief' };
+    const today = todayET();
+    let brief = '', headlines = [], impacts = [], stale = [];
+    // Each headline has to carry a date. Anything old goes back once to be taken out of the brief.
+    for (let i = 0; i < 2; i++) {
+      const ask = stale.length ? `${user}\n\nYour last draft ran these, which are older than allowed or had no date. Take them out of the brief completely:\n${stale.map((h) => `- ${h.text} (${h.date || 'no date'})`).join('\n')}` : user;
+      let out = '';
+      try { out = await chatAs('anthropic', null, 'You are W.I.R.E., the Empire\'s news desk — tight, factual, sourced, and only what is new.', [{ role: 'user', content: ask }], { maxTokens: 1900 }); }
+      catch (e) { console.error('newswire: brief write failed', e.message); return { error: e.message }; }
+      ({ brief, headlines, impacts } = parseBrief(out));
+      if (!brief) return { error: 'empty brief' };
+      stale = headlines.filter((h) => !freshHeadline(h, today));
+      if (!stale.length) break;
+      console.log(`newswire: draft ${i + 1} ran ${stale.length} stale headline(s) —`, stale.map((h) => h.text.slice(0, 50)).join(' | '));
+    }
+    headlines = headlines.filter((h) => freshHeadline(h, today));
+    const staleCalls = impacts.filter((x) => !freshImpact(x, today));
+    if (staleCalls.length) console.log('newswire: dropped trade calls not from today\'s news —', staleCalls.map((x) => `${x.side} ${x.symbol} (${x.published || 'no date'})`).join(', '));
+    impacts = impacts.filter((x) => freshImpact(x, today));
+    // Nothing current: send nothing, and leave the last brief on the HUD.
+    if (!headlines.length) { console.log('newswire: no fresh headlines — brief not sent'); return { skipped: 'no fresh news in the last 24 hours' }; }
 
     const slotLabel = trigger === 'manual' ? 'manual' : 'break';
     // Merge into the HUD row, never replace it — it also carries the routine,
@@ -159,7 +188,7 @@ async function pollHeadlines() {
   await setSetting('news_poll_hour', stamp);
 
   let scan = '';
-  try { scan = await webResearch('Breaking U.S., world and market news in the last two hours — headlines from apnews.com and ground.news, with sources.'); }
+  try { scan = await webResearch(`Breaking U.S., world and market news in the last two hours, as of ${asOf()} — headlines from apnews.com and ground.news, with sources and each one's publish time. Leave out anything older.`); }
   catch (e) { console.error('newswire: poll search failed', e.message); return; }
   if (!String(scan).trim()) return;
 
@@ -167,7 +196,7 @@ async function pollHeadlines() {
   let verdict = { new: false };
   try {
     const j = await chatAs('anthropic', null, 'You are W.I.R.E., the Empire\'s news desk.', [{ role: 'user', content:
-`Current headlines from the wires:\n${String(scan).slice(0, 4000)}\n\nYou have ALREADY reported these earlier:\n${seen.slice(0, 20).join(' | ') || '(nothing yet)'}\n\nIs there anything genuinely NEW and materially important since — a real development, not a rehash? Reply ONLY JSON:\n{"new": true|false, "headlines": ["short line", ...], "marketMove": true|false}` }], { maxTokens: 400 });
+`Right now it is ${asOf()}. Current headlines from the wires:\n${String(scan).slice(0, 4000)}\n\nYou have ALREADY reported these earlier:\n${seen.slice(0, 20).join(' | ') || '(nothing yet)'}\n\nIs there anything genuinely NEW and materially important since — a real development from today, not a rehash or an older story? Reply ONLY JSON:\n{"new": true|false, "headlines": ["short line", ...], "marketMove": true|false}` }], { maxTokens: 400 });
     const m = String(j).match(/\{[\s\S]*\}/);
     if (m) verdict = JSON.parse(m[0]);
   } catch { return; }
@@ -247,7 +276,7 @@ async function runEconDesk() {
   const { claudeText, WEB_SEARCH_TOOL } = require('./llm');
   const dateLine = new Date().toLocaleDateString('en-US', { timeZone: TZ, weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
   const out = await claudeText(
-    `You are W.I.R.E., the news desk, reading the 8:30 AM ET U.S. economic data release for the gold trading desk. Search the live web for the reports released at 8:30 AM ET TODAY (CPI / core CPI, PPI, nonfarm payrolls + unemployment rate + wages, initial jobless claims, retail sales, GDP, PCE / core PCE, durable goods, and similar). Use only numbers actually published today, never last month's.
+    `Today is ${asOf()}. You are W.I.R.E., the news desk, reading the 8:30 AM ET U.S. economic data release for the gold trading desk. Search the live web for the reports released at 8:30 AM ET TODAY (CPI / core CPI, PPI, nonfarm payrolls + unemployment rate + wages, initial jobless claims, retail sales, GDP, PCE / core PCE, durable goods, and similar). Use only numbers actually published today, never last month's.
 How gold reacts: a HOT surprise (inflation above forecast, payrolls/wages/growth/retail stronger than forecast, jobless claims lower than forecast) lifts the dollar and yields -> gold falls -> "sell". A SOFT surprise (the reverse) -> gold rises -> "buy". In line with forecast (CPI/PCE within 0.1 pt, payrolls within ~50k, claims within ~10k) or mixed signals with no clear lead -> "none". When several reports come out, the inflation and jobs numbers outrank the rest.
 Reply with exactly ONE line, nothing else:
 RELEASED | <report names> | <actual vs forecast, key numbers> | buy|sell|none | high|medium|low | <one-sentence reason>
@@ -283,4 +312,4 @@ async function tick() {
   }
 }
 
-module.exports = { tick, refreshNewsBrief, runEconDesk };
+module.exports = { tick, refreshNewsBrief, runEconDesk, parseBrief, freshHeadline, freshImpact };

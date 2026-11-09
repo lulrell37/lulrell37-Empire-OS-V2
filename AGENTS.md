@@ -305,7 +305,7 @@ market order fills), the app's refuses an order with no stop, and modifies send
 `stopLossType`. Every 5-min reconcile runs `ensureStop` (`server/tradeJournal.js`)
 on each of his open positions: no stop on the broker → the journal stop is put
 back, or the position is closed if price is already through it. The cron runs on any of the Claude subscription,
-`ANTHROPIC_API_KEY` or `XAI_API_KEY` (his brain is `claudeText`'s chain). W.I.R.E.'s
+`ANTHROPIC_API_KEY` or `XAI_API_KEY` (his brain is `claudeText`'s chain). Every W.I.R.E. search and brief carries today's date; each headline has to carry the date it ran, and undated or older-than-yesterday ones go back to be removed (`freshHeadline`), a brief with none isn't sent, and a news trade only comes off today's news (`freshImpact`). W.I.R.E.'s
 8:30 AM ET data desk (`runEconDesk` in `server/newsWire.js`, `ECON_DESK=off` to
 stop) reads CPI/jobs/claims/etc. vs forecast and hands a gold BUY/SELL to
 T.A.L.O.N. on a clear surprise. Every W.I.R.E. news brief (breaking or on request) also goes to the

@@ -183,6 +183,20 @@ assert.strictEqual(parseStories('NONE of the accounts agree\nSTORIES: ["A"]').st
   assert.deepStrictEqual(parseScripts('no format here'), []);
 }
 
+// W.I.R.E.: no date, an old date or a future date doesn't run; trades only off today.
+{
+  const { parseBrief, freshHeadline, freshImpact } = require('../newsWire');
+  const today = '2026-11-09';
+  const { brief, headlines, impacts } = parseBrief(`The brief.\n===HEADLINES===\nTOP|2026-11-09|Today's story\nTOP|2026-11-08|Yesterday's\nDMV|2026-10-02|Old one\nMONEY|No date on this\nTOP|2026-11-12|Future\n===MARKETIMPACT===\nXAUUSD|buy|today|high|2026-11-09|fresh thesis\nBTCUSD|sell|today|high|2026-11-08|yesterday thesis\nXAUUSD|sell|today|high|no date thesis`);
+  assert.strictEqual(brief, 'The brief.');
+  assert.deepStrictEqual(headlines.filter((h) => freshHeadline(h, today)).map((h) => h.text), ["Today's story", "Yesterday's"]);
+  const live = impacts.filter((i) => freshImpact(i, today));
+  assert.strictEqual(live.length, 1);
+  assert.strictEqual(live[0].thesis, 'fresh thesis');
+  assert.strictEqual(impacts[2].published, null);
+  assert.strictEqual(impacts[2].thesis, 'no date thesis');
+}
+
 // A montage has to be a montage: the Monday check turns away anything else.
 {
   const shots = Array.from({ length: 5 }, (_, i) => `SHOT ${i + 1}: something to film`).join('\n');

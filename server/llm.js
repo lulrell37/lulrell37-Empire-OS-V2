@@ -238,7 +238,7 @@ async function chatAs(api, model, system, messages, { maxTokens = 900, fallback 
 // Live web research — Claude + the web_search tool (Grok search if Anthropic is out of credits).
 async function webResearch(prompt) {
   return claudeText(
-    'You are a research analyst. Search the live web and answer concisely with concrete, current facts and figures. Cite source names inline. No preamble.',
+    `Today is ${new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', dateStyle: 'full', timeStyle: 'short' }).format(new Date())} ET. You are a research analyst. Search the live web and answer concisely with concrete, current facts and figures. Give the publish date of anything time-sensitive; if a source is old, say so. Cite source names inline. No preamble.`,
     prompt,
     { maxTokens: 1000, tools: WEB_SEARCH_TOOL },
   );
