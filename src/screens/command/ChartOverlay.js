@@ -73,6 +73,7 @@ function CandleSvg({m,box}){
   return(
     <Svg width={w} height={h}>
       {m.zones.map((z,i)=><Rect key={'z'+i} x={x(z.x1)} y={y(z.y2)} width={Math.max(1,x(z.x2)-x(z.x1))} height={Math.max(1,y(z.y1)-y(z.y2))} fill={z.color} opacity={z.opacity}/>)}
+      {(m.trends||[]).map((t,i)=><Path key={'tz'+i} d={`M ${x(t.x1)},${y(t.y1+t.zone)} L ${x(t.x2)},${y(t.y2+t.zone)} L ${x(t.x2)},${y(t.y2-t.zone)} L ${x(t.x1)},${y(t.y1-t.zone)} Z`} fill={t.color} opacity={0.18}/>)}
       {m.lines.map((l,i)=>(
         <G key={'l'+i}>
           <Line x1={x(l.x1)} y1={y(l.y)} x2={x(l.x2)} y2={y(l.y)} stroke={l.color} strokeWidth={l.width||1} strokeDasharray={l.dash?'3,3':undefined} opacity={l.dash?0.7:1}/>
@@ -94,6 +95,8 @@ function CandleSvg({m,box}){
           </G>
         );
       })}
+      {(m.trends||[]).map((t,i)=><Line key={'tr'+i} x1={x(t.x1)} y1={y(t.y1)} x2={x(t.x2)} y2={y(t.y2)} stroke={t.color} strokeWidth={1.4}/>)}
+      {(m.tags||[]).map((k,i)=><SvgText key={'sw'+i} x={x(k.x)} y={y(k.y)+(k.up?9:-4)} fill={k.color} fontSize={6.5} fontFamily="monospace" textAnchor="middle">{k.text}</SvgText>)}
       {m.labels.map((l,i)=><SvgText key={'t'+i} x={x(m.xLabel)} y={y(l.y)+3} fill={l.color} fontSize={7} fontFamily="monospace">{l.text}</SvgText>)}
     </Svg>
   );

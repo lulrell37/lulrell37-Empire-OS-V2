@@ -93,7 +93,7 @@ async function findLeadRow(ref) {
 const PROJECT_ROLES = {
   jarvis: 'Architecture & build feasibility',
   selene: 'Brand direction & visual identity',
-  rogue: 'Copy, messaging & content strategy',
+  rogue: 'Video editing, copy & content strategy',
   atlas: 'Pricing structure & payment systems',
   aisha: 'Legal, compliance, terms & privacy',
   stephanie: 'Training & educational content',

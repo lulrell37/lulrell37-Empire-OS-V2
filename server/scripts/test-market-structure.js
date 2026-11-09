@@ -124,6 +124,40 @@ const flat = (p, n) => Array.from({ length: n }, () => [p, p + 1, p - 1, p]);
   assert.strictEqual(ms.zoneStop({ symbol: 'EURUSD', side: 'buy', entry: 1.1 }), null, 'gold and Bitcoin only');
 }
 
+// Trend lines, swing tags and the current high/low on the chart.
+{
+  // Zig-zag climbing: lows at 100, 110, 120 on one rising line, highs above.
+  const rows = [];
+  for (let leg = 0; leg < 4; leg++) {
+    const b = 100 + leg * 10;
+    rows.push([b + 3, b + 4, b + 1, b + 3], [b + 2, b + 3, b + 0, b + 2], [b + 3, b + 6, b + 2, b + 5], [b + 6, b + 9, b + 5, b + 8], [b + 8, b + 12, b + 7, b + 9], [b + 8, b + 9, b + 5, b + 6], [b + 6, b + 8, b + 4, b + 5]);
+  }
+  const bars = mk(rows);
+  const st = ms.analyzeStructure(bars);
+  const up = st.trendLines.find((t) => t.dir === 1);
+  assert(up, 'rising support found');
+  assert.strictEqual(up.kind, 'support');
+  assert(up.touches >= 3, 'all the lows on the line');
+  assert(!st.trendLines.some((t) => t.dir === -1), 'no falling line in a climb');
+  const last = bars.length - 1;
+  const m = ms.chartModel({ symbol: 'XAUUSD', tf: '1H', bars, structure: st, now: bars[last].t });
+  assert.strictEqual(m.trends.length, 1);
+  assert(m.trends[0].y2 > m.trends[0].y1, 'drawn rising');
+  assert.strictEqual(m.trends[0].zone, st.atr * 0.25, 'an area, not just a line');
+  assert(/rising support now at [\d.]+ \(zone /.test(ms.formatTimeframe('1H', st, bars[last].c)));
+  assert(m.tags.some((k) => k.text === 'HH') && m.tags.some((k) => k.text === 'HL'), 'swings named');
+  assert(m.tags.every((k) => k.text !== 'SL'), "swing tags don't read as stop loss");
+  assert.strictEqual(m.lines.filter((l) => l.color === '#56CCF2').length, 2, 'latest swing high and low drawn');
+  assert(m.lines.filter((l) => l.color === '#F5F5F5').length === 2, 'current high and low drawn');
+  assert(/current H [\d.]+ \/ L [\d.]+/.test(m.subtitle), 'always readable in the subtitle');
+  assert(/rising support now at/.test(ms.formatTimeframe('1H', st, bars[last].c)));
+  // A close well under the line kills it.
+  const broke = mk([...rows, [120, 121, 60, 61], [61, 62, 60, 61], [61, 62, 60, 61]]);
+  assert(!ms.analyzeStructure(broke).trendLines.some((t) => t.dir === 1 && t.i1 < 14), 'broken line is gone');
+  const { vegaSpec } = require('../talonChart');
+  assert(vegaSpec(m).layer.length > 10);
+}
+
 // Too little history is null, not a crash; the read then stays empty.
 assert.strictEqual(ms.analyzeStructure(mk(flat(100, 5))), null);
 assert.strictEqual(ms.formatMarketRead({ structure: null, levels: [], price: 100 }), '');

@@ -223,6 +223,39 @@ function dealingRange(bars, bias) {
   return { high, low, eq: (high + low) / 2, pos, zone: pos > 0.5 ? 'premium' : 'discount', ote };
 }
 
+// The best trend line on each side: rising through swing lows (support), falling
+// through swing highs (resistance). Two swings, no candle since the first of them
+// closing through it and nothing wicking through it between them; more touches
+// win, then the more recent. A line price has closed through is gone.
+const TREND_ZONE = 0.25; // the band around a trend line, × ATR each side: bounces land in an area, not on a line
+function trendLines(bars, swings, atr) {
+  const n = bars.length;
+  const tol = (atr || 0) * 0.1;
+  const fit = (type, dir) => {
+    const pts = swings.filter((s) => s.type === type).slice(-12);
+    let best = null;
+    for (let b = pts.length - 1; b > 0; b--) {
+      for (let a = b - 1; a >= 0; a--) {
+        const p = pts[a], q = pts[b];
+        if (q.i - p.i < 5 || (q.price - p.price) * dir <= 0) continue;
+        const slope = (q.price - p.price) / (q.i - p.i);
+        const at = (i) => p.price + slope * (i - p.i);
+        let ok = true;
+        for (let i = p.i; i < n && ok; i++) {
+          // dir > 0: the line sits under price. Distance past it is positive when broken.
+          if ((at(i) - bars[i].c) * dir > tol) ok = false;
+          if (i <= q.i && (at(i) - (dir > 0 ? bars[i].l : bars[i].h)) * dir > tol) ok = false;
+        }
+        if (!ok) continue;
+        const touches = pts.filter((s) => s.i >= p.i && Math.abs(s.price - at(s.i)) <= Math.max(tol, 1e-9)).length;
+        if (!best || touches > best.touches) best = { dir, kind: dir > 0 ? 'support' : 'resistance', i1: p.i, p1: p.price, i2: q.i, p2: q.price, slope, touches, now: at(n - 1), zone: (atr || 0) * TREND_ZONE };
+      }
+    }
+    return best;
+  };
+  return [fit('low', 1), fit('high', -1)].filter(Boolean);
+}
+
 function analyzeStructure(bars) {
   if (!bars || bars.length < 10) return null;
   const atrs = rollingAtr(bars);
@@ -237,6 +270,7 @@ function analyzeStructure(bars) {
   });
   return {
     n: bars.length, atr, bias, swings, events, fvgs, displacement,
+    trendLines: trendLines(bars, swings, atr),
     last: bars[bars.length - 1].c,
     sweeps: findSweeps(bars, swings, atrs),
     pools: liquidityPools(bars, swings, atr),
@@ -373,6 +407,10 @@ function formatTimeframe(tf, st, price) {
   let head = `${tf}: structure ${st.bias === 'bull' ? 'BULLISH' : st.bias === 'bear' ? 'BEARISH' : 'UNDEFINED'}${heads.length ? ` (${heads.join('; ')})` : ''}`;
   if (st.range) head += `. Range ${px(st.range.low)}–${px(st.range.high)}, price in ${st.range.zone.toUpperCase()} at ${Math.round(st.range.pos * 100)}% (50% ${px(st.range.eq)}, OTE ${px(st.range.ote[0])}–${px(st.range.ote[1])})`;
   L.push(head);
+  const lastOf = (type) => [...st.swings].reverse().find((s) => s.type === type);
+  const sh = lastOf('high'), sl = lastOf('low');
+  if (sh || sl) L.push(`  Last swing: ${[sh && `high ${px(sh.price)} (${barsAgo(st, sh.i)})`, sl && `low ${px(sl.price)} (${barsAgo(st, sl.i)})`].filter(Boolean).join(', ')}`);
+  if (st.trendLines.length) L.push(`  Trend lines: ${st.trendLines.map((t) => `${t.dir > 0 ? 'rising support' : 'falling resistance'} now at ${px(t.now)} (zone ${px(t.now - t.zone)}–${px(t.now + t.zone)}, ${t.touches} touches, from ${px(t.p1)})`).join('; ')}`);
   const pool = (p) => `${p.kind} ${px(p.price)}${p.touches > 1 ? ` x${p.touches}` : ''}`;
   const above = st.pools.filter((p) => p.side === 'buy' && p.price >= price).sort((a, b) => a.price - b.price).slice(0, 3);
   const below = st.pools.filter((p) => p.side === 'sell' && p.price <= price).sort((a, b) => b.price - a.price).slice(0, 3);
@@ -424,8 +462,17 @@ WHAT YOU CAN SEE: candles (OHLC), the SMART-MONEY READ and the cross-market quot
 
 const COLORS = {
   up: '#5FA779', down: '#C7614B', bull: '#5FA779', bear: '#C7614B', breaker: '#C77DBB', flip: '#D9A441',
-  pool: '#5B8DEF', level: '#8A8A8A', entry: '#E8C98A', stop: '#E0555F', target: '#5FA779', text: '#D8D2C4',
+  pool: '#5B8DEF', level: '#8A8A8A', trend: '#FFD166', swing: '#56CCF2', current: '#F5F5F5', entry: '#E8C98A', stop: '#E0555F', target: '#5FA779', text: '#D8D2C4',
 };
+
+// High and low of the day the newest candle is in (ET), the forming candle included.
+function dayRange(bars) {
+  try {
+    const day = etOf(bars[bars.length - 1].t).day;
+    const today = bars.filter((b) => etOf(b.t).day === day);
+    return { high: Math.max(...today.map((b) => b.h)), low: Math.min(...today.map((b) => b.l)) };
+  } catch { return null; } // no timezone data on this device
+}
 
 function chartModel({ symbol, tf, bars, structure: st, levels = [], positions = [], visible = 80, now = Date.now() }) {
   const shown = (bars || []).slice(-visible);
@@ -440,7 +487,7 @@ function chartModel({ symbol, tf, bars, structure: st, levels = [], positions = 
   const reach = (hi - lo) * 0.25;
   const inView = (p) => p >= lo - reach && p <= hi + reach;
 
-  const zones = [], lines = [], marks = [], labels = [];
+  const zones = [], lines = [], marks = [], labels = [], tags = [], trends = [];
   const label = (y, text, color, pri) => labels.push({ y, text, color, pri });
   if (st) {
     for (const f of nearest(st.fvgs, lastPx, (x) => x.ce, 5)) {
@@ -468,6 +515,36 @@ function chartModel({ symbol, tf, bars, structure: st, levels = [], positions = 
     for (const s of st.sweeps) {
       if (s.i < start || !s.held) continue; // a sweep price has since closed past is just a break
       marks.push({ x: toX(s.i), y: s.wick, up: s.side === 'sell', color: s.side === 'sell' ? COLORS.up : COLORS.down, text: s.side === 'sell' ? 'SSL swept' : 'BSL swept' });
+    }
+    // Every swing in view, named against the one before it; the latest high and low get a line.
+    for (const type of ['high', 'low']) {
+      const list = st.swings.filter((s) => s.type === type);
+      list.forEach((s, j) => {
+        if (s.i < start) return;
+        const prev = list[j - 1];
+        const word = !prev ? (type === 'high' ? 'H' : 'L') : `${s.price >= prev.price ? 'H' : 'L'}${type === 'high' ? 'H' : 'L'}`;
+        tags.push({ x: toX(s.i), y: s.price, up: type === 'low', text: word, color: COLORS.swing });
+      });
+      const s = list[list.length - 1];
+      if (s && s.i >= start && inView(s.price)) {
+        lines.push({ x1: toX(s.i), x2: xEnd, y: s.price, color: COLORS.swing, dash: false });
+        label(s.price, `Swing ${type} ${px(s.price)}`, COLORS.swing, 1.8);
+      }
+    }
+    for (const t of st.trendLines || []) {
+      const at = (i) => t.p1 + t.slope * (i - t.i1);
+      const from = Math.max(t.i1, start), to = start + xEnd;
+      if (!inView(at(to))) continue;
+      const color = COLORS.trend;
+      trends.push({ x1: toX(from), y1: at(from), x2: xEnd, y2: at(to), zone: t.zone, color });
+      label(at(to), `Trend ${t.dir > 0 ? 'support' : 'resistance'} zone ${px(at(to) - t.zone)}–${px(at(to) + t.zone)}`, color, 1.8);
+    }
+  }
+  const day = dayRange(bars);
+  if (day) {
+    for (const [y, word] of [[day.high, 'high'], [day.low, 'low']]) {
+      lines.push({ x1: 0, x2: xEnd, y, color: COLORS.current, dash: true });
+      label(y, `Current ${word} ${px(y)}`, COLORS.current, 1.5);
     }
   }
   for (const l of levels) {
@@ -498,8 +575,8 @@ function chartModel({ symbol, tf, bars, structure: st, levels = [], positions = 
   const bias = st?.bias === 'bull' ? 'Bullish' : st?.bias === 'bear' ? 'Bearish' : 'Undefined';
   const zone = st?.range ? `, ${st.range.zone} ${Math.round(st.range.pos * 100)}%` : '';
   return {
-    symbol, tf, candles, zones, lines, marks, labels: placed, yMin, yMax, xMax, xLabel: n + 0.2,
-    title: `${symbol} ${tf} — T.A.L.O.N.`, subtitle: `${bias} structure${zone} · last ${px(lastPx)} · ${n} candles`,
+    symbol, tf, candles, zones, lines, marks, tags, trends, labels: placed, yMin, yMax, xMax, xLabel: n + 0.2,
+    title: `${symbol} ${tf} — T.A.L.O.N.`, subtitle: `${bias} structure${zone} · last ${px(lastPx)}${day ? ` · current H ${px(day.high)} / L ${px(day.low)}` : ''} · ${n} candles`,
     at: now,
   };
 }

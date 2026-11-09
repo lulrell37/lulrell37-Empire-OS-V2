@@ -427,7 +427,7 @@ export async function tlSnapshot(symbol='XAUUSD'){
   let structure=null,levels=null;
   try{
     structure={};
-    for(const tf of['4H','1H','15m'])if(closed[tf])structure[tf]=analyzeStructure(closed[tf]);
+    for(const tf of['1D','4H','1H','15m'])if(closed[tf])structure[tf]=analyzeStructure(closed[tf]);
     levels=keyLevels({symbol:sym,daily:closed['1D']||[],m15:closed['15m']||[],price:Number(quote?.mid)});
   }catch{structure=null;}
   const context={};

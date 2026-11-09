@@ -6,7 +6,7 @@
 // process instead of a memory-only session that resets on every cold app open).
 const { getSetting, setSetting, saveMemory } = require('./syncStore');
 const { tlStatus, tlConnect, tlFollowAccount, tlActiveEnv, tlSnapshot, tlFormatSnapshot, tlPlaceOrder, tlModifyPosition, tlPositions, tlInstrumentsById, tlQuote, MAX_QTY, entryCopies } = require('./tradeLocker');
-const { autoTradeDecision, guardStop, entryLocation, SYMBOLS } = require('./talonBrain');
+const { autoTradeDecision, guardStop, entryLocation, tradeContext, SYMBOLS } = require('./talonBrain');
 const { reconcileOpenTrades, formatTradeRecord, recordTradeOpen, allTrades, TRADER_ID } = require('./tradeJournal');
 const { orderRejected, araNote, tradeOpened, addedOn } = require('./talonAlerts');
 const { pushAlert } = require('./pushSender');
@@ -142,13 +142,13 @@ async function tick({ force = false } = {}) {
         const price = snap.quote?.mid ?? (dec.side === 'buy' ? snap.quote?.ask : snap.quote?.bid);
         // Rule 10, enforced: a setup against the 1D trend is a pullback unless he
         // called it a reversal — and a pullback gets the scalp only, no swing.
-        const d1 = snap.candles?.['1D']?.trend;
-        const against1D = d1 && ((dec.side === 'buy' && d1 === 'down') || (dec.side === 'sell' && d1 === 'up'));
-        const pullback = against1D && dec.daily !== 'reversal';
-        if (pullback && dec.swingTakeProfit != null) {
-          console.log(`talon-autotrade: ${sym} ${dec.side} runs against the 1D ${d1} trend and wasn't called a reversal — pullback, scalp only`);
+        // Against the 4H is a counter-trend trade: scalp only as well.
+        const { d1, h4, against1D, against4H, pullback, scalpOnly } = tradeContext({ side: dec.side, daily: dec.daily, snap });
+        if (scalpOnly && dec.swingTakeProfit != null) {
+          console.log(`talon-autotrade: ${sym} ${dec.side} — ${against4H ? `against the 4H ${h4} trend` : `against the 1D ${d1} trend, not called a reversal`}: scalp only`);
           dec.swingTakeProfit = undefined;
         }
+        if (against4H) decisions.push(`${sym}: against the 4H ${h4} trend — counter-trend, scalp only`);
         if (against1D) decisions.push(`${sym}: against the daily ${d1} trend — ${pullback ? 'read as a PULLBACK, scalp only' : 'read as a REVERSAL, full pair'}`);
         // Rule 2, enforced: the price he'd get has to be at 1H value, not mid-move.
         const loc = entryLocation({ side: dec.side, entry: price, snap });

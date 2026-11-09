@@ -234,10 +234,9 @@ low — never while price is still falling away from the TP; a new best price re
 one 0.02 position (`setup: 'add'`, `add_level`, not doubled by `ENTRY_COPIES`)
 that takes profit 1R past its entry, with the stop one step behind the armed step (first add's stop = the setup's entry), no
 cap on adds per setup, never within 1R of the target. It runs on every 5-min tick, with no AI calls.
-**Setups' location is checked in code** (`entryLocation` in `server/talonBrain.js`, run before `guardStop`): the price he'd actually get has to be within 0.5× the 1H ATR14 (`LOCATION_ATR`) of 1H value in the bias direction — the SMA20, a level broken that way (BOS/CHoCH retest), the dealing-range edge or OTE, or an unfilled FVG / order block / breaker pointing that way — or the "enter" is refused as a chase and logged in the cycle's decisions. News trades don't go through it. **Setups' bias is 4H + 1H** (`STRATEGY` rule 1). Rule 10 reads the 1D: a setup
+**Setups' location is checked in code** (`entryLocation` in `server/talonBrain.js`, run before `guardStop`): the price he'd actually get has to be within 0.5× the 1H ATR14 (`LOCATION_ATR`) of 1H value in the bias direction — the SMA20, a level broken that way (BOS/CHoCH retest), the dealing-range edge or OTE, a trend line zone on its own side, or an unfilled FVG / order block / breaker pointing that way — or the "enter" is refused as a chase and logged in the cycle's decisions. News trades don't go through it. **Setups read top down** (`STRATEGY` rule 1: 1D bigger picture, 4H overall trend, 1H + 15m now; either side is open if the entry and exit make sense). A setup against the 4H is a counter-trend trade and goes in scalp-only (2R). Rule 10 reads the 1D: a setup
 against the daily trend must be called a `"daily":"reversal"` by his brain to
-keep its swing — otherwise it's a pullback and goes in scalp-only (2R),
-enforced in `talonAutoTrade.js`. His market updates say with / pullback / reversal.
+keep its swing — otherwise it's a pullback and goes in scalp-only (`tradeContext` in `talonBrain.js`, enforced in `talonAutoTrade.js`). His market updates say with / pullback / reversal.
 **Quick scalps** (`server/talonQuick.js`, `TALON_QUICK=off` to stop; every filter
 fire and its outcome is logged to `app_settings.talon_quick_log`, read with
 `[QUICK_LOG]`; the brain's default is to take a fired setup) are a separate 5m desk on the same
@@ -333,14 +332,17 @@ BOS/CHoCH, liquidity pools (EQH/EQL, untaken swings), sweeps (wick through, clos
 back, still holding or failed), FVGs with CE and fill (IFVG once closed through),
 order blocks/breakers, dealing range (premium/discount, OTE) and key levels
 (PDH/PDL, PWH/PWL, PMH/PML, session highs/lows, midnight open, round numbers).
-`tlSnapshot` runs it on the 4H/1H/15m and `tlFormatSnapshot` prints it as the
+`tlSnapshot` runs it on the 1D/4H/1H/15m and `tlFormatSnapshot` prints it as the
 SMART-MONEY READ, so every decision, news trade, market update and `[TRADE_SCAN]`
 gets it; quick scalps also get a 5m read for their target. `STRATEGY` rule 11 says
-how it feeds rules 2-5: it never overrides the 4H + 1H bias or `guardStop`.
+how it feeds rules 2-5: it never overrides `guardStop`.
 `TRADING_KNOWLEDGE` (same file) is his glossary, in the playbook and both persona
 prompts; it says what he can't see (reliable volume, order flow, OI, funding,
 RSI/MACD values), so he doesn't quote readings he wasn't given.
-`[TRADE_CHART: SYMBOL | 5m/15m/1H/4H/1D]` draws it all from one `chartModel`, with
+`[TRADE_CHART: SYMBOL | 5m/15m/1H/4H/1D]` draws it all from one `chartModel`, plus trend lines
+(`trendLines`: best unbroken rising-support and falling-resistance line through swings, drawn as a line inside a ±`TREND_ZONE` × ATR band, also in the read; and a valid entry location in `entryLocation`),
+every swing named HH/HL/LH/LL, a line on the latest swing high and low, and the current high and low
+(the newest candle's ET day), with
 our open positions: a PNG on Telegram (`server/talonChart.js`, Vega-Lite via Kroki,
 T.A.L.O.N. and A.R.A.) and the Canvas in the app (`CandleSvg` in `ChartOverlay.js`).
 
@@ -367,7 +369,7 @@ Without them the brief says so rather than estimating. Tags: `[INSTAGRAM_WATCH]`
 `[WATCH_ACCOUNT]`, `[UNWATCH_ACCOUNT]`, `[SOCIAL_NICHE]`.
 
 **Monday scripts** (`server/scribeMonday.js`, `MONDAY_SCRIPTS=off`): Mondays 8 AM ET,
-retrying to 2 PM until one succeeds: 5 talking heads in `SCRIBE_VOICE` off her
+retrying to 2 PM until one succeeds: 7 videos, one per area picked from his "Instagram Content Areas" Drive note (read live; `checkScript` rejects a montage, movie scene or reaction written as a talking head; talking videos and Montages are Tate style, Empire OS is Iron Man lab style, never blended). S.C.R.I.B.E. writes only the content, he records it, R.O.G.U.E. (video editor, `[EDIT_CLIP]`) cuts it from her edit plan (`editPlan`), and S.E.L.E.N.E. dresses it up (`dressUp`: music, on-screen text, look, cover, caption; his words untouched; `checkEdit`), choosing music that fits from one web search of trending Reels audio (`trendingAudio`, web reports, labeled as such), and the note holds both, in `SCRIBE_VOICE` off her
 latest brief, filed as `Script — <title>`. A.R.A. only says they came in, with links; she doesn't
 read them out. `[MONDAY_SCRIPTS]` runs it now. `node server/scripts/test-desks.js` checks the rules behind all three.
 

@@ -5,7 +5,7 @@
 const assert = require('assert');
 const { validatePick, stepPick, tradable, recordLine, summarize } = require('../stockData');
 const { mediaStats, cleanHandle } = require('../seleneTrends');
-const { parseScripts } = require('../scribeMonday');
+const { parseScripts, checkScript, checkEdit, styleFor, EDIT_TAGS, DRESS_TAGS } = require('../scribeMonday');
 const { confirmScript } = require('../telegramMedia');
 const { guardStop } = require('../talonBrain');
 const { bottomLine, parseStories } = require('../wokeRead');
@@ -181,6 +181,30 @@ assert.strictEqual(parseStories('NONE of the accounts agree\nSTORIES: ["A"]').st
   assert(out[0].body.includes('(look at camera)'));
   assert.strictEqual(out[1].title, 'Fear');
   assert.deepStrictEqual(parseScripts('no format here'), []);
+}
+
+// A montage has to be a montage: the Monday check turns away anything else.
+{
+  const shots = Array.from({ length: 5 }, (_, i) => `SHOT ${i + 1}: something to film`).join('\n');
+  assert.strictEqual(checkScript(`AREA: Montages\nTYPE: montage\nIDEA: x\n${shots}\nSOUND: low synth`).type, 'montage');
+  assert(checkScript('AREA: Montages\nTYPE: talking head\nWhat is pain? Right?').why, 'a talking head filed under Montages');
+  assert(checkScript('AREA: Montages\nTYPE: montage\nWhat is pain? Something you feel when you are hurt.').why, 'a monologue called a montage');
+  assert(checkScript(`AREA: Montages\nTYPE: montage\n${shots}\nVO: ${'word '.repeat(60)}`).why, 'a montage that talks the whole way');
+  assert(checkScript('AREA: My life movie scenes\nTYPE: movie scene\nSHOT 1: a').why, 'too few shots');
+  assert(checkScript('AREA: Video reactions\nTYPE: reaction\nI saw this video once').why, 'a reaction needs a clip');
+  assert(checkScript('AREA: Video reactions\nTYPE: reaction\nCLIP: search for x\nREACT: pause at the claim').ok);
+  assert.strictEqual(checkScript('AREA: Empire OS\nTYPE: talking head\nHere is how it runs.').type, 'talking head');
+  assert.strictEqual(checkScript(`AREA: God\nTYPE: montage\n${shots}`).type, 'montage');
+  assert(checkScript('no labels at all').why);
+  // R.O.G.U.E.'s plan, S.E.L.E.N.E.'s dress-up, and the right style for the video.
+  assert(checkEdit('OPENING: x\nCUT: a\nSOUND: c', EDIT_TAGS).ok);
+  assert(/MUSIC, TEXT/.test(checkEdit('CUT: a', DRESS_TAGS).why));
+  assert(checkEdit('MUSIC: a\nTEXT: b\nFINISH: c\nCAPTION: d', DRESS_TAGS).ok);
+  assert.strictEqual(styleFor({ area: 'Empire OS', type: 'montage' }), 'lab');
+  assert.strictEqual(styleFor({ area: 'Montages', type: 'montage' }), 'tate');
+  assert.strictEqual(styleFor({ area: 'Talking heads', type: 'talking head' }), 'tate');
+  assert.strictEqual(styleFor({ area: 'God', type: 'talking head' }), null);
+  assert.strictEqual(styleFor({ area: 'My life movie scenes', type: 'movie scene' }), null);
 }
 
 console.log('desks: all checks passed');

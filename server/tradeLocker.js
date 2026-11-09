@@ -476,7 +476,7 @@ async function tlSnapshot(symbol = 'XAUUSD') {
   try {
     const price = Number(quote?.mid);
     structure = {};
-    for (const tf of ['4H', '1H', '15m']) if (closed[tf]) structure[tf] = analyzeStructure(closed[tf]);
+    for (const tf of ['1D', '4H', '1H', '15m']) if (closed[tf]) structure[tf] = analyzeStructure(closed[tf]);
     levels = keyLevels({ symbol: sym, daily: closed['1D'] || [], m15: closed['15m'] || [], price });
   } catch (e) { console.error(`tradelocker: structure read failed for ${sym} —`, e.message); structure = null; }
   const context = {};

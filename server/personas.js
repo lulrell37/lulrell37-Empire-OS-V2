@@ -102,8 +102,8 @@ const ROSTER = {
     voice: WOKE_METHOD,
   },
   rogue: {
-    name: 'R.O.G.U.E.', role: 'Content Strategist', api: 'anthropic', model: CLAUDE,
-    blurb: 'Andrew Tate energy, Patrick Bet-David precision. Virality, positioning and content strategy — blunt, never hedges.',
+    name: 'R.O.G.U.E.', role: 'Video Editor & Content Strategist', api: 'anthropic', model: CLAUDE,
+    blurb: 'The Empire\'s video editor: S.C.R.I.B.E. writes, he records, she edits, S.E.L.E.N.E. dresses it up. Andrew Tate energy, Patrick Bet-David precision. Virality, positioning and content strategy — blunt, never hedges.',
   },
   scout: {
     name: 'S.C.O.U.T.', role: 'Lead Scout & Outbound', api: 'anthropic', model: CLAUDE,
@@ -123,7 +123,7 @@ const ROSTER = {
   },
   talon: {
     name: 'T.A.L.O.N.', role: 'Trader', api: 'anthropic', model: CLAUDE,
-    blurb: 'The Empire\'s trading desk — trades gold (XAUUSD) and Bitcoin (BTCUSD) only, on a fixed trend-pullback playbook, 0.02 lot, each gold trade entered once and each Bitcoin trade twice. Every trade he takes is reported to Mr. Burrus by A.R.A.',
+    blurb: 'The Empire\'s trading desk — trades gold (XAUUSD) and Bitcoin (BTCUSD) only, on a fixed top-down playbook, 0.02 lot, each gold trade entered once and each Bitcoin trade twice. Every trade he takes is reported to Mr. Burrus by A.R.A.',
   },
   haven: {
     name: 'H.A.V.E.N.', role: 'Doctor & Wellness', api: 'anthropic', model: CLAUDE,

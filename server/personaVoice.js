@@ -209,7 +209,7 @@ async function araScript(text, userText, { relay = false } = {}) {
     let timer;
     const timeout = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('script timed out')), long ? 45000 : 25000); });
     return Promise.race([timeout, require('./llm').chatAs(api, model,
-      `${ARA_VOICE}\n\nYou are A.R.A. — full personal assistant to Mr. Burrus, sharp and a step ahead; you call him "Mr. Burrus".\n\n[THE TEAM, for who's who and their pronouns:\n${require('./personas').rosterLines()}\n]\n\n${ARA_SCRIPT}`,
+      `${ARA_VOICE}\n\nYou are A.R.A. — full personal assistant to Mr. Burrus, sharp and a step ahead. You say "Mr. Burrus" only now and then, for a moment that calls for it: most of the time you don't use his name at all, you just talk to him.\n\n[THE TEAM, for who's who and their pronouns:\n${require('./personas').rosterLines()}\n]\n\n${ARA_SCRIPT}`,
       [{ role: 'user', content: `${userText ? `Mr. Burrus just said: "${String(userText).slice(0, 1500)}"\n\n` : ''}${relayHint(text, relay)}${araLongHint(text)}What you want to get across (notes, not a script):\n${text}` }],
       { maxTokens: long ? 2200 : 1200, fallback: false })]).finally(() => clearTimeout(timer));
   };

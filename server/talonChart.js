@@ -1,6 +1,6 @@
 // [TRADE_CHART: XAUUSD | 1H] — T.A.L.O.N.'s marked-up chart as a PNG for
-// Telegram: candles, FVGs, order blocks, liquidity, sweeps, BOS/CHoCH, key levels
-// and our open positions. server/marketStructure.js finds and lays out everything;
+// Telegram: candles, FVGs, order blocks, liquidity, sweeps, BOS/CHoCH, trend lines,
+// swing and current highs/lows, key levels and our open positions. server/marketStructure.js finds and lays out everything;
 // this turns its drawing model into a Vega-Lite spec that Kroki renders (the same
 // service [DIAGRAM] uses, so no new dependency). Read-only: never touches a trade.
 const { tlHistory, tlQuote } = require('./tradeLocker');
@@ -40,6 +40,10 @@ function vegaSpec(m) {
         { x, x2: { field: 'x2' }, y, color }),
       layer(lines(false).map((l) => ({ x: l.x1, x2: l.x2, y: l.y, color: l.color, w: l.width || 1 })), { type: 'rule' },
         { x, x2: { field: 'x2' }, y, color, strokeWidth: { field: 'w', type: 'quantitative', scale: null } }),
+      layer(m.trends.flatMap((t, id) => [[t.x1, t.y1], [t.x2, t.y2]].map(([px, py]) => ({ id, x: px, y: py - t.zone, y2: py + t.zone, color: t.color }))), { type: 'area', opacity: 0.18, clip: true },
+        { x, y, y2: { field: 'y2' }, color, detail: { field: 'id', type: 'nominal' } }),
+      layer(m.trends.flatMap((t, id) => [{ id, x: t.x1, y: t.y1, color: t.color }, { id, x: t.x2, y: t.y2, color: t.color }]), { type: 'line', strokeWidth: 2, clip: true },
+        { x, y, color, detail: { field: 'id', type: 'nominal' } }),
       layer(m.candles.map((c) => ({ x: c.x, y: c.l, y2: c.h, color: c.color })), { type: 'rule', strokeWidth: 1 },
         { x, y, y2: { field: 'y2' }, color }),
       layer(body, { type: 'rect' }, { x, x2: { field: 'x2' }, y, y2: { field: 'y2' }, color }),
@@ -49,6 +53,8 @@ function vegaSpec(m) {
         { x, y, color, text: { field: 'text' } }),
       layer(m.marks.map((k) => ({ x: k.x, y: k.y, color: k.color, text: k.text, dy: k.up ? 14 : -14 })).filter((k) => k.dy < 0), { type: 'text', fontSize: 10, dy: -14 },
         { x, y, color, text: { field: 'text' } }),
+      layer(m.tags.filter((k) => k.up), { type: 'text', fontSize: 10, fontWeight: 'bold', dy: 11 }, { x, y, color, text: { field: 'text' } }),
+      layer(m.tags.filter((k) => !k.up), { type: 'text', fontSize: 10, fontWeight: 'bold', dy: -11 }, { x, y, color, text: { field: 'text' } }),
       layer(textLines, { type: 'text', fontSize: 9, dy: -6 }, { x, y, color, text: { field: 'text' } }),
       layer(m.labels.map((l) => ({ x: m.xLabel, y: l.y, text: l.text, color: l.color })), { type: 'text', align: 'left', fontSize: 11 },
         { x, y, color, text: { field: 'text' } }),

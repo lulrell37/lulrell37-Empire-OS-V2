@@ -299,7 +299,7 @@ function startWokeXCron() {
   console.log('W.O.K.E. X stories cron scheduled (08:00, 12:00, 16:00, 20:00 ET)');
 }
 
-// S.C.R.I.B.E.'s 5 Monday scripts (server/scribeMonday.js). The later slots are
+// S.C.R.I.B.E.'s 7 Monday videos (server/scribeMonday.js). The later slots are
 // retries: one successful run a Monday, so a failed call doesn't cost him the week.
 function startMondayScriptsCron() {
   if (process.env.MONDAY_SCRIPTS === 'off') return console.log('S.C.R.I.B.E. Monday scripts cron disabled (MONDAY_SCRIPTS=off)');

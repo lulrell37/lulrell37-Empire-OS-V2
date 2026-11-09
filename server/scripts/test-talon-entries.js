@@ -28,6 +28,23 @@ const { entryLocation } = require('../talonBrain');
 const { limitPlan, pendingTick } = require('../talonQuick');
 
 (async () => {
+  // --- direction: any side, but against the big picture it's scalp only ---
+  {
+    const { tradeContext } = require('../talonBrain');
+    const snap = { candles: { '1D': { trend: 'up' }, '4H': { trend: 'up' } } };
+    assert.strictEqual(tradeContext({ side: 'buy', snap }).scalpOnly, false, 'with everything: full setup');
+    const sell = tradeContext({ side: 'sell', daily: 'pullback', snap });
+    assert(sell.against4H && sell.scalpOnly, 'a sell against the 4H is allowed, scalp only');
+    assert.strictEqual(tradeContext({ side: 'sell', daily: 'reversal', snap }).scalpOnly, true, 'still scalp only while the 4H is against it');
+    const turned = { candles: { '1D': { trend: 'up' }, '4H': { trend: 'down' } } };
+    assert.strictEqual(tradeContext({ side: 'sell', daily: 'reversal', snap: turned }).scalpOnly, false, 'a called daily reversal with the 4H: full pair');
+    assert.strictEqual(tradeContext({ side: 'sell', snap: turned }).scalpOnly, true, 'against the 1D uncalled: scalp only');
+    // A trend line zone is somewhere to enter, on its own side only.
+    const zone = { candles: { '1H': { atr14: 10, sma20: 3000 } }, structure: { '1H': { events: [], fvgs: [], orderBlocks: [], trendLines: [{ dir: 1, kind: 'support', now: 3100, zone: 2.5 }] } } };
+    assert(entryLocation({ side: 'buy', entry: 3104, snap: zone }).ok, 'buy at rising support zone');
+    assert(entryLocation({ side: 'sell', entry: 3104, snap: zone }).skip, 'support is no place to sell');
+  }
+
   // --- entryLocation (playbook rule 2) ---
   const snap = {
     candles: { '1H': { atr14: 20, sma20: 3980 } },
