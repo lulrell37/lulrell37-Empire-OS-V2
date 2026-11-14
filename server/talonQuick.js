@@ -32,7 +32,8 @@
 // against an open position of his on that market. Gold only 3 AM-12 PM ET
 // (London + New York morning); both markets sit out 8:25-8:45 AM ET weekdays
 // (data releases). Two quick losses in a row on a market → 1 hour off it;
-// three in a day → done there for the day. No add-ons, no doubling, and they
+// two losses in a day → done there for the day. Fires only when 1H, 15m, 4H and 1D
+// all trend the scalp's way. No add-ons, no doubling, and they
 // don't count toward MAX_PAIRS. TALON_QUICK=off stops it.
 const { tlHistory, tlQuote, tlSnapshot, tlFormatSnapshot, tlPlaceOrder, tlModifyPosition, tlCancelOrder, tlOrderState, summarizeBars, MAX_QTY } = require('./tradeLocker');
 const { allTrades, recordTradeOpen, TRADER_ID } = require('./tradeJournal');
@@ -269,12 +270,29 @@ async function manage(open) {
   }
 }
 
-// Two quick losses in a row on a market → an hour off it; three today → done for the day.
+// 4H and 1D trend (last close vs SMA20, `summarizeBars` — the same read the main
+// playbook uses in tlSnapshot) must both match the scalp's direction. If either
+// can't be read cleanly, skip rather than guess.
+async function htfAgrees(sym, side) {
+  const want = side === 'buy' ? 'up' : 'down';
+  let h4, d1;
+  try {
+    const [b4, bd] = await Promise.all([tlHistory(sym, '4H', 60), tlHistory(sym, '1D', 60)]);
+    h4 = summarizeBars(b4)?.trend; d1 = summarizeBars(bd)?.trend;
+  } catch { return { skip: '4H/1D trend unavailable — skipped' }; }
+  if (!h4 || !d1) return { skip: '4H/1D trend unavailable — skipped' };
+  if (h4 !== want || d1 !== want) return { skip: `4H ${h4} / 1D ${d1} don't agree with the ${side} — skipped` };
+  return {};
+}
+
+const MAX_DAY_LOSSES = 2;
+
+// Two quick losses in a row on a market → an hour off it; two today → done for the day.
 function discipline(sym, mine) {
   const closed = mine.filter((t) => t.status === 'closed' && t.symbol === sym).sort((a, b) => (b.closed_at || 0) - (a.closed_at || 0));
   const today = etDay(Date.now());
   const lossesToday = closed.filter((t) => t.outcome === 'loss' && etDay(t.closed_at || 0) === today).length;
-  if (lossesToday >= 3) return `${lossesToday} quick losses today — done on it until tomorrow`;
+  if (lossesToday >= MAX_DAY_LOSSES) return `${lossesToday} quick losses today — done on it until tomorrow`;
   const scored = closed.filter((t) => t.outcome === 'win' || t.outcome === 'loss');
   if (scored[0]?.outcome === 'loss' && scored[1]?.outcome === 'loss' && Date.now() - (scored[0].closed_at || 0) < 60 * 60e3) return 'two quick losses in a row — an hour off it';
   return null;
@@ -300,6 +318,9 @@ async function quickTick({ marketOpen }) {
       const quote = await tlQuote(sym);
       const setup = findSetup({ sym, bars5, s15: summarizeBars(h15), s1h: summarizeBars(h1), quote });
       if (setup.skip) { out[sym] = setup.skip; continue; }
+      // 5. Higher-timeframe gate: 4H and 1D must trend the same way (same read as the main playbook).
+      const htf = await htfAgrees(sym, setup.side);
+      if (htf.skip) { out[sym] = htf.skip; await logQuick(sym, setup.side, out[sym]); continue; }
       if (trades.some((t) => t.status === 'open' && t.symbol === sym && t.side !== setup.side)) { out[sym] = `${setup.side} would go against an open position`; await logQuick(sym, setup.side, out[sym]); continue; }
       const snap = await tlSnapshot(sym);
       const dec = await confirm({ sym, setup, snapText: tlFormatSnapshot(snap), bars5 });

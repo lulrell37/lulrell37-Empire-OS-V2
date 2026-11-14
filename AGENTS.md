@@ -246,7 +246,7 @@ Stop beyond the key level, sized for the 5m: past the zone (5-bar swing, 5m EMA2
 with them) + one 5m ATR, min gold $3 / Bitcoin 0.3%; over gold $8 / Bitcoin 0.8% → skip; stop to
 break-even at +1R. Entry is back at the zone, not the confirmation close: unless price is still within 0.15 ATR of the 5m EMA20, the order is a GTC limit at the EMA20 (`limitPlan`; stop floored again from that price, R measured from it), resting 3 bars and cancelled if unfilled or if price reaches the target or stop first (`pendingTick`, `app_settings.talon_quick_pending`, `tlOrderState` / `tlCancelOrder` in `server/tradeLocker.js`); A.R.A. tells him when one goes in (`limitPlaced`), when it ends unfilled (`limitEnded`) and when it fills (`tradeOpened`, `limitFilled`); it's journaled only on the fill, and a resting one counts as that market's open quick scalp. One 0.02 position (`setup: 'quick'`), one open per
 market, never against an open position there; gold 3 AM-12 PM ET only, both off 8:25-8:45 AM ET
-weekdays; 2 quick losses in a row → 1 h off that market, 3 in a day → done for the day. No add-ons,
+weekdays; 2 quick losses in a row → 1 h off that market, 2 losses in a day → done for the day; the 4H and 1D trend (`htfAgrees`, same `summarizeBars` read as the playbook) must also match the scalp, else skipped. No add-ons,
 not doubled, not counted in `MAX_PAIRS`, skipped by the near-stop watch.
 **On his orders** (`server/talonCommands.js`): A.R.A. relays "tell Talon to…" (or
 any trade order — `TRADE_ORDER` in `relayAllowed` lets one through to T.A.L.O.N.
