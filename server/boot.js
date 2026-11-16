@@ -18,6 +18,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const http = require('http');
+const { shareBlocker } = require('./depsCheck');
 const { spawn, execFileSync } = require('child_process');
 
 const REPO = 'lulrell37/lulrell37-Empire-OS-V2';
@@ -45,13 +46,6 @@ async function gh(p, raw = false) {
   return raw ? Buffer.from(await res.arrayBuffer()) : res.json();
 }
 
-const depsKey = (dir) => {
-  try {
-    const p = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'));
-    return JSON.stringify([p.dependencies || {}, p.overrides || {}]);
-  } catch { return ''; }
-};
-
 // Latest main, unpacked and ready to run -> { dir, sha, source } (dir = its server/).
 async function prepare() {
   if (process.env.SELF_UPDATE === 'off') throw new Error('SELF_UPDATE=off');
@@ -70,11 +64,13 @@ async function prepare() {
     execFileSync('tar', ['-xzf', tgz, '-C', root, '--strip-components=1']);
     fs.rmSync(tgz, { force: true });
     if (!fs.existsSync(path.join(dir, 'index.js'))) throw new Error(`main @ ${sha} has no server/index.js`);
-    // Same dependencies as what's installed here -> share node_modules; new ones -> install.
-    if (depsKey(dir) === depsKey(BUNDLED) && fs.existsSync(path.join(BUNDLED, 'node_modules'))) {
+    // Share node_modules only when nothing differs (every dependency field AND the
+    // installed tree vs the new lockfile — see depsCheck.js); otherwise install.
+    const blocker = shareBlocker(dir, BUNDLED);
+    if (!blocker) {
       fs.symlinkSync(path.join(BUNDLED, 'node_modules'), path.join(dir, 'node_modules'), 'dir');
     } else {
-      log(`main @ ${sha} changed dependencies — installing`);
+      log(`main @ ${sha}: not sharing node_modules (${blocker}) — installing`);
       const lock = fs.existsSync(path.join(dir, 'package-lock.json'));
       execFileSync('npm', [lock ? 'ci' : 'install', '--omit=dev', '--no-audit', '--no-fund'], { cwd: dir, stdio: 'inherit', timeout: 8 * 60e3 });
     }
