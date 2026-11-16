@@ -21,6 +21,7 @@ import{cuedFor,ARA_VOICE}from '../services/voiceCues';
 import{reportIssue,clearIssueKey,notify}from '../services/report';
 import{googleReadInjections,googleWriteCommands}from '../services/googleCommands';
 import{courseInjections}from '../services/stephanieCourse';
+import{startClipScan}from '../services/clipScan';
 import{scanTags}from '../services/noteCommands';
 import{playOpts,speechRate,applyRate,onVoiceSpeedChange,voiceRate,setVoiceSpeed,VOICE_SPEED_MIN,VOICE_SPEED_MAX}from '../services/voiceSpeed';
 import SpeedSlider from '../components/SpeedSlider';
@@ -1819,6 +1820,12 @@ export default function CommandScreen({navigation,route}){
             }catch(e){
               pushSystemMsg(e?.noToken?'— CLIP · connect GitHub in Settings › Dev first —':`— CLIP · couldn't queue it: ${e.message} —`);
             }
+          },
+          onClipScan:async({mediaUrl,focus})=>{
+            try{
+              await startClipScan({mediaUrl,focus});
+              pushSystemMsg('— CLIP SCAN · started — R.O.G.U.E. is transcribing and picking moments; the ranked clips land on Telegram in a few minutes —');
+            }catch(e){pushSystemMsg(`— CLIP SCAN · couldn't start: ${e.message} —`);}
           },
           onWatchVideo:async({mediaUrl,focus})=>{
             try{

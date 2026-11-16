@@ -563,7 +563,45 @@ async function gTaskDelete(title) {
   return `Google Tasks: "${t.title}" deleted.`;
 }
 
+// Resumable upload of a local file (a rendered clip) into My Drive. Returns
+// { id, name, link }. Streams from disk, so a big file never sits in memory.
+async function driveUploadFile(filePath, name, mime = 'video/mp4') {
+  const fs = require('fs');
+  const token = await accessToken();
+  if (!token) throw new Error('google not linked');
+  const size = fs.statSync(filePath).size;
+  const init = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,name,webViewLink', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json; charset=UTF-8', 'X-Upload-Content-Type': mime, 'X-Upload-Content-Length': String(size) },
+    body: JSON.stringify({ name, mimeType: mime }),
+  });
+  if (!init.ok) throw new Error(`google ${init.status}: ${(await init.text()).slice(0, 160)}`);
+  const loc = init.headers.get('location');
+  if (!loc) throw new Error('drive upload: no session url');
+  const put = await fetch(loc, { method: 'PUT', headers: { 'Content-Type': mime, 'Content-Length': String(size) }, body: fs.readFileSync(filePath) });
+  if (!put.ok) throw new Error(`google ${put.status}: ${(await put.text()).slice(0, 160)}`);
+  const f = await put.json();
+  return { id: f.id, name: f.name, link: f.webViewLink || `https://drive.google.com/file/d/${f.id}/view` };
+}
+
+// Stream a Drive file's bytes to a local path (the owner's own file, so it uses
+// his token). Returns the file name.
+async function driveDownloadTo(fileId, destPath, maxBytes) {
+  const fs = require('fs');
+  const { Readable } = require('stream');
+  const { pipeline } = require('stream/promises');
+  const token = await accessToken();
+  if (!token) throw new Error('google not linked');
+  const meta = await gapi(`/drive/v3/files/${encodeURIComponent(fileId)}`, { query: { fields: 'name,size,mimeType', supportsAllDrives: true } });
+  if (maxBytes && Number(meta.size) > maxBytes) throw new Error(`file is ${(meta.size / 1e9).toFixed(1)} GB — over the ${(maxBytes / 1e9).toFixed(1)} GB limit`);
+  const res = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media&supportsAllDrives=true`, { headers: { Authorization: `Bearer ${token}` } });
+  if (!res.ok) throw new Error(`google ${res.status}: ${(await res.text()).slice(0, 160)}`);
+  await pipeline(Readable.fromWeb(res.body), fs.createWriteStream(destPath));
+  return meta.name || 'video';
+}
+
 module.exports = {
+  driveUploadFile, driveDownloadTo,
   calendarFind, calendarUpdate, driveMoveNote,
   accessToken, googleLinked, googleStatus, readDriveNote, saveDriveNote, gmailSend,
   gmailList, gmailRead, calendarList, calendarCreate, calendarDelete,

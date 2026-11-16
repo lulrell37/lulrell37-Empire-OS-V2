@@ -517,3 +517,17 @@ it will not ship as an OTA update.
 **"Push it" means ship it:** when the owner says push, commit, merge into
 `main` and push, so the APK build starts. Pushing only the feature branch
 builds nothing.
+
+## R.O.G.U.E.'s clip scan (`server/clipScan.js`, `CLIP_SCAN=off` to stop)
+
+`[CLIP_SCAN: drive link | focus]` (R.O.G.U.E.) takes a LONG video: downloads it from
+Drive, ffmpeg splits the audio into 10-min chunks, Whisper with timestamps
+(`transcribeSegments`, `server/llm.js`), one `claudeText` call picks the 3-5 most viral
+moments (12-90 s, no overlaps, filtered by `focus`; `sanitizePicks` enforces it), ffmpeg cuts
+each and center-crops to 1080x1920, `driveUploadFile` (`server/google.js`) puts them in
+My Drive, and the ranked list (range, reason, link) comes back with each clip under 45 MB
+as a Telegram video (`it.buffer` in `sendMedia`); bigger ones are links only. One scan at a
+time; caps `CLIP_SCAN_MAX_GB` (2) / `CLIP_SCAN_MAX_MIN` (180). The app's tag
+(`commandHandler.js` → `onClipScan` → `src/services/clipScan.js` → `POST /clips/scan`) runs it in the
+background and A.R.A. delivers the result on Telegram. `[EDIT_CLIP]` / `[WATCH_VIDEO]` are
+untouched. `node server/scripts/test-clip-scan.js`.
