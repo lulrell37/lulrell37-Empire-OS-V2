@@ -1,8 +1,8 @@
-// R.O.G.U.E.'s viral-moment scan — [CLIP_SCAN: drive link | focus].
+// R.O.G.U.E.'s viral-moment scan — [CLIP_SCAN: drive link or YouTube URL | focus].
 //
 // A LONG video (podcast, stream, long recording) goes in; a ranked set of short
 // vertical clips comes out, without him scrubbing the source first:
-//   Drive link -> download -> ffmpeg audio chunks -> Whisper (timestamps)
+//   Drive link (or YouTube URL, fetched with yt-dlp) -> download -> ffmpeg audio chunks -> Whisper (timestamps)
 //   -> Claude picks the top 3-5 moments (filtered by `focus`) -> ffmpeg cuts each
 //   and center-crops to 9:16 -> uploaded to his Drive -> ranked list back.
 // Doesn't touch [EDIT_CLIP]: a clip from here can still go through it for
@@ -35,6 +35,58 @@ function driveId(url) {
   const u = String(url || '');
   const m = u.match(/\/file\/d\/([\w-]{10,})/) || u.match(/[?&]id=([\w-]{10,})/) || u.match(/\/d\/([\w-]{10,})/);
   return m ? m[1] : null;
+}
+
+// youtube.com/watch, youtu.be, youtube.com/shorts (+ m./music./www.) -> true. One video only.
+function isYouTube(url) {
+  let u;
+  try { u = new URL(String(url || '').trim()); } catch { return false; }
+  if (!/^https?:$/.test(u.protocol)) return false;
+  const host = u.hostname.toLowerCase().replace(/^(www|m|music)\./, '');
+  if (host === 'youtu.be') return /^\/[\w-]{11}/.test(u.pathname);
+  if (host !== 'youtube.com') return false;
+  if (u.pathname === '/watch') return /^[\w-]{11}$/.test(u.searchParams.get('v') || '');
+  return /^\/(shorts|live|embed)\/[\w-]{11}/.test(u.pathname);
+}
+
+// 'drive' | 'youtube' | null (neither: refused before any download).
+function linkKind(url) {
+  const u = String(url || '').trim();
+  if (!/^https?:\/\//i.test(u)) return null;
+  if (driveId(u)) return 'drive';
+  if (isYouTube(u)) return 'youtube';
+  return null;
+}
+
+function ytdlpBin() {
+  try { return require('yt-dlp-exec/src/constants').YOUTUBE_DL_PATH; } catch { return 'yt-dlp'; }
+}
+
+function ytdlp(args) {
+  return new Promise((resolve, reject) => {
+    const p = spawn(ytdlpBin(), ['--no-playlist', '--no-warnings', '--ffmpeg-location', ffmpegPath, ...args]);
+    let out = '', err = '';
+    p.stdout.on('data', (c) => { out += c; });
+    p.stderr.on('data', (c) => { err = (err + c).slice(-2000); });
+    p.on('error', (e) => reject(new Error(`yt-dlp isn't available on this server (${e.message})`)));
+    p.on('close', (code) => (code === 0 ? resolve(out) : reject(new Error(`yt-dlp: ${(err.trim().split('\n').pop() || `exit ${code}`).slice(0, 240)}`))));
+  });
+}
+
+// YouTube URL -> local file at `dir`/source.<ext>. Checks duration before
+// downloading and the size cap during it. Returns { file, name }.
+async function downloadYouTube(url, dir) {
+  const meta = (await ytdlp(['--skip-download', '--print', '%(duration)s\n%(title)s', url])).split('\n');
+  const secs = Number(meta[0]);
+  const name = (meta.slice(1).join(' ').trim() || 'YouTube video');
+  if (Number.isFinite(secs) && secs > MAX_SEC) throw new Error(`that video is ${mmss(secs)} — the limit is ${mmss(MAX_SEC)}`);
+  await ytdlp(['-f', 'bv*[height<=720]+ba/b[height<=720]/b', '--merge-output-format', 'mp4', '--max-filesize', String(Math.floor(MAX_BYTES)),
+    '-o', path.join(dir, 'source.%(ext)s'), url]);
+  const file = fs.readdirSync(dir).find((f) => /^source\.(?!part|ytdl)/.test(f) && !f.endsWith('.part'));
+  if (!file) throw new Error('the video is over the size limit or couldn\'t be downloaded');
+  const full = path.join(dir, file);
+  if (fs.statSync(full).size > MAX_BYTES) throw new Error('file is over the size limit');
+  return { file: full, name };
 }
 
 function run(args, { allowFail = false } = {}) {
@@ -136,14 +188,16 @@ function cutVertical(src, start, end, dest) {
 async function clipScan(url, focus = '', { onProgress = () => {} } = {}) {
   if (!enabled()) throw new Error('clip scan is switched off (CLIP_SCAN=off)');
   if (running) throw new Error('a clip scan is already running — one at a time; wait for it to finish');
-  if (!/^https?:\/\//i.test(String(url || ''))) throw new Error('needs a link to the video (the Drive link from EDIT CLIP)');
+  const kind = linkKind(url);
+  if (!kind) throw new Error('needs a Google Drive link or a YouTube URL (youtube.com/watch, youtu.be, youtube.com/shorts)');
   running = true;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clipscan-'));
   try {
-    const src = path.join(dir, 'source');
-    const id = driveId(url);
+    let src = path.join(dir, 'source');
+    let name;
     onProgress('downloading');
-    const name = id ? await google.driveDownloadTo(id, src, MAX_BYTES) : await downloadUrl(url, src);
+    if (kind === 'youtube') ({ file: src, name } = await downloadYouTube(String(url).trim(), dir));
+    else name = await google.driveDownloadTo(driveId(url), src, MAX_BYTES);
     const total = await duration(src);
     if (!total) throw new Error('couldn\'t read that file as a video');
     if (total > MAX_SEC) throw new Error(`that video is ${mmss(total)} — the limit is ${mmss(MAX_SEC)}`);
@@ -203,6 +257,6 @@ function scanInBackground(url, focus) {
   });
 }
 
-const CLIP_TOOLS = ` - [CLIP_SCAN: drive link | focus] — for a LONG video (podcast, stream, full recording): you transcribe it, pick the 3-5 most viral moments (focus is optional, e.g. "funniest moments", "best trading calls"; blank = general virality), cut each to a 9:16 vertical short and upload them to his Drive. Takes several minutes; the ranked list (time range, why, link) and the clips themselves come back in this chat. Use it BEFORE [EDIT_CLIP] when the footage is long-form and he hasn't picked the moment; [EDIT_CLIP] on any one clip after that for captions, music, dress-up. One per turn, one scan at a time. Say it's done only from the result.`;
+const CLIP_TOOLS = ` - [CLIP_SCAN: drive link or YouTube URL | focus] — for a LONG video (podcast, stream, full recording): you transcribe it, pick the 3-5 most viral moments (focus is optional, e.g. "funniest moments", "best trading calls"; blank = general virality), cut each to a 9:16 vertical short and upload them to his Drive. Takes several minutes; the ranked list (time range, why, link) and the clips themselves come back in this chat. Use it BEFORE [EDIT_CLIP] when the footage is long-form and he hasn't picked the moment; [EDIT_CLIP] on any one clip after that for captions, music, dress-up. One per turn, one scan at a time. Say it's done only from the result.`;
 
-module.exports = { clipScan, scanInBackground, CLIP_TOOLS, driveId, parsePicks, sanitizePicks, mmss };
+module.exports = { clipScan, scanInBackground, CLIP_TOOLS, driveId, isYouTube, linkKind, parsePicks, sanitizePicks, mmss };
