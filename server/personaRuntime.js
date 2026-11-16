@@ -404,6 +404,8 @@ PERSONA_EXTRA_TOOLS.selene = ` YOUR INSTAGRAM WATCH — runs itself Mondays and 
 
 PERSONA_EXTRA_TOOLS.stephanie = require('./stephanieCourse').COURSE_TOOLS;
 
+PERSONA_EXTRA_TOOLS.rogue = require('./clipScan').CLIP_TOOLS;
+
 PERSONA_EXTRA_TOOLS.scribe = ` - [MONDAY_SCRIPTS] — write this week's 7 video scripts now, and file them; A.R.A. tells him they came in. They go out on their own Mondays at 8 AM ET; only use this when he asks for them again or early.`;
 
 PERSONA_EXTRA_TOOLS.talon = ` ${TRADING_KNOWLEDGE}
@@ -607,6 +609,14 @@ async function runInjections(text, persona = 'ara', { convo = '', depth = 0, sin
       if (name === 'WOKE_READ' && ['ara', 'woke'].includes(persona)) {
         const r = await require('./wokeRead').readNow(arg);
         return r.text ? `W.O.K.E.'S READ (A.R.A. has already sent him this, so don't repeat it, one line at most):\n${r.text}` : `W.O.K.E.: ${r.skipped || 'no result'}`;
+      }
+      if (name === 'CLIP_SCAN' && arg && persona === 'rogue') {
+        const [link, ...f] = arg.split('|');
+        try {
+          const r = await require('./clipScan').clipScan(link.trim(), f.join('|').trim());
+          if (sink && sink.media) sink.media.push(...r.media);
+          return `${r.text}\n(the clips themselves go out as videos right after your reply — put the list in your own words, don't paste every link unless he asks)`;
+        } catch (e) { return `CLIP_SCAN failed: ${e.message}`; }
       }
       if (name === 'STOCK_PICKS' && ['ara', 'atlas'].includes(persona)) return `A.T.L.A.S.'S OPEN STOCK CALLS (live prices):\n${await require('./atlasInvest').picksText()}`;
       if (name === 'STOCK_DESK' && ['ara', 'atlas'].includes(persona)) {

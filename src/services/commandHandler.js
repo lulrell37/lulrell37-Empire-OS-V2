@@ -343,6 +343,11 @@ export async function handleCommands(response,personaId,callbacks={}){
     const mediaUrl=m[1].trim();const instructions=m[2].trim();
     if(mediaUrl&&instructions)callbacks.onClipEdit?.({mediaUrl,instructions});
   }
+  // --- R.O.G.U.E. viral-moment scan of a LONG video — focus is optional ---
+  for(const m of response.matchAll(/\[CLIP_SCAN:\s*(\S+)(?:\s*\|\s*([\s\S]+?))?\]/gi)){
+    const mediaUrl=m[1].trim();const focus=(m[2]||'').trim();
+    if(mediaUrl)callbacks.onClipScan?.({mediaUrl,focus});
+  }
   // --- Video watching (any persona) — focus is optional ---
   for(const m of response.matchAll(/\[WATCH_VIDEO:\s*(\S+)(?:\s*\|\s*([\s\S]+?))?\]/gi)){
     const mediaUrl=m[1].trim();const focus=(m[2]||'').trim();
@@ -456,6 +461,7 @@ export function stripCommands(text){
     .replace(/\[PUBLISH(_APPROVED)?(?::[^\]]*)?\]/gi,'').replace(/\[PUBLISH_STATUS\]/gi,'').replace(/\[OPEN_CONTENT\]/gi,'')
     .replace(/\[REMEMBER:[^\]]*\]/gi,'').replace(/\[UNPIN_MEMORY:[^\]]*\]/gi,'')
     .replace(/\[EDIT_CLIP:[^\]]*\]/gi,'')
+    .replace(/\[CLIP_SCAN:[^\]]*\]/gi,'')
     .replace(/\[WATCH_VIDEO:[^\]]*\]/gi,'')
     .replace(/\[SHOW_CHART:[^\]]*\]/gi,'').replace(/\[TRADE_CHART(?::[^\]]*)?\]/gi,'').replace(/\[SHOW_NOTE:[^\]]*\]/gi,'')
     .replace(/\[SHOW_NOTES\]/gi,'').replace(/\[SHOW_TASKS\]/gi,'')
