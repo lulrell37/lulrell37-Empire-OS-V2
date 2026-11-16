@@ -1,4 +1,4 @@
-// R.O.G.U.E.'s [CLIP_SCAN: link | focus] in the app. The scan itself (Whisper →
+// R.O.G.U.E.'s [CLIP_SCAN: Drive link or YouTube URL | focus] in the app. The scan itself (Whisper →
 // Claude → ffmpeg 9:16 cuts → Drive) runs on the Empire server
 // (server/clipScan.js); this just starts it. The ranked list and the clips
 // arrive on Telegram from A.R.A. when it's done.
