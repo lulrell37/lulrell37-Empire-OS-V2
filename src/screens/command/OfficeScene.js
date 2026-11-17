@@ -166,7 +166,7 @@ function OfficeSceneInner({personaId,color,active,vizRef,personaPics,unreadPerso
   async function onContextCreate(gl){
     try{
       const glW=gl.drawingBufferWidth,glH=gl.drawingBufferHeight;
-      const renderer=new Renderer({gl});
+      const renderer=new Renderer({gl});renderer.debug.checkShaderErrors=false; // expo-gl returns undefined info logs; three .trim()s them and crashed the scene
       renderer.setSize(glW,glH);
       renderer.setClearColor(0x0d1114,1); // a hint of the world outside the windows, not a void
 

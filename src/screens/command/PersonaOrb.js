@@ -25,7 +25,7 @@ export default function PersonaOrb({viz,color='#E8C98A',active=true}){
   async function onContextCreate(gl){
     try{
       const w=gl.drawingBufferWidth,h=gl.drawingBufferHeight;
-      const renderer=new Renderer({gl});
+      const renderer=new Renderer({gl});renderer.debug.checkShaderErrors=false; // expo-gl returns undefined info logs; three .trim()s them and crashed the scene
       renderer.setSize(w,h);
       renderer.setClearColor(0x000000,0);
 

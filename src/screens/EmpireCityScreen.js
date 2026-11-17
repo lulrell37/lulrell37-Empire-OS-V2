@@ -819,7 +819,7 @@ function EmpireCity({navigation}){
   async function onContextCreate(gl){
     try{
       const glW=gl.drawingBufferWidth,glH=gl.drawingBufferHeight;
-      const renderer=new Renderer({gl});
+      const renderer=new Renderer({gl});renderer.debug.checkShaderErrors=false; // expo-gl returns undefined info logs; three .trim()s them and crashed the scene
       renderer.setSize(glW,glH);
       renderer.setClearColor(0x000000,1);
 

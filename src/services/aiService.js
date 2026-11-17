@@ -393,6 +393,23 @@ export async function callPersona(personaId,messages,signal=null,onDelta=null,op
     }
   }
 
+  // J.A.R.V.I.S.'s direct turns run on Claude Code (opts.engine, set by the chat
+  // screen): it keeps its own session, so it gets his newest message plus this
+  // turn's prompt. If it can't run, the plain model below answers instead.
+  if(opts.engine&&personaId==='jarvis'&&!hasVision){
+    const last=hist.filter(m=>m.role==='user').slice(-1)[0];
+    try{
+      const{jarvisEngineTurn}=await import('./jarvisEngine');
+      const text=await jarvisEngineTurn(String(last?.content||''),sys,{signal,onStatus:opts.onStatus});
+      // Comes back whole; type it in word by word when the bubble is live.
+      if(stream){const words=String(text).split(/(\s+)/);for(let i=0;i<words.length;i+=6){if(signal?.aborted)break;emit(words.slice(i,i+6).join(''));await new Promise(r=>setTimeout(r,35));}}
+      else emit(text);
+      api='engine';
+    }catch(e){
+      if(e?.name==='AbortError')throw e;
+      try{opts.onStatus?.(`◇ Claude Code couldn't run (${String(e.message).slice(0,80)}) — answering on the plain model…`);}catch{}
+    }
+  }
   // Grok model for this turn. A Claude persona landing here (billing fallback
   // below) has a Claude model id, so it gets the default Grok model instead.
   let grokModel=grokVisionModel||(persona.api==='grok'?(opts.model||persona.model):null)||'grok-4';

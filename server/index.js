@@ -25,7 +25,7 @@ app.get('/', (req, res) => res.status(200).send('ok'));
 
 app.get('/health', (req, res) => {
   const { subscriptionStatus, creditStatus } = require('./llm');
-  res.json({ ok: true, service: 'empire-os-backend', ts: Date.now(), code: require('./redeploy').codeInfo(), ai: { claudeSubscription: subscriptionStatus(), credits: creditStatus() } });
+  res.json({ ok: true, service: 'empire-os-backend', ts: Date.now(), code: require('./redeploy').codeInfo(), ai: { claudeSubscription: subscriptionStatus(), credits: creditStatus() }, jarvisEngine: require('./jarvisEngine').status() });
 });
 
 // AI proxy: no body parser — the request body is streamed straight through.
@@ -40,6 +40,7 @@ app.use('/google', auth, json, require('./routes/google'));
 app.use('/trade', auth, json, require('./routes/trade'));
 app.use('/council', auth, json, require('./routes/council'));
 app.use('/stephanie', auth, json, require('./routes/stephanie'));
+app.use('/jarvis', auth, json, require('./routes/jarvis'));
 app.use('/clips', auth, json, require('./routes/clips'));
 // Is Mem0 (persona memory) actually answering from the server — a live probe,
 // plus how many memories each persona has there.

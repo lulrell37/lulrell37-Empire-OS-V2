@@ -1095,7 +1095,10 @@ async function runPersonaTurn(personaId, userText, deliver) {
     memoryBlock(persona, userText).catch(() => ''),
   ]);
   let sys = persona === 'ara' ? systemPrompt(ctx, gs, custom, mem) : personaSystemPrompt(persona, ctx, gs, custom, mem);
-  if (persona === 'jarvis') sys = `${sys}\n\n${await empireOsBrief()}`;
+  // J.A.R.V.I.S. runs on Claude Code (server/jarvisEngine.js), which reads the
+  // repo itself, so the code brief is only for the plain-model fallback.
+  const engine = persona === 'jarvis' && require('./jarvisEngine').enabled() ? require('./jarvisEngine') : null;
+  if (persona === 'jarvis' && !engine) sys = `${sys}\n\n${await empireOsBrief()}`;
   if (persona === 'stephanie') {
     const course = await require('./stephanieCourse').statusText().catch((e) => `(couldn't read it: ${e.message})`);
     sys = `${sys}\n\n[YOUR COURSE — live from Drive this turn:\n${course}\n]`;
@@ -1107,7 +1110,17 @@ async function runPersonaTurn(personaId, userText, deliver) {
 
   // 4000: a long note lives inside the reply's tag — at 1200 it was cut off
   // mid-note, the tag never closed, and nothing was saved.
-  let reply = await chatAs(p.api, p.model, sys, messages, { maxTokens: 4000, fallback: persona !== 'ara' });
+  // The engine keeps its own session, so it gets only the newest message; if it
+  // fails, the turn falls back to his plain model and says so.
+  let engineNote = '';
+  const brain = async (msgs) => {
+    if (engine && !engineNote) {
+      try { return await engine.turn(String(msgs[msgs.length - 1].content), { persona: sys }); }
+      catch (e) { engineNote = `⚠️ Claude Code (his engine) failed, so this answer is from the plain chat model: ${e.message.slice(0, 200)}`; console.error('jarvis engine:', e.message); }
+    }
+    return chatAs(p.api, p.model, sys, msgs, { maxTokens: 4000, fallback: persona !== 'ara' });
+  };
+  let reply = await brain(messages);
   const replies = [reply];
   const looked = [];
 
@@ -1120,7 +1133,7 @@ async function runPersonaTurn(personaId, userText, deliver) {
     looked.push(inj);
     messages.push({ role: 'assistant', content: reply });
     messages.push({ role: 'user', content: `[tool results — where a persona's actions are listed, those receipts are what really happened: report them, never "done" for something that failed or never ran]\n\n${inj}\n\n[If something Mr. Burrus asked for still needs a lookup you haven't done, emit every remaining read tag now, together, and nothing else. Otherwise reply to him covering everything he asked, using these results — don't re-run a lookup that's already above.]` });
-    reply = await chatAs(p.api, p.model, sys, messages, { maxTokens: 4000, fallback: persona !== 'ara' });
+    reply = await brain(messages);
     replies.push(reply);
   }
 
@@ -1162,6 +1175,7 @@ async function runPersonaTurn(personaId, userText, deliver) {
   spoken = forSpeech(spoken);
   // A receipt under the reply for every write — the reply is written before the
   // writes run, so this is the only part guaranteed to say what really happened.
+  if (engineNote) fx.warnings.push(engineNote.replace(/^⚠️ /, ''));
   const footer = [...fx.notes.map((n) => `✓ ${n}`), ...fx.warnings.map((w) => `⚠️ ${w}`)].join('\n');
 
   // What she looked up / heard back this turn rides along with his message in

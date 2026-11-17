@@ -1584,7 +1584,9 @@ export default function CommandScreen({navigation,route}){
           const shown=(stripCommands(raw)||'').replace(/\[[A-Z_]+:?[^\]]*$/,'').trimEnd();
           patch(m=>({...m,content:shown,revealed:shown.length}));
         };
-        let response=await callPersona(pid,hist,myAbort.signal,onDelta,{...voiceModelOpts(p),images,saveUserText:text});
+        // J.A.R.V.I.S. in his own chat runs on Claude Code; his bubble shows what it's doing until he answers.
+        const engineOpts=(pid==='jarvis'&&!isGroup)?{engine:true,onStatus:(line)=>patch(m=>m.revealed&&m.content&&!m.content.startsWith('◇')?m:{...m,content:line,revealed:line.length})}:{};
+        let response=await callPersona(pid,hist,myAbort.signal,onDelta,{...voiceModelOpts(p),images,saveUserText:text,...engineOpts});
         // Kept so a failure in any step after this still shows her answer (see the catch below).
         inFlight.raw=response;inFlight.rtype=Object.prototype.toString.call(response);inFlight.pid=pid;
         // Second-pass tools: the persona emits a lookup tag on pass 1, we gather
@@ -1939,7 +1941,7 @@ export default function CommandScreen({navigation,route}){
           const hist2=[...hist,{role:'assistant',content:response},{role:'user',content:`[TOOL RESULTS for what you're about to answer — Mr. Burrus asked: "${text}"\n\nAnswer THAT, using this. Do not mention the lookup mechanism.\n\n${injections.join('\n\n---\n\n')}\n]`}];
           raw='';lastPatch=0;
           patch(m=>({...m,content:'',revealed:0,streaming:!willVoice}));
-          response=await callPersona(pid,hist2,myAbort.signal,willVoice?null:onDelta,{skipSave:true,...voiceModelOpts(p),images});
+          response=await callPersona(pid,hist2,myAbort.signal,willVoice?null:onDelta,{skipSave:true,...voiceModelOpts(p),images,...engineOpts});
           savePersonaMemory(pid,`YOU: ${text}\n${p.name}: ${stripCommands(response)||response}`).catch(()=>{});
         }
         let display=(stripCommands(response)||'').trim();
