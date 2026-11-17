@@ -511,6 +511,10 @@ sent by `routes/telegram.js` after the text via `sendMedia`. Persona turns run a
 to the end of the reply with a ⚠️, and a reply that says a note was saved with
 no note tag behind it gets a ⚠️ too.
 
+## The app replaces `String.prototype.matchAll` (`src/matchAllFix.js`)
+
+On the phone, Hermes's built-in `matchAll` threw "Object is not a function" inside a persona's turn (decoded from the crash log by rebuilding the exact Hermes bundle: the `[...response.matchAll(...)]` in `CommandScreen.js`), so every app reply died with "Something went wrong". `index.js` imports `src/matchAllFix.js` first; it swaps in a spec-equivalent `matchAll` built only on `RegExp.prototype.exec` (starts at `lastIndex`, leaves it unchanged, steps over zero-length matches). Keep it the first import. To decode a future crash: `npx expo export:embed --platform android --dev false --minify true` with `--sourcemap-output`, `hermesc -emit-binary -O -output-source-map`, `react-native/scripts/compose-source-maps.js`, then look up `line 1, column <address>` in the composed map; the address is the instruction after the failing call.
+
 ## Builds
 
 Android APK via EAS (`eas build --platform android --profile preview`), also
