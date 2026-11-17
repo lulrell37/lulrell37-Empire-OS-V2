@@ -440,9 +440,9 @@ tools — `applyEffects(…, { full: true })` — and any image/diagram/file it 
 goes out on the asking bot (`sink.media`). T.A.L.O.N. relayed can run
 `[TALON_RUN]` / `[TALON_UPDATE]` himself.
 
-## J.A.R.V.I.S. is Claude
+## J.A.R.V.I.S. runs on Claude Code (`server/jarvisEngine.js`)
 
-Talking to J.A.R.V.I.S. is talking directly to Claude: his prompt (`src/personas/personas.js` `system`, `server/personas.js` `tgIdentity`, keep in sync) says he is Claude, the same one that builds Empire OS in Claude Code, speaking plainly as himself: no butler act, no "sir". He runs on `claude-opus-5-5` (`JARVIS_MODEL` on the server; `model` + `voiceModel` in the app, so fast voice mode doesn't drop him to Haiku, and image turns stay on his model). Name, ElevenLabs voice and tools are unchanged.
+He stays J.A.R.V.I.S. (persona, "sir", voice); Claude Code is the engine. His direct turns, on Telegram (`runPersonaTurn`'s `brain`) and in the app (`opts.engine` → `src/services/jarvisEngine.js` → `routes/jarvis.js`, a job the app polls), go to headless Claude Code in its own clone of the repo (`JARVIS_WORKDIR`, default `~/jarvis-workspace/repo`, needs `GITHUB_TOKEN`; without it, read-only in the deployed checkout). One session is resumed every turn (`session.json`, fresh after 3 quiet days). His persona prompt is appended (`--append-system-prompt-file`, `--system-prompt-snapshot off` so the live context updates) and his command tags still run on the reply. `--permission-mode auto` (`JARVIS_PERMISSION_MODE`); the child env carries only the Claude login and GitHub token, not the server's other secrets. Model `claude-opus-5-5` (`JARVIS_ENGINE_MODEL`); `JARVIS_ENGINE=off` turns it off. If it fails he answers on his plain model with a ⚠️. The app's bubble shows Claude Code's progress. Status: `GET /jarvis/engine`, and `/health`'s `jarvisEngine`. The 3D renderers set `debug.checkShaderErrors=false` (expo-gl's info logs are undefined; three `.trim()`s them).
 
 ## J.A.R.V.I.S. reads the code (`server/codeAccess.js`)
 
