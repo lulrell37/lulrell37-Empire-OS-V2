@@ -58,13 +58,35 @@ function linkKind(url) {
   return null;
 }
 
+// yt-dlp's standalone Linux build (a self-contained binary — no Python needed,
+// unlike the yt-dlp-exec npm package, whose install script needs Python and broke
+// `npm ci` on the server). Fetched once on first YouTube use, cached in the tmp dir.
+// YTDLP_PATH overrides; a yt-dlp already on PATH is the fallback.
+const YTDLP_CACHE = path.join(os.tmpdir(), 'empire-bin', 'yt-dlp');
+let ytdlpReady = null;
 function ytdlpBin() {
-  try { return require('yt-dlp-exec/src/constants').YOUTUBE_DL_PATH; } catch { return 'yt-dlp'; }
+  if (process.env.YTDLP_PATH) return Promise.resolve(process.env.YTDLP_PATH);
+  if (!ytdlpReady) {
+    ytdlpReady = (async () => {
+      if (fs.existsSync(YTDLP_CACHE)) return YTDLP_CACHE;
+      if (process.platform !== 'linux') return 'yt-dlp';
+      const asset = process.arch === 'arm64' ? 'yt-dlp_linux_aarch64' : 'yt-dlp_linux';
+      const res = await fetch(`https://github.com/yt-dlp/yt-dlp/releases/latest/download/${asset}`);
+      if (!res.ok) throw new Error(`download ${res.status}`);
+      fs.mkdirSync(path.dirname(YTDLP_CACHE), { recursive: true });
+      const tmp = `${YTDLP_CACHE}.${process.pid}.part`;
+      fs.writeFileSync(tmp, Buffer.from(await res.arrayBuffer()), { mode: 0o755 });
+      fs.renameSync(tmp, YTDLP_CACHE);
+      return YTDLP_CACHE;
+    })().catch((e) => { ytdlpReady = null; console.error('yt-dlp fetch failed:', e.message); return 'yt-dlp'; });
+  }
+  return ytdlpReady;
 }
 
-function ytdlp(args) {
+async function ytdlp(args) {
+  const bin = await ytdlpBin();
   return new Promise((resolve, reject) => {
-    const p = spawn(ytdlpBin(), ['--no-playlist', '--no-warnings', '--ffmpeg-location', ffmpegPath, ...args]);
+    const p = spawn(bin, ['--no-playlist', '--no-warnings', '--ffmpeg-location', ffmpegPath, ...args]);
     let out = '', err = '';
     p.stdout.on('data', (c) => { out += c; });
     p.stderr.on('data', (c) => { err = (err + c).slice(-2000); });

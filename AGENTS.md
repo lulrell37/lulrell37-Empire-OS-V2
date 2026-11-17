@@ -521,7 +521,7 @@ builds nothing.
 ## R.O.G.U.E.'s clip scan (`server/clipScan.js`, `CLIP_SCAN=off` to stop)
 
 `[CLIP_SCAN: drive link or YouTube URL | focus]` (R.O.G.U.E.) takes a LONG video: downloads it from
-Drive (or, for youtube.com/watch, youtu.be, /shorts, with `yt-dlp-exec`'s binary, ≤720p, duration checked before download; any other link is refused), ffmpeg splits the audio into 10-min chunks, Whisper with timestamps
+Drive (or, for youtube.com/watch, youtu.be, /shorts, with yt-dlp's standalone Linux binary (fetched on first use, no Python needed; `YTDLP_PATH` overrides), ≤720p, duration checked before download; any other link is refused), ffmpeg splits the audio into 10-min chunks, Whisper with timestamps
 (`transcribeSegments`, `server/llm.js`), one `claudeText` call picks the 3-5 most viral
 moments (12-90 s, no overlaps, filtered by `focus`; `sanitizePicks` enforces it), ffmpeg cuts
 each and center-crops to 1080x1920, `driveUploadFile` (`server/google.js`) puts them in

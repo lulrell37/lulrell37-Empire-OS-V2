@@ -6,7 +6,7 @@
 //      lockfile: every non-dev package in it is present at the locked version.
 // (2) matters because the borrowed copy's package.json can be ahead of its
 // node_modules (checkout updated, install never re-run) — comparing manifests
-// alone then says "unchanged" while the package (e.g. yt-dlp-exec) is missing.
+// alone then says "unchanged" while the package (e.g. a package whose install script failed) is missing.
 // Anything unreadable or unknown -> not shareable -> npm ci.
 const fs = require('fs');
 const path = require('path');
