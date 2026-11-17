@@ -794,6 +794,10 @@ export default function CommandScreen({navigation,route}){
       maybeAutoListen();
       return{revealed:text.length,completed:true,finalText:text};
     }
+    // Hide the text and let playback reveal it, whatever state the caller left
+    // the bubble in — the failure path below used to settle it first, so the
+    // reply was spoken over one finished block of text.
+    patch(m=>({...m,content:text,revealed:0,streaming:true}));
     await clearSound();
 
     return new Promise((resolve)=>{
@@ -836,12 +840,15 @@ export default function CommandScreen({navigation,route}){
           // treat it as finished. Position-based, so long healthy audio is fine.
           if(pos!==lastPos){lastPos=pos;lastPosAt=Date.now();}
           else if(!st.didJustFinish&&pos>0&&Date.now()-lastPosAt>PLAYBACK_WEDGE_MS){done(true);return;}
+          // No duration reported yet: pace off ~14 characters a second so the
+          // text still moves with the voice instead of landing all at the end.
+          const byPos=dur?Math.ceil(fullText.length*Math.min(1,pos/dur)):Math.ceil(pos*14/1000);
           let target;
           if(timeline&&timeline.length){
             let c=0;for(const e of timeline){if(e.atMs<=pos)c=e.chars;else break;}
-            target=c||(dur?Math.ceil(fullText.length*Math.min(1,pos/dur)):lastRevealed);
+            target=c||byPos;
           }else{
-            target=dur?Math.ceil(fullText.length*Math.min(1,pos/dur)):lastRevealed;
+            target=byPos;
           }
           if(target>lastRevealed){lastRevealed=Math.min(fullText.length,target);patch(m=>({...m,revealed:lastRevealed}));}
           if(st.didJustFinish)done(true);
@@ -2030,9 +2037,12 @@ export default function CommandScreen({navigation,route}){
           // The answer came back — show it rather than throwing it away. Only what
           // ran after it (tags, follow-up passes) is lost, and the crash log says why.
           let shown=got;try{shown=stripCommands(got)||got;}catch{}
+          // …and still say it, word by word, if voice is on — speakWithReveal
+          // hides it and reveals it with the voice; settling it here first is
+          // what made it one block. Settle it only if it isn't being voiced.
+          const voiced=voiceOn&&!voiceMuted&&shown.trim();
+          if(voiced){try{await speakWithReveal(shown,getPersona(inFlight.pid||activePersona),inFlight.msgId,isGroup);}catch{}}
           inFlight.setMsgs(prev=>prev.map(m=>m.id===inFlight.msgId?{...m,content:shown,revealed:shown.length,streaming:false}:m));
-          // …and still say it, word by word, if voice is on — not a silent block.
-          if(voiceOn&&!voiceMuted&&shown.trim()){try{await speakWithReveal(shown,getPersona(inFlight.pid||activePersona),inFlight.msgId,isGroup);}catch{}}
         }else if(inFlight){
           // Put it in the failed bubble too, if that bubble is still empty — the
           // banner alone fades in 18s and left "she said nothing" for image turns.
