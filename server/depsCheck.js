@@ -55,6 +55,13 @@ function shareBlocker(newDir, oldDir) {
     const have = installed.packages[key];
     if (!have) return `${key} is not installed`;
     if (have.version !== meta.version) return `${key} installed ${have.version}, needs ${meta.version}`;
+    // npm can leave an optimistic .package-lock.json record for a package whose install
+    // (e.g. a postinstall download) failed or half-finished, so also require the package
+    // itself on disk at the locked version. The lock key ("node_modules/foo",
+    // "node_modules/@scope/foo", or nested "node_modules/a/node_modules/b") is already the
+    // path relative to the project dir.
+    const onDisk = readJson(path.join(oldDir, key, 'package.json'));
+    if (!onDisk || onDisk.version !== meta.version) return `${key} not resolvable on disk`;
   }
   return '';
 }
