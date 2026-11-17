@@ -19,7 +19,7 @@ const os = require('os');
 const path = require('path');
 const http = require('http');
 const { shareBlocker, crashReason } = require('./depsCheck');
-const { spawn, execFileSync } = require('child_process');
+const { spawn, spawnSync, execFileSync } = require('child_process');
 
 const REPO = 'lulrell37/lulrell37-Empire-OS-V2';
 const BUNDLED = __dirname;
@@ -53,6 +53,10 @@ async function prepare() {
   const head = await gh(`/repos/${REPO}/commits/main`);
   const sha = String(head.sha).slice(0, 12);
   if (lastGood && lastGood.sha === sha) return lastGood;
+  // A commit whose install already failed isn't retried on every restart (each
+  // try took minutes with nothing answering requests); a new commit on main clears it.
+  const failMark = path.join(STORE, `${sha}.failed`);
+  if (fs.existsSync(failMark)) throw new Error(fs.readFileSync(failMark, 'utf8'));
   const root = path.join(STORE, sha);
   const dir = path.join(root, 'server');
   if (!fs.existsSync(path.join(root, '.ready'))) {
@@ -72,17 +76,25 @@ async function prepare() {
     } else {
       log(`main @ ${sha}: not sharing node_modules (${blocker}) — installing`);
       const lock = fs.existsSync(path.join(dir, 'package-lock.json'));
-      execFileSync('npm', [lock ? 'ci' : 'install', '--omit=dev', '--no-audit', '--no-fund'], { cwd: dir, stdio: 'inherit', timeout: 8 * 60e3 });
-      // A failed/partial install must fail loudly here, not as MODULE_NOT_FOUND in the child.
+      const npm = spawnSync('npm', [lock ? 'ci' : 'install', '--omit=dev', '--no-audit', '--no-fund'], { cwd: dir, encoding: 'utf8', timeout: 8 * 60e3 });
+      const out = `${npm.stdout || ''}\n${npm.stderr || ''}`;
+      process.stdout.write(out);
+      // A failed/partial install must fail loudly here, with npm's own reason, not as MODULE_NOT_FOUND in the child.
       const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'));
       const missing = Object.keys(pkg.dependencies || {}).filter((n) => !fs.existsSync(path.join(dir, 'node_modules', n, 'package.json')));
-      if (missing.length) throw new Error(`main @ ${sha}: install finished but dependencies are missing on disk: ${missing.join(', ')}`);
+      if (npm.status !== 0 || npm.error || missing.length) {
+        const errLines = out.split('\n').filter((l) => /npm error|ERR!|Error:/i.test(l) && !/complete log/i.test(l)).slice(-12).join('\n');
+        const msg = `main @ ${sha}: npm ${lock ? 'ci' : 'install'} failed${npm.error ? ` (${npm.error.message})` : ` (exit ${npm.status})`}${missing.length ? `; missing: ${missing.join(', ')}` : ''}\n${errLines || out.trim().split('\n').slice(-12).join('\n')}`.slice(0, 2500);
+        fs.rmSync(root, { recursive: true, force: true });
+        fs.writeFileSync(failMark, msg);
+        throw new Error(msg);
+      }
     }
     fs.writeFileSync(path.join(root, '.ready'), sha);
   }
   // Keep the store small: this one, the last good one, nothing else.
   for (const d of fs.readdirSync(STORE)) {
-    if (d !== sha && (!lastGood || !lastGood.dir.includes(d))) fs.rm(path.join(STORE, d), { recursive: true, force: true }, () => {});
+    if (d !== sha && !d.endsWith('.failed') && (!lastGood || !lastGood.dir.includes(d))) fs.rm(path.join(STORE, d), { recursive: true, force: true }, () => {});
   }
   return { dir, sha, source: 'github' };
 }
@@ -132,12 +144,13 @@ async function stop() {
 
 async function cycle() {
   let want;
+  let failed = '';
   try { want = await prepare(); } catch (e) {
     log(`not updating from GitHub: ${e.message}`);
+    if (!/^(SELF_UPDATE=off|no GITHUB_TOKEN)$/.test(e.message)) failed = e.message; // A.R.A.'s boot report says why main isn't live
     want = lastGood || BUNDLE;
   }
   const tries = [want, lastGood, BUNDLE].filter((c, i, a) => c && a.findIndex((x) => x && x.dir === c.dir) === i);
-  let failed = '';
   for (const code of tries) {
     const run = await launch(code, failed ? { EMPIRE_FALLBACK_ERROR: failed } : {});
     if (run.ok) {
