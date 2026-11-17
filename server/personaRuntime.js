@@ -1113,9 +1113,10 @@ async function runPersonaTurn(personaId, userText, deliver) {
   // The engine keeps its own session, so it gets only the newest message; if it
   // fails, the turn falls back to his plain model and says so.
   let engineNote = '';
+  let engineUsed = false;
   const brain = async (msgs) => {
     if (engine && !engineNote) {
-      try { return await engine.turn(String(msgs[msgs.length - 1].content), { persona: sys }); }
+      try { const out = await engine.turn(String(msgs[msgs.length - 1].content), { persona: sys }); engineUsed = true; return out; }
       catch (e) { engineNote = `⚠️ Claude Code (his engine) failed, so this answer is from the plain chat model: ${e.message.slice(0, 200)}`; console.error('jarvis engine:', e.message); }
     }
     return chatAs(p.api, p.model, sys, msgs, { maxTokens: 4000, fallback: persona !== 'ara' });
@@ -1176,7 +1177,7 @@ async function runPersonaTurn(personaId, userText, deliver) {
   // A receipt under the reply for every write — the reply is written before the
   // writes run, so this is the only part guaranteed to say what really happened.
   if (engineNote) fx.warnings.push(engineNote.replace(/^⚠️ /, ''));
-  const footer = [...fx.notes.map((n) => `✓ ${n}`), ...fx.warnings.map((w) => `⚠️ ${w}`)].join('\n');
+  const footer = [...(engineUsed && !engineNote ? ['✓ Claude Code'] : []), ...fx.notes.map((n) => `✓ ${n}`), ...fx.warnings.map((w) => `⚠️ ${w}`)].join('\n');
 
   // What she looked up / heard back this turn rides along with his message in
   // history — otherwise the next turn ("no, not a trade scan") has only her

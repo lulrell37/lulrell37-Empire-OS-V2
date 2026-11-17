@@ -1585,7 +1585,7 @@ export default function CommandScreen({navigation,route}){
           patch(m=>({...m,content:shown,revealed:shown.length}));
         };
         // J.A.R.V.I.S. in his own chat runs on Claude Code; his bubble shows what it's doing until he answers.
-        const engineOpts=(pid==='jarvis'&&!isGroup)?{engine:true,onStatus:(line)=>patch(m=>m.revealed&&m.content&&!m.content.startsWith('◇')?m:{...m,content:line,revealed:line.length})}:{};
+        const engineOpts=(pid==='jarvis'&&!isGroup)?{engine:true,onEngine:()=>patch(m=>({...m,engine:true})),onStatus:(line)=>patch(m=>m.revealed&&m.content&&!m.content.startsWith('◇')?m:{...m,content:line,revealed:line.length})}:{};
         let response=await callPersona(pid,hist,myAbort.signal,onDelta,{...voiceModelOpts(p),images,saveUserText:text,...engineOpts});
         // Kept so a failure in any step after this still shows her answer (see the catch below).
         inFlight.raw=response;inFlight.rtype=Object.prototype.toString.call(response);inFlight.pid=pid;
@@ -2457,7 +2457,7 @@ export default function CommandScreen({navigation,route}){
             {pic?<Image source={{uri:pic}} style={s.aiAvatarImg}/>:<Text style={[s.aiAvatarText,{color:p?.color||'#E8C98A'}]}>{p?.icon||'?'}</Text>}
           </View>
           <View style={{flex:1}}>
-            <Text style={[s.aiName,{color:p?.color||'#E8C98A'}]}>{p?.name||'SYSTEM'}</Text>
+            <Text style={[s.aiName,{color:p?.color||'#E8C98A'}]}>{p?.name||'SYSTEM'}{item.engine&&<Text style={{color:'#4CD964'}}>  ✓ CLAUDE CODE</Text>}</Text>
             <Text style={s.aiRole}>{p?.role||''}</Text>
           </View>
           {!item.streaming&&<TouchableOpacity style={s.replayBtn} onPress={()=>speakResponse(item.content,p||{})}>

@@ -405,6 +405,7 @@ export async function callPersona(personaId,messages,signal=null,onDelta=null,op
       if(stream){const words=String(text).split(/(\s+)/);for(let i=0;i<words.length;i+=6){if(signal?.aborted)break;emit(words.slice(i,i+6).join(''));await new Promise(r=>setTimeout(r,35));}}
       else emit(text);
       api='engine';
+      try{opts.onEngine?.();}catch{}
     }catch(e){
       if(e?.name==='AbortError')throw e;
       try{opts.onStatus?.(`◇ Claude Code couldn't run (${String(e.message).slice(0,80)}) — answering on the plain model…`);}catch{}
