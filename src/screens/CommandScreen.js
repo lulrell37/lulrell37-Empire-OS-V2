@@ -23,6 +23,7 @@ import{googleReadInjections,googleWriteCommands}from '../services/googleCommands
 import{courseInjections}from '../services/stephanieCourse';
 import{startClipScan}from '../services/clipScan';
 import{scanTags}from '../services/noteCommands';
+import{allMatches}from '../matchAllFix';
 import{playOpts,speechRate,applyRate,onVoiceSpeedChange,voiceRate,setVoiceSpeed,VOICE_SPEED_MIN,VOICE_SPEED_MAX}from '../services/voiceSpeed';
 import SpeedSlider from '../components/SpeedSlider';
 import{driveUploadFile,googleConnected}from '../services/googleClient';
@@ -1584,11 +1585,13 @@ export default function CommandScreen({navigation,route}){
           patch(m=>({...m,content:shown,revealed:shown.length}));
         };
         let response=await callPersona(pid,hist,myAbort.signal,onDelta,{...voiceModelOpts(p),images,saveUserText:text});
+        // Kept so a failure in any step after this still shows her answer (see the catch below).
+        inFlight.raw=response;inFlight.rtype=Object.prototype.toString.call(response);inFlight.pid=pid;
         // Second-pass tools: the persona emits a lookup tag on pass 1, we gather
         // the data, then it re-answers with everything in hand. One pass only.
         const injections=[];
         let toolLabel='◇ working…';
-        const mq=[...response.matchAll(/\[MEMORY_QUERY:\s*([^\]]+)\]/gi)].map(x=>x[1].trim()).filter(Boolean);
+        const mq=allMatches(response,/\[MEMORY_QUERY:\s*([^\]]+)\]/gi).map(x=>x[1].trim()).filter(Boolean);
         if(mq.length&&(await getSetting('memory_recall','1'))==='1'){
           toolLabel='◇ recalling…';
           for(const q of mq.slice(0,2)){
@@ -1596,7 +1599,7 @@ export default function CommandScreen({navigation,route}){
             catch(e){injections.push(`MEMORY RECALL — Q: ${q}\nA: (failed: ${e.message})`);}
           }
         }
-        const scanTags=[...response.matchAll(/\[TRADE_SCAN(?::\s*([^\]]+))?\]/gi)];
+        const scanTags=allMatches(response,/\[TRADE_SCAN(?::\s*([^\]]+))?\]/gi);
         if(scanTags.length&&!myAbort.signal.aborted){
           toolLabel='◇ reading the market…';
           let syms=scanTags.flatMap(m=>(m[1]||'').split(/[\s,]+/).map(x=>x.trim().toUpperCase()).filter(Boolean));
@@ -1688,7 +1691,7 @@ export default function CommandScreen({navigation,route}){
           try{const es=await getExpenseSummary();injections.push(`EXPENSES ${es.month} — total ${es.total.toFixed(2)}:\n${es.byCategory.map(c=>`  ${c.category}: ${c.total.toFixed(2)} (${c.n})`).join('\n')||'  (none logged)'}`);}
           catch(e){injections.push('EXPENSE SUMMARY: failed — '+e.message);}
         }
-        const sw=[...response.matchAll(/\[SEARCH_WEB:\s*([^\]]+)\]/gi)].map(x=>x[1].trim()).filter(Boolean);
+        const sw=allMatches(response,/\[SEARCH_WEB:\s*([^\]]+)\]/gi).map(x=>x[1].trim()).filter(Boolean);
         if(sw.length&&!myAbort.signal.aborted){
           toolLabel='◇ searching…';
           for(const q of sw.slice(0,2)){
@@ -1851,7 +1854,7 @@ export default function CommandScreen({navigation,route}){
         // specialist inline (one-shot, no history), show their contribution in the
         // chat, then A.R.A. re-answers in a fresh bubble with everything in hand.
         const delegTags=(pid==='ara'&&!myAbort.signal.aborted)
-          ?[...response.matchAll(/\[DELEGATE:\s*([A-Za-z.\s]+?)\s*\|\s*([\s\S]+?)\]/gi)]
+          ?allMatches(response,/\[DELEGATE:\s*([A-Za-z.\s]+?)\s*\|\s*([\s\S]+?)\]/gi)
           :[];
         if(delegTags.length){
           await handleCommands(response,pid,cmdCallbacks); // honor a [PROJECT_START] in the same reply
@@ -2013,10 +2016,18 @@ export default function CommandScreen({navigation,route}){
     }catch(e){
       if(e.name!=='AbortError'){
         const who=isGroup?'the group':getPersona(activePersona).name;
-        reportIssue('ai:reply',`${who} couldn't reply`,e);
-        // Put it in the failed bubble too, if that bubble is still empty — the
-        // banner alone fades in 18s and left "she said nothing" for image turns.
-        if(inFlight){
+        const got=inFlight&&typeof inFlight.raw==='string'&&inFlight.raw.trim()?inFlight.raw:null;
+        // Say which persona and what the reply actually was, so a crash entry is enough to find the cause.
+        try{e.message=`${String(e.message||e)} [persona ${inFlight?.pid||activePersona}; reply ${inFlight?.rtype||'not received'}]`;}catch{}
+        reportIssue('ai:reply',got?`${inFlight.name} replied, but a step after the reply failed`:`${who} couldn't reply`,e);
+        if(got){
+          // The answer came back — show it rather than throwing it away. Only what
+          // ran after it (tags, follow-up passes) is lost, and the crash log says why.
+          let shown=got;try{shown=stripCommands(got)||got;}catch{}
+          inFlight.setMsgs(prev=>prev.map(m=>m.id===inFlight.msgId?{...m,content:shown,revealed:shown.length,streaming:false}:m));
+        }else if(inFlight){
+          // Put it in the failed bubble too, if that bubble is still empty — the
+          // banner alone fades in 18s and left "she said nothing" for image turns.
           const msg=inFlight.hadImages
             ?`Couldn't read that image — ${String(e.message||e).slice(0,140)}`
             :`Something went wrong — ${String(e.message||e).slice(0,140)}`;

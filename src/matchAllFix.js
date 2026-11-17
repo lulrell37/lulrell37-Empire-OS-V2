@@ -33,6 +33,16 @@ export function matchAllExec(str, re) {
   return out[Symbol.iterator]();
 }
 
+// Every match as an array, for the reply loop's tag scans. Takes anything
+// (coerced to text), never looks a method up on it and never spreads an
+// iterator: the phone kept failing on `[...response.matchAll(...)]` itself.
+export function allMatches(text, re) {
+  const it = matchAllExec(typeof text === 'string' ? text : String(text ?? ''), re);
+  const out = [];
+  for (let r = it.next(); !r.done; r = it.next()) out.push(r.value);
+  return out;
+}
+
 try {
   Object.defineProperty(String.prototype, 'matchAll', {
     value: function matchAll(re) { return matchAllExec(this, re); },
