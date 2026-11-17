@@ -12,6 +12,7 @@ const { orderRejected, araNote, tradeOpened, addedOn } = require('./talonAlerts'
 const { pushAlert } = require('./pushSender');
 const { watchTick, systemFault, systemOk } = require('./talonWatch');
 const quick = require('./talonQuick');
+const reentry = require('./talonReentry');
 
 let busy = false;
 let warnedDisconnected = false;
@@ -90,6 +91,9 @@ async function tick({ force = false } = {}) {
     if (rec?.error) systemFault('trade journal check', rec.error === 'positions' ? 'couldn\'t read open positions from TradeLocker' : rec.error);
     else systemOk('trade journal check');
     const marketOpen = fxOpen();
+    // A setup stopped out by a sweep gets one re-entry at the better price (server/talonReentry.js).
+    await reentry.reentryTick({ marketOpen, openPairs, maxPairs }).then(() => systemOk('re-entry pass'))
+      .catch((e) => { console.error('talon-reentry failed —', e.message); systemFault('re-entry pass', e.message); });
     await addOnEntries(marketOpen).then(() => systemOk('add-on pass'))
       .catch((e) => { console.error('talon-autotrade: add-on pass failed —', e.message); systemFault('add-on pass', e.message); });
     // Anything unexpected (trade near its stop, spike, broken call, no stop) -> A.R.A.
