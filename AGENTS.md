@@ -449,6 +449,12 @@ plus the source file map — and he has read-only code tags: `[SEARCH_CODE: text
 `[READ_CODE: path | page]`, `[CODE_TREE: folder]` (A.R.A. too). Text files only;
 `DEPLOY_BACKEND.md` and other gitignored secrets never show. Changing code still goes through `[BUILD_REQUEST]`.
 
+## J.A.R.V.I.S. sees the live server (`server/serverLog.js`)
+
+He used to debug blind (code only), so a broken deploy sent him in circles. The server now keeps, in memory since it started, every console warn/error line and every failed app AI call through `/ai/<provider>` (status, model, request size, upload time, what the provider said). `[HEALTH_CHECK]` (running commit, fell back or not with boot's full reason incl. npm's own error, AI status), `[AI_ERRORS]`, `[SERVER_LOGS]` / `[SERVER_LOGS: text]` read it (J.A.R.V.I.S., A.R.A.); `GET /diag` (auth) gives it as JSON. His prompt's DEBUGGING RULE: evidence first, name the root cause with the line that proves it before any `[BUILD_REQUEST]`, and stop and tell him after two failed fixes.
+
+**The AI proxy reads each request once.** `routes/ai.js` used to open a web stream on the request and then read it again for Claude, so any body over ~64 KB (every real app turn) hung until Replit's edge answered 408 / "Internal server error" — the app's Claude personas were dead while Telegram (which never uses the proxy) worked. Claude and Grok/OpenAI chat calls now buffer the body once and get the keep-alive; everything else is piped. The live server is `https://lulrell-37-empire-os-v-2--lulrell37.replit.app` (`empire-os-v2.replit.app` is dead).
+
 ## Self-updating server + J.A.R.V.I.S.'s [REDEPLOY] (`server/boot.js`, `server/redeploy.js`)
 
 `npm start` runs `boot.js`, a supervisor that runs `index.js` as a child. Each

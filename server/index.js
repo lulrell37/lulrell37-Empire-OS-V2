@@ -1,4 +1,5 @@
 require('dotenv').config();
+require('./serverLog').install(); // keeps recent log lines + failed AI calls for [SERVER_LOGS] / [AI_ERRORS] / GET /diag
 const express = require('express');
 const cron = require('node-cron');
 const db = require('./db');
@@ -29,6 +30,7 @@ app.get('/health', (req, res) => {
 
 // AI proxy: no body parser — the request body is streamed straight through.
 app.use('/ai', auth, require('./routes/ai'));
+app.get('/diag', auth, (req, res) => res.json(require('./serverLog').diagJson()));
 
 // JSON APIs.
 const json = express.json({ limit: '25mb' });

@@ -7,6 +7,7 @@
 const express = require('express');
 const { Readable } = require('stream');
 const { claudeSubRun, subscriptionAvailable, toCliPrompt } = require('../claudeSub');
+const serverLog = require('../serverLog');
 
 const r = express.Router();
 
@@ -67,19 +68,39 @@ r.all('/:provider/*', async (req, res) => {
   // Claude persona turns go to the Claude subscription first (CLAUDE_SUBSCRIPTION=on);
   // the metered API below only sees them when the subscription is at its usage
   // limit, can't carry the request (images), or fails before replying.
-  let body = hasBody ? Readable.toWeb(req) : undefined;
   const claudeCall = req.params.provider === 'anthropic' && req.method === 'POST';
+  // Grok / OpenAI chat turns: a reasoning model can think in silence long enough
+  // for Replit's edge to drop the request ("Internal Server Error" on the phone),
+  // so they get the same keep-alive as Claude. Audio, uploads etc. stay piped.
+  const chatCall = req.method === 'POST' && ['xai', 'openai'].includes(req.params.provider)
+    && /^v1\/(chat\/completions|responses)$/.test(upstreamPath);
+  const holdBody = claudeCall || chatCall;
+  // Only ONE reader may consume the request. The old code always opened a web
+  // stream on it and then, for Claude, read it again with readBody — any body
+  // over ~64 KB (every real app turn) never finished, so Claude calls hung until
+  // the edge answered 408 / "Internal server error".
+  let body = hasBody && !holdBody ? Readable.toWeb(req) : undefined;
   const t0 = Date.now();
   let stopKeepAlive = () => {};
+  const rec = { provider: req.params.provider, method: req.method, path: upstreamPath, ua: req.get('user-agent') || '', bytes: Number(req.get('content-length')) || null };
+  let recorded = false;
+  const record = (ok, status, detail) => {
+    if (recorded) return;
+    recorded = true;
+    serverLog.recordAi({ ...rec, ok, status, detail: detail ? String(detail).replace(/\s+/g, ' ').slice(0, 300) : '', ms: Date.now() - t0 });
+  };
+  res.on('close', () => { if (!recorded) record(res.statusCode < 400 && res.writableFinished, res.writableFinished ? res.statusCode : `${res.statusCode} (closed early — app hung up or edge cut it)`); });
 
   try {
     // Anthropic having a bad second (500 / 529 overloaded / 503) used to land on
     // the phone as "Claude error: Internal server error" and kill the turn. Hold
     // the body so the call can be retried — nothing has gone back to the app yet.
-    if (claudeCall) {
+    if (holdBody) {
       body = await readBody(req);
+      rec.uploadMs = Date.now() - t0;
+      rec.bytes = body.length;
       let streaming = false;
-      try { streaming = !!JSON.parse(body.toString('utf8')).stream; } catch {}
+      try { const j = JSON.parse(body.toString('utf8')); streaming = !!j.stream; rec.model = j.model; rec.stream = streaming; } catch {}
       stopKeepAlive = streaming ? keepAliveSse(res) : keepAlive(res);
     }
 
@@ -117,11 +138,23 @@ r.all('/:provider/*', async (req, res) => {
       await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
     }
     stopKeepAlive();
-    if (res.headersSent && isSse(res) && !upstream.ok) {
-      // The stream is already open — hand the API's error over as an SSE event.
+    if (!upstream.ok) {
+      // Keep what the provider said: it's the evidence [AI_ERRORS] shows.
       const raw = await upstream.text().catch(() => '');
-      let err; try { err = JSON.parse(raw); } catch { err = { type: 'error', error: { type: 'api_error', message: `anthropic ${upstream.status}: ${raw.slice(0, 200)}` } }; }
-      return sendJson(res, upstream.status, err);
+      record(false, upstream.status, raw || '(empty body)');
+      console.warn(`ai proxy: ${req.params.provider} ${upstream.status} on /${upstreamPath}: ${raw.replace(/\s+/g, ' ').slice(0, 200)}`);
+      if (res.headersSent && isSse(res)) {
+        // The stream is already open — hand the API's error over as an SSE event.
+        let err; try { err = JSON.parse(raw); } catch { err = { type: 'error', error: { type: 'api_error', message: `${req.params.provider} ${upstream.status}: ${raw.slice(0, 200)}` } }; }
+        if (err && !err.type) err = { type: 'error', error: { type: 'api_error', message: `${req.params.provider} ${upstream.status}: ${String(err.error || err.message || raw).slice(0, 200)}` } };
+        return sendJson(res, upstream.status, err);
+      }
+      if (!res.headersSent) {
+        res.status(upstream.status).set('cache-control', 'no-store');
+        const rct = upstream.headers.get('content-type');
+        if (rct) res.set('content-type', rct);
+      }
+      return res.end(raw);
     }
     if (!res.headersSent) {
       res.status(upstream.status);
@@ -140,6 +173,7 @@ r.all('/:provider/*', async (req, res) => {
     // down (every persona then got "Internal server error" while it restarted).
     stopKeepAlive();
     const secs = Math.round((Date.now() - t0) / 1000);
+    record(false, e.name === 'BudgetError' ? 504 : req.aborted ? 'app hung up' : 502, e.message);
     if (req.aborted || e.message === 'aborted') return console.warn(`ai proxy: app closed the request after ${secs}s`, req.params.provider);
     if (e.name === 'BudgetError') {
       console.error(`ai proxy: claude ran out of time after ${secs}s`);
