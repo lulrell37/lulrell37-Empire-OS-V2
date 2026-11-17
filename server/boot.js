@@ -73,6 +73,10 @@ async function prepare() {
       log(`main @ ${sha}: not sharing node_modules (${blocker}) — installing`);
       const lock = fs.existsSync(path.join(dir, 'package-lock.json'));
       execFileSync('npm', [lock ? 'ci' : 'install', '--omit=dev', '--no-audit', '--no-fund'], { cwd: dir, stdio: 'inherit', timeout: 8 * 60e3 });
+      // A failed/partial install must fail loudly here, not as MODULE_NOT_FOUND in the child.
+      const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'));
+      const missing = Object.keys(pkg.dependencies || {}).filter((n) => !fs.existsSync(path.join(dir, 'node_modules', n, 'package.json')));
+      if (missing.length) throw new Error(`main @ ${sha}: install finished but dependencies are missing on disk: ${missing.join(', ')}`);
     }
     fs.writeFileSync(path.join(root, '.ready'), sha);
   }
