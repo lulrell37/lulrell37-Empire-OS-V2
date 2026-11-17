@@ -9,7 +9,7 @@
 // constructor, no new RegExp. Same results as the spec for the global regexes
 // the app passes (each match array with .index / .input / groups).
 // Imported first thing in index.js, before anything else runs.
-export function matchAllExec(str, re) {
+function execAll(str, re) {
   const s = String(str);
   if (typeof re === 'string') re = new RegExp(re.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
   if (!re || typeof re.exec !== 'function') throw new TypeError('matchAll needs a RegExp');
@@ -30,17 +30,18 @@ export function matchAllExec(str, re) {
   } finally {
     re.lastIndex = saved;
   }
-  return out[Symbol.iterator]();
+  return out;
+}
+
+export function matchAllExec(str, re) {
+  return execAll(str, re)[Symbol.iterator]();
 }
 
 // Every match as an array, for the reply loop's tag scans. Takes anything
 // (coerced to text), never looks a method up on it and never spreads an
 // iterator: the phone kept failing on `[...response.matchAll(...)]` itself.
 export function allMatches(text, re) {
-  const it = matchAllExec(typeof text === 'string' ? text : String(text ?? ''), re);
-  const out = [];
-  for (let r = it.next(); !r.done; r = it.next()) out.push(r.value);
-  return out;
+  return execAll(typeof text === 'string' ? text : String(text ?? ''), re);
 }
 
 try {

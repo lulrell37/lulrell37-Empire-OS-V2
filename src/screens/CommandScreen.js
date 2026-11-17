@@ -1952,7 +1952,11 @@ export default function CommandScreen({navigation,route}){
           display=(stripCommands(response||'')||'').trim()||`(${p.name} came back empty — try asking again.)`;
         }
         if(display){replies.push({name:p.name,text:display});lastSpokenRef.current=display;}
-        await handleCommands(response,pid,cmdCallbacks);
+        // A tag that fails must not cost the reply its voice: it used to throw out
+        // of the turn here, before speakWithReveal, so the answer landed as one
+        // silent block of text.
+        try{await handleCommands(response,pid,cmdCallbacks);}
+        catch(e){if(e?.name==='AbortError')throw e;reportIssue('ai:commands',`${p.name}'s actions failed`,e);pushSystemMsg(`⚠️ ${p.name}'s actions failed: ${String(e?.message||e).slice(0,140)}`);}
         try{
           const gw=await googleWriteCommands(response,{onConfirm:queueGoogleAction,persona:pid});
           for(const line of gw.immediate)pushSystemMsg(line);
@@ -2025,6 +2029,8 @@ export default function CommandScreen({navigation,route}){
           // ran after it (tags, follow-up passes) is lost, and the crash log says why.
           let shown=got;try{shown=stripCommands(got)||got;}catch{}
           inFlight.setMsgs(prev=>prev.map(m=>m.id===inFlight.msgId?{...m,content:shown,revealed:shown.length,streaming:false}:m));
+          // …and still say it, word by word, if voice is on — not a silent block.
+          if(voiceOn&&!voiceMuted&&shown.trim()){try{await speakWithReveal(shown,getPersona(inFlight.pid||activePersona),inFlight.msgId,isGroup);}catch{}}
         }else if(inFlight){
           // Put it in the failed bubble too, if that bubble is still empty — the
           // banner alone fades in 18s and left "she said nothing" for image turns.

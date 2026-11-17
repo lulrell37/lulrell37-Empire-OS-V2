@@ -18,6 +18,7 @@
 import{getSetting,addLead,getFormSourceIds}from './database';
 import{sheetRead,googleConnected}from './googleClient';
 import{craigslistSub}from './scoutTargets';
+import{allMatches}from '../matchAllFix'; // never the built-in matchAll (it crashed on the phone)
 
 // --- Google Form responses -> inbound leads ------------------------------
 
@@ -344,7 +345,7 @@ async function scanCraigslist(metro,signal){
       const res=await fetch(url,{headers:{'User-Agent':'Mozilla/5.0 (compatible; EmpireOS lead scout)'},signal});
       if(!res.ok)continue;
       const xml=await res.text();
-      for(const m of xml.matchAll(/<item[^>]*>([\s\S]*?)<\/item>/g)){
+      for(const m of allMatches(xml,/<item[^>]*>([\s\S]*?)<\/item>/g)){
         const block=m[1];
         const title=clDecode((block.match(/<title>([\s\S]*?)<\/title>/)||[])[1]);
         const link=clDecode((block.match(/<link>([\s\S]*?)<\/link>/)||[])[1])

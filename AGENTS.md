@@ -440,6 +440,10 @@ tools — `applyEffects(…, { full: true })` — and any image/diagram/file it 
 goes out on the asking bot (`sink.media`). T.A.L.O.N. relayed can run
 `[TALON_RUN]` / `[TALON_UPDATE]` himself.
 
+## J.A.R.V.I.S. is Claude
+
+Talking to J.A.R.V.I.S. is talking directly to Claude: his prompt (`src/personas/personas.js` `system`, `server/personas.js` `tgIdentity`, keep in sync) says he is Claude, the same one that builds Empire OS in Claude Code, speaking plainly as himself: no butler act, no "sir". He runs on `claude-opus-5-5` (`JARVIS_MODEL` on the server; `model` + `voiceModel` in the app, so fast voice mode doesn't drop him to Haiku, and image turns stay on his model). Name, ElevenLabs voice and tools are unchanged.
+
 ## J.A.R.V.I.S. reads the code (`server/codeAccess.js`)
 
 With `GITHUB_TOKEN` set it reads GitHub `main` (tarball, re-checked every 2
@@ -514,6 +518,8 @@ no note tag behind it gets a ⚠️ too.
 ## The app replaces `String.prototype.matchAll` (`src/matchAllFix.js`)
 
 On the phone, Hermes's built-in `matchAll` threw "Object is not a function" inside a persona's turn (decoded from the crash log by rebuilding the exact Hermes bundle: the `[...response.matchAll(...)]` in `CommandScreen.js`), so every app reply died with "Something went wrong". `index.js` imports `src/matchAllFix.js` first; it swaps in a spec-equivalent `matchAll` built only on `RegExp.prototype.exec` (starts at `lastIndex`, leaves it unchanged, steps over zero-length matches). Keep it the first import. To decode a future crash: `npx expo export:embed --platform android --dev false --minify true` with `--sourcemap-output`, `hermesc -emit-binary -O -output-source-map`, `react-native/scripts/compose-source-maps.js`, then look up `line 1, column <address>` in the composed map; the address is the instruction after the failing call.
+
+The swap alone didn't take on the phone (the APK still crashed on `response.matchAll`), so **no app code calls `.matchAll` at all**: every call site uses `allMatches(text, re)` from `src/matchAllFix.js`, which returns a plain array from an exec loop and coerces the text itself. Use it for new tag scans too. In `CommandScreen`'s reply loop, a failure in `handleCommands` (or any step after the reply) no longer skips the voice: the reply is still spoken and revealed word by word (the earlier catch showed it as one silent block).
 
 ## Builds
 

@@ -23,6 +23,7 @@ import{runInboundScan}from './inbound';
 import{gmailSend,googleConnected}from './googleClient';
 import{pickTarget,pickInboundQuery}from './scoutTargets';
 import{pushLeadsToSheet}from './leadsSheet';
+import{allMatches}from '../matchAllFix'; // never the built-in matchAll (it crashed on the phone)
 
 let timer=null,running=false,busy=false;
 let lastHeartbeat=0,lastError=0;
@@ -58,7 +59,7 @@ const saveStats=s=>setSetting('auto_scout_stats',JSON.stringify(s)).catch(()=>{}
 
 function parseLeadAdds(text){
   const out=[];
-  for(const m of String(text||'').matchAll(/\[LEAD_ADD:\s*([^\]]+)\]/gi)){
+  for(const m of allMatches(text,/\[LEAD_ADD:\s*([^\]]+)\]/gi)){
     const p=m[1].split('|').map(x=>x.trim());
     if(p[0])out.push({name:p[0],business:p[1]||'',website:p[2]||'',contact:p[3]||'',bottleneck:p[4]||'',segment:p[5]||''});
   }

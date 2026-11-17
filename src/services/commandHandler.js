@@ -15,6 +15,7 @@ import{scheduleReminder}from './reminders';
 import{openApp,openWebpage}from './appLauncher';
 import useEmpireStore from '../store/useEmpireStore';
 import{scheduleSync}from './sync';
+import{allMatches}from '../matchAllFix'; // never the built-in matchAll (it crashed on the phone)
 const HUD_PANELS=['briefing','businesses','tasks','routine','batman','daily'];
 const PANEL_ALIASES=[['brief','briefing'],['business','businesses'],['revenue','businesses'],['empire','businesses'],['task','tasks'],['routine','routine'],['morning','routine'],['batman','batman'],['protocol','batman'],['training','batman'],['daily','daily'],['word','daily'],['verse','daily'],['fact','daily']];
 function resolvePanel(s){
@@ -33,7 +34,7 @@ export async function handleCommands(response,personaId,callbacks={}){
   // proposed trade silently never fired. Placing the order can't depend on an
   // unrelated bookkeeping write succeeding.
   try{
-    for(const m of response.matchAll(/\[TRADE_PROPOSE:\s*(?:([A-Za-z0-9./]{3,12})\s*\|\s*)?(buy|sell|long|short)\s*\|([^|\]]+)\|([^|\]]+)\|([^|\]]+)\|([^|\]]+)\|([^\]]+)\]/gi)){
+    for(const m of allMatches(response,/\[TRADE_PROPOSE:\s*(?:([A-Za-z0-9./]{3,12})\s*\|\s*)?(buy|sell|long|short)\s*\|([^|\]]+)\|([^|\]]+)\|([^|\]]+)\|([^|\]]+)\|([^\]]+)\]/gi)){
       const num=s=>{const v=parseFloat(String(s).replace(/[^0-9.\-]/g,''));return isNaN(v)?null:v;};
       const side=m[2].trim().toLowerCase();
       callbacks.onTradePropose?.({
@@ -43,17 +44,17 @@ export async function handleCommands(response,personaId,callbacks={}){
         qty:num(m[6])||1,rationale:m[7].trim(),
       });
     }
-    for(const m of response.matchAll(/\[TRADE_CLOSE:\s*([^\]]+)\]/gi)){
+    for(const m of allMatches(response,/\[TRADE_CLOSE:\s*([^\]]+)\]/gi)){
       callbacks.onTradeClose?.(m[1].trim());
     }
-    for(const m of response.matchAll(/\[TRADE_BREAKEVEN:\s*([A-Za-z0-9]+)\s*(?:\|\s*([0-9.]+))?\]/gi)){
+    for(const m of allMatches(response,/\[TRADE_BREAKEVEN:\s*([A-Za-z0-9]+)\s*(?:\|\s*([0-9.]+))?\]/gi)){
       const off=m[2]?parseFloat(m[2]):0;
       callbacks.onTradeBreakeven?.({id:m[1].trim(),offset:isNaN(off)?0:off});
     }
     // [TRADE_ACCOUNT: demo] — off live from the app. The server is the one trading:
     // it picks these synced settings up on its next 5-minute check. Going to live
     // stays on Telegram, where it gets a Confirm tap.
-    for(const m of response.matchAll(/\[TRADE_ACCOUNT:\s*([^\]]+)\]/gi)){
+    for(const m of allMatches(response,/\[TRADE_ACCOUNT:\s*([^\]]+)\]/gi)){
       if(!['ara','talon'].includes(personaId))continue;
       if(/demo|paper|practice/i.test(m[1])){
         await setSetting('talon_live','0');
@@ -65,41 +66,41 @@ export async function handleCommands(response,personaId,callbacks={}){
   }catch(e){try{require('./crashLog').logCrash('handleCommands:trade',String(e&&e.message||e));}catch{}}
   // [ARA_VOICE_ENGINE: elevenlabs|grok] — only a direct order from Mr. Burrus to J.A.R.V.I.S.
   // Only his own send() passes ownerText; relays and the council never do.
-  for(const m of response.matchAll(/\[ARA_VOICE_ENGINE:\s*([^\]]*)\]/gi)){
+  for(const m of allMatches(response,/\[ARA_VOICE_ENGINE:\s*([^\]]*)\]/gi)){
     const v=m[1].trim().toLowerCase().replace(/\s+/g,'');
     if(!voiceToggleAllowed(personaId,callbacks.ownerText))callbacks.onNotes?.(['⚠️ Voice not changed: only Mr. Burrus can order that, directly to J.A.R.V.I.S.']);
     else if(v!=='elevenlabs'&&v!=='grok')callbacks.onNotes?.(['⚠️ Voice not changed: it needs elevenlabs or grok.']);
     else{await setSetting('ara_voice',v);scheduleSync(0);callbacks.onNotes?.([`✓ A.R.A.'s voice is now ${v==='grok'?'Grok':'ElevenLabs'}.`]);}
   }
-  for(const m of response.matchAll(/\[ADD_TASK:\s*([^|\]]+?)(?:\|([^|\]]+))?(?:\|([^\]]+))?\]/gi)){
+  for(const m of allMatches(response,/\[ADD_TASK:\s*([^|\]]+?)(?:\|([^|\]]+))?(?:\|([^\]]+))?\]/gi)){
     const title=m[1]?.trim();if(!title)continue;
     const id=await addTask(title,m[2]?.trim()||'',m[3]?.trim()||null);
     callbacks.onTaskAdded?.({id,title});
   }
   // [CREATE_TASK: title | notes | due-date] — distinct from [ADD_TASK]; mirrors
   // to Google Tasks as well as the app's own synced task list.
-  for(const m of response.matchAll(/\[CREATE_TASK:\s*([^|\]]+?)(?:\|([^|\]]+))?(?:\|([^\]]+))?\]/gi)){
+  for(const m of allMatches(response,/\[CREATE_TASK:\s*([^|\]]+?)(?:\|([^|\]]+))?(?:\|([^\]]+))?\]/gi)){
     const title=m[1]?.trim();if(!title)continue;
     const notes=m[2]?.trim()||'',due=m[3]?.trim()||null;
     const id=await addTask(title,notes,due);
     callbacks.onTaskAdded?.({id,title});
     gtask.taskCreate({title,notes,due}).catch(()=>{});
   }
-  for(const m of response.matchAll(/\[COMPLETE_TASK:\s*([^\]]+)\]/gi)){
+  for(const m of allMatches(response,/\[COMPLETE_TASK:\s*([^\]]+)\]/gi)){
     const name=m[1].trim();
     const tasks=await getTasks(true);
     const task=tasks.find(t=>t.title.toLowerCase().includes(name.toLowerCase()));
     if(task){await completeTask(task.id);callbacks.onTaskCompleted?.(task);}
     gtask.taskComplete(name).catch(()=>{}); // best-effort Google Tasks mirror (title-matched)
   }
-  for(const m of response.matchAll(/\[DELETE_TASK:\s*([^\]]+)\]/gi)){
+  for(const m of allMatches(response,/\[DELETE_TASK:\s*([^\]]+)\]/gi)){
     const name=m[1].trim();
     const tasks=await getTasks(true);
     const task=tasks.find(t=>t.title.toLowerCase().includes(name.toLowerCase()));
     if(task){await deleteTask(task.id);callbacks.onTaskDeleted?.(task);}
     gtask.taskDelete(name).catch(()=>{}); // best-effort Google Tasks mirror
   }
-  for(const m of response.matchAll(/\[TASK_EDIT:\s*([^|\]]+)\|([^\]]+)\]/gi)){
+  for(const m of allMatches(response,/\[TASK_EDIT:\s*([^|\]]+)\|([^\]]+)\]/gi)){
     const tasks=await getTasks(true);
     const task=tasks.find(t=>t.title.toLowerCase().includes(m[1].trim().toLowerCase()));
     if(task){await updateTask(task.id,m[2].trim(),task.notes||'');callbacks.onTaskEdited?.(task);}
@@ -121,7 +122,7 @@ export async function handleCommands(response,personaId,callbacks={}){
   const ARTIFACT_NS={scribe:{verb:'SCRIPT',prefix:'Script'},hook:{verb:'HOOK',prefix:'Hook Set'}};
   if(ARTIFACT_NS[personaId]){
     const{verb,prefix}=ARTIFACT_NS[personaId];
-    for(const m of response.matchAll(new RegExp(`\\[${verb}_(?:CREATE|EDIT):\\s*([^|\\]]+)\\|([^\\]]+)\\]`,'gi'))){
+    for(const m of allMatches(response,new RegExp(`\\[${verb}_(?:CREATE|EDIT):\\s*([^|\\]]+)\\|([^\\]]+)\\]`,'gi'))){
       const name=m[1]?.trim(),body=m[2]?.trim();
       if(!name||!body)continue;
       const title=`${prefix} — ${name}`;
@@ -133,7 +134,7 @@ export async function handleCommands(response,personaId,callbacks={}){
   // Empire Council to work through. Appended to the `council_ideas` app-setting
   // (a JSON list), which syncs to the backend where the 5am meeting reads it.
   // [COUNCIL_IDEAS_CLEAR] wipes the agenda.
-  for(const m of response.matchAll(/\[COUNCIL_IDEA:\s*([^\]]+)\]/gi)){
+  for(const m of allMatches(response,/\[COUNCIL_IDEA:\s*([^\]]+)\]/gi)){
     const text=m[1]?.trim();if(!text)continue;
     let list=[];try{list=JSON.parse((await getSetting('council_ideas',''))||'[]');}catch{}
     if(!Array.isArray(list))list=[];
@@ -151,7 +152,7 @@ export async function handleCommands(response,personaId,callbacks={}){
   // meeting. Same synced app-setting shape as `council_ideas` (a JSON list);
   // [COUNCIL_NOTES_CLEAR] wipes it. The meeting surfaces the brief to every
   // persona and clears it once it's been used.
-  for(const m of response.matchAll(/\[COUNCIL_NOTE:\s*([^\]]+)\]/gi)){
+  for(const m of allMatches(response,/\[COUNCIL_NOTE:\s*([^\]]+)\]/gi)){
     const text=m[1]?.trim();if(!text)continue;
     let list=[];try{list=JSON.parse((await getSetting('council_notes',''))||'[]');}catch{}
     if(!Array.isArray(list))list=[];
@@ -176,7 +177,7 @@ export async function handleCommands(response,personaId,callbacks={}){
   // tool-injection pass since they return a result. Nothing posts without the
   // owner approving it in the Content screen.
   if(/^muse[123]$/.test(personaId)){
-    for(const m of response.matchAll(/\[CONTENT_QUEUE:\s*([^|\]]*)\|([^|\]]*)\|([^|\]]*)\|([^|\]]*)(?:\|([^\]]*))?\]/gi)){
+    for(const m of allMatches(response,/\[CONTENT_QUEUE:\s*([^|\]]*)\|([^|\]]*)\|([^|\]]*)\|([^|\]]*)(?:\|([^\]]*))?\]/gi)){
       const kind=(m[1]||'reel').trim().toLowerCase();
       const slot=(m[2]||'').trim();
       const prompt=(m[3]||'').trim();
@@ -186,11 +187,11 @@ export async function handleCommands(response,personaId,callbacks={}){
       const id=await addContentItem({page:personaId,kind:['reel','image','carousel'].includes(kind)?kind:'reel',slot,prompt,caption,hashtags,status:'queued'});
       callbacks.onContentQueued?.({id,page:personaId,slot,kind});
     }
-    for(const m of response.matchAll(/\[CONTENT_CAPTION:\s*([^|\]]+)\|([^\]]*)\]/gi)){
+    for(const m of allMatches(response,/\[CONTENT_CAPTION:\s*([^|\]]+)\|([^\]]*)\]/gi)){
       const item=await findContentByRef(m[1].trim());
       if(item){await updateContentItem(item.id,{caption:m[2].trim()});callbacks.onContentEdited?.({id:item.id});}
     }
-    for(const m of response.matchAll(/\[CONTENT_DROP:\s*([^\]]+)\]/gi)){
+    for(const m of allMatches(response,/\[CONTENT_DROP:\s*([^\]]+)\]/gi)){
       const item=await findContentByRef(m[1].trim());
       if(item&&item.status!=='posted'){await deleteContentItem(item.id);callbacks.onContentDropped?.({id:item.id});}
     }
@@ -200,26 +201,26 @@ export async function handleCommands(response,personaId,callbacks={}){
   // etc.) by its Android package — never a webpage fallback. [OPEN_WEBPAGE:
   // url] is the separate, explicit escape hatch for when a webpage genuinely
   // is what's wanted. Both fire-and-forget: no confirmation, no DB state.
-  for(const m of response.matchAll(/\[OPEN_APP:\s*([^\]]+)\]/gi)){
+  for(const m of allMatches(response,/\[OPEN_APP:\s*([^\]]+)\]/gi)){
     const name=m[1]?.trim();if(!name)continue;
     openApp(name).then(r=>{if(!r.ok)callbacks.onOpenAppFailed?.({name,reason:r.reason});}).catch(()=>{});
   }
-  for(const m of response.matchAll(/\[OPEN_WEBPAGE:\s*([^\]]+)\]/gi)){
+  for(const m of allMatches(response,/\[OPEN_WEBPAGE:\s*([^\]]+)\]/gi)){
     const url=m[1]?.trim();if(!url)continue;
     openWebpage(url).then(r=>{if(!r.ok)callbacks.onOpenAppFailed?.({name:url,reason:r.reason});}).catch(()=>{});
   }
-  for(const m of response.matchAll(/\[ADD_REVENUE:\s*([^|\]]+)\|([^|\]]+)(?:\|([^|\]]+))?(?:\|([^\]]+))?\]/gi)){
+  for(const m of allMatches(response,/\[ADD_REVENUE:\s*([^|\]]+)\|([^|\]]+)(?:\|([^|\]]+))?(?:\|([^\]]+))?\]/gi)){
     const amount=parseFloat(m[2]);
     if(m[1]&&!isNaN(amount))await addRevenue(m[1].trim(),amount,m[3]?.trim()||'income',m[4]?.trim()||'');
   }
-  for(const m of response.matchAll(/\[RELAY_TO:\s*([^|\]]+)\|([^\]]+)\]/gi)){
+  for(const m of allMatches(response,/\[RELAY_TO:\s*([^|\]]+)\|([^\]]+)\]/gi)){
     callbacks.onRelay?.({target:m[1].trim().toLowerCase(),message:m[2].trim()});
   }
   // --- THE FIRM — A.R.A. project orchestration ---
   // [PROJECT_START: name | brief] opens a client project; [PROJECT_DONE] closes it.
   // [DELEGATE: persona | task] is handled in CommandScreen.runRound (it calls the
   // specialist inline and feeds the result back to A.R.A.), not here.
-  for(const m of response.matchAll(/\[PROJECT_START:\s*([\s\S]+?)\]/gi)){
+  for(const m of allMatches(response,/\[PROJECT_START:\s*([\s\S]+?)\]/gi)){
     const parts=m[1].split('|').map(s=>s.trim());
     const name=parts[0];if(!name)continue;
     // target: "empire" (build into Empire OS V2) | "new" (dedicated repo) | "owner/repo"
@@ -229,15 +230,15 @@ export async function handleCommands(response,personaId,callbacks={}){
   // [TRADE_PROPOSE], [TRADE_CLOSE] and [TRADE_BREAKEVEN] are handled at the top of
   // this function (guarded) so an unrelated failing command can't skip an order.
   // [STRATEGY_UPDATE: full replacement text] — T.A.L.O.N. rewrites the trading playbook
-  for(const m of response.matchAll(/\[STRATEGY_UPDATE:\s*([\s\S]+?)\]/gi)){
+  for(const m of allMatches(response,/\[STRATEGY_UPDATE:\s*([\s\S]+?)\]/gi)){
     if(m[1]?.trim())callbacks.onStrategyUpdate?.(m[1].trim());
   }
   // [TRADE_REVIEW: tradeId | one-line note] — T.A.L.O.N. annotates a closed trade
-  for(const m of response.matchAll(/\[TRADE_REVIEW:\s*#?(\d+)\s*\|\s*([^\]]+)\]/gi)){
+  for(const m of allMatches(response,/\[TRADE_REVIEW:\s*#?(\d+)\s*\|\s*([^\]]+)\]/gi)){
     callbacks.onTradeReview?.({id:parseInt(m[1],10),note:m[2].trim()});
   }
   let drFired=false;
-  for(const m of response.matchAll(/\[DEEP[_ ]?RESEARCH\s*:\s*([^\]]+)\]/gi)){
+  for(const m of allMatches(response,/\[DEEP[_ ]?RESEARCH\s*:\s*([^\]]+)\]/gi)){
     if(m[1]?.trim()){callbacks.onDeepResearch?.(m[1].trim());drFired=true;}
   }
   // A model (esp. Grok) will sometimes SAY it's starting deep research without
@@ -247,29 +248,29 @@ export async function handleCommands(response,personaId,callbacks={}){
     callbacks.onDeepResearchClaimed?.();
   }
   // --- JARVIS build pipeline ---
-  for(const m of response.matchAll(/\[BUILD_REQUEST:\s*([^\]]+)\]/gi)){
+  for(const m of allMatches(response,/\[BUILD_REQUEST:\s*([^\]]+)\]/gi)){
     if(m[1]?.trim())callbacks.onBuildRequest?.({spec:m[1].trim()});
   }
-  for(const m of response.matchAll(/\[BUILD_REPLY:\s*#?(\d+)\s*\|\s*([^\]]+)\]/gi)){
+  for(const m of allMatches(response,/\[BUILD_REPLY:\s*#?(\d+)\s*\|\s*([^\]]+)\]/gi)){
     callbacks.onBuildReply?.({issueNumber:parseInt(m[1],10),text:m[2].trim()});
   }
-  for(const m of response.matchAll(/\[BUILD_MERGE:\s*#?(\d+)\]/gi)){
+  for(const m of allMatches(response,/\[BUILD_MERGE:\s*#?(\d+)\]/gi)){
     callbacks.onBuildMerge?.({issueNumber:parseInt(m[1],10)});
   }
-  for(const m of response.matchAll(/\[BUILD_CANCEL:\s*#?(\d+)\]/gi)){
+  for(const m of allMatches(response,/\[BUILD_CANCEL:\s*#?(\d+)\]/gi)){
     callbacks.onBuildCancel?.({issueNumber:parseInt(m[1],10)});
   }
   // --- The Canvas — a persona turns the orb screen into an interactive surface.
   // [SHOW_CHART], [SHOW_NOTES]/[SHOW_NOTE: title], [SHOW_TASKS]. All route to one
   // callback; CommandScreen animates it in (viz view) or drops a chip (chat).
-  for(const m of response.matchAll(/\[SHOW_CHART:\s*([^\]]+)\]/gi)){
+  for(const m of allMatches(response,/\[SHOW_CHART:\s*([^\]]+)\]/gi)){
     if(m[1]?.trim())callbacks.onShowArtifact?.({kind:'chart',raw:m[1].trim()});
   }
   // [TRADE_CHART: XAUUSD | 1H] — T.A.L.O.N.'s marked-up candlestick chart.
-  for(const m of response.matchAll(/\[TRADE_CHART(?::\s*([^\]]*))?\]/gi)){
+  for(const m of allMatches(response,/\[TRADE_CHART(?::\s*([^\]]*))?\]/gi)){
     callbacks.onShowArtifact?.({kind:'tradeChart',raw:(m[1]||'').trim()});
   }
-  for(const m of response.matchAll(/\[SHOW_NOTE:\s*([^\]]+)\]/gi)){
+  for(const m of allMatches(response,/\[SHOW_NOTE:\s*([^\]]+)\]/gi)){
     if(m[1]?.trim())callbacks.onShowArtifact?.({kind:'notes',open:m[1].trim()});
   }
   if(/\[SHOW_NOTES\]/i.test(response))callbacks.onShowArtifact?.({kind:'notes'});
@@ -287,13 +288,13 @@ export async function handleCommands(response,personaId,callbacks={}){
     if(/\[LIST_NOTES(?::[^\]]*)?\]|\[SEARCH_DRIVE:/i.test(response))callbacks.onShowArtifact?.({kind:'notes'});
     else if(/\[READ_TASKS\]/i.test(response))callbacks.onShowArtifact?.({kind:'tasks'});
   }
-  for(const m of response.matchAll(/\[ADD_EXPENSE:\s*([^|\]]+)(?:\|([^|\]]+))?(?:\|([^\]]+))?\]/gi)){
+  for(const m of allMatches(response,/\[ADD_EXPENSE:\s*([^|\]]+)(?:\|([^|\]]+))?(?:\|([^\]]+))?\]/gi)){
     await addExpense(m[1],m[2]?.trim()||'general',m[3]?.trim()||'');
   }
-  for(const m of response.matchAll(/\[ADD_DATE:\s*([^|\]]+)\|([^|\]]+)(?:\|([^\]]+))?\]/gi)){
+  for(const m of allMatches(response,/\[ADD_DATE:\s*([^|\]]+)\|([^|\]]+)(?:\|([^\]]+))?\]/gi)){
     await addImportantDate(m[1].trim(),m[2].trim(),m[3]?.trim()||'');
   }
-  for(const m of response.matchAll(/\[REMIND_ME:\s*([^|\]]+)\|([^\]]+)\]/gi)){
+  for(const m of allMatches(response,/\[REMIND_ME:\s*([^|\]]+)\|([^\]]+)\]/gi)){
     const txt=m[1].trim();
     try{
       const at=await scheduleReminder(txt,m[2].trim());
@@ -301,7 +302,7 @@ export async function handleCommands(response,personaId,callbacks={}){
     }catch(e){callbacks.onReminderSet?.({text:txt,error:e.message});}
   }
   // --- S.C.O.U.T. leads pipeline ---
-  for(const m of response.matchAll(/\[LEAD_ADD:\s*([^\]]+)\]/gi)){
+  for(const m of allMatches(response,/\[LEAD_ADD:\s*([^\]]+)\]/gi)){
     const parts=m[1].split('|').map(s=>s.trim());
     const name=parts[0];
     if(!name)continue;
@@ -317,7 +318,7 @@ export async function handleCommands(response,personaId,callbacks={}){
     const id=await addLead({name,business:parts[1]||'',website:parts[2]||'',contact,bottleneck:parts[4]||'',segment});
     callbacks.onLeadChange?.({action:'add',id,name});
   }
-  for(const m of response.matchAll(/\[LEAD_UPDATE:\s*([^|\]]+)\|([^\]]+)\]/gi)){
+  for(const m of allMatches(response,/\[LEAD_UPDATE:\s*([^|\]]+)\|([^\]]+)\]/gi)){
     const lead=await findLead(m[1].trim());
     if(!lead){callbacks.onLeadChange?.({action:'miss',ref:m[1].trim()});continue;}
     const patch={};
@@ -332,88 +333,88 @@ export async function handleCommands(response,personaId,callbacks={}){
     if(Object.keys(patch).length)await updateLead(lead.id,patch);
     callbacks.onLeadChange?.({action:'update',id:lead.id,name:lead.name});
   }
-  for(const m of response.matchAll(/\[LEAD_LOG:\s*([^|\]]+)\|([^\]]+)\]/gi)){
+  for(const m of allMatches(response,/\[LEAD_LOG:\s*([^|\]]+)\|([^\]]+)\]/gi)){
     const lead=await findLead(m[1].trim());
     if(!lead){callbacks.onLeadChange?.({action:'miss',ref:m[1].trim()});continue;}
     await appendLeadLog(lead.id,m[2].trim());
     callbacks.onLeadChange?.({action:'log',id:lead.id,name:lead.name});
   }
   // --- R.O.G.U.E. clip editing ---
-  for(const m of response.matchAll(/\[EDIT_CLIP:\s*(\S+)\s*\|\s*([\s\S]+?)\]/gi)){
+  for(const m of allMatches(response,/\[EDIT_CLIP:\s*(\S+)\s*\|\s*([\s\S]+?)\]/gi)){
     const mediaUrl=m[1].trim();const instructions=m[2].trim();
     if(mediaUrl&&instructions)callbacks.onClipEdit?.({mediaUrl,instructions});
   }
   // --- R.O.G.U.E. viral-moment scan of a LONG video — focus is optional ---
-  for(const m of response.matchAll(/\[CLIP_SCAN:\s*(\S+)(?:\s*\|\s*([\s\S]+?))?\]/gi)){
+  for(const m of allMatches(response,/\[CLIP_SCAN:\s*(\S+)(?:\s*\|\s*([\s\S]+?))?\]/gi)){
     const mediaUrl=m[1].trim();const focus=(m[2]||'').trim();
     if(mediaUrl)callbacks.onClipScan?.({mediaUrl,focus});
   }
   // --- Video watching (any persona) — focus is optional ---
-  for(const m of response.matchAll(/\[WATCH_VIDEO:\s*(\S+)(?:\s*\|\s*([\s\S]+?))?\]/gi)){
+  for(const m of allMatches(response,/\[WATCH_VIDEO:\s*(\S+)(?:\s*\|\s*([\s\S]+?))?\]/gi)){
     const mediaUrl=m[1].trim();const focus=(m[2]||'').trim();
     if(mediaUrl)callbacks.onWatchVideo?.({mediaUrl,focus});
   }
   // --- Pinned memory (any persona) ---
-  for(const m of response.matchAll(/\[REMEMBER:\s*([^|\]]+?)(?:\s*\|\s*(\d+))?\]/gi)){
+  for(const m of allMatches(response,/\[REMEMBER:\s*([^|\]]+?)(?:\s*\|\s*(\d+))?\]/gi)){
     const txt=m[1]?.trim();if(!txt)continue;
     const r=await pinMemory(personaId,txt,m[2]?parseInt(m[2],10):3);
     if(r)callbacks.onMemoryPinned?.({text:txt,days:r.days});
   }
-  for(const m of response.matchAll(/\[UNPIN_MEMORY:\s*([^\]]+)\]/gi)){
+  for(const m of allMatches(response,/\[UNPIN_MEMORY:\s*([^\]]+)\]/gi)){
     const q=m[1].trim().toLowerCase();if(!q)continue;
     const pins=await getPinnedMemories(personaId);
     const hit=pins.find(p=>String(p.content||'').toLowerCase().includes(q));
     if(hit){await unpinMemory(hit.id);callbacks.onMemoryUnpinned?.({text:q});}
   }
   if(/\[READ_HUD\]/i.test(response)){const hud=await getHudState();callbacks.onHudRead?.(hud);}
-  for(const m of response.matchAll(/\[UPDATE_HUD:\s*([^|\]]+)\|([^\]]+)\]/gi)){
+  for(const m of allMatches(response,/\[UPDATE_HUD:\s*([^|\]]+)\|([^\]]+)\]/gi)){
     await updateHudState({[m[1].trim()]:m[2].trim()});hudChanged();callbacks.onHudUpdated?.({field:m[1].trim(),value:m[2].trim()});
   }
-  for(const m of response.matchAll(/\[UPDATE_SCORE:\s*(\d+)\]/gi)){
+  for(const m of allMatches(response,/\[UPDATE_SCORE:\s*(\d+)\]/gi)){
     await updateHudState({empire_score:parseInt(m[1])});hudChanged();callbacks.onScoreUpdated?.(parseInt(m[1]));
   }
-  for(const m of response.matchAll(/\[ROUTINE_DONE:\s*([^\]]+)\]/gi)){
+  for(const m of allMatches(response,/\[ROUTINE_DONE:\s*([^\]]+)\]/gi)){
     const items=m[1].split(',').map(s=>s.trim()).filter(Boolean);
     for(const item of items){await setRoutineDone(item,true);}
     hudChanged();callbacks.onRoutineDone?.(items);
   }
-  for(const m of response.matchAll(/\[ROUTINE_ADD:\s*([^\]]+)\]/gi)){
+  for(const m of allMatches(response,/\[ROUTINE_ADD:\s*([^\]]+)\]/gi)){
     await addRoutineItem(m[1].trim());hudChanged();
   }
-  for(const m of response.matchAll(/\[ROUTINE_REMOVE:\s*([^\]]+)\]/gi)){
+  for(const m of allMatches(response,/\[ROUTINE_REMOVE:\s*([^\]]+)\]/gi)){
     await removeRoutineItem(m[1].trim());hudChanged();
   }
-  for(const m of response.matchAll(/\[ROUTINE_RENAME:\s*([^|\]]+)\|([^\]]+)\]/gi)){
+  for(const m of allMatches(response,/\[ROUTINE_RENAME:\s*([^|\]]+)\|([^\]]+)\]/gi)){
     await renameRoutineItem(m[1].trim(),m[2].trim());hudChanged();
   }
-  for(const m of response.matchAll(/\[BATMAN_SET:\s*([^|\]]+)\|([^|\]]+)(?:\|([^\]]+))?\]/gi)){
+  for(const m of allMatches(response,/\[BATMAN_SET:\s*([^|\]]+)\|([^|\]]+)(?:\|([^\]]+))?\]/gi)){
     await setBatmanDay(m[1].trim(),m[2].trim(),m[3]!=null?m[3].trim():null);hudChanged();
   }
-  for(const m of response.matchAll(/\[SET_WORD:\s*([^|\]]+)(?:\|([^|\]]*))?(?:\|([^\]]+))?\]/gi)){
+  for(const m of allMatches(response,/\[SET_WORD:\s*([^|\]]+)(?:\|([^|\]]*))?(?:\|([^\]]+))?\]/gi)){
     await updateHudState({word_of_day:m[1].trim(),word_phonetic:m[2]?.trim()||'',word_def:m[3]?.trim()||''});hudChanged();
   }
-  for(const m of response.matchAll(/\[SET_VERSE:\s*([^|\]]+)(?:\|([^\]]+))?\]/gi)){
+  for(const m of allMatches(response,/\[SET_VERSE:\s*([^|\]]+)(?:\|([^\]]+))?\]/gi)){
     await updateHudState({verse_of_day:m[1].trim(),verse_ref:m[2]?.trim()||''});hudChanged();
   }
-  for(const m of response.matchAll(/\[SET_FACT:\s*([^\]]+)\]/gi)){
+  for(const m of allMatches(response,/\[SET_FACT:\s*([^\]]+)\]/gi)){
     await updateHudState({fact_of_day:m[1].trim()});hudChanged();
   }
-  for(const m of response.matchAll(/\[HUD_DETACH:\s*([^\]]+)\]/gi)){
+  for(const m of allMatches(response,/\[HUD_DETACH:\s*([^\]]+)\]/gi)){
     const p=resolvePanel(m[1]);
     if(p){await setPanelLayout(p,{detached:1,x:24,y:24,z:Math.floor(Date.now()/1000)%100000});hudChanged();}
   }
-  for(const m of response.matchAll(/\[HUD_DOCK:\s*([^\]]+)\]/gi)){
+  for(const m of allMatches(response,/\[HUD_DOCK:\s*([^\]]+)\]/gi)){
     const p=resolvePanel(m[1]);
     if(p){await setPanelLayout(p,{detached:0});hudChanged();}
   }
-  for(const m of response.matchAll(/\[DIAGRAM_SHOW:\s*([^\]]+)\]/gi)){
+  for(const m of allMatches(response,/\[DIAGRAM_SHOW:\s*([^\]]+)\]/gi)){
     const subject=m[1].trim();
     if(subject){
       useEmpireStore.getState().setDiagramPrompt(subject);
       callbacks.onShowDiagram?.();
     }
   }
-  for(const m of response.matchAll(/\[SET_TARGET:\s*([^|\]]+)\|([^|\]]+)(?:\|([^\]]+))?\]/gi)){
+  for(const m of allMatches(response,/\[SET_TARGET:\s*([^|\]]+)\|([^|\]]+)(?:\|([^\]]+))?\]/gi)){
     const targets=await getBusinessTargets();
     const b=targets.find(x=>x.business.toLowerCase().includes(m[1].trim().toLowerCase()));
     if(b){

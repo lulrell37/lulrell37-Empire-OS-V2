@@ -5,6 +5,7 @@
 // every step is best-effort and a failure degrades to a short note rather than
 // breaking the turn.
 import*as FileSystem from 'expo-file-system';
+import{allMatches}from '../matchAllFix'; // never the built-in matchAll (it crashed on the phone)
 
 const UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36';
 const HDRS={'User-Agent':UA,'Accept-Language':'en-US,en;q=0.9'};
@@ -61,7 +62,7 @@ async function youTubeTranscript(id,signal){
   const track=list.find(t=>/^en/i.test(t.languageCode))||list[0];
   if(!track?.baseUrl)return'';
   const xml=await getText(track.baseUrl.replace(/\\u0026/g,'&'),signal);
-  const lines=[...xml.matchAll(/<text[^>]*>([\s\S]*?)<\/text>/g)].map(m=>stripTags(m[1]));
+  const lines=[...allMatches(xml,/<text[^>]*>([\s\S]*?)<\/text>/g)].map(m=>stripTags(m[1]));
   return lines.join(' ').replace(/\s+/g,' ').trim();
 }
 async function fetchYouTube(url,signal){

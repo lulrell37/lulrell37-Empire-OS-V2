@@ -408,7 +408,7 @@ export async function callPersona(personaId,messages,signal=null,onDelta=null,op
     const claudeSystem=(cacheAt>0&&cacheAt<sys.length)
       ?[{type:'text',text:sys.slice(0,cacheAt),cache_control:{type:'ephemeral'}},{type:'text',text:sys.slice(cacheAt)}]
       :sys;
-    const body=JSON.stringify({model:hasVision?'claude-sonnet-5':(opts.model||persona.model||'claude-sonnet-5'),max_tokens:maxTokens,system:claudeSystem,messages:hist,stream});
+    const body=JSON.stringify({model:hasVision?(persona.model||'claude-sonnet-5'):(opts.model||persona.model||'claude-sonnet-5'),max_tokens:maxTokens,system:claudeSystem,messages:hist,stream});
     if(stream){
       let tin=0,tout=0;
       await xhrStream({url,headers,body,signal,onEvent:(e)=>{

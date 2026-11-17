@@ -7,6 +7,7 @@
 //   courseInjections(text, pid, asked) -> TOOL RESULT strings for the second pass
 //   COURSE_TAG_RE                      -> for stripCommands
 import{loadBackend}from './keyStore';
+import{allMatches}from '../matchAllFix'; // never the built-in matchAll (it crashed on the phone)
 
 export const COURSE_TAG_RE=/\[(COURSE_STATUS|COURSE_START|LESSON_DONE|LESSON_UNDO|COURSE_DONE|ROADMAP_CHECK|ROADMAP_UNCHECK)(?::\s*([^\]]*))?\]/gi;
 
@@ -44,7 +45,7 @@ export async function courseContext(){
 export async function courseInjections(text,persona,asked){
   const out=[];
   const seen=new Set();
-  for(const m of String(text||'').matchAll(COURSE_TAG_RE)){
+  for(const m of allMatches(text,COURSE_TAG_RE)){
     const name=m[1].toUpperCase(),arg=(m[2]||'').trim();
     const key=`${name}|${arg}`;
     if(seen.has(key))continue;

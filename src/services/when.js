@@ -6,6 +6,7 @@
 //
 // parseWhen(text, today) -> { y, m, d, hh, mm, allDay } | null
 //   today = { y, m, d, wd } (wd 0 = Sunday) — the caller's "today" in his time zone.
+import{allMatches}from '../matchAllFix'; // never the built-in matchAll (it crashed on the phone)
 const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
 const DAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 
@@ -53,7 +54,7 @@ function parseWhen(input, today) {
   else if (/\bmidnight\b/.test(s)) hh = 0;
   else if ((m = s.match(/(?:^|[^\d])(\d{1,2})(?::(\d{2}))?(?::\d{2})?\s*(a\.?\s?m\.?|p\.?\s?m\.?)?(?![\d])/g))) {
     // Pick the token that's really a time: has minutes or am/pm, or follows "at".
-    const toks = [...s.matchAll(/(at\s+)?(\d{1,2})(?::(\d{2}))?(?::\d{2})?\s*(a\.?\s?m\.?|p\.?\s?m\.?)?(?![\d])/g)]
+    const toks = [...allMatches(s,/(at\s+)?(\d{1,2})(?::(\d{2}))?(?::\d{2})?\s*(a\.?\s?m\.?|p\.?\s?m\.?)?(?![\d])/g)]
       .filter((t) => t[3] || t[4] || t[1]);
     const t = toks[0];
     if (t) {

@@ -12,6 +12,7 @@
 import*as g from './googleClient';
 import{addImportantDate,getTasks,getNote,findLead,appendLeadLog,updateLead}from './database';
 import{runSync}from './sync';
+import{allMatches}from '../matchAllFix'; // never the built-in matchAll (it crashed on the phone)
 
 const ARA_ONLY=/\[(READ_EMAIL|READ_EMAIL_ID|READ_CALENDAR|CREATE_EVENT|ADD_EVENT|EDIT_EVENT|UPDATE_EVENT|MOVE_EVENT|DELETE_EVENT|SEND_EMAIL)\b[^\]]*\]/gi;
 const araOnly=(text,persona)=>(persona&&persona!=='ara'?String(text||'').replace(ARA_ONLY,''):String(text||''));
@@ -36,7 +37,7 @@ export async function googleReadInjections(text,persona){
 
   if(/\[READ_EMAIL\]/i.test(t))await push('GMAIL',()=>g.gmailUnread());
 
-  for(const m of t.matchAll(/\[READ_CALENDAR(?::\s*([^\]]+))?\]/ig)){
+  for(const m of allMatches(t,/\[READ_CALENDAR(?::\s*([^\]]+))?\]/ig)){
     const arg=(m[1]||'').trim();
     let opts={};
     if(arg){
@@ -48,13 +49,13 @@ export async function googleReadInjections(text,persona){
     await push('GOOGLE CALENDAR',()=>g.calendarList(opts));
   }
 
-  for(const m of t.matchAll(/\[LIST_NOTES(?::\s*([^\]]+))?\]/ig)){
+  for(const m of allMatches(t,/\[LIST_NOTES(?::\s*([^\]]+))?\]/ig)){
     const arg=m[1]?m[1].trim():30;
     await push('DRIVE',()=>g.driveList(arg));
   }
-  for(const m of t.matchAll(/\[SEARCH_DRIVE:\s*([^\]]+)\]/ig))
+  for(const m of allMatches(t,/\[SEARCH_DRIVE:\s*([^\]]+)\]/ig))
     await push('DRIVE SEARCH',()=>g.driveSearch(m[1].trim()));
-  for(const m of t.matchAll(/\[READ_NOTE:\s*([^\]]+)\]/ig)){
+  for(const m of allMatches(t,/\[READ_NOTE:\s*([^\]]+)\]/ig)){
     const {ref:name,page}=splitPageArg(m[1]);
     await push('NOTE',async()=>{
       try{return await g.driveRead({name,page});}
@@ -65,14 +66,14 @@ export async function googleReadInjections(text,persona){
       }
     });
   }
-  for(const m of t.matchAll(/\[READ_FILE_ID:\s*([^\]]+)\]/ig)){
+  for(const m of allMatches(t,/\[READ_FILE_ID:\s*([^\]]+)\]/ig)){
     const {ref:fileId,page}=splitPageArg(m[1]);
     await push('DRIVE FILE',()=>g.driveRead({fileId,page}));
   }
   // S.C.R.I.B.E. / H.O.O.K. pull one of their own artifacts back, or list them —
   // same Drive-first, local-fallback path as [READ_NOTE], with the namespace
   // prefix their [SCRIPT_CREATE] / [HOOK_CREATE] writes use.
-  for(const m of t.matchAll(/\[(SCRIPT|HOOK)_OPEN:\s*([^\]]+)\]/ig)){
+  for(const m of allMatches(t,/\[(SCRIPT|HOOK)_OPEN:\s*([^\]]+)\]/ig)){
     const prefix=m[1].toUpperCase()==='SCRIPT'?'Script':'Hook Set';
     const {ref,page}=splitPageArg(m[2]);
     const name=`${prefix} — ${ref}`;
@@ -111,7 +112,7 @@ export async function googleWriteCommands(text,{onConfirm,persona}={}){
 
   // [CREATE_EVENT: title | when | minutes | location | notes]; "when" may be split
   // across two fields (date | time) — a time-looking third field joins it.
-  for(const m of t.matchAll(/\[(?:CREATE|ADD)_EVENT:\s*([^\]]+)\]/ig)){
+  for(const m of allMatches(t,/\[(?:CREATE|ADD)_EVENT:\s*([^\]]+)\]/ig)){
     const p=m[1].split('|').map(s=>s.trim());
     if(!p[0]||!p[1]){immediate.push('⚠️ CREATE_EVENT needs a title and a start time');continue;}
     let when=p[1],i=2;
@@ -124,19 +125,19 @@ export async function googleWriteCommands(text,{onConfirm,persona}={}){
   // [CREATE_NOTE] / [EDIT_NOTE] (and [SAVE_NOTE] / [APPEND_NOTE]) are run by
   // handleCommands via noteCommands.js — one path, with receipts, for every persona.
 
-  for(const m of t.matchAll(/\[MOVE_NOTE:\s*([^|\]]+)\|([^\]]+)\]/ig))
+  for(const m of allMatches(t,/\[MOVE_NOTE:\s*([^|\]]+)\|([^\]]+)\]/ig))
     await run(()=>g.driveMoveNote({ref:m[1].trim(),folder:m[2].trim()}));
 
   if(/\[SYNC_NOTES\]/i.test(t))
     await run(()=>g.driveSyncNotesFolder());
 
-  for(const m of t.matchAll(/\[CREATE_SHEET:\s*([^|\]]+)(?:\|([^|\]]*))?(?:\|([^\]]*))?\]/ig)){
+  for(const m of allMatches(t,/\[CREATE_SHEET:\s*([^|\]]+)(?:\|([^|\]]*))?(?:\|([^\]]*))?\]/ig)){
     const cols=(m[2]||'').split(',').map(s=>s.trim()).filter(Boolean);
     const vals=(m[3]||'').split(',').map(s=>s.trim()).filter(Boolean);
     await run(()=>g.sheetCreate({title:m[1].trim(),columns:cols,values:vals}));
   }
 
-  for(const m of t.matchAll(/\[SET_REMINDER:\s*([^|\]]+)\|([^\]]+)\]/ig))
+  for(const m of allMatches(t,/\[SET_REMINDER:\s*([^|\]]+)\|([^\]]+)\]/ig))
     await run(async()=>{await addImportantDate(m[1].trim(),m[2].trim(),'');return `Reminder saved: ${m[1].trim()} — ${m[2].trim()}`;});
 
   if(/\[SYNC_AND_SAVE\]/i.test(t))
@@ -144,7 +145,7 @@ export async function googleWriteCommands(text,{onConfirm,persona}={}){
 
   // deferred — need a confirmation tap
   const defer=(a)=>{deferred++;onConfirm?.(a);};
-  for(const m of t.matchAll(/\[SEND_EMAIL:\s*([^|\]]+)\|([^|\]]+)\|([^\]]+)\]/ig)){
+  for(const m of allMatches(t,/\[SEND_EMAIL:\s*([^|\]]+)\|([^|\]]+)\|([^\]]+)\]/ig)){
     const to=m[1].trim(),subject=m[2].trim(),body=m[3].trim();
     defer({kind:'send_email',label:'Send email',detail:`To: ${to}\nSubject: ${subject}`,
       run:()=>g.gmailSend({to,subject,body})});
@@ -152,7 +153,7 @@ export async function googleWriteCommands(text,{onConfirm,persona}={}){
   // [LEAD_EMAIL: ref | subject | body] — S.C.O.U.T. sends outreach to a pipeline
   // lead. Pulls the address from the lead's `contact`, and on send logs it and
   // moves a brand-new lead to `contacted`.
-  for(const m of t.matchAll(/\[LEAD_EMAIL:\s*([^|\]]+)\|([^|\]]+)\|([^\]]+)\]/ig)){
+  for(const m of allMatches(t,/\[LEAD_EMAIL:\s*([^|\]]+)\|([^|\]]+)\|([^\]]+)\]/ig)){
     const ref=m[1].trim(),subject=m[2].trim(),body=m[3].trim();
     const lead=await findLead(ref);
     if(!lead){immediate.push(`⚠️ No lead matches "${ref}" — add them to the pipeline first.`);continue;}
@@ -166,11 +167,11 @@ export async function googleWriteCommands(text,{onConfirm,persona}={}){
         return `Sent to ${lead.name} — logged to the pipeline`;
       }});
   }
-  for(const m of t.matchAll(/\[DELETE_EVENT:\s*([^\]]+)\]/ig)){
+  for(const m of allMatches(t,/\[DELETE_EVENT:\s*([^\]]+)\]/ig)){
     const id=m[1].trim();
     defer({kind:'delete_event',label:'Delete calendar event',detail:`Event id: ${id}`,run:()=>g.calendarDelete(id)});
   }
-  for(const m of t.matchAll(/\[DELETE_FILE:\s*([^\]]+)\]/ig)){
+  for(const m of allMatches(t,/\[DELETE_FILE:\s*([^\]]+)\]/ig)){
     const id=m[1].trim();
     defer({kind:'delete_file',label:'Delete Drive file',detail:`File id: ${id}`,run:()=>g.driveDelete(id)});
   }
