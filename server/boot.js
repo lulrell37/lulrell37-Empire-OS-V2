@@ -18,7 +18,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const http = require('http');
-const { shareBlocker } = require('./depsCheck');
+const { shareBlocker, crashReason } = require('./depsCheck');
 const { spawn, execFileSync } = require('child_process');
 
 const REPO = 'lulrell37/lulrell37-Empire-OS-V2';
@@ -141,7 +141,8 @@ async function cycle() {
       return run.exit;
     }
     await stop();
-    const why = run.tail.slice(-8).join('\n').slice(-900);
+    const cause = crashReason(run.tail);
+    const why = (cause ? `${cause}\n` : '') + run.tail.slice(-15).join('\n').slice(-2500);
     log(`${code.source} @ ${code.sha} did not come up healthy`);
     failed = `${code.source === 'github' ? 'main' : code.source} @ ${code.sha} crashed on startup:\n${why || '(no output)'}`;
   }

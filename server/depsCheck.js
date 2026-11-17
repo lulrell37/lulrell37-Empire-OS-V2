@@ -10,6 +10,13 @@
 // Anything unreadable or unknown -> not shareable -> npm ci.
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
+
+// Content hash of a file ('' when missing). Raw bytes, so ANY edit to package.json or
+// package-lock.json (even one the dependency-field compare below would miss) is a change.
+const fileHash = (file) => {
+  try { return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex'); } catch { return ''; }
+};
 
 const FIELDS = ['dependencies', 'optionalDependencies', 'peerDependencies', 'devDependencies', 'overrides'];
 
@@ -30,6 +37,10 @@ function manifestKey(dir) {
 function shareBlocker(newDir, oldDir) {
   const nm = path.join(oldDir, 'node_modules');
   if (!fs.existsSync(nm)) return 'no node_modules to share';
+  // Any byte change to package.json or package-lock.json -> full install, never share.
+  for (const f of ['package.json', 'package-lock.json']) {
+    if (fileHash(path.join(newDir, f)) !== fileHash(path.join(oldDir, f))) return `${f} changed`;
+  }
   const a = manifestKey(newDir);
   const b = manifestKey(oldDir);
   if (a === null || b === null) return 'package.json unreadable';
@@ -48,4 +59,14 @@ function shareBlocker(newDir, oldDir) {
   return '';
 }
 
-module.exports = { manifestKey, shareBlocker };
+// Pulls the real cause out of a crashed child's output: the first error line (and the
+// exact module name for MODULE_NOT_FOUND / "Cannot find module"). `lines` = output tail.
+function crashReason(lines) {
+  const text = lines.join('\n');
+  const mod = text.match(/Cannot find module '([^']+)'/) || text.match(/Cannot find package '([^']+)'/);
+  const first = lines.find((l) => /(^|\s)(\w*Error\b|MODULE_NOT_FOUND|Cannot find)/.test(l)) || '';
+  const head = [mod ? `missing module: ${mod[1]}` : '', first.trim().slice(0, 300)].filter(Boolean);
+  return [...new Set(head)].join(' | ');
+}
+
+module.exports = { manifestKey, shareBlocker, crashReason };
