@@ -18,7 +18,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const http = require('http');
-const { shareBlocker, crashReason } = require('./depsCheck');
+const { pickShareSource, npmCrashed, crashReason } = require('./depsCheck');
 const { spawn, spawnSync, execFileSync } = require('child_process');
 
 const REPO = 'lulrell37/lulrell37-Empire-OS-V2';
@@ -70,18 +70,45 @@ async function prepare() {
     if (!fs.existsSync(path.join(dir, 'index.js'))) throw new Error(`main @ ${sha} has no server/index.js`);
     // Share node_modules only when nothing differs (every dependency field AND the
     // installed tree vs the new lockfile — see depsCheck.js); otherwise install.
-    const blocker = shareBlocker(dir, BUNDLED);
-    if (!blocker) {
-      fs.symlinkSync(path.join(BUNDLED, 'node_modules'), path.join(dir, 'node_modules'), 'dir');
-    } else {
-      log(`main @ ${sha}: not sharing node_modules (${blocker}) — installing`);
+    // Any copy already installed can lend it: the one running now, other ready
+    // copies in the store, then the bundled deploy.
+    const ready = fs.readdirSync(STORE)
+      .filter((d) => d !== sha && fs.existsSync(path.join(STORE, d, '.ready')))
+      .sort((a, b) => fs.statSync(path.join(STORE, b, '.ready')).mtimeMs - fs.statSync(path.join(STORE, a, '.ready')).mtimeMs)
+      .map((d) => path.join(STORE, d, 'server'));
+    const { from, blocker } = pickShareSource(dir, [lastGood && lastGood.source === 'github' ? lastGood.dir : null, ...ready, BUNDLED]);
+    let shared = false;
+    if (from) {
+      const src = fs.realpathSync(path.join(from, 'node_modules'));
+      try {
+        // The bundled deploy never goes away: link to it. A store copy can be
+        // cleaned up later, so take a hard-linked copy (fast, no extra space).
+        if (src === fs.realpathSync(path.join(BUNDLED, 'node_modules'))) fs.symlinkSync(src, path.join(dir, 'node_modules'), 'dir');
+        else execFileSync('cp', ['-al', src, path.join(dir, 'node_modules')]);
+        shared = true;
+        log(`main @ ${sha}: sharing node_modules from ${from === BUNDLED ? 'the bundled deploy' : path.basename(path.dirname(from))}`);
+      } catch (e) {
+        log(`main @ ${sha}: couldn't share node_modules (${e.message}) — installing`);
+        fs.rmSync(path.join(dir, 'node_modules'), { recursive: true, force: true });
+      }
+    }
+    if (!shared) {
+      if (!from) log(`main @ ${sha}: not sharing node_modules (${blocker}) — installing`);
       const lock = fs.existsSync(path.join(dir, 'package-lock.json'));
-      const npm = spawnSync('npm', [lock ? 'ci' : 'install', '--omit=dev', '--no-audit', '--no-fund'], { cwd: dir, encoding: 'utf8', timeout: 8 * 60e3 });
-      const out = `${npm.stdout || ''}\n${npm.stderr || ''}`;
-      process.stdout.write(out);
-      // A failed/partial install must fail loudly here, with npm's own reason, not as MODULE_NOT_FOUND in the child.
       const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'));
-      const missing = Object.keys(pkg.dependencies || {}).filter((n) => !fs.existsSync(path.join(dir, 'node_modules', n, 'package.json')));
+      const missingNow = () => Object.keys(pkg.dependencies || {}).filter((n) => !fs.existsSync(path.join(dir, 'node_modules', n, 'package.json')));
+      let npm, out, missing;
+      // One more try when npm itself crashed mid-install (it exits 0 and leaves the tree half done).
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        npm = spawnSync('npm', [lock ? 'ci' : 'install', '--omit=dev', '--no-audit', '--no-fund'], { cwd: dir, encoding: 'utf8', timeout: 8 * 60e3 });
+        out = `${npm.stdout || ''}\n${npm.stderr || ''}`;
+        process.stdout.write(out);
+        missing = missingNow();
+        if (npm.status === 0 && !npm.error && !missing.length) break;
+        if (attempt === 1 && npmCrashed(out)) { log(`main @ ${sha}: npm crashed mid-install — trying once more`); fs.rmSync(path.join(dir, 'node_modules'), { recursive: true, force: true }); continue; }
+        break;
+      }
+      // A failed/partial install must fail loudly here, with npm's own reason, not as MODULE_NOT_FOUND in the child.
       if (npm.status !== 0 || npm.error || missing.length) {
         const errLines = out.split('\n').filter((l) => /npm error|ERR!|Error:/i.test(l) && !/complete log/i.test(l)).slice(-12).join('\n');
         const msg = `main @ ${sha}: npm ${lock ? 'ci' : 'install'} failed${npm.error ? ` (${npm.error.message})` : ` (exit ${npm.status})`}${missing.length ? `; missing: ${missing.join(', ')}` : ''}\n${errLines || out.trim().split('\n').slice(-12).join('\n')}`.slice(0, 2500);

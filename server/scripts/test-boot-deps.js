@@ -4,7 +4,7 @@ const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { shareBlocker } = require('../depsCheck');
+const { shareBlocker, pickShareSource, npmCrashed } = require('../depsCheck');
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bootdeps-'));
 let n = 0;
@@ -49,5 +49,19 @@ assert.match(shareBlocker(mk({ a: '^1', b: '^2' }, { lock: L }), wrongVer), /not
 // Unknowns -> install.
 assert.ok(shareBlocker(mk({ a: '^1', b: '^2' }), old), 'no lockfile');
 assert.ok(shareBlocker(mk({ a: '^1', b: '^2' }, { lock: L }), mk({ a: '^1', b: '^2' }, { lock: L })), 'no node_modules');
+// Any installed copy can lend its node_modules, not just the bundled one: the
+// running copy matches main when no package changed, even if the bundle is older.
+{
+  const L2 = { a: '1.0.0', b: '2.1.0' };
+  const bundled = mk({ a: '^1', b: '^2' }, { lock: L, installed: L });          // older deploy
+  const running = mk({ a: '^1', b: '^2' }, { lock: L2, installed: L2 });        // last good main
+  const next = mk({ a: '^1', b: '^2' }, { lock: L2 });                          // new main, same packages
+  assert.strictEqual(pickShareSource(next, [running, bundled]).from, running, 'shares the running copy');
+  assert.strictEqual(pickShareSource(next, [null, bundled]).from, '', 'bundled alone does not fit');
+  assert.match(pickShareSource(next, [null, bundled]).blocker, /changed|installed|needs/);
+  assert.strictEqual(pickShareSource(next, [bundled, running]).from, running, 'falls through to a later candidate');
+  assert.ok(npmCrashed('npm error Exit handler never called!'));
+  assert.ok(!npmCrashed('npm error ERESOLVE could not resolve'));
+}
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log('boot deps: ok');

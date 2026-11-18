@@ -66,6 +66,31 @@ function shareBlocker(newDir, oldDir) {
   return '';
 }
 
+// Where the new copy at `newDir` can get its node_modules without an install:
+// the first of `candidates` (server dirs: the running copy, other ready copies,
+// the bundled deploy) whose installed tree matches it. Returns { from, blocker }:
+// `from` = that dir ('' if none), `blocker` = why the last one didn't fit.
+// Before this, only the bundled deploy was checked — it's older than main, so
+// every redeploy ran a full `npm ci` even when no package had changed.
+function pickShareSource(newDir, candidates) {
+  let blocker = 'nothing to share from';
+  const seen = new Set();
+  for (const c of candidates) {
+    if (!c) continue;
+    let real;
+    try { real = fs.realpathSync(c); } catch { continue; }
+    if (seen.has(real) || real === fs.realpathSync(newDir)) continue;
+    seen.add(real);
+    blocker = shareBlocker(newDir, c);
+    if (!blocker) return { from: c, blocker: '' };
+  }
+  return { from: '', blocker };
+}
+
+// npm itself crashed ("Exit handler never called!" — an npm bug that exits 0 with
+// the tree half-written): worth one more try, unlike a real resolution error.
+const npmCrashed = (out) => /Exit handler never called/i.test(String(out || ''));
+
 // Pulls the real cause out of a crashed child's output: the first error line (and the
 // exact module name for MODULE_NOT_FOUND / "Cannot find module"). `lines` = output tail.
 function crashReason(lines) {
@@ -76,4 +101,4 @@ function crashReason(lines) {
   return [...new Set(head)].join(' | ');
 }
 
-module.exports = { manifestKey, shareBlocker, crashReason };
+module.exports = { manifestKey, shareBlocker, pickShareSource, npmCrashed, crashReason };
