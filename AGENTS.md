@@ -293,6 +293,7 @@ market update (the update ends in a `LEVELS:` JSON line, stripped and saved to
 `app_settings.talon_update_levels`), a position with no stop, and the loop
 itself failing (`systemFault`/`systemOk`). `tradeClosed` flags a close nowhere
 near the stop, target or break-even as one he didn't make.
+**Gold is sized to its stop** (`goldLots` in `server/tradeLocker.js`, `GOLD_MAX_LOSS` = $40, env override): no gold position may lose more than $40 at its stop. XAUUSD is 100 oz a lot, so a stop up to $20 from entry goes in at 0.02, $20-$40 at 0.01, and wider is skipped — `guardStop` skips setups, news trades and re-entries before any order, and `tlPlaceOrder` sizes (or refuses, `goldTooWide`) every gold order after its stop is final, quick scalps, add-ons and his hand orders included. The app's own orders (0.01) refuse a gold stop past $40 too. The owner chose this (2026-11-18); the rest of the gold playbook is unchanged. Bitcoin is untouched.
 **The main stop rule's minimum is on every order except quick scalps and add-ons** — gold $10 /
 Bitcoin 0.8% and 1.2× the 1H ATR14 from entry (`minStopDist`, server and app `tradeLocker.js`),
 and clear of the danger zone: past the furthest of the 1H SMA20, the nearest $50 / $500 and the last

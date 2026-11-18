@@ -313,7 +313,11 @@ async function addOnEntries(marketOpen) {
         rationale: `add-on ${step} — ${t0.rationale || ''}`.slice(0, 400), orderId: s.orderId, setup: 'add', auto: true, setupId: key, addLevel: step, alert: false }).catch(() => {});
       console.log(`talon-autotrade: ADD ${step} ${s.side.toUpperCase()} ${s.qty} ${sym} @ ~${price} after a pullback from ${peak} to ${trough}, turning back toward TP · SL ${addStop} TP ${early}`);
       addedOn({ symbol: sym, side: s.side, qty: s.qty, copies: 1, step, entry: price, stopLoss: addStop, earlyTarget: early, takeProfit: early });
-    } catch (e) { console.error(`talon-autotrade: ${sym} add-on ${step} failed —`, e.message); orderRejected({ symbol: sym, side: `${t0.side} (add-on ${step})`, error: e.message }); }
+    } catch (e) {
+      // Past the gold loss limit is a skip, not a broker rejection.
+      if (e.goldTooWide) { console.log(`talon-autotrade: ${sym} add-on ${step} skipped — ${e.message}`); continue; }
+      console.error(`talon-autotrade: ${sym} add-on ${step} failed —`, e.message); orderRejected({ symbol: sym, side: `${t0.side} (add-on ${step})`, error: e.message });
+    }
   }
 }
 

@@ -204,7 +204,7 @@ async function writeTag({ name, arg }) {
       if (!side) return { warn: 'TRADE_ENTER: needs buy or sell' };
       if (stop == null) return { warn: 'TRADE_ENTER: every trade needs a stop — nothing placed' };
       const label = `T.A.L.O.N.: ${side.toUpperCase()} ${NAME[symbol]} on the LIVE account`;
-      return act('enter', label, `0.02 · stop ${stop}${target != null ? ` · target ${target}` : ''}`, { symbol, side, stop, target });
+      return act('enter', label, `${String(symbol).toUpperCase() === 'XAUUSD' ? 'sized to the stop ($40 max loss)' : '0.02'} · stop ${stop}${target != null ? ` · target ${target}` : ''}`, { symbol, side, stop, target });
     }
     if (name === 'TRADE_CLOSE') {
       const list = await pick(p[0]);

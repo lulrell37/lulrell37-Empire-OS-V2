@@ -143,6 +143,23 @@ const { limitPlan, pendingTick } = require('../talonQuick');
     assert.match(sent[1], /is off/); assert.match(sent[1], /No position was opened/);
     assert.match(sent[2], /filled on his limit/);
   }
+  // Gold sizing: at most $40 lost per position at its stop (100 oz a lot).
+  {
+    const { goldLots } = require('../tradeLocker');
+    assert.strictEqual(goldLots(12), 0.02);  // $24 at 0.02
+    assert.strictEqual(goldLots(20), 0.02);  // $40 at 0.02
+    assert.strictEqual(goldLots(28), 0.01);  // $56 at 0.02 → 0.01 = $28
+    assert.strictEqual(goldLots(40), 0.01);
+    assert.strictEqual(goldLots(41), 0);     // over the limit even at 0.01 → skip
+    const { guardStop: gs } = require('../talonBrain');
+    const snap = { candles: { '1H': { atr14: 10, sma20: 3990 } }, structure: { '1H': { swings: [] } } };
+    const ok = gs({ symbol: 'XAUUSD', side: 'buy', entry: 4020, stopLoss: 3995, takeProfit: 4100, snap });
+    assert.ok(!ok.skip, `a $30-ish gold stop is taken (at 0.01): ${ok.skip}`);
+    const wide = gs({ symbol: 'XAUUSD', side: 'buy', entry: 4049, stopLoss: 4005, takeProfit: 4200, snap: { candles: { '1H': { atr14: 10, sma20: 4060 } }, structure: { '1H': { swings: [] } } } });
+    assert.match(wide.skip || '', /\$40 gold limit/, 'a gold stop past $40 is skipped');
+    const btc = gs({ symbol: 'BTCUSD', side: 'buy', entry: 90000, stopLoss: 89000, takeProfit: 93000, snap: { candles: { '1H': { atr14: 400, sma20: 89800 } }, structure: { '1H': { swings: [] } } } });
+    assert.ok(!btc.skip || !/gold/.test(btc.skip), 'Bitcoin untouched');
+  }
   console.log('talon entries: all passed');
   process.exit(0);
 })().catch((e) => { console.error(e); process.exit(1); });

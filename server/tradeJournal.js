@@ -397,7 +397,7 @@ async function tradeStats({ symbol = 'XAUUSD', days = 30 } = {}) {
   const label = !sym || sym === 'ALL' ? 'all markets' : sym;
   if (!rows.length) return `${label}, last ${days} days: no closed trades in the journal.`;
   const all = bucket(rows);
-  const L = [`${label}, last ${days} days. P/L is the broker's, per position (each 0.02 lot). Worst first in every cut.`, line('ALL', all)];
+  const L = [`${label}, last ${days} days. P/L is the broker's, per position (0.02 lot, or 0.01 on a gold stop over $20). Worst first in every cut.`, line('ALL', all)];
   const section = (title, keyFn) => { L.push(`${title}:`); for (const [k, b] of cut(rows, keyFn)) L.push(line(k, b)); };
   section('BY KIND OF TRADE', kindOf);
   section('BY SIDE', (t) => String(t.side || '?').toUpperCase());

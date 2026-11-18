@@ -79,7 +79,7 @@ const goLive = async () => {
   await tl.tlConnect();
   assert.strictEqual(tl.tlStatus().env, 'live');
 };
-const order = () => tl.tlPlaceOrder({ symbol: 'XAUUSD', side: 'buy', stopLoss: 3950, takeProfit: 4100, minStop: false });
+const order = () => tl.tlPlaceOrder({ symbol: 'XAUUSD', side: 'buy', stopLoss: 3985, takeProfit: 4100, minStop: false });
 
 (async () => {
   // Right after a restart the session hasn't logged in and reads 'demo' by default.

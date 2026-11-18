@@ -25,6 +25,21 @@ const entryCopies = (sym) => COPIES_BY_SYMBOL[String(sym).toUpperCase()] ?? ENTR
 // add-ons (his setups, W.I.R.E.'s news trades, anything else): the stop sits at least gold $10 /
 // Bitcoin 0.8% (anything else 0.4%) and 1.2x the 1H ATR14 from entry.
 const STOP_FLOOR = { XAUUSD: () => 10, BTCUSD: (px) => px * 0.008 };
+// Gold is sized to its stop: no gold position may lose more than GOLD_MAX_LOSS
+// dollars at its stop. XAUUSD is 100 oz a lot, so 0.01 lot = $1 per $1 of stop.
+// The lot is the most that fits, in 0.01 steps, under MAX_QTY: a stop up to $20
+// goes in at 0.02, $20-$40 at 0.01, wider is skipped (goldLots → 0). Every gold
+// order: setups, swings, re-entries, news trades, quick scalps, add-ons, his own.
+const GOLD_MAX_LOSS = Number(process.env.GOLD_MAX_LOSS) || 40;
+const GOLD_OZ_PER_LOT = 100;
+const isGold = (symbol) => String(symbol || '').toUpperCase() === 'XAUUSD';
+function goldLots(stopDist, cap = MAX_QTY) {
+  const d = Math.abs(Number(stopDist));
+  if (!(d > 0)) return 0;
+  const fit = Math.floor((GOLD_MAX_LOSS / (d * GOLD_OZ_PER_LOT)) * 100 + 1e-9) / 100;
+  return Math.min(cap, +fit.toFixed(2));
+}
+const goldTooWide = (stopDist) => `the gold stop is ${Math.abs(Number(stopDist)).toFixed(2)} from entry: even 0.01 lot would lose more than the $${GOLD_MAX_LOSS} gold limit, so it was skipped`;
 const minStopDist = (symbol, px, atr1h = 0) => Math.max((STOP_FLOOR[String(symbol).toUpperCase()] || ((p) => p * 0.004))(Number(px)), 1.2 * (Number(atr1h) || 0));
 async function tlAtr1H(symbol) { return summarizeBars(await tlHistory(String(symbol).toUpperCase(), '1H', 60))?.atr14 || 0; }
 
@@ -331,9 +346,13 @@ async function tlPlaceOrder({ symbol = 'XAUUSD', side, qty = MAX_QTY, stopLoss, 
   // wrong side) is pushed out to it. Quick scalps and add-ons run their own
   // tighter stops and pass minStop: false.
   let widenedFrom = null;
+  // Where it fills: the limit, or the market now. Gold sizing needs it on every order.
+  let entry = limit;
+  if (entry == null && (minStop || isGold(symbol))) {
+    const qt = await tlQuote(symbol).catch(() => null);
+    entry = Number(qt?.mid ?? (side === 'buy' ? qt?.ask : qt?.bid));
+  }
   if (minStop && stopLoss != null && isFinite(Number(stopLoss))) {
-    const qt = limit != null ? null : await tlQuote(symbol).catch(() => null);
-    const entry = limit != null ? limit : Number(qt?.mid ?? (side === 'buy' ? qt?.ask : qt?.bid));
     if (isFinite(entry) && entry) {
       const min = minStopDist(symbol, entry, await tlAtr1H(symbol).catch(() => 0));
       const dir = side === 'buy' ? 1 : -1;
@@ -350,10 +369,19 @@ async function tlPlaceOrder({ symbol = 'XAUUSD', side, qty = MAX_QTY, stopLoss, 
   }
   if (stopLoss != null && isFinite(Number(stopLoss))) { stopLoss = roundPx(m, stopLoss); body.stopLoss = stopLoss; body.stopLossType = 'absolute'; }
   if (takeProfit != null && isFinite(Number(takeProfit))) { takeProfit = roundPx(m, takeProfit); body.takeProfit = takeProfit; body.takeProfitType = 'absolute'; }
+  // Gold: sized to the final stop (after any widening above), or refused.
+  let sizedFrom = null;
+  if (isGold(symbol)) {
+    if (!(isFinite(entry) && entry)) throw new Error('no gold price to size the order against, so no order was placed');
+    const lots = goldLots(entry - Number(stopLoss), q);
+    if (!lots) throw Object.assign(new Error(goldTooWide(entry - Number(stopLoss))), { goldTooWide: true });
+    if (lots < q) { sizedFrom = q; body.qty = lots; }
+  }
   const j = await api(`/trade/accounts/${session.accountId}/orders`, { method: 'POST', body });
   tlBustPositions();
   if (widenedFrom != null) console.log(`tradelocker: ${symbol} ${side} stop ${widenedFrom} widened to ${stopLoss} (main stop rule)`);
-  return { orderId: j.d?.orderId, qty: q, side, symbol, stopLoss, takeProfit, widenedFrom, limitPrice: limit };
+  if (sizedFrom != null) console.log(`tradelocker: ${symbol} ${side} sized ${sizedFrom} → ${body.qty} lot (stop ${Math.abs(entry - Number(stopLoss)).toFixed(2)} away, $${GOLD_MAX_LOSS} gold limit)`);
+  return { orderId: j.d?.orderId, qty: body.qty, side, symbol, stopLoss, takeProfit, widenedFrom, sizedFrom, limitPrice: limit };
 }
 
 // Resting (unfilled) orders on the account.
@@ -507,7 +535,7 @@ function tlFormatSnapshot(snap) {
   return L.join('\n');
 }
 
-module.exports = {
+module.exports = { goldLots, goldTooWide, GOLD_MAX_LOSS,
   MAX_QTY, ENTRY_COPIES, entryCopies, minStopDist, tlAtr1H,
   tlConnect, tlStatus, tlAccountState, tlListInstruments, tlInstrumentsById, tlInstrument,
   tlQuote, tlHistory, tlPositions, tlOrdersHistory, tlPlaceOrder, tlClosePosition, tlModifyPosition, tlOrders, tlCancelOrder, tlOrderState,

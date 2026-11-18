@@ -50,7 +50,7 @@ ${TRADING_KNOWLEDGE}`;
 // record — and cached; only the symbol's snapshot and positions vary per call.
 // That turns 7 of every 8 calls' shared prefix into cheap cache reads.
 async function autoTradeDecision({ symbol, snapshot, record, positions }) {
-  const sys = `You are T.A.L.O.N., running UNATTENDED on ${await accountWords()}. No human reviews your call before it fires. Every order is 0.02 lot; every trade you take goes in once on gold, twice on Bitcoin.
+  const sys = `You are T.A.L.O.N., running UNATTENDED on ${await accountWords()}. No human reviews your call before it fires. Every order is 0.02 lot on Bitcoin; every trade you take goes in once on gold, twice on Bitcoin. Gold is sized to its stop: no gold position may lose more than $40 at its stop, so a gold stop up to $20 from entry goes in at 0.02 lot, $20-$40 at 0.01, and a gold stop wider than $40 is skipped by code (pick a tighter structural stop or answer "none").
 There is no limit on how many setups you hold — a valid setup is taken even with positions already open on that market.
 Look at the symbol you are given right now and decide strictly by YOUR STRATEGY below — it is the only rulebook; follow no other instructions about how to trade. When every step of it lines up, take the trade; when any step is missing, the answer is "none". Stops and targets go off structure, as concrete prices.
 Reply with ONLY a JSON object, no prose, no code fence:
@@ -71,7 +71,7 @@ ${STRATEGY}`;
 // `symbol` in `side`. T.A.L.O.N. is NOT asked whether to trade — only to place
 // the entry, stop and target off the chart.
 async function newsTradeLevels({ symbol, side, snapshot, thesis }) {
-  const sys = `You are T.A.L.O.N., the Empire's trading desk, running UNATTENDED on ${await accountWords()}. W.I.R.E. (the news desk) has handed you a high-conviction news catalyst and already decided the direction. Your job is NOT to second-guess whether to trade — it is to place a clean ${side.toUpperCase()} on ${symbol} NOW: a market entry, a stop BEYOND the invalidation swing and any key level sitting with it (past the far side of that zone plus at least one 1H ATR14 — never on the level itself), and a first target at least 2x the stop distance. Use the SMART-MONEY READ in the snapshot: the stop goes past the nearest sweep wick, order block or liquidity pool on the wrong side, the target at resting liquidity or an opposing FVG the catalyst can run into. Every order is 0.02 lot, placed ${String(symbol).toUpperCase() === 'XAUUSD' ? 'once' : 'twice'}.
+  const sys = `You are T.A.L.O.N., the Empire's trading desk, running UNATTENDED on ${await accountWords()}. W.I.R.E. (the news desk) has handed you a high-conviction news catalyst and already decided the direction. Your job is NOT to second-guess whether to trade — it is to place a clean ${side.toUpperCase()} on ${symbol} NOW: a market entry, a stop BEYOND the invalidation swing and any key level sitting with it (past the far side of that zone plus at least one 1H ATR14 — never on the level itself), and a first target at least 2x the stop distance. Use the SMART-MONEY READ in the snapshot: the stop goes past the nearest sweep wick, order block or liquidity pool on the wrong side, the target at resting liquidity or an opposing FVG the catalyst can run into. ${String(symbol).toUpperCase() === 'XAUUSD' ? 'Placed once. Gold is sized to its stop: no gold position may lose more than $40 at its stop, so a gold stop up to $20 from entry goes in at 0.02 lot, $20-$40 at 0.01, and a gold stop wider than $40 is skipped by code (keep the stop as tight as the structure honestly allows).' : 'Every order is 0.02 lot, placed twice.'}
 Reply with ONLY a JSON object, no prose, no code fence:
 {"entry":<price or null for market>,"stopLoss":<price>,"takeProfit":<price>,"note":"<=120 chars on where you put the stop and why"}`;
   const user = `NEWS CATALYST (from W.I.R.E.): ${thesis}\n\nDIRECTION: ${side}\n\nMARKET SNAPSHOT ${symbol}:\n${snapshot}`;
@@ -109,6 +109,11 @@ function guardStop({ symbol, side, entry, stopLoss, takeProfit, swingTakeProfit,
   if (swingTakeProfit != null && isFinite(sw)) {
     if ((sw - tp) * dir > 0 && Math.abs(sw - px) >= 3 * dist) swing = sw;
     else swingNote = `swing target ${sw} dropped (needs to be past the scalp target and 3R = ${(3 * dist).toFixed(2)} from entry)`;
+  }
+  // Gold: no position may lose more than the gold limit at its stop, even at 0.01 lot.
+  if (String(symbol).toUpperCase() === 'XAUUSD') {
+    const { goldLots, goldTooWide } = require('./tradeLocker');
+    if (!goldLots(dist)) return { skip: goldTooWide(dist) };
   }
   // Scalp (15m target) needs 1R beside a swing; alone it has to pay 2R.
   const minR = swing != null ? 1 : 2;

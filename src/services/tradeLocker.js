@@ -51,6 +51,7 @@ const POSITION_COLS=['id','tradableInstrumentId','routeId','side','qty','avgPric
 const RES_MS={'1m':60e3,'5m':300e3,'15m':900e3,'30m':1800e3,'1H':3600e3,'4H':14400e3,'1D':86400e3,'1W':604800e3};
 
 export const MAX_QTY=0.01; // hard lot cap — user-set, enforced on every order
+export const GOLD_MAX_LOSS=40; // most one gold position may lose at its stop (server/tradeLocker.js)
 export const MAX_OPEN_POSITIONS=5; // most positions Atlas may run at once
 
 const session={token:null,refresh:null,exp:0,env:'demo',accountId:null,accNum:null,instruments:{},instrumentList:null,rateLimitedUntil:0};
@@ -353,6 +354,13 @@ export async function tlPlaceOrder({symbol='XAUUSD',side,qty=MAX_QTY,stopLoss,ta
       const z=zoneStop({symbol,side,entry,sma20:summarizeBars(bars.slice(-60))?.sma20,atr:await atr1H(symbol).catch(()=>0),swings:analyzeStructure(closedBars(bars,'1H'))?.swings});
       if(z&&!z.tooWide&&(Number(stopLoss)-z.stop)*dir>1e-9){widenedFrom=widenedFrom??Number(stopLoss);stopLoss=z.stop;}
     }catch{}
+  }
+  // Gold: no position may lose more than $40 at its stop (100 oz a lot, so this
+  // order's loss is stop distance × qty × 100). Same limit as server/tradeLocker.js.
+  if(String(symbol).toUpperCase()==='XAUUSD'){
+    if(!(isFinite(entry)&&entry))throw new Error('no gold price to size the order against, so no order was placed');
+    const loss=Math.abs(entry-Number(stopLoss))*q*100;
+    if(loss>GOLD_MAX_LOSS+1e-6)throw new Error(`the gold stop is ${Math.abs(entry-Number(stopLoss)).toFixed(2)} from entry: that's $${loss.toFixed(2)} at ${q} lot, over the $${GOLD_MAX_LOSS} gold limit, so no order was placed`);
   }
   // On the instrument's own price precision, so the broker doesn't drop an off-tick stop.
   const px=v=>+Number(v).toFixed(m.pricePrecision??2);
