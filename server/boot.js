@@ -38,12 +38,45 @@ let child = null;
 let shuttingDown = false;
 
 async function gh(p, raw = false) {
-  const res = await fetch(`https://api.github.com${p}`, {
-    headers: { authorization: `Bearer ${process.env.GITHUB_TOKEN}`, accept: 'application/vnd.github+json' },
-    signal: AbortSignal.timeout(90000),
-  });
-  if (!res.ok) throw new Error(`GitHub ${res.status} on ${p}`);
-  return raw ? Buffer.from(await res.arrayBuffer()) : res.json();
+  let last;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const res = await fetch(`https://api.github.com${p}`, {
+        headers: { authorization: `Bearer ${process.env.GITHUB_TOKEN}`, accept: raw ? 'application/vnd.github.raw' : 'application/vnd.github+json' },
+        signal: AbortSignal.timeout(60000),
+      });
+      if (!res.ok) throw Object.assign(new Error(`GitHub ${res.status} on ${p}`), { status: res.status });
+      return raw ? Buffer.from(await res.arrayBuffer()) : res.json();
+    } catch (e) {
+      last = e;
+      if (e.status && e.status < 500 && e.status !== 429) break; // a real answer, not a blip
+      await new Promise((r) => setTimeout(r, 2000 * attempt));
+    }
+  }
+  throw new Error(`${last.message} (GitHub ${p.split('?')[0]})`);
+}
+
+// Only server/ at `commit`, file by file, into `root`/server. The whole-repo
+// tarball is ~75 MB (the app's 3D models and images) and timed out on the VM;
+// server/ is a couple of MB.
+async function downloadServer(commit, root) {
+  const top = await gh(`/repos/${REPO}/git/trees/${commit}`);
+  const entry = (top.tree || []).find((t) => t.path === 'server' && t.type === 'tree');
+  if (!entry) throw new Error(`main @ ${commit.slice(0, 12)} has no server/ folder`);
+  const tree = await gh(`/repos/${REPO}/git/trees/${entry.sha}?recursive=1`);
+  if (tree.truncated) throw new Error('server/ tree too big to list');
+  const files = tree.tree.filter((t) => t.type === 'blob' && !/^node_modules\//.test(t.path));
+  let i = 0;
+  const worker = async () => {
+    while (i < files.length) {
+      const f = files[i++];
+      const out = path.join(root, 'server', f.path);
+      fs.mkdirSync(path.dirname(out), { recursive: true });
+      fs.writeFileSync(out, await gh(`/repos/${REPO}/git/blobs/${f.sha}`, true), { mode: f.mode === '100755' ? 0o755 : 0o644 });
+    }
+  };
+  await Promise.all(Array.from({ length: 8 }, worker));
+  log(`main @ ${commit.slice(0, 12)}: ${files.length} server files downloaded`);
 }
 
 // Latest main, unpacked and ready to run -> { dir, sha, source } (dir = its server/).
@@ -63,10 +96,7 @@ async function prepare() {
     log(`downloading main @ ${sha}`);
     fs.rmSync(root, { recursive: true, force: true });
     fs.mkdirSync(root, { recursive: true });
-    const tgz = `${root}.tgz`;
-    fs.writeFileSync(tgz, await gh(`/repos/${REPO}/tarball/${head.sha}`, true));
-    execFileSync('tar', ['-xzf', tgz, '-C', root, '--strip-components=1']);
-    fs.rmSync(tgz, { force: true });
+    await downloadServer(head.sha, root);
     if (!fs.existsSync(path.join(dir, 'index.js'))) throw new Error(`main @ ${sha} has no server/index.js`);
     // Share node_modules only when nothing differs (every dependency field AND the
     // installed tree vs the new lockfile — see depsCheck.js); otherwise install.
