@@ -183,13 +183,13 @@ async function tick({ force = false } = {}) {
           } catch (e) { orderFails++; console.error(`talon-autotrade: ${sym} order failed —`, e.message); orderRejected({ symbol: sym, side: dec.side, error: e.message }); continue; }
           r = r || s; scalps++; openCount++;
           await recordTradeOpen({ symbol: sym, side: s.side, qty: s.qty, entry: price, stopLoss: s.stopLoss ?? lv.stopLoss, takeProfit: lv.takeProfit,
-            rationale: why, orderId: s.orderId, setup: pairId ? 'scalp' : (dec.setup || 'scalp'), auto: true, pairId, setupId, alert: false }).catch(() => {});
+            rationale: why, orderId: s.orderId, setup: pairId ? 'scalp' : (dec.setup || 'scalp'), auto: true, pairId, setupId, trend: { d1, h4 }, alert: false }).catch(() => {});
           console.log(`talon-autotrade: ${s.side.toUpperCase()} ${s.qty} ${sym} @ ~${price ?? 'mkt'} · SL ${lv.stopLoss} TP ${lv.takeProfit}${pairId ? ' (scalp)' : ''}${dec.rationale ? ` — ${dec.rationale}` : ''}`);
           if (!pairId) continue;
           try {
             const s2 = await tlPlaceOrder({ symbol: sym, side: dec.side, qty: MAX_QTY, stopLoss: lv.stopLoss, takeProfit: lv.swingTakeProfit });
             await recordTradeOpen({ symbol: sym, side: s2.side, qty: s2.qty, entry: price, stopLoss: s2.stopLoss ?? lv.stopLoss, takeProfit: lv.swingTakeProfit,
-              rationale: why, orderId: s2.orderId, setup: 'swing', auto: true, pairId, setupId, alert: false }).catch(() => {});
+              rationale: why, orderId: s2.orderId, setup: 'swing', auto: true, pairId, setupId, trend: { d1, h4 }, alert: false }).catch(() => {});
             swings++; openCount++;
             console.log(`talon-autotrade: ${s2.side.toUpperCase()} ${s2.qty} ${sym} · SL ${lv.stopLoss} TP ${lv.swingTakeProfit} (swing)`);
           } catch (e) { orderFails++; console.error(`talon-autotrade: ${sym} swing order failed —`, e.message); orderRejected({ symbol: sym, side: `${dec.side} (swing half)`, error: e.message }); }

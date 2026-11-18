@@ -24,6 +24,7 @@ import{courseInjections}from '../services/stephanieCourse';
 import{startClipScan}from '../services/clipScan';
 import{scanTags}from '../services/noteCommands';
 import{allMatches}from '../matchAllFix';
+import{cancelJarvisTurn}from '../services/jarvisEngine';
 import{playOpts,speechRate,applyRate,onVoiceSpeedChange,voiceRate,setVoiceSpeed,VOICE_SPEED_MIN,VOICE_SPEED_MAX}from '../services/voiceSpeed';
 import SpeedSlider from '../components/SpeedSlider';
 import{driveUploadFile,googleConnected}from '../services/googleClient';
@@ -1596,6 +1597,8 @@ export default function CommandScreen({navigation,route}){
         let response=await callPersona(pid,hist,myAbort.signal,onDelta,{...voiceModelOpts(p),images,saveUserText:text,...engineOpts});
         // Kept so a failure in any step after this still shows her answer (see the catch below).
         inFlight.raw=response;inFlight.rtype=Object.prototype.toString.call(response);inFlight.pid=pid;
+        // Which step after the reply is running, so a crash entry names it.
+        inFlight.step='tag lookups';
         // Second-pass tools: the persona emits a lookup tag on pass 1, we gather
         // the data, then it re-answers with everything in hand. One pass only.
         const injections=[];
@@ -1608,10 +1611,10 @@ export default function CommandScreen({navigation,route}){
             catch(e){injections.push(`MEMORY RECALL — Q: ${q}\nA: (failed: ${e.message})`);}
           }
         }
-        const scanTags=allMatches(response,/\[TRADE_SCAN(?::\s*([^\]]+))?\]/gi);
-        if(scanTags.length&&!myAbort.signal.aborted){
+        const tradeScans=allMatches(response,/\[TRADE_SCAN(?::\s*([^\]]+))?\]/gi);
+        if(tradeScans.length&&!myAbort.signal.aborted){
           toolLabel='◇ reading the market…';
-          let syms=scanTags.flatMap(m=>(m[1]||'').split(/[\s,]+/).map(x=>x.trim().toUpperCase()).filter(Boolean));
+          let syms=tradeScans.flatMap(m=>(m[1]||'').split(/[\s,]+/).map(x=>x.trim().toUpperCase()).filter(Boolean));
           syms=[...new Set(syms.length?syms:['XAUUSD'])].slice(0,4);
           for(const sym of syms){
             if(myAbort.signal.aborted)break;
@@ -1725,6 +1728,7 @@ export default function CommandScreen({navigation,route}){
         // Drive" handed to another persona ran nothing, and both personas
         // reported it done. Balanced-bracket scan so a relay carrying a note
         // with [ ] in it isn't cut short.
+        inFlight.step='relays';
         const relayTags=scanTags(response).filter(t=>t.name==='RELAY_TO'&&t.arg.includes('|'))
           .map(t=>{const i=t.arg.indexOf('|');return[null,t.arg.slice(0,i),t.arg.slice(i+1)];});
         if(relayTags.length&&!myAbort.signal.aborted){
@@ -1862,6 +1866,7 @@ export default function CommandScreen({navigation,route}){
         // A.R.A. emits one or more [DELEGATE: name | task] on pass 1. We call each
         // specialist inline (one-shot, no history), show their contribution in the
         // chat, then A.R.A. re-answers in a fresh bubble with everything in hand.
+        inFlight.step='delegation';
         const delegTags=(pid==='ara'&&!myAbort.signal.aborted)
           ?allMatches(response,/\[DELEGATE:\s*([A-Za-z.\s]+?)\s*\|\s*([\s\S]+?)\]/gi)
           :[];
@@ -1936,6 +1941,7 @@ export default function CommandScreen({navigation,route}){
           continue;
         }
 
+        inFlight.step='second pass';
         if(injections.length&&!myAbort.signal.aborted){
           await handleCommands(response,pid,cmdCallbacks);
           patch(m=>({...m,content:toolLabel,revealed:toolLabel.length,streaming:false}));
@@ -1951,6 +1957,7 @@ export default function CommandScreen({navigation,route}){
           response=await callPersona(pid,hist2,myAbort.signal,willVoice?null:onDelta,{skipSave:true,...voiceModelOpts(p),images,...engineOpts});
           savePersonaMemory(pid,`YOU: ${text}\n${p.name}: ${stripCommands(response)||response}`).catch(()=>{});
         }
+        inFlight.step='cleaning the reply';
         let display=(stripCommands(response)||'').trim();
         // A reply that was nothing but tags (or nothing at all) used to land as
         // an empty bubble — "he won't respond". Ask once more for the actual
@@ -1987,6 +1994,7 @@ export default function CommandScreen({navigation,route}){
         // (group turns don't have an "orb" to leave, so they always count as
         // present). Don't burn a live TTS call talking to an empty room — save
         // it silently and queue it; it'll be voiced once when he zooms back in.
+        inFlight.step='showing/voicing the reply';
         if(willVoice&&!(isGroup||isPresentFor(pid))){
           vizRef.speaking=false;vizRef.amplitude=0;
           patch(m=>({...m,content:display,revealed:display.length,streaming:false}));
@@ -2031,7 +2039,7 @@ export default function CommandScreen({navigation,route}){
         const who=isGroup?'the group':getPersona(activePersona).name;
         const got=inFlight&&typeof inFlight.raw==='string'&&inFlight.raw.trim()?inFlight.raw:null;
         // Say which persona and what the reply actually was, so a crash entry is enough to find the cause.
-        try{e.message=`${String(e.message||e)} [persona ${inFlight?.pid||activePersona}; reply ${inFlight?.rtype||'not received'}]`;}catch{}
+        try{e.message=`${String(e.message||e)} [persona ${inFlight?.pid||activePersona}; reply ${inFlight?.rtype||'not received'}${inFlight?.step?`; step ${inFlight.step}`:''}]`;}catch{}
         reportIssue('ai:reply',got?`${inFlight.name} replied, but a step after the reply failed`:`${who} couldn't reply`,e);
         if(got){
           // The answer came back — show it rather than throwing it away. Only what
@@ -2752,7 +2760,7 @@ export default function CommandScreen({navigation,route}){
                 <Text style={[s.iactT,voiceMuted&&{color:'#E05555'}]}>{voiceMuted?'MUTED':'MUTE'}</Text>
               </TouchableOpacity>
             </>}
-            {loading&&<TouchableOpacity style={[s.iact,{borderColor:'#E05555'}]} onPress={()=>{abortRef.current?.abort();stopAudio();setLoading(false);}}>
+            {loading&&<TouchableOpacity style={[s.iact,{borderColor:'#E05555'}]} onPress={()=>{cancelJarvisTurn();abortRef.current?.abort();stopAudio();setLoading(false);}}>
               <View style={[s.iactDot,{backgroundColor:'#E05555'}]}/>
               <Text style={[s.iactT,{color:'#E05555'}]}>STOP</Text>
             </TouchableOpacity>}

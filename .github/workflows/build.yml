@@ -26,4 +26,6 @@ jobs:
           eas-version: latest
           token: ${{ secrets.EXPO_TOKEN }}
       - run: yarn install --network-timeout 300000
+      # A local that hides a function and then gets called is "Object is not a function" on the phone.
+      - run: node scripts/check-shadowed-calls.js
       - run: eas build --platform android --profile preview --non-interactive --no-wait

@@ -358,7 +358,7 @@ ${SHARED_OPS}
  - T.A.L.O.N. trades gold and Bitcoin ON HIS OWN, from the server, app open or not — he places, manages and closes his own orders on whichever account he's on whenever auto-trade is ON. Never tell Mr. Burrus T.A.L.O.N. can't place trades himself; he does. The TRADING line in LIVE CONTEXT says whether he's running and what his last scan did.
  - [TALON_RUN] — make him scan gold and Bitcoin right now instead of waiting for his next cycle. He decides and, if the setup is there, places the trade himself; you get back what he decided (or why he couldn't) before you answer. Use it when Mr. Burrus says "have T.A.L.O.N. trade", "is he trading?", "run a scan" and the like.
  - T.A.L.O.N.'S ACCOUNT — [TRADE_ACCOUNT: demo] takes him off live yourself, at once and with no Confirm; [TRADE_ACCOUNT: live] puts him on real money and waits for Mr. Burrus's Confirm tap. Emit the tag rather than relaying this, and report its receipt word for word, including any positions left open on live. It hasn't happened unless the tag ran.
- - ORDERS FOR T.A.L.O.N. — enter a trade, close one or all, move a stop (or to break-even), move a target: pass it to him with [RELAY_TO: talon | the exact order with every number Mr. Burrus gave]. He executes it (on the live account Mr. Burrus gets a Confirm button), and you report his receipts. [TRADE_POSITIONS] shows you the open positions yourself; [QUICK_LOG] shows his 5m quick-scalp desk (what it's seeing, every time it fired and why it did or didn't trade). [TRADE_CHART: XAUUSD or BTCUSD | 1H] sends him T.A.L.O.N.'s marked-up chart (5m, 15m, 1H, 4H or 1D); to explain what's on it, relay to T.A.L.O.N.
+ - ORDERS FOR T.A.L.O.N. — enter a trade, close one or all, move a stop (or to break-even), move a target: pass it to him with [RELAY_TO: talon | the exact order with every number Mr. Burrus gave]. He executes it (on the live account Mr. Burrus gets a Confirm button), and you report his receipts. [TRADE_POSITIONS] shows you the open positions yourself; [TRADE_STATS: XAUUSD | 30] breaks his closed trades down (by kind, side, session, daily trend, exit) so you can see where a market loses; [QUICK_LOG] shows his 5m quick-scalp desk (what it's seeing, every time it fired and why it did or didn't trade). [TRADE_CHART: XAUUSD or BTCUSD | 1H] sends him T.A.L.O.N.'s marked-up chart (5m, 15m, 1H, 4H or 1D); to explain what's on it, relay to T.A.L.O.N.
  - [TALON_UPDATE] — ask him for a market update right now: his read on gold and Bitcoin, where he predicts each goes next, and how our open positions look. Use it when Mr. Burrus asks "how's the market", "how are our trades", "what's T.A.L.O.N. think" and the like. He also sends you one on his own a few times a day — those show up in this chat as "T.A.L.O.N. → A.R.A.".
  - If auto-trade is OFF or something's broken (no TradeLocker login, an error), say exactly what the TRADING line says and how to fix it.
 
@@ -420,6 +420,7 @@ PERSONA_EXTRA_TOOLS.talon = ` ${TRADING_KNOWLEDGE}
  - [TALON_UPDATE] — your market update right now: your read, prediction and how the open positions look.
  - [TRADE_SCAN: XAUUSD, BTCUSD] — a live market snapshot plus your trade record.
  - [QUICK_LOG] — your 5m quick-scalp desk: what the last check saw on each market and every time the filter fired with what happened (taken, passed and why, skipped). Use it whenever he asks about quick scalps.
+ - [TRADE_STATS: XAUUSD | 30] — where the money goes on a market (XAUUSD, BTCUSD or ALL; days back, default 30): your closed trades by kind (paired / lone / quick / add-on / re-entry / news / manual), side, session, with or against the 1D at entry, how they exited, per setup, and the worst 5. Run it before you answer anything about why a market is losing or what to change; quote its numbers, don't guess.
  ON MR. BURRUS'S ORDERS — he's the boss of the desk; when he (or A.R.A. for him) tells you to do one of these, do it, even if your playbook wouldn't (say so in a line if you disagree):
  - [TRADE_POSITIONS] — every open position with its id, stop, target and P/L. Read it first when he refers to "the gold trade", "the swing", "everything".
  - [TRADE_ENTER: XAUUSD or BTCUSD | buy or sell | stop price | target price] — a market order, 0.02. A stop is required; the main stop rule's minimum (gold $10 / Bitcoin 0.8% and 1.2× the 1H ATR) still applies and widens a tighter one. If he gave no stop or target, [TRADE_SCAN] first and set them off structure.
@@ -641,6 +642,10 @@ async function runInjections(text, persona = 'ara', { convo = '', depth = 0, sin
         return `MONDAY SCRIPTS: ${r.count} written and filed, and he's been told they came in (don't paste or read them): ${(r.titles || []).join(' | ')}`;
       }
       if (COURSE_TAGS.has(name) && (persona === 'stephanie' || (persona === 'ara' && name === 'COURSE_STATUS'))) return `${name}${arg ? ` "${arg}"` : ''}: ${await courseTag(name, arg, asked)}`;
+      if (name === 'TRADE_STATS' && ['ara', 'talon', 'atlas'].includes(persona)) {
+        const [symArg, daysArg] = String(arg || '').split('|').map((x) => x.trim());
+        return `TRADE STATS (from his journal, arithmetic only):\n${await require('./tradeJournal').tradeStats({ symbol: symArg || 'XAUUSD', days: Number(daysArg) || 30 })}`;
+      }
       if (name === 'QUICK_LOG' && ['ara', 'talon'].includes(persona)) return `QUICK-SCALP DESK:\n${await require('./talonQuick').quickLogText()}`;
       if (name === 'TRADE_POSITIONS' && ['ara', 'talon'].includes(persona)) return `OPEN POSITIONS:\n${await require('./talonCommands').positionsText()}`;
       if (name === 'TALON_RUN' && ['ara', 'talon'].includes(persona)) return `T.A.L.O.N. SCAN (run just now):\n${talonRunLine(await require('./talonAutoTrade').tick({ force: true }))}`;
@@ -1083,8 +1088,10 @@ async function saveMessage(persona, role, content) {
 
 // Run one turn for `personaId` on `userText`. `deliver(text)` sends a message to
 // the owner — used for the final reply and for background job results. Returns
-// { text, effects }.
-async function runPersonaTurn(personaId, userText, deliver) {
+// { text, effects }. `reply`: J.A.R.V.I.S.'s engine already wrote the first answer
+// (an app job finished after the app stopped listening) — use it instead of
+// asking again; its tags and any lookup rounds still run.
+async function runPersonaTurn(personaId, userText, deliver, { reply: given, resumes = 0 } = {}) {
   userText = require('./llm').fixNames(userText); // "Aura" is always A.R.A.
   const persona = ROSTER[personaId] ? personaId : 'ara';
   const p = ROSTER[persona];
@@ -1115,8 +1122,9 @@ async function runPersonaTurn(personaId, userText, deliver) {
   let engineNote = '';
   let engineUsed = false;
   const brain = async (msgs) => {
+    if (given != null) { const out = String(given); given = null; engineUsed = !!engine; return out; }
     if (engine && !engineNote) {
-      try { const out = await engine.turn(String(msgs[msgs.length - 1].content), { persona: sys }); engineUsed = true; return out; }
+      try { const out = await engine.turn(String(msgs[msgs.length - 1].content), { persona: sys, source: 'telegram', ownerText: userText, resumes }); engineUsed = true; return out; }
       catch (e) { engineNote = `⚠️ Claude Code (his engine) failed, so this answer is from the plain chat model: ${e.message.slice(0, 200)}`; console.error('jarvis engine:', e.message); }
     }
     return chatAs(p.api, p.model, sys, msgs, { maxTokens: 4000, fallback: persona !== 'ara' });

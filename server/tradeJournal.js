@@ -78,7 +78,7 @@ async function getStrategy() {
 // every position of one setup (all its copies and its add-ons, `addLevel` = which
 // step toward the target an add went in at); `alert: false` when the caller
 // sends one alert for the pair itself.
-async function recordTradeOpen({ symbol, side, qty, entry, stopLoss, takeProfit, rationale, orderId, setup, auto, pairId, setupId, addLevel, alert = true }) {
+async function recordTradeOpen({ symbol, side, qty, entry, stopLoss, takeProfit, rationale, orderId, setup, auto, pairId, setupId, addLevel, trend, alert = true }) {
   const now = Date.now();
   const syncId = newId();
   await upsertSyncRow('trades', syncId, {
@@ -87,6 +87,8 @@ async function recordTradeOpen({ symbol, side, qty, entry, stopLoss, takeProfit,
     setup: setup || inferSetup(rationale), rationale: String(rationale || '').slice(0, 400),
     status: 'open', order_id: orderId != null ? String(orderId) : null, opened_at: now,
     auto: auto ? 1 : 0, pair_id: pairId || null, setup_id: setupId || null, add_level: addLevel || null, updated_at: now,
+    // The 1D / 4H trend when it went in ({ d1, h4 }), so [TRADE_STATS] can split with vs against.
+    trend_at_entry: trend && (trend.d1 || trend.h4) ? { d1: trend.d1 || null, h4: trend.h4 || null } : null,
   });
   if (alert) alerts.tradeOpened({ symbol: String(symbol || '').toUpperCase(), side, qty, entry, stopLoss, takeProfit, rationale, setup });
   return syncId;
@@ -319,4 +321,106 @@ async function formatTradeRecord() {
   return L.join('\n');
 }
 
-module.exports = { TRADER_ID, STRATEGY_TITLE, allTrades, parkOpenTrades, getStrategy, recordTradeOpen, reconcileOpenTrades, tradeRecord, formatTradeRecord };
+// --- where the money goes: [TRADE_STATS] -----------------------------------------
+//
+// His closed trades on one market (or all), cut every way that could hide the
+// leak: by kind of trade, side, session (ET), with/against the 1D at entry, how it
+// exited, and by setup (a scalp + swing pair, its copies and add-ons together).
+// Plain arithmetic on the journal, no AI. `days` = how far back (default 30).
+function etHour(ts) {
+  return parseInt(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: '2-digit', hour12: false }).format(new Date(ts)), 10) % 24;
+}
+function sessionOf(ts) {
+  if (!ts) return 'unknown';
+  const h = etHour(ts);
+  if (h >= 3 && h < 8) return 'London (3-8 AM ET)';
+  if (h >= 8 && h < 12) return 'New York AM (8-12 ET)';
+  if (h >= 12 && h < 17) return 'New York PM (12-5 PM ET)';
+  return 'Asia / overnight (6 PM-3 AM ET)';
+}
+function kindOf(t) {
+  if (String(t.setup_id || '').endsWith(':re')) return `re-entry ${t.setup === 'swing' ? 'swing' : 'scalp'}`;
+  if (t.setup === 'scalp') return t.pair_id ? 'paired scalp' : 'lone scalp (no swing)';
+  if (['swing', 'quick', 'add', 'news', 'manual'].includes(t.setup)) return t.setup === 'add' ? 'add-on' : t.setup === 'quick' ? 'quick scalp (5m)' : t.setup;
+  return t.setup || 'other';
+}
+function exitOf(t) {
+  const x = num(t.exit_price), e = num(t.entry_ref), sl = num(t.stop_loss), tp = num(t.take_profit);
+  if (t.closed_by === 'owner') return 'closed on his order';
+  if (x == null) return 'exit unknown';
+  const risk = e != null && sl != null ? Math.abs(e - sl) : null;
+  const tol = risk ? Math.max(risk * 0.08, 0.01) : 0.5;
+  if (tp != null && near(x, tp, tol)) return 'target';
+  if (e != null && near(x, e, tol)) return 'break-even';
+  if (sl != null && near(x, sl, tol)) return 'stop';
+  if (sl != null && e != null && (t.side === 'buy' ? x < sl : x > sl)) return 'stop (slipped past it)';
+  return 'other (moved stop / closed between)';
+}
+function dailyOf(t) {
+  const d1 = t.trend_at_entry && t.trend_at_entry.d1;
+  if (!d1 || d1 === 'flat' || d1 === 'range') return d1 ? 'daily flat' : 'not recorded (older trades)';
+  const withIt = (t.side === 'buy' && d1 === 'up') || (t.side === 'sell' && d1 === 'down');
+  return withIt ? 'with the 1D' : 'against the 1D';
+}
+function bucket(rows) {
+  const n = rows.length;
+  const wins = rows.filter((t) => t.outcome === 'win'), losses = rows.filter((t) => t.outcome === 'loss');
+  const pl = (t) => Number(t.realized_pl) || 0;
+  const net = rows.reduce((a, t) => a + pl(t), 0);
+  const rs = rows.map((t) => num(t.r_multiple)).filter((v) => v != null);
+  const stops = rows.map((t) => (num(t.entry_ref) != null && num(t.stop_loss) != null ? Math.abs(t.entry_ref - t.stop_loss) : null)).filter((v) => v != null);
+  const avg = (a) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : null);
+  return {
+    n, w: wins.length, l: losses.length, be: n - wins.length - losses.length,
+    winRate: wins.length + losses.length ? Math.round((wins.length / (wins.length + losses.length)) * 100) : null,
+    net: +net.toFixed(2), avgR: avg(rs), avgWin: avg(wins.map(pl)), avgLoss: avg(losses.map(pl)), avgStop: avg(stops),
+  };
+}
+const money = (v) => (v == null ? '—' : `${v >= 0 ? '+' : '-'}$${Math.abs(v).toFixed(2)}`);
+function line(label, b) {
+  return `  ${label}: ${b.n} trades, ${b.w}W-${b.l}L-${b.be}BE${b.winRate != null ? ` (${b.winRate}%)` : ''}, net ${money(b.net)}`
+    + `${b.avgR != null ? `, avg ${b.avgR >= 0 ? '+' : ''}${b.avgR.toFixed(2)}R` : ''}`
+    + `${b.avgWin != null ? `, avg win ${money(b.avgWin)}` : ''}${b.avgLoss != null ? `, avg loss ${money(b.avgLoss)}` : ''}`
+    + `${b.avgStop != null ? `, avg stop ${b.avgStop.toFixed(2)}` : ''}`;
+}
+function cut(rows, keyFn) {
+  const groups = {};
+  for (const t of rows) (groups[keyFn(t)] || (groups[keyFn(t)] = [])).push(t);
+  return Object.entries(groups).map(([k, g]) => [k, bucket(g)]).sort((a, b) => a[1].net - b[1].net); // worst first
+}
+
+async function tradeStats({ symbol = 'XAUUSD', days = 30 } = {}) {
+  const sym = String(symbol || '').toUpperCase();
+  const since = Date.now() - days * 86400000;
+  const rows = (await allTrades()).filter((t) => t.status === 'closed' && t.outcome && t.outcome !== 'unknown'
+    && (!sym || sym === 'ALL' || t.symbol === sym) && (t.closed_at || 0) >= since);
+  const label = !sym || sym === 'ALL' ? 'all markets' : sym;
+  if (!rows.length) return `${label}, last ${days} days: no closed trades in the journal.`;
+  const all = bucket(rows);
+  const L = [`${label}, last ${days} days. P/L is the broker's, per position (each 0.02 lot). Worst first in every cut.`, line('ALL', all)];
+  const section = (title, keyFn) => { L.push(`${title}:`); for (const [k, b] of cut(rows, keyFn)) L.push(line(k, b)); };
+  section('BY KIND OF TRADE', kindOf);
+  section('BY SIDE', (t) => String(t.side || '?').toUpperCase());
+  section('BY SESSION (when it opened)', (t) => sessionOf(t.opened_at));
+  section('BY THE DAILY TREND AT ENTRY', dailyOf);
+  section('BY HOW IT EXITED', exitOf);
+  // Setups: every position that went in on one decision (scalp + swing pair,
+  // copies, its add-ons) as one result: the real cost of one idea being wrong.
+  const bySetup = {};
+  for (const t of rows) {
+    const k = t.setup_id || t.pair_id || t.sync_id;
+    (bySetup[k] || (bySetup[k] = [])).push(t);
+  }
+  const setups = Object.values(bySetup).map((g) => g.reduce((a, t) => a + (Number(t.realized_pl) || 0), 0));
+  const lost = setups.filter((v) => v < -0.01), won = setups.filter((v) => v > 0.01);
+  const avg = (a) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0);
+  L.push(`BY SETUP (all positions from one decision together): ${setups.length} setups, ${won.length} made money (avg ${money(avg(won))}), ${lost.length} lost (avg ${money(avg(lost))})${lost.length ? `, worst ${money(Math.min(...lost))}` : ''}.`);
+  const worst = [...rows].sort((a, b) => (Number(a.realized_pl) || 0) - (Number(b.realized_pl) || 0)).slice(0, 5);
+  L.push('WORST 5 TRADES:');
+  for (const t of worst) {
+    L.push(`  ${new Date(t.opened_at || t.closed_at).toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} ET ${t.symbol} ${String(t.side).toUpperCase()} ${kindOf(t)} @ ${t.entry_ref} SL ${t.stop_loss} TP ${t.take_profit} → ${t.exit_price ?? '?'} (${exitOf(t)}) ${money(Number(t.realized_pl) || 0)}${t.r_multiple != null ? ` ${t.r_multiple}R` : ''}${t.rationale ? ` · "${String(t.rationale).slice(0, 90)}"` : ''}`);
+  }
+  return L.join('\n');
+}
+
+module.exports = { TRADER_ID, STRATEGY_TITLE, allTrades, parkOpenTrades, getStrategy, recordTradeOpen, reconcileOpenTrades, tradeRecord, formatTradeRecord, tradeStats, statsParts: { kindOf, exitOf, sessionOf, dailyOf, bucket } };

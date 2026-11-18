@@ -408,7 +408,9 @@ export async function callPersona(personaId,messages,signal=null,onDelta=null,op
       try{opts.onEngine?.();}catch{}
     }catch(e){
       if(e?.name==='AbortError')throw e;
-      try{opts.onStatus?.(`◇ Claude Code couldn't run (${String(e.message).slice(0,80)}) — answering on the plain model…`);}catch{}
+      // The work is still going on the server — don't answer it half-done on the plain model.
+      if(e?.continuing){emit(`Still on it, sir: ${e.message}.`);api='engine';}
+      else try{opts.onStatus?.(`◇ Claude Code couldn't run (${String(e.message).slice(0,80)}) — answering on the plain model…`);}catch{}
     }
   }
   // Grok model for this turn. A Claude persona landing here (billing fallback

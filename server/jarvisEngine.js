@@ -15,6 +15,15 @@
 //   JARVIS_WORKDIR                  default ~/jarvis-workspace
 //   JARVIS_ENGINE_TIMEOUT_MIN       default 30
 //
+// A turn is never dropped without a word: every running turn is logged to
+// <workdir>/turns.json, and the session id is saved the moment Claude Code
+// reports it. If the server restarts mid-turn, recover() (run at boot) tells him
+// on J.A.R.V.I.S.'s Telegram bot and resumes the work once in the same session.
+// An app job keeps running when the app stops listening (he left the chat, sent
+// something else, the phone slept): only the app's stop button cancels it, and
+// a result nobody collected goes out on Telegram (routes/telegram.js
+// jarvisOutOfBand), command tags and all.
+//
 // Auth is the Claude subscription (CLAUDE_CODE_OAUTH_TOKEN), else ANTHROPIC_API_KEY.
 // Without GITHUB_TOKEN there is no clone to work in, so it runs read-only in the
 // deployed checkout.
@@ -170,7 +179,10 @@ function spawnTurn({ prompt, persona, resume, onProgress, signal }) {
     const timer = setTimeout(() => { child.kill('SIGTERM'); done(() => reject(Object.assign(new Error(`ran past ${Math.round(TIMEOUT_MS() / 60000)} minutes`), { partial: lastText, sessionId }))); }, TIMEOUT_MS());
     const handle = (line) => {
       let ev; try { ev = JSON.parse(line); } catch { return; }
-      if (ev.session_id) sessionId = ev.session_id;
+      if (ev.session_id && ev.session_id !== sessionId) {
+        sessionId = ev.session_id;
+        saveSession(sessionId); // now, not at the end: a restart mid-turn can then resume this session
+      }
       if (ev.type === 'assistant' && !ev.parent_tool_use_id && ev.message && Array.isArray(ev.message.content)) {
         for (const b of ev.message.content) {
           if (b.type === 'tool_use' && onProgress) onProgress(describeTool(b));
@@ -194,26 +206,73 @@ function spawnTurn({ prompt, persona, resume, onProgress, signal }) {
   });
 }
 
+// Every turn still running, on disk, so a restart can say so and pick it up.
+// { id: { id, text, source: 'app'|'telegram', startedAt, resumes } }
+const turnsFile = () => path.join(ROOT(), 'turns.json');
+function readTurns() { try { return JSON.parse(fs.readFileSync(turnsFile(), 'utf8')) || {}; } catch { return {}; } }
+function writeTurns(t) { try { fs.mkdirSync(ROOT(), { recursive: true }); fs.writeFileSync(turnsFile(), JSON.stringify(t)); } catch (e) { console.warn('jarvis engine: turn log:', e.message); } }
+function logTurn(entry) { const t = readTurns(); t[entry.id] = entry; writeTurns(t); }
+function unlogTurn(id) { const t = readTurns(); if (t[id]) { delete t[id]; writeTurns(t); } }
+
 // One turn at a time: they share a session and a working tree.
+// `ownerText` is his own message (what a resume after a restart re-asks);
+// `source` says where he asked; `resumes` counts restarts already survived.
 let chain = Promise.resolve();
-async function turn(prompt, { persona = '', onProgress, signal } = {}) {
+let busy = 0;
+async function turn(prompt, { persona = '', onProgress, signal, source = 'telegram', ownerText, resumes = 0 } = {}) {
+  const id = crypto.randomUUID();
   const go = async () => {
-    const resume = loadSession();
-    let out;
+    logTurn({ id, text: String(ownerText || prompt).slice(0, 6000), source, startedAt: Date.now(), resumes });
     try {
-      out = await spawnTurn({ prompt, persona, resume, onProgress, signal });
-    } catch (e) {
-      if (!e.resumeFailed) throw e;
-      resetSession(); // the saved session is gone (new machine, cleared home) — start a new one
-      out = await spawnTurn({ prompt, persona, resume: null, onProgress, signal });
+      const resume = loadSession();
+      let out;
+      try {
+        out = await spawnTurn({ prompt, persona, resume, onProgress, signal });
+      } catch (e) {
+        if (!e.resumeFailed) throw e;
+        resetSession(); // the saved session is gone (new machine, cleared home) — start a new one
+        out = await spawnTurn({ prompt, persona, resume: null, onProgress, signal });
+      }
+      if (out.sessionId) saveSession(out.sessionId);
+      console.log(`jarvis engine: done in ${out.turns || '?'} turns${out.costUsd != null ? `, $${Number(out.costUsd).toFixed(3)}` : ''}`);
+      return out.text;
+    } finally {
+      unlogTurn(id); // finished, failed or cancelled: it has been answered either way
+      busy--;
     }
-    if (out.sessionId) saveSession(out.sessionId);
-    console.log(`jarvis engine: done in ${out.turns || '?'} turns${out.costUsd != null ? `, $${Number(out.costUsd).toFixed(3)}` : ''}`);
-    return out.text;
   };
+  if (busy++ > 0 && onProgress) onProgress('Finishing the job before this one first');
   const p = chain.then(go, go);
   chain = p.catch(() => {});
   return p;
+}
+
+// At boot: any turn still logged was cut off by the restart. Tell him, and pick
+// it up once more in the same session (Claude Code checks where it got to). A
+// turn already resumed once is only reported: two restarts in a row is
+// something he should look at, not a loop.
+async function recover() {
+  const left = Object.values(readTurns());
+  if (!left.length) return [];
+  writeTurns({});
+  if (!enabled()) return [];
+  const { jarvisOutOfBand } = require('./routes/telegram');
+  const out = [];
+  for (const t of left) {
+    const what = String(t.text || '').replace(/^\[[^\]]*\]\s*/, '').replace(/\s+/g, ' ').slice(0, 220);
+    const mins = Math.max(1, Math.round((Date.now() - (t.startedAt || Date.now())) / 60000));
+    if ((t.resumes || 0) >= 1) {
+      await jarvisOutOfBand('', { notice: `⚠️ Sir, a server restart cut me off again on "${what}". That's twice, so I've stopped rather than loop. Tell me to carry on once the server has settled.` }).catch((e) => console.error('jarvis recover:', e.message));
+      out.push({ id: t.id, resumed: false });
+      continue;
+    }
+    const ask = `[The server restarted about ${mins} minute${mins === 1 ? '' : 's'} into your last turn and cut you off before you answered. First check where the work got to (git status, the branch, what's committed and pushed), then finish it and answer him.${t.source === 'app' ? ' He asked in the app; this answer goes to him on Telegram.' : ''} His message was:]\n${t.text}`;
+    // Not awaited: each goes through the engine's queue in order.
+    jarvisOutOfBand(ask, { notice: `⏳ Sir, a server restart cut me off ${mins} min after you asked "${what}". Picking it back up now; I'll answer here.`, resumes: (t.resumes || 0) + 1 })
+      .catch((e) => console.error('jarvis recover:', e.message));
+    out.push({ id: t.id, resumed: true });
+  }
+  return out;
 }
 
 // Jobs, for the app: start one, poll it. A job outlives the HTTP request, so a
@@ -222,25 +281,44 @@ const jobs = new Map();
 function startJob(prompt, persona) {
   const id = crypto.randomUUID();
   const ctrl = new AbortController();
-  const job = { id, status: 'running', progress: 'Thinking', text: '', error: '', startedAt: Date.now(), ctrl };
+  const job = { id, status: 'running', progress: 'Thinking', text: '', error: '', startedAt: Date.now(), seenAt: Date.now(), detached: false, ctrl, prompt };
   jobs.set(id, job);
   for (const [k, j] of jobs) if (jobs.size > 30 && j.status !== 'running') jobs.delete(k);
-  turn(prompt, { persona, signal: ctrl.signal, onProgress: (p) => { job.progress = p; } })
+  turn(prompt, { persona, signal: ctrl.signal, source: 'app', ownerText: prompt, onProgress: (p) => { job.progress = p; } })
     .then((text) => { job.status = 'done'; job.text = text; })
     .catch((e) => { job.status = e.name === 'AbortError' ? 'cancelled' : 'error'; job.error = e.message; job.text = e.partial || ''; })
-    .finally(() => { job.endedAt = Date.now(); });
+    .finally(() => { job.endedAt = Date.now(); handOff(job); });
   return id;
+}
+// The app polls every 2s; quiet for this long means nobody is there to read it.
+const UNWATCHED_MS = 45000;
+const unwatched = (j) => j.detached || Date.now() - j.seenAt > UNWATCHED_MS;
+// A finished app job nobody collected goes to him on Telegram, tags and all.
+// If the app comes back and polls, it still gets the answer too.
+function handOff(job) {
+  if (job.status === 'running' || job.status === 'cancelled' || job.deliveredTo || !unwatched(job)) return;
+  job.deliveredTo = 'pending';
+  const { jarvisOutOfBand } = require('./routes/telegram');
+  const send = job.status === 'done' && String(job.text || '').trim()
+    ? jarvisOutOfBand(job.prompt, { reply: job.text, notice: '📲 Sir, the job you gave me in the app is finished. The app had stopped listening, so here it is:' })
+    : jarvisOutOfBand('', { notice: `⚠️ Sir, the job you gave me in the app ("${String(job.prompt || '').replace(/\s+/g, ' ').slice(0, 160)}") didn't finish: ${String(job.error || 'it came back empty').slice(0, 300)}${job.text ? `\n\nWhere I'd got to: ${String(job.text).slice(0, 1500)}` : ''}` });
+  send.then((ok) => { job.deliveredTo = ok ? 'telegram' : null; }).catch((e) => { job.deliveredTo = null; console.error('jarvis hand-off:', e.message); });
 }
 function jobStatus(id) {
   const j = jobs.get(id);
   if (!j) return null;
-  const { ctrl, ...pub } = j;
+  j.seenAt = Date.now();
+  j.detached = false;
+  const { ctrl, prompt, ...pub } = j;
   return { ...pub, secs: Math.round(((j.endedAt || Date.now()) - j.startedAt) / 1000) };
 }
+// Stop button only. Leaving the chat or sending something else detaches instead.
 function cancelJob(id) { const j = jobs.get(id); if (j && j.status === 'running') j.ctrl.abort(); return !!j; }
+// The app stopped listening: keep working and answer on Telegram when done.
+function detachJob(id) { const j = jobs.get(id); if (j) { j.detached = true; handOff(j); } return !!j; }
 
 function status() {
   return { enabled: enabled(), model: MODEL(), permissionMode: PERMISSION(), workdir: ROOT(), readOnly: !process.env.GITHUB_TOKEN, session: loadSession(), running: [...jobs.values()].filter((j) => j.status === 'running').length };
 }
 
-module.exports = { enabled, turn, startJob, jobStatus, cancelJob, resetSession, status, engineBrief, describeTool };
+module.exports = { enabled, turn, recover, startJob, jobStatus, cancelJob, detachJob, resetSession, status, engineBrief, describeTool };

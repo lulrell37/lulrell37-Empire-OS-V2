@@ -123,6 +123,56 @@ async function seeMedia(bot, msgs) {
   return { seen: parts.join('\n\n'), caption };
 }
 
+// A finished turn out to the chat: voice note, text + receipts, media, then any
+// Confirm cards (so the buttons land last).
+async function sendTurnResult(personaId, bot, chatId, { text: reply, spoken, footer, confirms, media }, userText, deliver) {
+  const muted = await sendSpoken(personaId, bot, chatId, spoken || reply, userText);
+  const tail = [footer, muted].filter(Boolean).join('\n\n');
+  await deliver(tail ? `${reply}\n\n${tail}` : reply);
+  // Generated images, diagrams, charts, photos and files — after the text.
+  // (These were built every turn but never sent, so [GENERATE_IMAGE] did nothing.)
+  if (media && media.length) {
+    const failed = await sendMedia(bot, chatId, media);
+    if (failed.length) await deliver(failed.map((w) => `⚠️ ${w}`).join('\n'));
+  }
+  for (const c of confirms || []) {
+    // Read out word for word (scripted: no rewrite pass, since he's approving
+    // exactly this), then the card, so the buttons land last. A voice failure
+    // leaves the card as it was.
+    const { ogg } = await voiceNote(personaId, confirmScript(c), { scripted: true }).catch(() => ({ ogg: null }));
+    if (ogg) await bot.sendVoice(chatId, ogg).catch((e) => console.error(`tg ${personaId} confirm voice:`, e.message));
+    await bot.sendMessage(chatId, `${c.label}?\n\n${c.detail}`, {
+      reply_markup: { inline_keyboard: [[
+        { text: '✅ Confirm', callback_data: `ok:${c.id}` },
+        { text: '✖ Cancel', callback_data: `no:${c.id}` },
+      ]] },
+    }).catch((e) => console.error(`tg ${personaId} confirm card:`, e.message));
+  }
+}
+
+// A J.A.R.V.I.S. turn that didn't start from a Telegram message: an app job he
+// finished after the app stopped listening (`reply` = what Claude Code already
+// wrote; his tags still run here), or one a server restart cut off (no `reply`:
+// the engine resumes it). It goes out on his bot (A.R.A.'s if his isn't set up)
+// like any other reply, so the work is never lost. Returns false with no bot.
+async function jarvisOutOfBand(text, { reply, notice, resumes = 0 } = {}) {
+  const personaId = tg.botFor('jarvis') && tg.botFor('jarvis').isConfigured() ? 'jarvis' : 'ara';
+  const bot = tg.botFor(personaId);
+  if (!bot || !bot.isConfigured() || !tg.OWNER_ID) return false;
+  const chatId = tg.OWNER_ID;
+  const deliver = (t) => bot.sendMessage(chatId, t).catch((e) => console.error(`tg ${personaId} send:`, e.message));
+  deliver.voiced = async (t) => {
+    const muted = await sendSpoken(personaId, bot, chatId, String(t).slice(0, 1500), text);
+    return deliver(muted ? `${t}\n\n${muted}` : t);
+  };
+  if (notice) await deliver(notice);
+  if (!String(text || '').trim() && reply == null) return true; // just the notice
+  if (personaId !== 'jarvis') { if (reply) await deliver(`J.A.R.V.I.S.:\n${reply}`); return true; }
+  const result = await runPersonaTurn('jarvis', text, deliver, { reply, resumes });
+  await sendTurnResult('jarvis', bot, chatId, result, text, deliver);
+  return true;
+}
+
 // The voice half of a reply: synth (ElevenLabs, OpenAI backup) and send, with
 // one retry on the upload. Returns '' when it went out, or a 🔇 line saying why
 // it didn't — so a reply never comes back text-only without him knowing.
@@ -209,30 +259,9 @@ async function handleMessages(personaId, bot, msgs) {
   const keepTyping = setInterval(() => bot.sendChatAction(chatId, 'record_voice').catch(() => {}), 6000);
   const started = Date.now();
   try {
-    const { text: reply, spoken, footer, confirms, media } = await runPersonaTurn(personaId, text, deliver);
+    const result = await runPersonaTurn(personaId, text, deliver);
     console.log(`tg ${personaId}: reply ready in ${Math.round((Date.now() - started) / 1000)}s`);
-    const muted = await sendSpoken(personaId, bot, chatId, spoken || reply, text);
-    const tail = [footer, muted].filter(Boolean).join('\n\n');
-    await deliver(tail ? `${reply}\n\n${tail}` : reply);
-    // Generated images, diagrams, charts, photos and files — after the text.
-    // (These were built every turn but never sent, so [GENERATE_IMAGE] did nothing.)
-    if (media && media.length) {
-      const failed = await sendMedia(bot, chatId, media);
-      if (failed.length) await deliver(failed.map((w) => `⚠️ ${w}`).join('\n'));
-    }
-    for (const c of confirms || []) {
-      // Read out word for word (scripted: no rewrite pass, since he's approving
-      // exactly this), then the card, so the buttons land last. A voice failure
-      // leaves the card as it was.
-      const { ogg } = await voiceNote(personaId, confirmScript(c), { scripted: true }).catch(() => ({ ogg: null }));
-      if (ogg) await bot.sendVoice(chatId, ogg).catch((e) => console.error(`tg ${personaId} confirm voice:`, e.message));
-      await bot.sendMessage(chatId, `${c.label}?\n\n${c.detail}`, {
-        reply_markup: { inline_keyboard: [[
-          { text: '✅ Confirm', callback_data: `ok:${c.id}` },
-          { text: '✖ Cancel', callback_data: `no:${c.id}` },
-        ]] },
-      }).catch((e) => console.error(`tg ${personaId} confirm card:`, e.message));
-    }
+    await sendTurnResult(personaId, bot, chatId, result, text, deliver);
   } catch (e) {
     console.error(`${personaId} turn failed:`, e.message);
     await deliver(`Something went wrong on my end: ${e.message}`);
@@ -286,3 +315,4 @@ r.get('/info', auth, async (req, res) => {
 });
 
 module.exports = r;
+module.exports.jarvisOutOfBand = jarvisOutOfBand;

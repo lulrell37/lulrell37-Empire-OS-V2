@@ -2,9 +2,16 @@
 // the Empire server (server/jarvisEngine.js, routes/jarvis.js), which works in
 // the repo with its full toolset and answers as him. The app starts a job and
 // polls it, so a long piece of work doesn't hang on one request.
+//
+// The turn's abort (he left the chat, sent something else, talked over him)
+// only DETACHES from the job: Claude Code keeps working and, if the app isn't
+// there to collect the answer, the server sends it on J.A.R.V.I.S.'s Telegram
+// bot. Only the stop button (cancelJarvisTurn) kills the work. A restart on
+// the server resumes the job itself and answers on Telegram.
 import{loadBackend}from './keyStore';
 
 const POLL_MS=2000;
+let current=null; // {be,id} of the job this app is waiting on
 const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));
 
 async function call(be,path,{method='GET',body,signal}={}){
@@ -23,8 +30,9 @@ export async function jarvisEngineTurn(text,system,{signal,onStatus}={}){
   const be=await loadBackend();
   if(!be)throw new Error('no Empire server linked');
   const{id}=await call(be,'/jarvis/ask',{method:'POST',body:{text,system},signal});
-  const cancel=()=>{call(be,`/jarvis/ask/${id}/cancel`,{method:'POST'}).catch(()=>{});};
-  signal?.addEventListener?.('abort',cancel);
+  const detach=()=>{call(be,`/jarvis/ask/${id}/detach`,{method:'POST'}).catch(()=>{});};
+  signal?.addEventListener?.('abort',detach);
+  current={be,id};
   let last='',misses=0;
   try{
     for(;;){
@@ -34,8 +42,8 @@ export async function jarvisEngineTurn(text,system,{signal,onStatus}={}){
       try{j=await call(be,`/jarvis/ask/${id}`,{signal});misses=0;}
       catch(e){
         if(e?.name==='AbortError')throw e;
-        if(e.status===404)throw new Error('the server lost the job (it restarted) — ask again');
-        if(++misses>=15)throw new Error(`lost touch with the server (${e.message})`);
+        if(e.status===404)throw Object.assign(new Error('the server restarted mid-job, so I\'ll pick it back up and answer you on Telegram'),{continuing:true});
+        if(++misses>=15){detach();throw Object.assign(new Error(`the app lost touch with the server (${e.message}), so I\'ll keep working and answer you on Telegram`),{continuing:true});}
         continue;
       }
       if(j.status==='running'){
@@ -43,9 +51,26 @@ export async function jarvisEngineTurn(text,system,{signal,onStatus}={}){
         if(line!==last){last=line;try{onStatus?.(line);}catch{}}
         continue;
       }
-      if(j.status==='done'&&String(j.text||'').trim())return j.text;
+      if(j.status==='done'&&String(j.text||'').trim()){
+        // Already sent on Telegram (the app was away), where its tags ran: show it
+        // here without them, so a note or task isn't made twice.
+        if(j.deliveredTo){
+          const{stripCommands}=await import('./commandHandler');
+          return `${(stripCommands(j.text)||j.text).trim()}\n\n(Also sent to you on Telegram while the app was away; its actions ran there.)`;
+        }
+        return j.text;
+      }
       if(j.status==='cancelled')throw Object.assign(new Error('aborted'),{name:'AbortError'});
       throw new Error(j.error||'Claude Code came back empty');
     }
-  }finally{signal?.removeEventListener?.('abort',cancel);}
+  }finally{
+    signal?.removeEventListener?.('abort',detach);
+    if(current?.id===id)current=null;
+  }
+}
+
+// The stop button: actually stop the work on the server, not just stop waiting.
+export function cancelJarvisTurn(){
+  const c=current;current=null;
+  if(c)call(c.be,`/jarvis/ask/${c.id}/cancel`,{method:'POST'}).catch(()=>{});
 }
