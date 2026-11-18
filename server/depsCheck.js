@@ -34,6 +34,20 @@ function manifestKey(dir) {
 }
 
 // Returns '' when `nodeModulesDir` can be shared with the code in `newDir`, else the reason not.
+// Would npm install this optional package on this machine? (os / cpu / libc lists, with "!x" exclusions)
+function fitsList(list, value) {
+  if (!Array.isArray(list) || !list.length) return true;
+  const neg = list.filter((x) => String(x).startsWith('!')).map((x) => String(x).slice(1));
+  const pos = list.filter((x) => !String(x).startsWith('!'));
+  if (neg.includes(value)) return false;
+  return !pos.length || pos.includes(value);
+}
+function platformFits(meta) {
+  let libc = 'glibc';
+  try { if (process.report && !process.report.getReport().header.glibcVersionRuntime) libc = 'musl'; } catch {}
+  return fitsList(meta.os, process.platform) && fitsList(meta.cpu, process.arch) && fitsList(meta.libc, libc);
+}
+
 function shareBlocker(newDir, oldDir) {
   const nm = path.join(oldDir, 'node_modules');
   if (!fs.existsSync(nm)) return 'no node_modules to share';
@@ -52,6 +66,10 @@ function shareBlocker(newDir, oldDir) {
   if (!installed || !installed.packages) return 'installed tree has no record of what it contains';
   for (const [key, meta] of Object.entries(lock.packages)) {
     if (!key || meta.dev || meta.link) continue; // '' = root; dev packages aren't installed (--omit=dev)
+    // Optional packages built for another platform (Claude Code's darwin / arm64 /
+    // musl binaries) are never installed here: npm skips them too. Before this,
+    // every restart saw them as "not installed" and ran a full npm ci.
+    if (meta.optional && !installed.packages[key] && !platformFits(meta)) continue;
     const have = installed.packages[key];
     if (!have) return `${key} is not installed`;
     if (have.version !== meta.version) return `${key} installed ${have.version}, needs ${meta.version}`;

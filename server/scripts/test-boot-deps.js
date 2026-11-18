@@ -63,5 +63,16 @@ assert.ok(shareBlocker(mk({ a: '^1', b: '^2' }, { lock: L }), mk({ a: '^1', b: '
   assert.ok(npmCrashed('npm error Exit handler never called!'));
   assert.ok(!npmCrashed('npm error ERESOLVE could not resolve'));
 }
+// Optional builds for other platforms are in the lock but never installed: still share.
+{
+  const other = process.platform === 'darwin' ? 'linux' : 'darwin';
+  const withOpt = (d) => {
+    const f = path.join(d, 'package-lock.json'); const j = JSON.parse(fs.readFileSync(f, 'utf8'));
+    j.packages['node_modules/tool-other'] = { version: '1.0.0', optional: true, os: [other] };
+    fs.writeFileSync(f, JSON.stringify(j)); return d;
+  };
+  const inst = withOpt(mk({ a: '^1', b: '^2' }, { lock: L, installed: L }));
+  assert.strictEqual(shareBlocker(withOpt(mk({ a: '^1', b: '^2' }, { lock: L })), inst), '', 'other-platform optional skipped');
+}
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log('boot deps: ok');
