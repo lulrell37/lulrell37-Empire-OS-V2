@@ -41,7 +41,7 @@ const { upsertSyncRow, saveMemory, getSetting, setSetting } = require('./syncSto
 const alerts = require('./talonAlerts');
 const { orderRejected } = alerts;
 const { claudeText } = require('./llm');
-const { SYMBOLS } = require('./talonBrain');
+const { SYMBOLS, pullInTarget } = require('./talonBrain');
 const { analyzeStructure, formatTimeframe } = require('./marketStructure');
 
 const BAR = 5 * 60e3;
@@ -179,7 +179,7 @@ function limitPlan({ sym, setup, takeProfit }) {
   let tp = Number(takeProfit);
   if (!isFinite(tp) || (tp - entry) * dir < MIN_R * dist - 1e-9) return { skip: `target ${takeProfit} under ${MIN_R}R` };
   if ((tp - entry) * dir > MAX_R * dist) tp = +(entry + dir * MAX_R * dist).toFixed(2);
-  return { limit, entry, stopLoss: stop, dist, takeProfit: tp };
+  return { limit, entry, stopLoss: stop, dist, takeProfit: pullInTarget(entry, tp) };
 }
 
 async function loadPending() {

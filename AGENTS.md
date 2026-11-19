@@ -219,7 +219,7 @@ every stop (his and W.I.R.E.'s news trades) at least gold $10 / Bitcoin 0.8% and
 little. Every setup goes in as a scalp + swing pair (two 0.02 positions, same
 entry and stop; scalp → next 15m level at 1R+, swing → next 4H level at 3R+;
 no valid swing → scalp alone, which needs 2R;
-linked by `pair_id` in `trades`); when the scalp pays, `reconcileOpenTrades`
+linked by `pair_id` in `trades`; every target he sets, scalp, swing and quick scalp, is placed 10% of the way back toward the entry from the level he chose, `TP_PULL_IN` / `pullInTarget` in `talonBrain.js`, env `TALON_TP_PULL_IN`, with the minimum-R checks made on his level so no trade is lost to it, re-entries keep the journal's already-pulled targets, add-ons are untouched; owner's call 2026-11-19); when the scalp pays, `reconcileOpenTrades`
 moves the swing's stop to break-even. Every Bitcoin trade (setups and news trades) is
 entered `ENTRY_COPIES` = 2 times (gold once — `entryCopies()` in `server/tradeLocker.js`), each scalp + swing copy with its own `pair_id`,
 capped by `MAX_PAIRS` at 1 scalp + swing pair open at once on gold (so a gold paired setup goes in once) and 2 on Bitcoin (a pair

@@ -71,7 +71,19 @@ const { limitPlan, pendingTick } = require('../talonQuick');
   assert.strictEqual(p.limit, 4002, 'limit at the 5m EMA20, not the close');
   assert.strictEqual(p.entry, 4002);
   assert.strictEqual(p.stopLoss, 3998, 'stop stays beyond the zone (4 = over the $3 floor)');
-  assert.strictEqual(p.takeProfit, 4014, 'target capped at 3R from the limit');
+  assert.strictEqual(p.takeProfit, 4012.8, 'target capped at 3R from the limit, then pulled in 10% (4014 → 4012.8)');
+  {
+    const { pullInTarget, guardStop: g } = require('../talonBrain');
+    assert.strictEqual(pullInTarget(4000, 4020), 4018, 'a buy target comes in 10% toward the entry');
+    assert.strictEqual(pullInTarget(4000, 3980), 3982, 'a sell target comes in 10% toward the entry');
+    const snap = { candles: { '1H': { atr14: 4, sma20: 3990 } }, structure: { '1H': { swings: [] } } };
+    const lv = g({ symbol: 'XAUUSD', side: 'buy', entry: 4000, stopLoss: 3985, takeProfit: 4030, snap });
+    assert.ok(!lv.skip && lv.takeProfit === 4027, 'a lone scalp at exactly 2R still goes in, its target pulled in to 4027');
+    const pair = g({ symbol: 'XAUUSD', side: 'buy', entry: 4000, stopLoss: 3985, takeProfit: 4020, swingTakeProfit: 4060, snap });
+    assert.ok(pair.takeProfit === 4018 && pair.swingTakeProfit === 4054, 'scalp and swing both pulled in');
+    const re = g({ symbol: 'XAUUSD', side: 'buy', entry: 4000, stopLoss: 3985, takeProfit: 4030, snap, pullIn: false });
+    assert.strictEqual(re.takeProfit, 4030, 're-entries keep the journal target (already pulled in)');
+  }
   p = limitPlan({ sym: 'XAUUSD', setup: { ...setup, stopLoss: 4000 }, takeProfit: 4020 });
   assert.strictEqual(p.stopLoss, 3999, 'a better price can\'t bring the stop under the $3 floor');
   p = limitPlan({ sym: 'XAUUSD', setup: { ...setup, entry: 4002.3 }, takeProfit: 4020 });
