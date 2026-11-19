@@ -18,8 +18,8 @@ import{getPersona}from '../personas/personas';
 import{getSetting}from './database';
 
 const VOICE_DB=-47;          // metering above this counts as talking
-const SILENCE_MS=1100;       // quiet this long after a real utterance -> done
-const SILENCE_SLOW_MS=2100;  // more grace when he's barely started
+const SILENCE_MS=2500;       // quiet this long after a real utterance -> done (room to breathe)
+const SILENCE_SLOW_MS=3500;  // more grace when he's barely started
 const SPOKE_ENOUGH_MS=1500;
 const NOVOICE_MS=9000;       // mic open this long with no voice -> give up the take
 const MAX_MS=30000;

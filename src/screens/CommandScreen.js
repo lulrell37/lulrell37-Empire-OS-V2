@@ -56,11 +56,11 @@ import{extractUrls,fetchLinkContext,linkContextToBlock}from '../services/mediaCo
 import{prepareImage}from '../services/imagePrep';
 
 const TEAM_PHOTO=require('../../assets/teamphoto.png');
-const HANDS_FREE_SILENCE_MS=1200;      // quiet for this long AFTER a normal utterance -> stop
-const HANDS_FREE_SILENCE_SLOW_MS=2200; // longer grace when barely anything has been said yet (slow starter)
+const HANDS_FREE_SILENCE_MS=2500;      // quiet for this long AFTER a normal utterance -> stop (room to breathe mid-thought)
+const HANDS_FREE_SILENCE_SLOW_MS=3500; // longer grace when barely anything has been said yet (slow starter)
 const HANDS_FREE_SPOKE_ENOUGH_MS=1500; // spoke at least this long -> use the snappy endpoint
 const HANDS_FREE_VOICE_DB=-47;      // metering above this counts as "talking"
-const HANDS_FREE_MAX_MS=30000;      // hard cap on one hands-free take
+const HANDS_FREE_MAX_MS=90000;      // hard cap on one hands-free take
 const HANDS_FREE_NOMETER_MS=8000;   // devices that don't report metering -> fixed take
 const HANDS_FREE_NOVOICE_MS=7000;   // mic open this long with no voice at all -> give up, discard the take
 const MANUAL_MAX_MS=120000;         // manual SPEAK take: 2-min safety backstop only (user taps STOP REC)
@@ -208,8 +208,8 @@ export default function CommandScreen({navigation,route}){
   // once per distinct cause instead of repeating it on every single reply.
   const voiceWarnRef=useRef(null);
   function warnVoiceFallback(){
-    const reason=getLastTtsFailReason();
-    if(!reason||voiceWarnRef.current===reason)return;
+    const reason=getLastTtsFailReason()||'ElevenLabs returned no audio (no error given)';
+    if(voiceWarnRef.current===reason)return;
     voiceWarnRef.current=reason;
     reportError('Voice fell back to the device voice — '+reason);
   }
@@ -569,8 +569,8 @@ export default function CommandScreen({navigation,route}){
     if(talking){
       clearSilenceTimer();
     }else if(!silenceTimerRef.current){
-      // Adaptive endpoint: end the take ~1.2s after a normal utterance so the
-      // reply comes back fast, but hold longer when almost nothing has been
+      // Adaptive endpoint: end the take ~2.5s after a normal utterance (room for a
+      // breath mid-thought), and hold longer when almost nothing has been
       // said yet so a slow start isn't chopped mid-thought.
       const spokeMs=voicedCountRef.current*250;
       const graceMs=spokeMs<HANDS_FREE_SPOKE_ENOUGH_MS?HANDS_FREE_SILENCE_SLOW_MS:HANDS_FREE_SILENCE_MS;
@@ -1086,6 +1086,7 @@ export default function CommandScreen({navigation,route}){
     // Every segment failed to synthesize (e.g. ElevenLabs down) — rather than
     // leave the reply silent, read it once with the native voice.
     if(ttsPlayedCountRef.current===0&&!ttsCancelRef.current&&!abortRef.current?.signal.aborted){
+      warnVoiceFallback(); // this fallback used to be silent: say why
       try{await new Promise(res=>{Speech.speak(display.slice(0,700),{language:'en-US',rate:speechRate(0.95),onDone:res,onStopped:res});setTimeout(res,Math.min(60000,display.length*70+4000));});}catch{}
     }
     streamSpeakActiveRef.current=false;
