@@ -17,7 +17,8 @@ const TONE={
 };
 const GAP=6; // must match s.row / s.copy column gap, so copy B lands exactly where copy A began
 
-export default function NudgeBar({active}){
+// activityOnly: just the "who's working" chips (the map's banner).
+export default function NudgeBar({active,activityOnly=false}){
   const[nudges,setNudges]=useState([]);
   const[dismissed,setDismissed]=useState({});
   const firmIssues=useEmpireStore(s=>s.firmIssues);
@@ -40,7 +41,7 @@ export default function NudgeBar({active}){
 
   useEffect(()=>{
     let alive=true;
-    if(active)computeNudges().then(n=>{if(alive)setNudges(n);}).catch(()=>{});
+    if(active&&!activityOnly)computeNudges().then(n=>{if(alive)setNudges(n);}).catch(()=>{});
     return()=>{alive=false;};
   },[active,firmIssues]);
 
@@ -66,7 +67,7 @@ export default function NudgeBar({active}){
     key:'firm:'+key,rawKey:key,text:v.text,detail:v.detail,severity:v.severity||'error',issue:true,
   })).sort((a,b)=>(a.severity==='error'?0:1)-(b.severity==='error'?0:1));
   const nudgeChips=nudges.map(n=>({...n,severity:n.severity||'warn'}));
-  const shown=[...activityChips,...issueChips,...nudgeChips].filter(n=>!dismissed[n.key]);
+  const shown=(activityOnly?activityChips:[...activityChips,...issueChips,...nudgeChips]).filter(n=>!dismissed[n.key]);
 
   const belt=active&&oneW>0&&cw>0&&oneW>cw+8&&shown.length>1;
 

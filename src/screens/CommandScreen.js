@@ -42,7 +42,7 @@ import{tlChartModel,tlSnapshot,tlFormatSnapshot,tlPlaceOrder,tlClosePosition,tlM
 import{recordTradeOpen,reconcileOpenTrades,traderJournalBlock,setStrategy,setTradeReview,TRADER_ID}from '../services/tradeJournal';
 import{loadKeys,loadGitHubToken}from '../services/keyStore';
 import useEmpireStore from '../store/useEmpireStore';
-import{useIsFocused,useFocusEffect}from '@react-navigation/native';
+import{useIsFocused,useFocusEffect,CommonActions}from '@react-navigation/native';
 import OfficeScene from './command/OfficeScene';
 import Canvas from './command/Canvas';
 import ActivityPane from './command/ActivityPane';
@@ -287,7 +287,7 @@ export default function CommandScreen({navigation,route}){
   // Runs whenever this screen is focused regardless of view, so the chips are
   // there in chat too.
   useEffect(()=>{
-    if(!isFocused){setBgJobs(j=>j.length?[]:j);return;}
+    if(!isFocused&&!loading){setBgJobs(j=>j.length?[]:j);return;}
     let alive=true;
     const pull=async()=>{
       try{
@@ -320,7 +320,7 @@ export default function CommandScreen({navigation,route}){
     pull();
     const iv=setInterval(pull,5000);
     return()=>{alive=false;clearInterval(iv);};
-  },[isFocused]);
+  },[isFocused,loading]);
   // Poll the backend for a running council meeting while this screen is focused:
   // fast (5s) once one is live so the banner + speaking-orb glow track it turn
   // by turn, slow (every ~4th tick = 20s) the rest of the time.
@@ -1464,7 +1464,15 @@ export default function CommandScreen({navigation,route}){
     setHandsFree(false);handsFreeRef.current=false;clearSilenceTimer();
     if(recordingRef.current)stopRecording();
     stopAudio();
-    navigation.navigate('Map');
+    if(!loading){navigation.navigate('Map');return;}
+    // A reply is still coming: put the map on top instead of popping this
+    // screen, so the turn keeps running (and lands in the chat) while he's away.
+    // The stack becomes [...others, Command, Map] with Command's route key kept,
+    // so this screen stays mounted; the map's banner shows who's working.
+    navigation.dispatch(state=>{
+      const routes=state.routes.filter(r=>r.name!=='Map');
+      return CommonActions.reset({...state,routes:[...routes,{name:'Map',key:'Map-'+Date.now()}],index:routes.length});
+    });
   }
 
   // Header back button: on the visualization, step back one level (face-to-face
@@ -2491,12 +2499,32 @@ export default function CommandScreen({navigation,route}){
   const cp=getPersona(activePersona);
   const displayMessages=mode==='direct'?messages:groupMessages;
 
+  // A reply that finished while he was on another screen: a "replied" chip on
+  // the map's banner until he comes back to the chat.
+  const[repliedAway,setRepliedAway]=useState(null);
+  const wasLoadingRef=useRef(false);
+  useEffect(()=>{
+    if(wasLoadingRef.current&&!loading&&!isFocusedRef.current)setRepliedAway({persona:mode==='direct'?activePersona:customPersonas[0]});
+    wasLoadingRef.current=loading;
+  },[loading]);// eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(()=>{if(isFocused)setRepliedAway(null);},[isFocused]);
+  function openRepliedChat(){
+    setRepliedAway(null);setView('text');
+    navigation.navigate('Command');
+  }
+
   // One list of everything a persona is doing right now — background queue work,
   // auto-agent cycles, relays, deep research, a live council. It drives the
   // banner chips (via the store) and the gold "working" aura on the galaxy orbs,
   // so what's happening is never a guess.
   const activityItems=useMemo(()=>{
     const out=[...bgJobs];
+    // The reply in flight, whenever he isn't looking at that chat (office
+    // overview, or another screen while it finishes in the background).
+    const replyWho=mode==='direct'?activePersona:customPersonas[0];
+    const inChat=isFocused&&(view==='text'||orbLevel==='desk');
+    if(loading&&replyWho&&!inChat)out.push({key:'reply',persona:replyWho,label:mode==='direct'?'working on your message':'group is talking'});
+    if(repliedAway&&!loading)out.push({key:'replied',persona:repliedAway.persona,label:'replied · tap to open',onPress:openRepliedChat});
     agentBusy.forEach(id=>out.push({key:'agent:'+id,persona:id,label:AGENT_LABEL[id]||'running a cycle'}));
     relayBusy.forEach(id=>out.push({key:'relay:'+id,persona:id,label:'pulled in on a relay'}));
     if(deepResearch&&deepResearch.status==='running'&&deepResearch.persona){
@@ -2509,7 +2537,7 @@ export default function CommandScreen({navigation,route}){
     // de-dupe by key (same persona can't stack two identical rows)
     const seen=new Set();
     return out.filter(a=>a&&a.persona&&!seen.has(a.key)&&seen.add(a.key));
-  },[bgJobs,agentBusy,relayBusy,deepResearch,councilLive]);// eslint-disable-line react-hooks/exhaustive-deps
+  },[bgJobs,agentBusy,relayBusy,deepResearch,councilLive,loading,mode,activePersona,customPersonas,isFocused,view,orbLevel,repliedAway]);// eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(()=>{setActivity(activityItems);},[activityItems,setActivity]);
   useEffect(()=>()=>setActivity([]),[setActivity]); // clear on unmount (leaving for the map)
@@ -2578,6 +2606,13 @@ export default function CommandScreen({navigation,route}){
                 </TouchableOpacity>
               ))}
             </View>
+          )}
+          {!chromeVisible&&(
+            // The office has no multi-select of its own, so this is the way
+            // into a group chat: the team picker below, then LAUNCH.
+            <TouchableOpacity style={s.groupPill} onPress={()=>{setSelectedCustom([]);setShowCustomPicker(true);}} hitSlop={{top:8,bottom:8,left:8,right:8}}>
+              <Text style={s.groupPillT}>⧉ GROUP</Text>
+            </TouchableOpacity>
           )}
           <View style={s.onlinePill}><View style={s.onlineDot}/><Text style={s.onlineText}>ONLINE</Text></View>
         </View>
@@ -2803,7 +2838,7 @@ export default function CommandScreen({navigation,route}){
             );})}
           </ScrollView>
           <View style={{flexDirection:'row',gap:10,marginTop:16}}>
-            <TouchableOpacity style={[s.modalBtn,{backgroundColor:'#E8C98A'}]} onPress={()=>{if(selectedCustom.length>=2){setCustomPersonas(selectedCustom);setMode('custom');setShowCustomPicker(false);}}}>
+            <TouchableOpacity style={[s.modalBtn,{backgroundColor:'#E8C98A'}]} onPress={()=>{if(selectedCustom.length>=2){launchGroupFromOrb(selectedCustom);setShowCustomPicker(false);}}}>
               <Text style={[s.modalBtnT,{color:'#000'}]}>LAUNCH</Text>
             </TouchableOpacity>
             <TouchableOpacity style={[s.modalBtn,{backgroundColor:'#111',borderWidth:1,borderColor:'#333'}]} onPress={()=>setShowCustomPicker(false)}>
@@ -2841,6 +2876,8 @@ const s=StyleSheet.create({
   empireOSmap:{fontFamily:'monospace',fontSize:9,fontWeight:'700',color:'#6b5a30',letterSpacing:2},
   onlinePill:{flexDirection:'row',alignItems:'center',gap:5,borderWidth:1,borderColor:'#4CAF5055',borderRadius:12,paddingHorizontal:8,paddingVertical:3},
   headerRight:{flexDirection:'row',alignItems:'center',gap:8},
+  groupPill:{borderWidth:1,borderColor:'#E8C98A66',borderRadius:12,paddingHorizontal:9,paddingVertical:3},
+  groupPillT:{fontFamily:'monospace',fontSize:8,color:'#E8C98A',letterSpacing:2},
   viewToggle:{flexDirection:'row',gap:4},
   viewTab:{width:26,height:22,borderRadius:5,borderWidth:1,borderColor:'#222',alignItems:'center',justifyContent:'center'},
   viewTabT:{fontFamily:'monospace',fontSize:11,color:'#444'},
