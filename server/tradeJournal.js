@@ -423,4 +423,62 @@ async function tradeStats({ symbol = 'XAUUSD', days = 30 } = {}) {
   return L.join('\n');
 }
 
-module.exports = { TRADER_ID, STRATEGY_TITLE, allTrades, parkOpenTrades, getStrategy, recordTradeOpen, reconcileOpenTrades, tradeRecord, formatTradeRecord, tradeStats, statsParts: { kindOf, exitOf, sessionOf, dailyOf, bucket } };
+// One target per area: a new take profit within SHARE_TP of a target his open
+// trades (or a resting quick limit) on the same market and side already use is
+// set to that same price, so the positions bank together instead of a few
+// dollars apart. The window is gold $3 / Bitcoin 0.3% (TALON_SHARE_TP_GOLD /
+// TALON_SHARE_TP_BTC), never more than a quarter of the way from entry to the
+// target, and the shared price has to stay on the profit side. Owner's call, 2026-11-19.
+const SHARE_TP = {
+  XAUUSD: () => Number(process.env.TALON_SHARE_TP_GOLD ?? 3),
+  BTCUSD: (px) => px * Number(process.env.TALON_SHARE_TP_BTC ?? 0.003),
+};
+function snapTarget({ symbol, side, entry, takeProfit, targets }) {
+  const sym = String(symbol).toUpperCase(), px = Number(entry), tp = Number(takeProfit);
+  const win = SHARE_TP[sym];
+  if (!win || !isFinite(px) || !isFinite(tp)) return takeProfit;
+  const dir = side === 'buy' ? 1 : -1;
+  const reach = (tp - px) * dir;
+  if (!(reach > 0)) return takeProfit;
+  const tol = Math.min(win(px), reach / 4);
+  let best = null;
+  for (const t of targets || []) {
+    const v = Number(t);
+    if (!isFinite(v) || (v - px) * dir <= 0) continue;
+    const gap = Math.abs(v - tp);
+    if (gap <= tol + 1e-9 && (best == null || gap < Math.abs(best - tp))) best = v;
+  }
+  return best == null ? takeProfit : best;
+}
+// The targets already set on a market and side: open journal trades + resting quick limits.
+async function openTargets(symbol, side) {
+  const sym = String(symbol).toUpperCase();
+  const out = (await allTrades()).filter((t) => t.status === 'open' && String(t.symbol).toUpperCase() === sym && t.side === side)
+    .map((t) => num(t.take_profit)).filter((v) => v != null);
+  try {
+    const raw = await getSetting('talon_quick_pending', '[]');
+    const l = Array.isArray(raw) ? raw : JSON.parse(raw || '[]');
+    for (const p of Array.isArray(l) ? l : []) if (p.sym === sym && p.side === side && num(p.takeProfit) != null) out.push(num(p.takeProfit));
+  } catch {}
+  return out;
+}
+async function sharedTarget({ symbol, side, entry, takeProfit }) {
+  if (takeProfit == null) return takeProfit;
+  const targets = await openTargets(symbol, side).catch(() => []);
+  const v = snapTarget({ symbol, side, entry, takeProfit, targets });
+  if (v !== takeProfit) console.log(`talon: ${symbol} ${side} target ${takeProfit} → ${v}, the target already set in that area`);
+  return v;
+}
+// Scalp + swing together: the swing has to stay past the scalp after sharing.
+async function sharedTargets({ symbol, side, entry, takeProfit, swingTakeProfit }) {
+  const tp = await sharedTarget({ symbol, side, entry, takeProfit });
+  let sw = swingTakeProfit;
+  if (sw != null) {
+    const s2 = await sharedTarget({ symbol, side, entry, takeProfit: sw });
+    const dir = side === 'buy' ? 1 : -1;
+    sw = (Number(s2) - Number(tp)) * dir > 0 ? s2 : sw;
+  }
+  return { takeProfit: tp, swingTakeProfit: sw };
+}
+
+module.exports = { snapTarget, sharedTarget, sharedTargets, TRADER_ID, STRATEGY_TITLE, allTrades, parkOpenTrades, getStrategy, recordTradeOpen, reconcileOpenTrades, tradeRecord, formatTradeRecord, tradeStats, statsParts: { kindOf, exitOf, sessionOf, dailyOf, bucket } };

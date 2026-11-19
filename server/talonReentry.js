@@ -21,7 +21,7 @@
 const { getSetting, setSetting, saveMemory } = require('./syncStore');
 const { tlHistory, tlSnapshot, tlPlaceOrder, MAX_QTY } = require('./tradeLocker');
 const { guardStop, tradeContext } = require('./talonBrain');
-const { allTrades, recordTradeOpen, TRADER_ID } = require('./tradeJournal');
+const { allTrades, recordTradeOpen, sharedTargets, TRADER_ID } = require('./tradeJournal');
 const { closedBars } = require('./marketStructure');
 const alerts = require('./talonAlerts');
 
@@ -145,6 +145,7 @@ async function reentryTick({ marketOpen, openPairs, maxPairs }) {
       continue;
     }
     const e = d.enter;
+    Object.assign(e, await sharedTargets({ symbol: w.symbol, side: w.side, entry: price, takeProfit: e.takeProfit, swingTakeProfit: e.swingTakeProfit }));
     let swing = e.swingTakeProfit;
     if (swing != null && (await openPairs(w.symbol).catch(() => 0)) >= maxPairs(w.symbol)) { w.lastWait = 'pair cap full'; changed = true; continue; }
     // One try, recorded before the order, so a failure can't double it on the next tick.

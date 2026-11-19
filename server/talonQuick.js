@@ -36,7 +36,7 @@
 // all trend the scalp's way. No add-ons, no doubling, and they
 // don't count toward MAX_PAIRS. TALON_QUICK=off stops it.
 const { tlHistory, tlQuote, tlSnapshot, tlFormatSnapshot, tlPlaceOrder, tlModifyPosition, tlCancelOrder, tlOrderState, summarizeBars, MAX_QTY } = require('./tradeLocker');
-const { allTrades, recordTradeOpen, TRADER_ID } = require('./tradeJournal');
+const { allTrades, recordTradeOpen, sharedTarget, TRADER_ID } = require('./tradeJournal');
 const { upsertSyncRow, saveMemory, getSetting, setSetting } = require('./syncStore');
 const alerts = require('./talonAlerts');
 const { orderRejected } = alerts;
@@ -328,7 +328,8 @@ async function quickTick({ marketOpen }) {
       const plan = limitPlan({ sym, setup, takeProfit: dec.takeProfit });
       if (plan.skip) { out[sym] = `${plan.skip} — skipped`; await logQuick(sym, setup.side, out[sym]); continue; }
       const { dir } = setup;
-      const { entry, dist, stopLoss, takeProfit: tp, limit } = plan;
+      const { entry, dist, stopLoss, limit } = plan;
+      const tp = await sharedTarget({ symbol: sym, side: setup.side, entry, takeProfit: plan.takeProfit });
       const rationale = `quick 5m — ${dec.rationale || 'EMA20 pullback rejection'}`.slice(0, 400);
       let s;
       try { s = await tlPlaceOrder({ symbol: sym, side: setup.side, qty: MAX_QTY, stopLoss, takeProfit: tp, minStop: false, limitPrice: limit }); }
