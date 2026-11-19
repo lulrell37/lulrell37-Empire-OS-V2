@@ -477,7 +477,7 @@ only. A redeploy is the child exiting with 75: J.A.R.V.I.S.'s `[REDEPLOY]` →
 Confirm tap → `requestRedeploy` writes `app_settings.redeploy_pending`, fires a
 `repository_dispatch` (`server-redeploy`) and exits; boot pulls main and
 restarts. Replit's process never exits, so this doesn't depend on Replit
-restarting anything. On the way up `onBoot()` has A.R.A. report on Telegram:
+restarting anything. In the app, J.A.R.V.I.S.'s or A.R.A.'s `[REDEPLOY]` opens a confirm dialog (`src/services/redeploy.js`) and, on his tap, calls `POST /redeploy` (auth), the same `requestRedeploy`. On the way up `onBoot()` has A.R.A. report on Telegram:
 live or fell back (with the error), time taken, the commit running and the
 commit list since the last version. `.github/workflows/server-check.yml` (run by
 that dispatch) checks `/health` → `code.booted_at` ~6 min later and fails, which

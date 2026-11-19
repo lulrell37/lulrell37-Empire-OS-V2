@@ -31,6 +31,8 @@ app.get('/health', (req, res) => {
 // AI proxy: no body parser — the request body is streamed straight through.
 app.use('/ai', auth, require('./routes/ai'));
 app.get('/diag', auth, (req, res) => res.json(require('./serverLog').diagJson()));
+// The app's [REDEPLOY], after his tap on its confirm dialog (Telegram's is a Confirm card).
+app.post('/redeploy', auth, (req, res) => require('./redeploy').requestRedeploy('app').then((text) => res.json({ text })).catch((e) => res.status(500).json({ error: e.message })));
 // What's broken right now (server/sentinel.js) — the app's top strip reads it.
 app.get('/sentinel', auth, (req, res) => require('./sentinel').status().then((items) => res.json({ items })).catch((e) => res.status(500).json({ error: e.message })));
 

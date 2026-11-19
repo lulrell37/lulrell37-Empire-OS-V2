@@ -15,6 +15,7 @@ import{scheduleReminder}from './reminders';
 import{openApp,openWebpage}from './appLauncher';
 import useEmpireStore from '../store/useEmpireStore';
 import{scheduleSync}from './sync';
+import{confirmRedeploy}from './redeploy';
 import{allMatches}from '../matchAllFix'; // never the built-in matchAll (it crashed on the phone)
 const HUD_PANELS=['briefing','businesses','tasks','routine','batman','daily'];
 const PANEL_ALIASES=[['brief','briefing'],['business','businesses'],['revenue','businesses'],['empire','businesses'],['task','tasks'],['routine','routine'],['morning','routine'],['batman','batman'],['protocol','batman'],['training','batman'],['daily','daily'],['word','daily'],['verse','daily'],['fact','daily']];
@@ -257,6 +258,8 @@ export async function handleCommands(response,personaId,callbacks={}){
   for(const m of allMatches(response,/\[BUILD_MERGE:\s*#?(\d+)\]/gi)){
     callbacks.onBuildMerge?.({issueNumber:parseInt(m[1],10)});
   }
+  // [REDEPLOY]: J.A.R.V.I.S. / A.R.A. only, and only after his tap (same as Telegram's Confirm card).
+  if(/\[REDEPLOY\]/i.test(response)&&['jarvis','ara'].includes(personaId))confirmRedeploy();
   for(const m of allMatches(response,/\[BUILD_CANCEL:\s*#?(\d+)\]/gi)){
     callbacks.onBuildCancel?.({issueNumber:parseInt(m[1],10)});
   }
@@ -469,7 +472,7 @@ export function stripCommands(text){
     .replace(/\[SHOW_ANALYTICS\]/gi,'').replace(/\[OPEN_ANALYTICS\]/gi,'')
     .replace(/\[SHOW_NEWS\]/gi,'').replace(/\[NEWS_BRIEF\]/gi,'')
     .replace(/\[BUILD_REQUEST:[^\]]*\]/gi,'').replace(/\[BUILD_REPLY:[^\]]*\]/gi,'')
-    .replace(/\[BUILD_MERGE:[^\]]*\]/gi,'').replace(/\[BUILD_CANCEL:[^\]]*\]/gi,'').replace(/\[BUILD_STATUS\]/gi,'')
+    .replace(/\[BUILD_MERGE:[^\]]*\]/gi,'').replace(/\[BUILD_CANCEL:[^\]]*\]/gi,'').replace(/\[BUILD_STATUS\]/gi,'').replace(/\[REDEPLOY\]/gi,'')
     .replace(/\[SEND_SMS:[^\]]*\]/gi,'')
     .replace(/\[CREATE_EVENT:[^\]]*\]/gi,'').replace(/\[DELETE_EVENT:[^\]]*\]/gi,'')
     .replace(/\[LIST_NOTES(?::[^\]]*)?\]/gi,'').replace(/\[SEARCH_DRIVE:[^\]]*\]/gi,'')
