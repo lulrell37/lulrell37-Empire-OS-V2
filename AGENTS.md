@@ -461,6 +461,10 @@ He used to debug blind (code only), so a broken deploy sent him in circles. The 
 
 **The AI proxy reads each request once.** `routes/ai.js` used to open a web stream on the request and then read it again for Claude, so any body over ~64 KB (every real app turn) hung until Replit's edge answered 408 / "Internal server error" — the app's Claude personas were dead while Telegram (which never uses the proxy) worked. Claude and Grok/OpenAI chat calls now buffer the body once and get the keep-alive; everything else is piped. The live server is `https://lulrell-37-empire-os-v-2--lulrell37.replit.app` (`empire-os-v2.replit.app` is dead).
 
+## The sentinel: nothing switches off silently (`server/sentinel.js`, `SENTINEL=off` to stop)
+
+Every 10 min it checks the ElevenLabs balance (out, or under 10% left), the server's AI keys out of credits, the Claude subscription limited or logged out, the app's AI calls through `/ai/<p>` refused (401/402/403/429), Google failing, each Telegram bot's webhook, a boot that fell back, any loop logging "<name> failed" 2+ times in 30 min, and no phone registered for push. A new problem goes to him once from A.R.A.'s bot as text (no voice, which is often what broke) plus a phone push; a reminder every 12 h while it lasts; "working again" when it clears. State: `app_settings.sentinel_state`. `GET /sentinel` lists what's broken now; the app's top strip (`NudgeBar`, chat and map) shows it via `src/services/sentinel.js`. A new loop should log failures as `<name> failed: why` so the sentinel sees it. In the app, a voice that falls back to the phone voice also goes to the strip and Diagnostics. `node server/scripts/test-sentinel.js`.
+
 ## Self-updating server + J.A.R.V.I.S.'s [REDEPLOY] (`server/boot.js`, `server/redeploy.js`)
 
 `npm start` runs `boot.js`, a supervisor that runs `index.js` as a child. Each

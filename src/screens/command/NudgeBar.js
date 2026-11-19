@@ -9,6 +9,7 @@ import{View,Text,StyleSheet,ScrollView,TouchableOpacity,Animated,Easing,Alert}fr
 import{computeNudges}from '../../services/nudges';
 import useEmpireStore from '../../store/useEmpireStore';
 import{getPersona}from '../../personas/personas';
+import{fetchSentinel}from '../../services/sentinel';
 
 const TONE={
   error:{border:'#7A2E2E',fg:'#E8938C',x:'#8a4a4a'},
@@ -17,7 +18,7 @@ const TONE={
 };
 const GAP=6; // must match s.row / s.copy column gap, so copy B lands exactly where copy A began
 
-// activityOnly: just the "who's working" chips (the map's banner).
+// activityOnly: just who's working + what's broken (the map's banner).
 export default function NudgeBar({active,activityOnly=false}){
   const[nudges,setNudges]=useState([]);
   const[dismissed,setDismissed]=useState({});
@@ -25,6 +26,16 @@ export default function NudgeBar({active,activityOnly=false}){
   const clearFirmIssue=useEmpireStore(s=>s.clearFirmIssue);
   const sweepFirmIssues=useEmpireStore(s=>s.sweepFirmIssues);
   const activity=useEmpireStore(s=>s.activity);
+  // The server's sentinel: anything in the Empire that's broken right now.
+  const[sentinel,setSentinel]=useState([]);
+  useEffect(()=>{
+    if(!active)return;
+    let alive=true;
+    const pull=()=>fetchSentinel().then(x=>{if(alive)setSentinel(x);}).catch(()=>{});
+    pull();
+    const id=setInterval(pull,60000);
+    return()=>{alive=false;clearInterval(id);};
+  },[active]);
 
   // Drop TTL'd error chips so transient failures fade instead of piling up.
   useEffect(()=>{
@@ -67,7 +78,11 @@ export default function NudgeBar({active,activityOnly=false}){
     key:'firm:'+key,rawKey:key,text:v.text,detail:v.detail,severity:v.severity||'error',issue:true,
   })).sort((a,b)=>(a.severity==='error'?0:1)-(b.severity==='error'?0:1));
   const nudgeChips=nudges.map(n=>({...n,severity:n.severity||'warn'}));
-  const shown=(activityOnly?activityChips:[...activityChips,...issueChips,...nudgeChips]).filter(n=>!dismissed[n.key]);
+  const sentinelChips=sentinel.map(x=>({
+    key:'sentinel:'+x.key,text:`${x.label}: ${x.msg}`.slice(0,90),detail:`${x.label}\n\n${x.msg}\n\nSince ${new Date(x.since).toLocaleString()}`,
+    severity:x.severity==='warn'?'warn':'error',issue:true,
+  }));
+  const shown=(activityOnly?[...activityChips,...sentinelChips]:[...activityChips,...sentinelChips,...issueChips,...nudgeChips]).filter(n=>!dismissed[n.key]);
 
   const belt=active&&oneW>0&&cw>0&&oneW>cw+8&&shown.length>1;
 
@@ -98,7 +113,7 @@ export default function NudgeBar({active,activityOnly=false}){
   const dismissChip=(n)=>{
     if(n.activity)return; // activity clears itself when the work ends
     setDismissed(d=>({...d,[n.key]:true}));
-    if(n.issue)clearFirmIssue(n.rawKey);
+    if(n.issue&&n.rawKey)clearFirmIssue(n.rawKey);
   };
 
   const renderChip=(n,prefix='')=>{

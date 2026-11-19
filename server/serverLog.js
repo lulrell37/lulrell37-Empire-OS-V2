@@ -85,4 +85,8 @@ function diagJson() {
   return { started, lines: lines.slice(-200), aiCalls, aiTotals, fallbackError: process.env.EMPIRE_FALLBACK_ERROR || null };
 }
 
-module.exports = { install, recordAi, serverLogs, aiErrors, healthCheck, DIAG_TAGS, diagTag, diagJson };
+// For the sentinel: warn/error lines and failed app AI calls newer than ts.
+const errorLinesSince = (ts) => lines.filter((l) => l.ts > ts && l.level !== 'log');
+const aiFailuresSince = (ts) => aiCalls.filter((c) => c.ts > ts);
+
+module.exports = { install, recordAi, errorLinesSince, aiFailuresSince, serverLogs, aiErrors, healthCheck, DIAG_TAGS, diagTag, diagJson };

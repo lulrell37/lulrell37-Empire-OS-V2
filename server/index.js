@@ -31,6 +31,8 @@ app.get('/health', (req, res) => {
 // AI proxy: no body parser — the request body is streamed straight through.
 app.use('/ai', auth, require('./routes/ai'));
 app.get('/diag', auth, (req, res) => res.json(require('./serverLog').diagJson()));
+// What's broken right now (server/sentinel.js) — the app's top strip reads it.
+app.get('/sentinel', auth, (req, res) => require('./sentinel').status().then((items) => res.json({ items })).catch((e) => res.status(500).json({ error: e.message })));
 
 // JSON APIs.
 const json = express.json({ limit: '25mb' });
@@ -92,6 +94,7 @@ db.init()
     startNewsWireCron();
     startScoutOutreachCron();
     startAutoAtlasCron();
+    startSentinelCron();
     startAtlasInvestCron();
     startSeleneTrendsCron();
     startMondayScriptsCron();
@@ -311,6 +314,14 @@ function startMondayScriptsCron() {
   if (process.env.MONDAY_SCRIPTS === 'off') return console.log('S.C.R.I.B.E. Monday scripts cron disabled (MONDAY_SCRIPTS=off)');
   cron.schedule('0 8,10,12,14 * * 1', () => require('./scribeMonday').runMondayScripts().then((r) => console.log('monday scripts:', JSON.stringify(r))).catch((e) => console.error('monday scripts failed:', e.message)), { timezone: 'America/New_York' });
   console.log('S.C.R.I.B.E. Monday scripts cron scheduled (08:00 ET Mondays, retries to 14:00)');
+}
+
+// The sentinel — anything that breaks or switches off tells him (server/sentinel.js).
+function startSentinelCron() {
+  if (process.env.SENTINEL === 'off') return console.log('sentinel disabled (SENTINEL=off)');
+  cron.schedule('*/10 * * * *', () => require('./sentinel').tick().catch((e) => console.error('sentinel tick error:', e.message)));
+  setTimeout(() => require('./sentinel').tick().catch((e) => console.error('sentinel tick error:', e.message)), 90000);
+  console.log('sentinel scheduled (every 10m)');
 }
 
 function startAutoAtlasCron() {
