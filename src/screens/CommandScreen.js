@@ -19,6 +19,7 @@ import{autoAtlasBusy}from '../services/autoAtlas';
 import{handleCommands,stripCommands}from '../services/commandHandler';
 import{cuedFor,ARA_VOICE}from '../services/voiceCues';
 import{reportIssue,clearIssueKey,notify}from '../services/report';
+import{logCrash}from '../services/crashLog';
 import{googleReadInjections,googleWriteCommands}from '../services/googleCommands';
 import{courseInjections}from '../services/stephanieCourse';
 import{startClipScan}from '../services/clipScan';
@@ -212,6 +213,10 @@ export default function CommandScreen({navigation,route}){
     if(voiceWarnRef.current===reason)return;
     voiceWarnRef.current=reason;
     reportError('Voice fell back to the device voice — '+reason);
+    // Also in Settings → DIAGNOSTICS (timestamped) and the top strip, so it
+    // can't be missed if the red overlay is hidden or tapped away.
+    try{logCrash('voice','Voice fell back to the device voice — '+reason);}catch{}
+    try{reportIssue('voice','Voice fell back to the phone voice',new Error(reason),{severity:'error',ttlMs:30*60000});}catch{}
   }
   const voiceControlRef=useRef(null); // {pause(),resume()} for whatever is currently speaking — set by speakWithReveal, null when nothing is
   // --- streamed sentence-chunked TTS (ElevenLabs personas, voice on) ---
@@ -769,6 +774,8 @@ export default function CommandScreen({navigation,route}){
         Speech.speak(text.substring(0,500),{language:'en-US',rate:speechRate(0.95),onDone:()=>maybeAutoListen(),onStopped:()=>maybeAutoListen()});
       }
     }catch(err){
+      try{voiceWarnRef.current=null;}catch{}
+      warnVoiceFallback();
       Speech.speak(text.substring(0,500),{language:'en-US',rate:speechRate(0.95),onDone:()=>maybeAutoListen(),onStopped:()=>maybeAutoListen()});
     }
   }
