@@ -4,6 +4,19 @@
 // arrive on Telegram from A.R.A. when it's done.
 import{loadBackend}from './keyStore';
 
+// [TRANSCRIBE: link] — the server downloads and transcribes it, saves a Drive
+// note, and sends the transcript on Telegram.
+export async function startTranscribe({mediaUrl,persona}){
+  const be=await loadBackend();
+  if(!be)throw new Error('transcription runs on the Empire server, and no server is linked (Settings › Backend)');
+  const res=await fetch(be.url+'/clips/transcribe',{method:'POST',
+    headers:{Authorization:'Bearer '+be.token,'Content-Type':'application/json'},
+    body:JSON.stringify({url:mediaUrl,persona:persona||'ara'})});
+  const j=await res.json().catch(()=>({}));
+  if(!res.ok)throw new Error(j.error||`server ${res.status}`);
+  return j;
+}
+
 export async function startClipScan({mediaUrl,focus}){
   const be=await loadBackend();
   if(!be)throw new Error('clip scan runs on the Empire server, and no server is linked (Settings › Backend)');

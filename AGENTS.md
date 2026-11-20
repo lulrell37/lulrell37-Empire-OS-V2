@@ -557,3 +557,7 @@ time; caps `CLIP_SCAN_MAX_GB` (2) / `CLIP_SCAN_MAX_MIN` (180). The app's tag
 (`commandHandler.js` → `onClipScan` → `src/services/clipScan.js` → `POST /clips/scan`) runs it in the
 background and A.R.A. delivers the result on Telegram. `[EDIT_CLIP]` / `[WATCH_VIDEO]` are
 untouched. `node server/scripts/test-clip-scan.js`.
+
+## Transcripts of any video link (`server/transcribe.js`, `TRANSCRIBE=off` to stop)
+
+`[TRANSCRIBE: link]` (every persona) takes a YouTube, Instagram (reel / post / IGTV), TikTok or Google Drive link to one video: yt-dlp (or Drive) downloads it the same way the clip scan does (`downloadYouTube` in `server/clipScan.js`, which now also takes `isSocialVideo` links), Whisper transcribes the audio in 10-min chunks with timestamps (no persona-name prompt for other people's videos), and the transcript is saved as the Drive note `Transcript — <title>`. On Telegram it's a lookup tag: the transcript comes back into the persona's turn (first 40k characters), so it can summarize or quote it right away. In the app (`commandHandler.js` → `onTranscribe` → `startTranscribe` → `POST /clips/transcribe`) it runs in the background and arrives on Telegram from the asking persona's bot (else A.R.A.'s). Instagram sometimes refuses logged-out downloads; `INSTAGRAM_COOKIES` (cookies.txt text) or `INSTAGRAM_COOKIES_FILE` on the server gives yt-dlp a session, and the error says so. Two at a time; same size and length caps as the clip scan. `node server/scripts/test-transcribe.js`.

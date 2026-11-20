@@ -22,7 +22,7 @@ import{reportIssue,clearIssueKey,notify}from '../services/report';
 import{logCrash}from '../services/crashLog';
 import{googleReadInjections,googleWriteCommands}from '../services/googleCommands';
 import{courseInjections}from '../services/stephanieCourse';
-import{startClipScan}from '../services/clipScan';
+import{startClipScan,startTranscribe}from '../services/clipScan';
 import{scanTags}from '../services/noteCommands';
 import{allMatches}from '../matchAllFix';
 import{cancelJarvisTurn}from '../services/jarvisEngine';
@@ -1858,6 +1858,12 @@ export default function CommandScreen({navigation,route}){
               await startClipScan({mediaUrl,focus});
               pushSystemMsg('— CLIP SCAN · started — R.O.G.U.E. is transcribing and picking moments; the ranked clips land on Telegram in a few minutes —');
             }catch(e){pushSystemMsg(`— CLIP SCAN · couldn't start: ${e.message} —`);}
+          },
+          onTranscribe:async({mediaUrl})=>{
+            try{
+              await startTranscribe({mediaUrl,persona:pid});
+              pushSystemMsg('— TRANSCRIBE · started — the transcript lands on Telegram and in your Drive, usually within a minute or two —');
+            }catch(e){pushSystemMsg(`— TRANSCRIBE · couldn't start: ${e.message} —`);}
           },
           onWatchVideo:async({mediaUrl,focus})=>{
             try{

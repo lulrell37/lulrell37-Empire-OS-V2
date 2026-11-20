@@ -352,6 +352,11 @@ export async function handleCommands(response,personaId,callbacks={}){
     const mediaUrl=m[1].trim();const focus=(m[2]||'').trim();
     if(mediaUrl)callbacks.onClipScan?.({mediaUrl,focus});
   }
+  // --- Transcript of a video link (any persona) — runs on the server ---
+  for(const m of allMatches(response,/\[TRANSCRIBE:\s*(\S+?)\s*\]/gi)){
+    const mediaUrl=m[1].trim();
+    if(mediaUrl)callbacks.onTranscribe?.({mediaUrl});
+  }
   // --- Video watching (any persona) — focus is optional ---
   for(const m of allMatches(response,/\[WATCH_VIDEO:\s*(\S+)(?:\s*\|\s*([\s\S]+?))?\]/gi)){
     const mediaUrl=m[1].trim();const focus=(m[2]||'').trim();
@@ -467,6 +472,7 @@ export function stripCommands(text){
     .replace(/\[EDIT_CLIP:[^\]]*\]/gi,'')
     .replace(/\[CLIP_SCAN:[^\]]*\]/gi,'')
     .replace(/\[WATCH_VIDEO:[^\]]*\]/gi,'')
+    .replace(/\[TRANSCRIBE:[^\]]*\]/gi,'')
     .replace(/\[SHOW_CHART:[^\]]*\]/gi,'').replace(/\[TRADE_CHART(?::[^\]]*)?\]/gi,'').replace(/\[SHOW_NOTE:[^\]]*\]/gi,'')
     .replace(/\[SHOW_NOTES\]/gi,'').replace(/\[SHOW_TASKS\]/gi,'')
     .replace(/\[SHOW_ANALYTICS\]/gi,'').replace(/\[OPEN_ANALYTICS\]/gi,'')

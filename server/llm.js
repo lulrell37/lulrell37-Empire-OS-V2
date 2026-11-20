@@ -266,13 +266,13 @@ async function transcribe(buffer, filename = 'voice.ogg') {
 
 // Whisper with timestamps: [{ start, end, text }] in seconds, for a long
 // recording's chunk. Needs OPENAI_API_KEY. Same persona-name vocabulary.
-async function transcribeSegments(buffer, filename = 'audio.mp3') {
+async function transcribeSegments(buffer, filename = 'audio.mp3', { prompt = 'A.R.A., Ara, J.A.R.V.I.S., T.A.L.O.N., S.E.L.E.N.E. Okay. Here is what I need you to do.' } = {}) {
   if (!process.env.OPENAI_API_KEY) throw new Error('transcription needs OPENAI_API_KEY on the server');
   const form = new FormData();
   form.append('file', new Blob([buffer]), filename);
   form.append('model', 'whisper-1');
   form.append('response_format', 'verbose_json');
-  form.append('prompt', 'A.R.A., Ara, J.A.R.V.I.S., T.A.L.O.N., S.E.L.E.N.E. Okay. Here is what I need you to do.');
+  if (prompt) form.append('prompt', prompt);
   const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
     method: 'POST', headers: { authorization: `Bearer ${process.env.OPENAI_API_KEY}` }, body: form,
   });

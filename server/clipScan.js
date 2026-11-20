@@ -83,6 +83,31 @@ function ytdlpBin() {
   return ytdlpReady;
 }
 
+// Instagram (reels, posts, IGTV) and TikTok links, also fetched with yt-dlp.
+function isSocialVideo(url) {
+  let u;
+  try { u = new URL(String(url || '').trim()); } catch { return null; }
+  if (!/^https?:$/.test(u.protocol)) return null;
+  const host = u.hostname.toLowerCase().replace(/^(www|m)\./, '');
+  if ((host === 'instagram.com' || host === 'instagr.am') && /^\/(?:[\w.]+\/)?(reel|reels|p|tv)\/[\w-]+/.test(u.pathname)) return 'instagram';
+  if ((host === 'tiktok.com' || host.endsWith('.tiktok.com')) && (/\/video\/\d+/.test(u.pathname) || /^(vm|vt)\./.test(host))) return 'tiktok';
+  return null;
+}
+
+// Instagram often wants a logged-in session. INSTAGRAM_COOKIES_FILE (a path) or
+// INSTAGRAM_COOKIES (the cookies.txt text itself) is passed to yt-dlp when set.
+function cookieArgs(url) {
+  if (isSocialVideo(url) !== 'instagram') return [];
+  if (process.env.INSTAGRAM_COOKIES_FILE) return ['--cookies', process.env.INSTAGRAM_COOKIES_FILE];
+  if (process.env.INSTAGRAM_COOKIES) {
+    const f = path.join(os.tmpdir(), 'empire-bin', 'ig-cookies.txt');
+    fs.mkdirSync(path.dirname(f), { recursive: true });
+    fs.writeFileSync(f, process.env.INSTAGRAM_COOKIES.replace(/\\n/g, '\n'), { mode: 0o600 });
+    return ['--cookies', f];
+  }
+  return [];
+}
+
 async function ytdlp(args) {
   const bin = await ytdlpBin();
   return new Promise((resolve, reject) => {
@@ -98,11 +123,17 @@ async function ytdlp(args) {
 // YouTube URL -> local file at `dir`/source.<ext>. Checks duration before
 // downloading and the size cap during it. Returns { file, name }.
 async function downloadYouTube(url, dir) {
-  const meta = (await ytdlp(['--skip-download', '--print', '%(duration)s\n%(title)s', url])).split('\n');
+  const ck = cookieArgs(url);
+  let meta;
+  try { meta = (await ytdlp([...ck, '--skip-download', '--print', '%(duration)s\n%(title)s', url])).split('\n'); }
+  catch (e) {
+    if (isSocialVideo(url) === 'instagram' && !ck.length && /login|cookie|empty media|rate.?limit|not available|private/i.test(e.message)) throw new Error(`Instagram wouldn't hand the video over without a login (${e.message.slice(0, 140)}). A cookies file for an Instagram account (INSTAGRAM_COOKIES on the server) fixes that`);
+    throw e;
+  }
   const secs = Number(meta[0]);
-  const name = (meta.slice(1).join(' ').trim() || 'YouTube video');
+  const name = (meta.slice(1).join(' ').trim() || (isSocialVideo(url) === 'instagram' ? 'Instagram video' : isSocialVideo(url) === 'tiktok' ? 'TikTok video' : 'YouTube video'));
   if (Number.isFinite(secs) && secs > MAX_SEC) throw new Error(`that video is ${mmss(secs)} — the limit is ${mmss(MAX_SEC)}`);
-  await ytdlp(['-f', 'bv*[height<=720]+ba/b[height<=720]/b', '--merge-output-format', 'mp4', '--max-filesize', String(Math.floor(MAX_BYTES)),
+  await ytdlp([...ck, '-f', 'bv*[height<=720]+ba/b[height<=720]/b', '--merge-output-format', 'mp4', '--max-filesize', String(Math.floor(MAX_BYTES)),
     '-o', path.join(dir, 'source.%(ext)s'), url]);
   const file = fs.readdirSync(dir).find((f) => /^source\.(?!part|ytdl)/.test(f) && !f.endsWith('.part'));
   if (!file) throw new Error('the video is over the size limit or couldn\'t be downloaded');
@@ -146,14 +177,14 @@ async function duration(file) {
 }
 
 // Whole recording -> [{ start, end, text }] with absolute seconds.
-async function transcribeVideo(src, dir) {
+async function transcribeVideo(src, dir, opts) {
   await run(['-hide_banner', '-loglevel', 'error', '-i', src, '-vn', '-ac', '1', '-ar', '16000', '-b:a', '32k',
     '-f', 'segment', '-segment_time', String(CHUNK_SEC), '-reset_timestamps', '1', path.join(dir, 'a%03d.mp3')]);
   const chunks = fs.readdirSync(dir).filter((f) => /^a\d+\.mp3$/.test(f)).sort();
   if (!chunks.length) throw new Error('no audio track in that video');
   const all = [];
   for (let i = 0; i < chunks.length; i++) {
-    const segs = await transcribeSegments(fs.readFileSync(path.join(dir, chunks[i])), chunks[i]);
+    const segs = await transcribeSegments(fs.readFileSync(path.join(dir, chunks[i])), chunks[i], opts);
     for (const s of segs) all.push({ start: s.start + i * CHUNK_SEC, end: s.end + i * CHUNK_SEC, text: s.text });
   }
   return all;
@@ -281,4 +312,4 @@ function scanInBackground(url, focus) {
 
 const CLIP_TOOLS = ` - [CLIP_SCAN: drive link or YouTube URL | focus] — for a LONG video (podcast, stream, full recording): you transcribe it, pick the 3-5 most viral moments (focus is optional, e.g. "funniest moments", "best trading calls"; blank = general virality), cut each to a 9:16 vertical short and upload them to his Drive. Takes several minutes; the ranked list (time range, why, link) and the clips themselves come back in this chat. Use it BEFORE [EDIT_CLIP] when the footage is long-form and he hasn't picked the moment; [EDIT_CLIP] on any one clip after that for captions, music, dress-up. One per turn, one scan at a time. Say it's done only from the result.`;
 
-module.exports = { clipScan, scanInBackground, CLIP_TOOLS, driveId, isYouTube, linkKind, parsePicks, sanitizePicks, mmss };
+module.exports = { clipScan, scanInBackground, CLIP_TOOLS, driveId, isYouTube, isSocialVideo, linkKind, downloadYouTube, transcribeVideo, duration, MAX_BYTES, MAX_SEC, parsePicks, sanitizePicks, mmss };

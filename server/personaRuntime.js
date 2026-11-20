@@ -439,6 +439,7 @@ function genericTools(personaId) {
  - [RELAY_TO: persona-id | a complete, specific question] — ONLY when he asks you to bring that persona in. Synchronous: you get their real answer back this turn. Ask a full question; never guess their answer.
  - [MEMORY_QUERY: precise question] — search your own history with Mr. Burrus when he points back to something not in view.
  ${GOOGLE_TOOLS_OTHERS}${extra}
+${require('./transcribe').TRANSCRIBE_TOOLS}
 ${MEDIA_TOOLS}
 
 Write tags run after your reply and Mr. Burrus gets a receipt for each — never claim something happened that a tag didn't do.
@@ -617,6 +618,15 @@ async function runInjections(text, persona = 'ara', { convo = '', depth = 0, sin
       if (name === 'WOKE_READ' && ['ara', 'woke'].includes(persona)) {
         const r = await require('./wokeRead').readNow(arg);
         return r.text ? `W.O.K.E.'S READ (A.R.A. has already sent him this, so don't repeat it, one line at most):\n${r.text}` : `W.O.K.E.: ${r.skipped || 'no result'}`;
+      }
+      if (name === 'TRANSCRIBE' && arg) {
+        try {
+          const out = await require('./transcribe').transcribeTag(arg);
+          const m = /Saved to his Drive as "([^"]+)"/.exec(out);
+          if (m && sink) sink.notes.push(`transcript note saved: ${m[1]}`);
+          return out;
+        }
+        catch (e) { return `TRANSCRIBE failed: ${e.message}`; }
       }
       if (name === 'CLIP_SCAN' && arg && persona === 'rogue') {
         const [link, ...f] = arg.split('|');
