@@ -412,6 +412,7 @@ PERSONA_EXTRA_TOOLS.stephanie = require('./stephanieCourse').COURSE_TOOLS;
 
 PERSONA_EXTRA_TOOLS.rogue = require('./clipScan').CLIP_TOOLS + '\n' + require('./autoClip').AUTO_CLIP_TOOLS;
 PERSONA_EXTRA_TOOLS.jarvis += '\n' + require('./autoClip').AUTO_CLIP_TOOLS;
+PERSONA_EXTRA_TOOLS.jarvis += '\n' + require('./browserAgent').BROWSE_TOOLS;
 
 PERSONA_EXTRA_TOOLS.scribe = ` - [MONDAY_SCRIPTS] — write this week's 7 video scripts now, and file them; A.R.A. tells him they came in. They go out on their own Mondays at 8 AM ET; only use this when he asks for them again or early.`;
 
@@ -488,7 +489,7 @@ function systemPrompt(ctx, gs, custom, mem) {
     CONTINUITY,
     mem,
     memoryLine(),
-    ARA_TOOLS,
+    ARA_TOOLS + '\n' + require('./browserAgent').BROWSE_TOOLS,
     googleLine(gs),
     `[THE EMPIRE — you run the team. When Mr. Burrus tells you to DO something that's another persona's job, send it to whoever owns it with [RELAY_TO: id | the full instruction, every detail he gave] — he never has to name them. WHO OWNS WHAT: ${ARA_ROUTE}. Everyday things you have your own tags for (notes, tasks, calendar, email, reminders, expenses, the HUD, research, images) you just do yourself. A question or an opinion you answer yourself, unless he names someone or it needs their live tools (where his trades stand → T.A.L.O.N.; how something in the app's code works → J.A.R.V.I.S.). Several jobs for several people → several RELAY_TO tags in the same reply. Report what they actually did from their receipts. This overrides any hand-off instruction elsewhere in your prompt.\n${rosterLines()}\n]`,
     faithBlock('ara'),
@@ -619,6 +620,13 @@ async function runInjections(text, persona = 'ara', { convo = '', depth = 0, sin
       if (name === 'WOKE_READ' && ['ara', 'woke'].includes(persona)) {
         const r = await require('./wokeRead').readNow(arg);
         return r.text ? `W.O.K.E.'S READ (A.R.A. has already sent him this, so don't repeat it, one line at most):\n${r.text}` : `W.O.K.E.: ${r.skipped || 'no result'}`;
+      }
+      if (name === 'BROWSE' && arg && ['jarvis', 'ara'].includes(persona)) {
+        try {
+          const r = await require('./browserAgent').browseTag(persona, arg, { ownerText: asked });
+          if (sink && sink.media) sink.media.push(...r.media);
+          return r.text;
+        } catch (e) { console.error('browse failed:', e.message); return `BROWSE failed: ${e.message}`; }
       }
       if (name === 'TRANSCRIBE' && arg) {
         try {
@@ -901,7 +909,7 @@ async function relayToPersona(id, message, { from = 'ara', convo = '', depth = 1
     await relaySystem(id, from),
     OBEY,
     emotionFor(id),
-    id === 'ara' ? ARA_TOOLS : genericTools(id),
+    id === 'ara' ? ARA_TOOLS + '\n' + require('./browserAgent').BROWSE_TOOLS : genericTools(id),
     id === 'jarvis' ? await empireOsBrief() : '',
     id === 'talon' ? RELAY_TOOLS.replace(HAND_TRADES, TALON_HAND_TRADES) : RELAY_TOOLS,
     googleLine(gs),

@@ -21,8 +21,7 @@
 //   - passwords are only typed if he gave them in that same message
 //
 // Chrome: BROWSER_WS_URL (a hosted browser's CDP websocket — Browserbase, Steel,
-// Browserless…) if set; otherwise Google's chrome-headless-shell, downloaded once
-// into ~/.empire-bin like yt-dlp. Driven over the DevTools protocol with `ws`
+// Browserless…) if set; otherwise the free self-contained Chromium below. Driven over the DevTools protocol with `ws`
 // (already a dependency — nothing new to install). BROWSE=off stops it.
 // node server/scripts/test-browser-agent.js.
 const fs = require('fs');
@@ -72,24 +71,45 @@ function unzip(file, dest) {
   }
 }
 
+// The free Chrome: @sparticuz/chromium's self-contained Linux build (made for
+// serverless boxes with no system libraries — it carries its own NSS, GLib, X11
+// stubs etc.). Its npm tarball is fetched once into ~/.empire-bin/chromium:
+// chromium.br (brotli) is the binary, al2023.tar.br / swiftshader.tar.br hold the
+// shared libraries (put on LD_LIBRARY_PATH), fonts.tar.br the fonts. Owner's
+// choice over a paid hosted browser, 2026-11-20; untested on the live server
+// until its first [BROWSE]. CHROME_PATH or BROWSER_WS_URL override it.
+const CHROMIUM_DIR = path.join(BIN_DIR, 'chromium');
 let chromeReady = null;
 function chromePath() {
-  if (process.env.CHROME_PATH) return Promise.resolve(process.env.CHROME_PATH);
+  if (process.env.CHROME_PATH) return Promise.resolve({ exe: process.env.CHROME_PATH, libs: [] });
   if (!chromeReady) {
     chromeReady = (async () => {
-      const exe = path.join(BIN_DIR, 'chrome-headless-shell-linux64', 'chrome-headless-shell');
-      if (fs.existsSync(exe)) return exe;
-      if (process.platform !== 'linux' || process.arch !== 'x64') throw new Error(`no Chrome build for ${process.platform}/${process.arch} — set CHROME_PATH or BROWSER_WS_URL`);
-      const meta = await (await fetch('https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json')).json();
-      const url = meta.channels.Stable.downloads['chrome-headless-shell'].find((d) => d.platform === 'linux64').url;
-      const res = await fetch(url);
-      if (!res.ok) throw new Error(`Chrome download ${res.status}`);
-      fs.mkdirSync(BIN_DIR, { recursive: true });
-      const zip = path.join(BIN_DIR, `chrome.${process.pid}.zip`);
-      fs.writeFileSync(zip, Buffer.from(await res.arrayBuffer()));
-      try { unzip(zip, BIN_DIR); } finally { fs.rmSync(zip, { force: true }); }
-      fs.chmodSync(exe, 0o755);
-      return exe;
+      const exe = path.join(CHROMIUM_DIR, 'chromium');
+      const libs = [path.join(CHROMIUM_DIR, 'lib'), path.join(CHROMIUM_DIR, 'al2023', 'lib'), CHROMIUM_DIR];
+      if (fs.existsSync(exe) && fs.existsSync(path.join(CHROMIUM_DIR, '.ready'))) return { exe, libs };
+      if (process.platform !== 'linux' || process.arch !== 'x64') throw new Error(`no Chromium build for ${process.platform}/${process.arch} — set CHROME_PATH or BROWSER_WS_URL`);
+      const meta = await (await fetch('https://registry.npmjs.org/@sparticuz/chromium/latest')).json();
+      const res = await fetch(meta.dist.tarball);
+      if (!res.ok) throw new Error(`Chromium download ${res.status}`);
+      fs.rmSync(CHROMIUM_DIR, { recursive: true, force: true });
+      fs.mkdirSync(CHROMIUM_DIR, { recursive: true });
+      const tgz = path.join(CHROMIUM_DIR, 'pkg.tgz');
+      fs.writeFileSync(tgz, Buffer.from(await res.arrayBuffer()));
+      execFileSync('tar', ['xzf', tgz, '-C', CHROMIUM_DIR, 'package/bin']);
+      const bin = path.join(CHROMIUM_DIR, 'package', 'bin');
+      fs.writeFileSync(exe, zlib.brotliDecompressSync(fs.readFileSync(path.join(bin, 'chromium.br'))), { mode: 0o755 });
+      for (const t of ['al2023', 'swiftshader', 'fonts']) {
+        const br = path.join(bin, `${t}.tar.br`);
+        if (!fs.existsSync(br)) continue;
+        const tar = path.join(CHROMIUM_DIR, `${t}.tar`);
+        fs.writeFileSync(tar, zlib.brotliDecompressSync(fs.readFileSync(br)));
+        execFileSync('tar', ['xf', tar, '-C', CHROMIUM_DIR]);
+        fs.rmSync(tar, { force: true });
+      }
+      fs.rmSync(path.join(CHROMIUM_DIR, 'package'), { recursive: true, force: true });
+      fs.rmSync(tgz, { force: true });
+      fs.writeFileSync(path.join(CHROMIUM_DIR, '.ready'), meta.version);
+      return { exe, libs };
     })().catch((e) => { chromeReady = null; throw e; });
   }
   return chromeReady;
@@ -142,13 +162,16 @@ const browsers = new Map(); // persona -> { proc, cdp, session, idleTimer, busy,
 async function launch(persona) {
   let wsUrl = process.env.BROWSER_WS_URL, proc = null;
   if (!wsUrl) {
-    const exe = await chromePath();
+    const { exe, libs } = await chromePath();
     const dir = path.join(PROFILES, persona.replace(/[^\w-]/g, ''));
     fs.mkdirSync(dir, { recursive: true });
     for (const f of ['SingletonLock', 'SingletonSocket', 'SingletonCookie']) fs.rmSync(path.join(dir, f), { force: true });
     proc = spawn(exe, ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage', '--no-first-run', '--no-default-browser-check',
       '--hide-scrollbars', '--mute-audio', `--window-size=${VIEW.width},${VIEW.height}`, '--remote-debugging-port=0', `--user-data-dir=${dir}`,
-      '--lang=en-US', 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });
+      '--lang=en-US', '--headless=new', '--single-process', '--no-zygote', 'about:blank'], {
+      stdio: ['ignore', 'ignore', 'pipe'],
+      env: { ...process.env, LD_LIBRARY_PATH: [...libs, process.env.LD_LIBRARY_PATH].filter(Boolean).join(':'), FONTCONFIG_PATH: path.join(CHROMIUM_DIR, 'fonts') },
+    });
     wsUrl = await new Promise((resolve, reject) => {
       let err = '';
       const t = setTimeout(() => reject(new Error(`Chrome didn't start: ${err.slice(-300) || 'no output'}`)), 30e3);

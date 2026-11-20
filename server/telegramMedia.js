@@ -231,9 +231,10 @@ async function sendMedia(bot, chatId, items) {
           break;
         }
         default: {
-          if (it.buffer) { // a rendered clip held in memory (R.O.G.U.E.'s [CLIP_SCAN])
-            await bot.sendChatAction(chatId, 'upload_video');
-            await bot.sendFile(chatId, 'video', it.buffer, { filename: it.filename, caption: it.caption });
+          if (it.buffer) { // held in memory: a rendered clip ([CLIP_SCAN]) or a browser screenshot ([BROWSE], kind 'photo')
+            const k = it.kind || 'video';
+            await bot.sendChatAction(chatId, k === 'photo' ? 'upload_photo' : 'upload_video');
+            await bot.sendFile(chatId, k, it.buffer, { filename: it.filename, caption: it.caption });
             break;
           }
           const kind = { SEND_PHOTO: 'photo', SEND_IMAGE: 'photo', SEND_VIDEO: 'video', SEND_AUDIO: 'audio' }[it.name] || 'document';
