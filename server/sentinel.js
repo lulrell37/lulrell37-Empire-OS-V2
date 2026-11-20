@@ -153,12 +153,12 @@ async function tick() {
     next[key] = item;
   }
   // Recovered: an AI-refusal / loop alert clears once a full window passes clean;
-  // the others clear as soon as their check passes.
+  // the others clear as soon as their check passes. Clearing is silent: he only
+  // hears about what's broken, never that something works (owner's call, 2026-11-20).
   for (const [key, prev] of Object.entries(state)) {
     if (next[key]) continue;
     const sticky = /^(appai:|loop:)/.test(key) || (key === 'elevenlabs' && /refused/.test(prev.msg || ''));
     if (sticky && now - (prev.lastSeen || prev.since) < LOOP_WINDOW_MS) { next[key] = prev; continue; }
-    await tell(`✅ ${prev.label}: working again.`, `✅ ${prev.label}`, `sentinel:${key}:ok:${now}`);
   }
   for (const key of Object.keys(found)) next[key].lastSeen = now;
   await setSetting('sentinel_state', JSON.stringify(next));
