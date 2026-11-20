@@ -582,3 +582,7 @@ Every 3 h (:15) one Claude call reads the last ~day of conversation (every perso
 
 The "learns you" piece of his smart-AI ask (2026-11-20). Every 6 h (:45) one Claude call reads the same ~day of conversation as the open threads plus the current profile and returns up to 35 lines of his preferences, standing decisions, corrections and communication style (only what he said or showed; newer replaces older). Stored in synced `app_settings.owner_profile`, mirrored to the Drive note "How Mr. Burrus Works", and put in every persona prompt: Telegram turns and relays (`profileBlock`) and the app (`buildSys` reads the synced setting). The morning brief also carries an OPEN THREADS section (`threadsSection`). `node server/scripts/test-owner-profile.js`.
 
+## Day nudges (`server/dayNudge.js`, `DAY_NUDGE=off` to stop)
+
+Thinking ahead during the day (2026-11-20): at 11 AM, 3 PM and 7 PM ET one Claude call looks at the next 24 h of his calendar, open tasks due today or overdue, and the open threads, and A.R.A. sends one short nudge only when something needs him soon (`NOTHING` stays quiet). Items already nudged that day are skipped (`app_settings.day_nudge_seen`). `node server/scripts/test-day-nudge.js`.
+

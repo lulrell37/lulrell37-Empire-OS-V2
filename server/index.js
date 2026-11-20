@@ -98,6 +98,7 @@ db.init()
     startAutoClipCron();
     startOpenThreadsCron();
     startOwnerProfileCron();
+    startDayNudgeCron();
     startScoutOutreachCron();
     startAutoAtlasCron();
     startSentinelCron();
@@ -137,6 +138,14 @@ function startOwnerProfileCron() {
   const op = require('./ownerProfile');
   cron.schedule('45 */6 * * *', () => op.tick().catch((e) => console.error('owner profile failed:', e.message)));
   console.log('owner profile cron scheduled (every 6h)');
+}
+
+// Thinking ahead during the day: A.R.A. nudges only when something needs him.
+function startDayNudgeCron() {
+  if (String(process.env.DAY_NUDGE || '').toLowerCase() === 'off') return console.log('day nudge cron disabled (DAY_NUDGE=off)');
+  const dn = require('./dayNudge');
+  cron.schedule('0 11,15,19 * * *', () => dn.tick().catch((e) => console.error('day nudge failed:', e.message)), { timezone: 'America/New_York' });
+  console.log('day nudge cron scheduled (11 AM, 3 PM, 7 PM ET)');
 }
 
 function startNudgeCron() {
