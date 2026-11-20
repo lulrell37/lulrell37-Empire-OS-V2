@@ -96,6 +96,7 @@ db.init()
     startBuildPollCron();
     startNewsWireCron();
     startAutoClipCron();
+    startOpenThreadsCron();
     startScoutOutreachCron();
     startAutoAtlasCron();
     startSentinelCron();
@@ -119,6 +120,14 @@ function startAutoClipCron() {
   const autoClip = require('./autoClip');
   cron.schedule('*/20 * * * *', () => autoClip.tick().catch((e) => console.error('auto clip failed:', e.message)));
   console.log('auto clip cron scheduled (every 20m)');
+}
+
+// Open threads: topics he started and set aside, kept in the Drive note "Open Threads".
+function startOpenThreadsCron() {
+  if (String(process.env.OPEN_THREADS || '').toLowerCase() === 'off') return console.log('open threads cron disabled (OPEN_THREADS=off)');
+  const ot = require('./openThreads');
+  cron.schedule('15 */3 * * *', () => ot.tick().catch((e) => console.error('open threads failed:', e.message)));
+  console.log('open threads cron scheduled (every 3h)');
 }
 
 function startNudgeCron() {
