@@ -416,6 +416,10 @@ Stories that start on X get the same read: `runXStories` runs at 8 AM, noon, 4 P
 day, checks it against the reporting and sends it. `app_settings.woke_x_seen` stops
 repeats unless a story develops; nothing new stays quiet.
 
+## Every persona acts on a task (`INITIATIVE`)
+
+`INITIATIVE` (`server/personas.js`, mirrored in `src/personas/personas.js`, keep in sync) is in every persona's prompt: Telegram turns and relays (`personaRuntime.js`, next to `OBEY`) and the app (`buildSys`). Owner's standing order, 2026-11-20: start a task right away with the tools at hand, come back only for a choice only he can make, his OK before sending/posting/buying/deleting, or something only he has; email codes and links come from A.R.A.; new-account passwords are made and handed to him.
+
 ## Persona hand-offs only on request
 
 **Except A.R.A.:** she runs the team, so her relays always go through

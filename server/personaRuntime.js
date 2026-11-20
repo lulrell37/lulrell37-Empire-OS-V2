@@ -512,6 +512,7 @@ function personaSystemPrompt(personaId, ctx, gs, custom, mem) {
     custom ? `${custom}\n\n${TG_FRAME}` : `${personaTgIdentity(personaId)}\n\nYou are talking to Mr. Burrus over Telegram (text), away from the Empire OS app — keep replies tight and mobile-readable. Reply directly to what he just said; no status-briefing preamble. There is a live context block below — read from it, don't invent numbers.`,
     custom ? genderLine(personaId) : '', // the built-in identity already carries it
     OBEY,
+    require('./personas').INITIATIVE,
     emotionFor(personaId),
     CONTINUITY,
     mem,
@@ -908,6 +909,7 @@ async function relayToPersona(id, message, { from = 'ara', convo = '', depth = 1
   const sys = [
     await relaySystem(id, from),
     OBEY,
+    require('./personas').INITIATIVE,
     emotionFor(id),
     id === 'ara' ? ARA_TOOLS + '\n' + require('./browserAgent').BROWSE_TOOLS : genericTools(id),
     id === 'jarvis' ? await empireOsBrief() : '',
