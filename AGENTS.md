@@ -549,7 +549,7 @@ builds nothing.
 `[CLIP_SCAN: drive link or YouTube URL | focus]` (R.O.G.U.E.) takes a LONG video: downloads it from
 Drive (or, for youtube.com/watch, youtu.be, /shorts, with yt-dlp's standalone Linux binary (fetched on first use, no Python needed; `YTDLP_PATH` overrides), ≤720p, duration checked before download; any other link is refused), ffmpeg splits the audio into 10-min chunks, Whisper with timestamps
 (`transcribeSegments`, `server/llm.js`), one `claudeText` call picks the 3-5 most viral
-moments (12-90 s, no overlaps, filtered by `focus`; `sanitizePicks` enforces it), ffmpeg cuts
+moments, starting from the viewer signals in `server/clipSignals.js` when there are any (YouTube: the most-replayed heatmap, peaks 2x+ its median with the opening and last 3% left out; timestamps quoted in the top 400 comments; a past livestream's chat replay, read alongside the download, spikes 2.5x+ the surrounding norm with reaction words counted, partial if it runs past 10 min; any video: audio 6 dB+ over the surrounding minute), merged into scored windows the transcript then trims; the result says which signals it used. node server/scripts/test-clip-signals.js; (12-90 s, no overlaps, filtered by `focus`; `sanitizePicks` enforces it), ffmpeg cuts
 each and center-crops to 1080x1920, `driveUploadFile` (`server/google.js`) puts them in
 My Drive, and the ranked list (range, reason, link) comes back with each clip under 45 MB
 as a Telegram video (`it.buffer` in `sendMedia`); bigger ones are links only. One scan at a
