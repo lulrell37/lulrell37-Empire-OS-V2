@@ -577,3 +577,8 @@ untouched. `node server/scripts/test-clip-scan.js`.
 ## Open threads (`server/openThreads.js`, `OPEN_THREADS=off` to stop)
 
 Every 3 h (:15) one Claude call reads the last ~day of conversation (every persona's `tg_messages` plus `persona_memory` rows, which is how app chats and relays show up) and the current list, and rewrites the Drive note "Open Threads": topics he advanced and then set aside, how far each got, the next step. Finished or dropped threads come off; skipped when nothing new (`app_settings.open_threads_last`). `[OPEN_THREADS]` (every persona) reads it. Owner's request, 2026-11-20. `node server/scripts/test-open-threads.js`.
+
+## How Mr. Burrus works (`server/ownerProfile.js`, `OWNER_PROFILE=off` to stop)
+
+The "learns you" piece of his smart-AI ask (2026-11-20). Every 6 h (:45) one Claude call reads the same ~day of conversation as the open threads plus the current profile and returns up to 35 lines of his preferences, standing decisions, corrections and communication style (only what he said or showed; newer replaces older). Stored in synced `app_settings.owner_profile`, mirrored to the Drive note "How Mr. Burrus Works", and put in every persona prompt: Telegram turns and relays (`profileBlock`) and the app (`buildSys` reads the synced setting). The morning brief also carries an OPEN THREADS section (`threadsSection`). `node server/scripts/test-owner-profile.js`.
+

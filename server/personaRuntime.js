@@ -910,6 +910,7 @@ async function relayToPersona(id, message, { from = 'ara', convo = '', depth = 1
   ]);
   const sys = [
     await relaySystem(id, from),
+    await require('./ownerProfile').profileBlock().catch(() => ''),
     OBEY,
     require('./personas').INITIATIVE,
     emotionFor(id),
@@ -1133,6 +1134,7 @@ async function runPersonaTurn(personaId, userText, deliver, { reply: given, resu
   // repo itself, so the code brief is only for the plain-model fallback.
   const engine = persona === 'jarvis' && require('./jarvisEngine').enabled() ? require('./jarvisEngine') : null;
   if (persona === 'jarvis' && !engine) sys = `${sys}\n\n${await empireOsBrief()}`;
+  { const prof = await require('./ownerProfile').profileBlock().catch(() => ''); if (prof) sys = `${sys}\n\n${prof}`; }
   if (persona === 'stephanie') {
     const course = await require('./stephanieCourse').statusText().catch((e) => `(couldn't read it: ${e.message})`);
     sys = `${sys}\n\n[YOUR COURSE — live from Drive this turn:\n${course}\n]`;

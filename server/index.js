@@ -97,6 +97,7 @@ db.init()
     startNewsWireCron();
     startAutoClipCron();
     startOpenThreadsCron();
+    startOwnerProfileCron();
     startScoutOutreachCron();
     startAutoAtlasCron();
     startSentinelCron();
@@ -128,6 +129,14 @@ function startOpenThreadsCron() {
   const ot = require('./openThreads');
   cron.schedule('15 */3 * * *', () => ot.tick().catch((e) => console.error('open threads failed:', e.message)));
   console.log('open threads cron scheduled (every 3h)');
+}
+
+// How Mr. Burrus works: preferences and corrections learned for every persona.
+function startOwnerProfileCron() {
+  if (String(process.env.OWNER_PROFILE || '').toLowerCase() === 'off') return console.log('owner profile cron disabled (OWNER_PROFILE=off)');
+  const op = require('./ownerProfile');
+  cron.schedule('45 */6 * * *', () => op.tick().catch((e) => console.error('owner profile failed:', e.message)));
+  console.log('owner profile cron scheduled (every 6h)');
 }
 
 function startNudgeCron() {
