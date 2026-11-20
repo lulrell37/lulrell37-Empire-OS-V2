@@ -262,18 +262,25 @@ function buildAss({ words = [], hook = '', keywords = [], duration, captionY, ho
   return L.join('\n') + '\n';
 }
 
-async function clipWords(src, start, end, dir, tag) {
+// The clip's words. Cut cold at the clip's first frame, Whisper mishears the
+// opening (half a word, no context), so it gets PRE_ROLL seconds of lead-in and
+// the full transcript's text for this stretch as its prompt; the lead-in words
+// are dropped and the rest shifted back to the clip's own clock.
+const PRE_ROLL = 2;
+async function clipWords(src, start, end, dir, tag, context = '') {
   const { transcribeWords } = require('./llm');
   const a = path.join(dir, `${tag}-words.mp3`);
-  await run(['-hide_banner', '-loglevel', 'error', '-y', '-ss', start.toFixed(2), '-i', src, '-t', (end - start).toFixed(2), '-vn', '-ac', '1', '-ar', '16000', '-b:a', '48k', a]);
-  return transcribeWords(fs.readFileSync(a), `${tag}.mp3`);
+  const from = Math.max(0, start - PRE_ROLL), lead = start - from;
+  await run(['-hide_banner', '-loglevel', 'error', '-y', '-ss', from.toFixed(2), '-i', src, '-t', (end - from).toFixed(2), '-vn', '-ac', '1', '-ar', '16000', '-b:a', '64k', a]);
+  const words = await transcribeWords(fs.readFileSync(a), `${tag}.mp3`, { prompt: context });
+  return words.map((w) => ({ ...w, start: w.start - lead, end: w.end - lead })).filter((w) => w.end > 0.05).map((w) => ({ ...w, start: Math.max(0, w.start) }));
 }
 
 // --- the render ------------------------------------------------------------------
 
 // Cut [start,end] of src to dest as a finished 1080x1920 clip. pick = { hook, keywords }.
 // Returns { layout, captions: bool, notes: [] }.
-async function renderClip({ src, start, end, dest, dir, pick = {}, size }) {
+async function renderClip({ src, start, end, dest, dir, pick = {}, size, context = '' }) {
   const notes = [];
   const dur = end - start;
   const tag = path.basename(dest, '.mp4');
@@ -282,7 +289,7 @@ async function renderClip({ src, start, end, dest, dir, pick = {}, size }) {
   const [lay, words, fontsDir] = await Promise.all([
     size.h > size.w ? Promise.resolve({ layout: 'vertical' })
       : fontP.then((fd) => detectLayout(src, start + dur / 2, dir, fd)).catch((e) => { notes.push(`layout read failed (${e.message.slice(0, 80)}), used the blurred frame`); return { layout: 'wide' }; }),
-    clipWords(src, start, end, dir, tag).catch((e) => { notes.push(`no captions (${e.message.slice(0, 80)})`); return []; }),
+    clipWords(src, start, end, dir, tag, context).catch((e) => { notes.push(`no captions (${e.message.slice(0, 80)})`); return []; }),
     fontP,
   ]);
   if (lay.note) notes.push(lay.note);

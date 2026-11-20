@@ -94,6 +94,7 @@ db.init()
     startTalonAutoTradeCron();
     startBuildPollCron();
     startNewsWireCron();
+    startAutoClipCron();
     startScoutOutreachCron();
     startAutoAtlasCron();
     startSentinelCron();
@@ -111,6 +112,14 @@ db.init()
 // The scheduled nudge sender. Ticks every 30 minutes; each nudge's own time
 // window + push_log keep it to one send per occurrence. Set NUDGES=off to
 // disable (e.g. for a second instance or local dev).
+// R.O.G.U.E.'s auto clips: watched channels' new uploads, every 20 min.
+function startAutoClipCron() {
+  if (String(process.env.AUTO_CLIP || '').toLowerCase() === 'off') return console.log('auto clip cron disabled (AUTO_CLIP=off)');
+  const autoClip = require('./autoClip');
+  cron.schedule('*/20 * * * *', () => autoClip.tick().catch((e) => console.error('auto clip failed:', e.message)));
+  console.log('auto clip cron scheduled (every 20m)');
+}
+
 function startNudgeCron() {
   if (process.env.NUDGES === 'off') return console.log('nudge cron disabled (NUDGES=off)');
   cron.schedule('*/30 * * * *', () => {

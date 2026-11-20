@@ -273,12 +273,13 @@ async function transcribeSegments(buffer, filename = 'audio.mp3', { prompt = 'A.
   form.append('model', 'whisper-1');
   form.append('response_format', 'verbose_json');
   if (prompt) form.append('prompt', prompt);
+  const ownVoice = !!prompt && /J\.A\.R\.V\.I\.S/.test(prompt);
   const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
     method: 'POST', headers: { authorization: `Bearer ${process.env.OPENAI_API_KEY}` }, body: form,
   });
   if (!res.ok) throw new Error(`whisper ${res.status}: ${(await res.text()).slice(0, 160)}`);
   const d = await res.json();
-  return (d.segments || []).map((s) => ({ start: s.start, end: s.end, text: fixNames(s.text) })).filter((s) => s.text);
+  return (d.segments || []).map((s) => ({ start: s.start, end: s.end, text: ownVoice ? fixNames(s.text) : String(s.text || '').trim() })).filter((s) => s.text);
 }
 
 // Speech-to-text keeps hearing "Ara" as "Aura" — he never means aura.
@@ -288,19 +289,28 @@ function fixNames(text) {
 }
 
 // Word-level timestamps for a short piece of audio (clip captions): [{ word, start, end }].
-async function transcribeWords(buffer, filename = 'clip.mp3') {
+// `prompt` is what was said around it (from the full transcript), so names and
+// slang come out spelled the same way. Words inside a segment Whisper itself
+// flags as probably invented (no speech + low confidence, or a looping
+// repetition) are dropped: that is what put words on screen nobody said.
+async function transcribeWords(buffer, filename = 'clip.mp3', { prompt = '' } = {}) {
   if (!process.env.OPENAI_API_KEY) throw new Error('captions need OPENAI_API_KEY on the server');
   const form = new FormData();
   form.append('file', new Blob([buffer]), filename);
   form.append('model', 'whisper-1');
   form.append('response_format', 'verbose_json');
   form.append('timestamp_granularities[]', 'word');
+  form.append('timestamp_granularities[]', 'segment');
+  form.append('temperature', '0');
+  if (prompt) form.append('prompt', String(prompt).slice(-800));
   const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
     method: 'POST', headers: { authorization: `Bearer ${process.env.OPENAI_API_KEY}` }, body: form,
   });
   if (!res.ok) throw new Error(`whisper ${res.status}: ${(await res.text()).slice(0, 160)}`);
   const d = await res.json();
-  return (d.words || []).map((w) => ({ word: String(w.word || '').trim(), start: Number(w.start), end: Number(w.end) })).filter((w) => w.word && Number.isFinite(w.start));
+  const bad = (d.segments || []).filter((s) => (s.no_speech_prob > 0.6 && s.avg_logprob < -0.8) || s.compression_ratio > 2.4 || s.avg_logprob < -1.2);
+  return (d.words || []).map((w) => ({ word: String(w.word || '').trim(), start: Number(w.start), end: Number(w.end) }))
+    .filter((w) => w.word && Number.isFinite(w.start) && !bad.some((s) => w.start >= s.start - 0.05 && w.end <= s.end + 0.05));
 }
 
 module.exports = { transcribeWords, CLAUDE_MODEL, keyFor, WEB_SEARCH_TOOL, claudeText, creditStatus, subscriptionStatus, openaiCompatText, geminiText, chatAs, webResearch, xSearch, transcribe, transcribeSegments, fixNames };
