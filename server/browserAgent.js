@@ -1,4 +1,4 @@
-// Every persona's own computer: a real Chrome on the server that the persona
+// J.A.R.V.I.S.'s and A.R.A.'s own computer: a real Chrome on the server that the persona
 // drives step by step like a person — open a page, read it, click, type, scroll
 // — for anything that has no proper API (LinkedIn, a supplier's site, a form).
 //
@@ -41,6 +41,9 @@ const PROFILES = process.env.BROWSER_PROFILES || path.join(os.homedir(), '.empir
 const VIEW = { width: 1280, height: 900 };
 
 function enabled() { return String(process.env.BROWSE || '').toLowerCase() !== 'off'; }
+
+// Who gets a browser: J.A.R.V.I.S. and A.R.A. only (owner's call, 2026-11-20).
+const BROWSE_PERSONAS = new Set(['jarvis', 'ara']);
 
 // --- getting Chrome ------------------------------------------------------------
 
@@ -421,6 +424,7 @@ async function finish(b, status, text, log) {
 const NAMES = () => { try { return Object.fromEntries(require('./personas').ROSTER.map((p) => [p.id, p.name])); } catch { return {}; } };
 
 async function browseTag(persona, arg, { ownerText = '' } = {}) {
+  if (!BROWSE_PERSONAS.has(persona)) throw new Error('the browser is J.A.R.V.I.S.\'s and A.R.A.\'s only — hand it to one of them');
   const { claudeText } = require('./llm');
   const name = NAMES()[persona] || persona;
   const r = await runTask({ persona, personaName: name, task: String(arg || '').trim(), ownerText,
@@ -435,4 +439,4 @@ async function browseTag(persona, arg, { ownerText = '' } = {}) {
 
 const BROWSE_TOOLS = ` - [BROWSE: the task, in full] — your own computer: a real Chrome in the cloud that you drive like a person (open sites, search, read, click, fill in forms), with your own saved logins. For anything with no direct tool: looking someone up on LinkedIn, checking a supplier's prices, reading a site, filling a form. The result comes back to you this turn and he gets a screenshot. It stops and asks before anything that acts in the world (sending, posting, connecting, buying, booking, deleting): put that question to him, and when he answers run [BROWSE] again with the same task — his reply is what approves it. A minute or several. One per turn. Report only what it found.`;
 
-module.exports = { runTask, browseTag, BROWSE_TOOLS, close, browserFor, snapshot, click, type, press, screenshot, unzip, chromePath, parseAction, isCommit, approves, enabled };
+module.exports = { BROWSE_PERSONAS, runTask, browseTag, BROWSE_TOOLS, close, browserFor, snapshot, click, type, press, screenshot, unzip, chromePath, parseAction, isCommit, approves, enabled };
