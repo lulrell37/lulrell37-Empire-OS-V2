@@ -17,6 +17,8 @@ const { spawn } = require('child_process');
 const ffmpegPath = require('ffmpeg-static');
 const { claudeText, transcribeSegments } = require('./llm');
 const signals = require('./clipSignals');
+const layout = require('./clipLayout');
+const LAYOUT_WORDS = { facecam: 'face cam on top, gameplay below', talking: 'vertical crop on the speaker', wide: 'full frame over a blurred background', vertical: 'already vertical' };
 const google = require('./google');
 
 const CHUNK_SEC = 600; // 10 min of 32 kbps mono mp3 ≈ 2.4 MB, far under Whisper's 25 MB
@@ -191,7 +193,7 @@ async function transcribeVideo(src, dir, opts) {
   return all;
 }
 
-const PICK_SYSTEM = `You are R.O.G.U.E., the Empire's video editor, finding the moments in a long recording that would go viral as vertical short-form clips (Reels / TikTok / Shorts). You get a transcript with [mm:ss] timestamps. Pick the 3 to 5 best self-contained moments: a hook in the first seconds, a complete thought or story or punchline, an emotional or surprising or high-stakes beat, something a stranger would share. Each clip runs ${MIN_CLIP} to ${MAX_CLIP} seconds (ideal 25-60), starts where the thought starts and ends where it lands. Don't overlap clips. Use only timestamps that exist in the transcript. When you're given VIEWER SIGNALS (where real viewers replayed, cited in comments, spammed chat, or the audio jumped), those are the strongest evidence of what people want: start from the strongest of them, find in the transcript where that moment's thought starts and where it lands, and cut that. A signal with nothing worth clipping in the transcript can be passed over, and a moment the signals missed can still be picked if the words clearly carry it. Name the signal in the reason when a pick comes from one. Reply with ONLY a JSON array, best first: [{"start": seconds, "end": seconds, "title": "3-6 word label", "reason": "one line on why it hits", "score": 1-100}]. Nothing else.`;
+const PICK_SYSTEM = `You are R.O.G.U.E., the Empire's video editor, finding the moments in a long recording that would go viral as vertical short-form clips (Reels / TikTok / Shorts). You get a transcript with [mm:ss] timestamps. Pick the 3 to 5 best self-contained moments: a hook in the first seconds, a complete thought or story or punchline, an emotional or surprising or high-stakes beat, something a stranger would share. Each clip runs ${MIN_CLIP} to ${MAX_CLIP} seconds (ideal 25-60), starts where the thought starts and ends where it lands. Don't overlap clips. Use only timestamps that exist in the transcript. When you're given VIEWER SIGNALS (where real viewers replayed, cited in comments, spammed chat, or the audio jumped), those are the strongest evidence of what people want: start from the strongest of them, find in the transcript where that moment's thought starts and where it lands, and cut that. A signal with nothing worth clipping in the transcript can be passed over, and a moment the signals missed can still be picked if the words clearly carry it. Name the signal in the reason when a pick comes from one. Reply with ONLY a JSON array, best first: [{"start": seconds, "end": seconds, "title": "3-6 word label", "reason": "one line on why it hits", "score": 1-100, "hook": "the line shown at the top of the clip", "keywords": ["2-5 words said in the clip to color"]}]. The HOOK is the most important part: it makes a stranger who has never heard of this person need to see what happens ("Kai went ALL IN on one GTA stock", never "Kai plays GTA"). For each clip write five hooks in your head and give only the strongest: 3-9 words, plain words, no hashtags, no emoji, no quotation marks, never giving away the ending. KEYWORDS are 2-5 single words actually spoken in that clip that carry it (a number, a name, the punchline word). Nothing else.`;
 
 async function pickMoments(segments, focus, total, hot = []) {
   let text = segments.map((s) => `[${mmss(s.start)}] ${s.text.trim()}`).join('\n');
@@ -214,7 +216,9 @@ function parsePicks(raw) {
 function sanitizePicks(arr, total) {
   const out = [];
   const ranked = arr
-    .map((p) => ({ start: Number(p.start), end: Number(p.end), title: String(p.title || '').slice(0, 60), reason: String(p.reason || '').slice(0, 240), score: Number(p.score) || 0 }))
+    .map((p) => ({ start: Number(p.start), end: Number(p.end), title: String(p.title || '').slice(0, 60), reason: String(p.reason || '').slice(0, 240), score: Number(p.score) || 0,
+      hook: String(p.hook || '').replace(/["“”]/g, '').replace(/\s+/g, ' ').trim().slice(0, 70),
+      keywords: (Array.isArray(p.keywords) ? p.keywords : []).map((k) => String(k).trim()).filter((k) => k && !/\s/.test(k)).slice(0, 6) }))
     .filter((p) => Number.isFinite(p.start) && Number.isFinite(p.end) && p.end > p.start)
     .sort((a, b) => b.score - a.score);
   for (const p of ranked) {
@@ -282,6 +286,7 @@ async function clipScan(url, focus = '', { onProgress = () => {} } = {}) {
     if (!picks.length) throw new Error('no moment in it was strong enough to cut' + (focus ? ` for "${focus}"` : ''));
 
     const base = String(name).replace(/\.[^.]+$/, '').slice(0, 60);
+    const srcSize = await layout.videoSize(src);
     const lines = [];
     const media = [];
     for (let i = 0; i < picks.length; i++) {
@@ -290,16 +295,23 @@ async function clipScan(url, focus = '', { onProgress = () => {} } = {}) {
       onProgress(`cutting ${i + 1}/${picks.length}`);
       const out = path.join(dir, `clip${i + 1}.mp4`);
       try {
-        await cutVertical(src, p.start, p.end, out);
+        let look = '';
+        try {
+          const r = await layout.renderClip({ src, start: p.start, end: p.end, dest: out, dir, pick: p, size: srcSize });
+          look = `${LAYOUT_WORDS[r.layout] || r.layout}${r.captions ? ', captions' : ''}${p.hook ? ', hook' : ''}${r.notes.length ? ` (${r.notes.join('; ')})` : ''}`;
+        } catch (e) {
+          await cutVertical(src, p.start, p.end, out);
+          look = `plain crop (the styled render failed: ${e.message.slice(0, 120)})`;
+        }
         const size = fs.statSync(out).size;
         const up = await google.driveUploadFile(out, `Clip ${i + 1} — ${p.title || base} (${range}).mp4`);
-        lines.push(`${i + 1}. ${range} (${Math.round(p.end - p.start)}s) — ${p.title ? `${p.title}: ` : ''}${p.reason}\n   ${up.link}`);
-        if (size <= TG_VIDEO_MAX) media.push({ name: 'SEND_VIDEO', buffer: fs.readFileSync(out), filename: `clip${i + 1}.mp4`, caption: `${i + 1}. ${range} — ${p.reason}` });
+        lines.push(`${i + 1}. ${range} (${Math.round(p.end - p.start)}s) — ${p.title ? `${p.title}: ` : ''}${p.reason}${p.hook ? `\n   Hook: "${p.hook}"` : ''}\n   ${look}\n   ${up.link}`);
+        if (size <= TG_VIDEO_MAX) media.push({ name: 'SEND_VIDEO', buffer: fs.readFileSync(out), filename: `clip${i + 1}.mp4`, caption: `${i + 1}. ${p.hook || range} — ${p.reason}`.slice(0, 1000) });
       } catch (e) {
         lines.push(`${i + 1}. ${range} — ${p.reason}\n   ⚠️ couldn't render this one: ${e.message.slice(0, 160)}`);
       }
     }
-    const head = `CLIP SCAN — "${base}" (${mmss(total)}), ${picks.length} moment${picks.length === 1 ? '' : 's'}${focus ? ` for "${focus}"` : ''}, best first. Picked from ${sig.used.length ? `${sig.used.join(', ')} + the transcript` : 'the transcript alone'}${sigNotes.length ? ` (${sigNotes.join('; ')})` : ''}. 9:16 center-crop, uploaded to his Drive:`;
+    const head = `CLIP SCAN — "${base}" (${mmss(total)}), ${picks.length} moment${picks.length === 1 ? '' : 's'}${focus ? ` for "${focus}"` : ''}, best first. Picked from ${sig.used.length ? `${sig.used.join(', ')} + the transcript` : 'the transcript alone'}${sigNotes.length ? ` (${sigNotes.join('; ')})` : ''}. Each is a finished 9:16 clip (layout to the shot, word-by-word captions, hook on top), uploaded to his Drive:`;
     return { text: `${head}\n${lines.join('\n')}\nEach can still go through [EDIT_CLIP: <its link> | brief] for captions, music or S.E.L.E.N.E.'s dress-up.`, media };
   } finally {
     running = false;
@@ -326,6 +338,6 @@ function scanInBackground(url, focus) {
   });
 }
 
-const CLIP_TOOLS = ` - [CLIP_SCAN: drive link or YouTube URL | focus] — for a LONG video (podcast, stream, full recording): it reads what viewers already showed (YouTube's most-replayed graph, timestamps quoted in the comments, a past livestream's chat spikes, jumps in the audio), transcribes it, picks the 3-5 most viral moments (focus is optional, e.g. "funniest moments", "best trading calls"; blank = general virality), cut each to a 9:16 vertical short and upload them to his Drive. Takes several minutes; the ranked list (time range, why, link) and the clips themselves come back in this chat. Use it BEFORE [EDIT_CLIP] when the footage is long-form and he hasn't picked the moment; [EDIT_CLIP] on any one clip after that for captions, music, dress-up. One per turn, one scan at a time. Say it's done only from the result.`;
+const CLIP_TOOLS = ` - [CLIP_SCAN: drive link or YouTube URL | focus] — for a LONG video (podcast, stream, full recording): it reads what viewers already showed (YouTube's most-replayed graph, timestamps quoted in the comments, a past livestream's chat spikes, jumps in the audio), transcribes it, picks the 3-5 most viral moments (focus is optional, e.g. "funniest moments", "best trading calls"; blank = general virality), cut each into a finished 9:16 short (face cam on top and gameplay below for streams, a crop that follows the speaker for one person on camera, the full frame over a blurred background otherwise; word-by-word captions with key words colored; a hook line at the top) and upload them to his Drive. Takes several minutes; the ranked list (time range, why, link) and the clips themselves come back in this chat. Use it BEFORE [EDIT_CLIP] when the footage is long-form and he hasn't picked the moment; [EDIT_CLIP] on any one clip after that for captions, music, dress-up. One per turn, one scan at a time. Say it's done only from the result.`;
 
 module.exports = { clipScan, scanInBackground, CLIP_TOOLS, driveId, isYouTube, isSocialVideo, linkKind, downloadYouTube, transcribeVideo, duration, MAX_BYTES, MAX_SEC, parsePicks, sanitizePicks, mmss };
