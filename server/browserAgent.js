@@ -79,6 +79,43 @@ function unzip(file, dest) {
 // choice over a paid hosted browser, 2026-11-20; untested on the live server
 // until its first [BROWSE]. CHROME_PATH or BROWSER_WS_URL override it.
 const CHROMIUM_DIR = path.join(BIN_DIR, 'chromium');
+
+// The sparticuz build expects the host's libsqlite3 (NSS needs it to start; without
+// it Chrome dies with SIGTRAP "Error initializing NSS" on the first page), and the
+// server has none. Debian's libsqlite3-0 package is fetched once and its .so is
+// unpacked next to the other libraries: the .deb is an ar archive holding
+// data.tar.xz, read here and unpacked with the system tar (xz is on the box).
+async function ensureSqlite(libDir) {
+  if (fs.readdirSync(libDir).some((f) => /^libsqlite3\.so\.0/.test(f))) return;
+  const html = await (await fetch('https://deb.debian.org/debian/pool/main/s/sqlite3/')).text();
+  const debs = [...new Set(html.match(/libsqlite3-0_[^"<>]+_amd64\.deb/g) || [])]
+    .filter((n) => /\+deb12|\+deb13/.test(n)).sort();
+  const pick = debs[debs.length - 1];
+  if (!pick) throw new Error("couldn't find Debian's libsqlite3 package");
+  const res = await fetch(`https://deb.debian.org/debian/pool/main/s/sqlite3/${pick}`);
+  if (!res.ok) throw new Error(`libsqlite3 download ${res.status}`);
+  const buf = Buffer.from(await res.arrayBuffer());
+  if (buf.toString('latin1', 0, 8) !== '!<arch>\n') throw new Error('libsqlite3 package is not an ar archive');
+  let off = 8, data = null, name = '';
+  while (off + 60 <= buf.length) {
+    const n = buf.toString('latin1', off, off + 16).trim().replace(/\/$/, '');
+    const size = Number(buf.toString('latin1', off + 48, off + 58).trim());
+    if (n.startsWith('data.tar')) { data = buf.subarray(off + 60, off + 60 + size); name = n; break; }
+    off += 60 + size + (size % 2);
+  }
+  if (!data) throw new Error('no data in the libsqlite3 package');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sqlite-'));
+  try {
+    const tarFile = path.join(tmp, name);
+    fs.writeFileSync(tarFile, data);
+    execFileSync('tar', [name.endsWith('.xz') ? 'xJf' : name.endsWith('.gz') ? 'xzf' : 'xf', tarFile, '-C', tmp]);
+    const src = path.join(tmp, 'usr', 'lib', 'x86_64-linux-gnu');
+    const libs = fs.readdirSync(src).filter((f) => /^libsqlite3\.so/.test(f));
+    if (!libs.length) throw new Error('libsqlite3 not in the package');
+    for (const f of libs) fs.copyFileSync(path.join(src, f), path.join(libDir, f));
+    // The package ships libsqlite3.so.0 as a symlink to the versioned file; copyFileSync followed it.
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+}
 let chromeReady = null;
 function chromePath() {
   if (process.env.CHROME_PATH) return Promise.resolve({ exe: process.env.CHROME_PATH, libs: [] });
@@ -86,7 +123,11 @@ function chromePath() {
     chromeReady = (async () => {
       const exe = path.join(CHROMIUM_DIR, 'chromium');
       const libs = [path.join(CHROMIUM_DIR, 'lib'), path.join(CHROMIUM_DIR, 'al2023', 'lib'), CHROMIUM_DIR];
-      if (fs.existsSync(exe) && fs.existsSync(path.join(CHROMIUM_DIR, '.ready'))) return { exe, libs };
+      if (fs.existsSync(exe) && fs.existsSync(path.join(CHROMIUM_DIR, '.ready'))) {
+        fs.mkdirSync(libs[0], { recursive: true });
+        await ensureSqlite(libs[0]);
+        return { exe, libs };
+      }
       if (process.platform !== 'linux' || process.arch !== 'x64') throw new Error(`no Chromium build for ${process.platform}/${process.arch} — set CHROME_PATH or BROWSER_WS_URL`);
       const meta = await (await fetch('https://registry.npmjs.org/@sparticuz/chromium/latest')).json();
       const res = await fetch(meta.dist.tarball);
@@ -108,6 +149,8 @@ function chromePath() {
       }
       fs.rmSync(path.join(CHROMIUM_DIR, 'package'), { recursive: true, force: true });
       fs.rmSync(tgz, { force: true });
+      fs.mkdirSync(libs[0], { recursive: true });
+      await ensureSqlite(libs[0]);
       fs.writeFileSync(path.join(CHROMIUM_DIR, '.ready'), meta.version);
       return { exe, libs };
     })().catch((e) => { chromeReady = null; throw e; });
@@ -471,4 +514,4 @@ async function browseTag(persona, arg, { ownerText = '' } = {}) {
 
 const BROWSE_TOOLS = ` - [BROWSE: the task, in full] — your own computer: a real Chrome in the cloud that you drive like a person (open sites, search, read, click, fill in forms), with your own saved logins. For anything with no direct tool: looking someone up on LinkedIn, checking a supplier's prices, reading a site, filling a form. The result comes back to you this turn and he gets a screenshot. It stops and asks before anything that acts in the world (sending, posting, connecting, buying, booking, deleting): put that question to him, and when he answers run [BROWSE] again with the same task — his reply is what approves it. A minute or several. One per turn. Report only what it found.`;
 
-module.exports = { BROWSE_PERSONAS, runTask, browseTag, BROWSE_TOOLS, close, browserFor, snapshot, click, type, press, screenshot, unzip, chromePath, parseAction, isCommit, approves, enabled };
+module.exports = { ensureSqlite, BROWSE_PERSONAS, runTask, browseTag, BROWSE_TOOLS, close, browserFor, snapshot, click, type, press, screenshot, unzip, chromePath, parseAction, isCommit, approves, enabled };
