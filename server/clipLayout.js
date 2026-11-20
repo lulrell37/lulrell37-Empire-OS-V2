@@ -71,7 +71,7 @@ async function videoSize(src) {
 
 const LAYOUT_PROMPT = `This is one frame from a video that is being cut into a vertical (9:16) short. Say what kind of shot it is, as JSON only:
 {"layout":"facecam"|"talking"|"wide","facecam":{"x":0-1,"y":0-1,"w":0-1,"h":0-1},"face_x":0-1}
-- "facecam": gameplay, a screen or a stream with a separate small webcam box showing the streamer's face. Give that webcam box as fractions of the frame (x,y = top-left corner).
+- "facecam": gameplay, a screen or a stream with a separate small webcam box showing the streamer's face. Give that webcam box as fractions of the frame: x = its LEFT edge, y = its TOP edge, w = its width, h = its height. The frame has a yellow measuring grid drawn over it, a line every 0.05 with the value written on every 0.1 line along the top and left side (0.0 = left / top of the frame, 1.0 = right / bottom). Read the webcam's four edges off that grid; don't estimate. The box is cropped straight from your numbers, so if it's off the face gets cut.
 - "talking": one person on camera fills most of the frame. Give face_x, the horizontal center of their face as a fraction of the width.
 - "wide": anything else (two or more people side by side, slides, a screen with no webcam, scenery).
 Only the JSON.`;
@@ -91,12 +91,76 @@ function parseLayout(raw) {
   return { layout: 'wide' };
 }
 
-async function detectLayout(src, at, dir) {
+// A measuring grid over the frame (lines every 5%, values on every 10% line),
+// drawn with libass since this ffmpeg has no drawtext: vision models misjudge
+// positions badly by eye (Kai Cenat's webcam came back a whole box-height high),
+// and read them well off a ruler.
+function gridAss(w, h) {
+  const L = ['[Script Info]', 'ScriptType: v4.00+', `PlayResX: ${w}`, `PlayResY: ${h}`, 'ScaledBorderAndShadow: yes', '', '[V4+ Styles]',
+    'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
+    `Style: G,${FONT_NAME},22,&H0000FFFF&,&H0000FFFF&,&H00000000&,&H00000000&,0,0,0,0,100,100,0,0,1,2,0,7,0,0,0,1`, '', '[Events]',
+    'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text'];
+  for (let i = 1; i < 10; i++) {
+    const v = (i / 10).toFixed(1);
+    L.push(`Dialogue: 0,0:00:00.00,0:00:10.00,G,,0,0,0,,{\\pos(${Math.round(i * w / 10) + 3},2)}${v}`);
+    L.push(`Dialogue: 0,0:00:00.00,0:00:10.00,G,,0,0,0,,{\\pos(3,${Math.round(i * h / 10) + 2})}${v}`);
+  }
+  return L.join('\n') + '\n';
+}
+
+async function gridFrame(src, at, dir, fontsDir) {
   const frame = path.join(dir, `frame-${Math.round(at * 10)}.jpg`);
-  await run(['-hide_banner', '-loglevel', 'error', '-y', '-ss', at.toFixed(2), '-i', src, '-frames:v', '1', '-vf', 'scale=1280:-2', '-q:v', '4', frame]);
+  const ass = path.join(dir, `grid-${Math.round(at * 10)}.ass`);
+  fs.writeFileSync(ass, gridAss(1280, 720));
+  const esc = (x) => x.replace(/[:\\']/g, '\\$&');
+  const vf = `scale=1280:720,drawgrid=w=iw/20:h=ih/20:t=1:c=yellow@0.45,drawgrid=w=iw/10:h=ih/10:t=2:c=yellow@0.8${fontsDir ? `,ass=${esc(ass)}:fontsdir=${esc(fontsDir)}` : ''}`;
+  await run(['-hide_banner', '-loglevel', 'error', '-y', '-ss', at.toFixed(2), '-i', src, '-frames:v', '1', '-vf', vf, '-q:v', '3', frame]);
+  return frame;
+}
+
+// The crop as it will be cut, for the second look.
+async function cropFrame(src, at, dir, box) {
+  const out = path.join(dir, `check-${Math.round(at * 10)}.jpg`);
+  await run(['-hide_banner', '-loglevel', 'error', '-y', '-ss', at.toFixed(2), '-i', src, '-frames:v', '1',
+    '-vf', `crop=iw*${box.w.toFixed(4)}:ih*${box.h.toFixed(4)}:iw*${box.x.toFixed(4)}:ih*${box.y.toFixed(4)},scale=640:-2`, '-q:v', '3', out]);
+  return out;
+}
+
+const CHECK_PROMPT = `This image is meant to be exactly one streamer's webcam, cropped out of a stream, to sit on top of a vertical clip. Is the whole webcam picture in it, with the person's whole head and face visible? JSON only:
+{"ok":true|false,"shift_y":-1..1,"shift_x":-1..1,"grow":0..1}
+shift_y: how far to move the crop, as a fraction of its own height; positive = move it DOWN (the webcam continues below the bottom edge), negative = UP. shift_x likewise, positive = right. grow: how much bigger the crop needs to be to fit the whole webcam (0 = fine). If there's no webcam or face in it at all, "ok":false and your best guess of the direction to it.`;
+
+function parseCheck(raw) {
+  const m = String(raw || '').match(/\{[\s\S]*\}/);
+  if (!m) return null;
+  try {
+    const j = JSON.parse(m[0]);
+    const c = (v, lo, hi) => Math.min(hi, Math.max(lo, Number(v) || 0));
+    return { ok: j.ok === true, sx: c(j.shift_x, -1.5, 1.5), sy: c(j.shift_y, -1.5, 1.5), grow: c(j.grow, 0, 1) };
+  } catch { return null; }
+}
+
+// Apply a correction (in box units) and keep the box inside the frame.
+function adjustBox(b, { sx = 0, sy = 0, grow = 0 }) {
+  const w = Math.min(1, b.w * (1 + grow)), h = Math.min(1, b.h * (1 + grow));
+  const cx = b.x + b.w / 2 + sx * b.w, cy = b.y + b.h / 2 + sy * b.h;
+  return { x: Math.min(Math.max(0, cx - w / 2), 1 - w), y: Math.min(Math.max(0, cy - h / 2), 1 - h), w, h };
+}
+
+async function detectLayout(src, at, dir, fontsDir) {
   const { lookAtImages } = require('./vision');
-  const raw = await lookAtImages([{ data: fs.readFileSync(frame), mime: 'image/jpeg' }], LAYOUT_PROMPT);
-  return parseLayout(raw);
+  const frame = await gridFrame(src, at, dir, fontsDir);
+  const lay = parseLayout(await lookAtImages([{ data: fs.readFileSync(frame), mime: 'image/jpeg' }], LAYOUT_PROMPT));
+  if (lay.layout !== 'facecam') return lay;
+  // Second look: the crop itself. Up to two corrections; still wrong after that = no face cam layout.
+  for (let i = 0; i < 3; i++) {
+    const chk = parseCheck(await lookAtImages([{ data: fs.readFileSync(await cropFrame(src, at, dir, lay.facecam)), mime: 'image/jpeg' }], CHECK_PROMPT).catch(() => ''));
+    if (!chk) break;
+    if (chk.ok && chk.grow < 0.1 && Math.abs(chk.sx) < 0.1 && Math.abs(chk.sy) < 0.1) { lay.checked = true; break; }
+    if (i === 2) return { layout: 'wide', note: 'the webcam crop never checked out' };
+    lay.facecam = adjustBox(lay.facecam, chk);
+  }
+  return lay;
 }
 
 const even = (n) => Math.max(2, Math.round(n / 2) * 2);
@@ -110,10 +174,12 @@ function layoutGraph(lay, sw, sh) {
   if (lay.layout === 'facecam') {
     // Face box trimmed to the band's shape (1080:700) around its center — trimmed,
     // not grown, so stream overlays next to the webcam (viewer count, alerts) stay out.
+    // A webcam taller than the band keeps its full height and takes some of what's
+    // beside it instead — trimming height is what cuts off heads.
     const b = lay.facecam;
     let bw = b.w * sw, bh = b.h * sh;
     const want = W / FACE_H;
-    if (bw / bh > want) bw = bh * want; else bh = bw / want;
+    if (bw / bh > want) bw = bh * want; else bw = bh * want;
     bw = Math.min(bw, sw); bh = Math.min(bh, sh);
     const cx = (b.x + b.w / 2) * sw, cy = (b.y + b.h / 2) * sh;
     const fx = Math.min(Math.max(0, cx - bw / 2), sw - bw), fy = Math.min(Math.max(0, cy - bh / 2), sh - bh);
@@ -212,12 +278,14 @@ async function renderClip({ src, start, end, dest, dir, pick = {}, size }) {
   const dur = end - start;
   const tag = path.basename(dest, '.mp4');
   size = size || await videoSize(src) || { w: 1920, h: 1080 };
+  const fontP = ensureFont();
   const [lay, words, fontsDir] = await Promise.all([
     size.h > size.w ? Promise.resolve({ layout: 'vertical' })
-      : detectLayout(src, start + dur / 2, dir).catch((e) => { notes.push(`layout read failed (${e.message.slice(0, 80)}), used the blurred frame`); return { layout: 'wide' }; }),
+      : fontP.then((fd) => detectLayout(src, start + dur / 2, dir, fd)).catch((e) => { notes.push(`layout read failed (${e.message.slice(0, 80)}), used the blurred frame`); return { layout: 'wide' }; }),
     clipWords(src, start, end, dir, tag).catch((e) => { notes.push(`no captions (${e.message.slice(0, 80)})`); return []; }),
-    ensureFont(),
+    fontP,
   ]);
+  if (lay.note) notes.push(lay.note);
   const g = layoutGraph(lay, size.w, size.h);
   if (!fontsDir) notes.push('caption font unavailable, used the system font');
   const ass = path.join(dir, `${tag}.ass`);
@@ -236,4 +304,4 @@ async function renderClip({ src, start, end, dest, dir, pick = {}, size }) {
   return { layout: lay.layout, captions: words.length > 0, notes };
 }
 
-module.exports = { renderClip, layoutGraph, parseLayout, buildAss, phrases, videoSize, ensureFont };
+module.exports = { gridAss, parseCheck, adjustBox, renderClip, layoutGraph, parseLayout, buildAss, phrases, videoSize, ensureFont };

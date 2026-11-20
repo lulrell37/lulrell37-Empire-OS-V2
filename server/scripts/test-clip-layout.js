@@ -14,6 +14,13 @@ assert.strictEqual(L.parseLayout('{"layout":"facecam","facecam":{"x":0,"y":0,"w"
 assert.strictEqual(L.parseLayout('{"layout":"talking","face_x":0.4}').face_x, 0.4);
 assert.strictEqual(L.parseLayout('no idea').layout, 'wide');
 
+// The second look's correction: a crop a box-height too high moves down onto the webcam, and stays in frame.
+assert.deepStrictEqual(L.parseCheck('{"ok":false,"shift_y":1,"shift_x":0,"grow":0.2}'), { ok: false, sx: 0, sy: 1, grow: 0.2 });
+assert.ok(Math.abs(L.adjustBox({ x: 0, y: 0.05, w: 0.2, h: 0.2 }, { sy: 1 }).y - 0.25) < 1e-9);
+const grown = L.adjustBox({ x: 0.9, y: 0.9, w: 0.2, h: 0.2 }, { grow: 0.5 });
+assert.ok(grown.x + grown.w <= 1 + 1e-9 && grown.y + grown.h <= 1 + 1e-9);
+assert.ok(/Dialogue:.*0\.5/.test(L.gridAss(1280, 720)), 'grid labels');
+
 // Captions: up to 3 words a phrase, new phrase after a pause or a sentence end.
 const w = (word, start) => ({ word, start, end: start + 0.3 });
 assert.deepStrictEqual(L.phrases([w('one', 0), w('two', 0.3), w('three', 0.6), w('four', 0.9), w('five.', 2), w('six', 2.3)]).map((p) => p.length), [3, 1, 1, 1]);
