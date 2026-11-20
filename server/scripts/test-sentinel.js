@@ -45,13 +45,13 @@ const sentinel = require(path.join(__dirname, '..', 'sentinel'));
   // topped up -> cleared
   ellBody = { character_count: 10, character_limit: 1000 };
   await sentinel.tick();
-  assert.match(sent[1], /ElevenLabs.*working again/);
+  assert.ok(!sent.some((t) => /working again/.test(t)), 'recovery is silent');
   assert.strictEqual((await sentinel.status()).length, 0);
 
   // low balance -> warn
   ellBody = { character_count: 950, character_limit: 1000 };
   await sentinel.tick();
-  assert.match(sent[2], /credits low/);
+  assert.match(sent[1], /credits low/);
   ellBody = { character_count: 10, character_limit: 1000 };
   await sentinel.tick(); sent.length = 0;
 
@@ -63,7 +63,7 @@ const sentinel = require(path.join(__dirname, '..', 'sentinel'));
   assert(sent.some((t) => /Google.*invalid_grant/.test(t)));
   credit = {}; google = { linked: true, ok: true }; sent.length = 0;
   await sentinel.tick();
-  assert.strictEqual(sent.filter((t) => /working again/.test(t)).length, 2);
+  assert.strictEqual(sent.filter((t) => /working again/.test(t)).length, 0, 'recovery is silent');
 
   // a loop failing twice -> alert; once -> nothing
   sent.length = 0;
