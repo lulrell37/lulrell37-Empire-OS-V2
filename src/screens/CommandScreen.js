@@ -22,7 +22,7 @@ import{reportIssue,clearIssueKey,notify}from '../services/report';
 import{logCrash}from '../services/crashLog';
 import{googleReadInjections,googleWriteCommands}from '../services/googleCommands';
 import{courseInjections}from '../services/stephanieCourse';
-import{startClipScan,startTranscribe}from '../services/clipScan';
+import{startClipScan,startTranscribe,runBrowse}from '../services/clipScan';
 import{scanTags}from '../services/noteCommands';
 import{allMatches}from '../matchAllFix';
 import{cancelJarvisTurn}from '../services/jarvisEngine';
@@ -1736,6 +1736,18 @@ export default function CommandScreen({navigation,route}){
           const cr=await courseInjections(response,pid,text);
           if(cr.length){toolLabel='◇ updating the course…';injections.push(...cr);}
         }catch(e){/* never let the course break the turn */}
+        // [BROWSE: task] — J.A.R.V.I.S.'s and A.R.A.'s browser, on the server; the
+        // result comes back into this turn like a read (same as on Telegram).
+        if(pid==='jarvis'||pid==='ara'){
+          for(const m of allMatches(response,/\[BROWSE:\s*([^\]]+)\]/gi)){
+            const task=m[1].trim();if(!task)continue;
+            toolLabel='◇ using the browser…';
+            pushSystemMsg('— BROWSER · working — a screenshot of where it ends up goes to Telegram —');
+            try{injections.push(await runBrowse({persona:pid,task,ownerText:text}));}
+            catch(e){injections.push(`BROWSE failed: ${e.message}`);}
+            break; // one per turn
+          }
+        }
         // [RELAY_TO: id | message] — actually ask that persona and wait for their
         // real answer before this persona answers Mr. Burrus. One-shot, no
         // history. Their own command tags DO run (notes, tasks, calendar, … —

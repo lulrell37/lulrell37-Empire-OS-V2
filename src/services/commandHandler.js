@@ -473,6 +473,7 @@ export function stripCommands(text){
     .replace(/\[CLIP_SCAN:[^\]]*\]/gi,'')
     .replace(/\[WATCH_VIDEO:[^\]]*\]/gi,'')
     .replace(/\[TRANSCRIBE:[^\]]*\]/gi,'')
+    .replace(/\[BROWSE:[^\]]*\]/gi,'')
     .replace(/\[SHOW_CHART:[^\]]*\]/gi,'').replace(/\[TRADE_CHART(?::[^\]]*)?\]/gi,'').replace(/\[SHOW_NOTE:[^\]]*\]/gi,'')
     .replace(/\[SHOW_NOTES\]/gi,'').replace(/\[SHOW_TASKS\]/gi,'')
     .replace(/\[SHOW_ANALYTICS\]/gi,'').replace(/\[OPEN_ANALYTICS\]/gi,'')

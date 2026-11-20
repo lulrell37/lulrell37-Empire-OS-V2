@@ -46,6 +46,7 @@ app.use('/council', auth, json, require('./routes/council'));
 app.use('/stephanie', auth, json, require('./routes/stephanie'));
 app.use('/jarvis', auth, json, require('./routes/jarvis'));
 app.use('/clips', auth, json, require('./routes/clips'));
+app.use('/browse', auth, json, require('./routes/browse'));
 // Is Mem0 (persona memory) actually answering from the server — a live probe,
 // plus how many memories each persona has there.
 app.get('/mem0/status', auth, async (req, res) => {
