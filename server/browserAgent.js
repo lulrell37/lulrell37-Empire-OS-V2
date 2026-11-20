@@ -168,7 +168,7 @@ async function launch(persona) {
     for (const f of ['SingletonLock', 'SingletonSocket', 'SingletonCookie']) fs.rmSync(path.join(dir, f), { force: true });
     proc = spawn(exe, ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage', '--no-first-run', '--no-default-browser-check',
       '--hide-scrollbars', '--mute-audio', `--window-size=${VIEW.width},${VIEW.height}`, '--remote-debugging-port=0', `--user-data-dir=${dir}`,
-      '--lang=en-US', '--headless=new', '--single-process', '--no-zygote', 'about:blank'], {
+      '--lang=en-US', '--headless=new', 'about:blank'], {
       stdio: ['ignore', 'ignore', 'pipe'],
       env: { ...process.env, LD_LIBRARY_PATH: [...libs, process.env.LD_LIBRARY_PATH].filter(Boolean).join(':'), FONTCONFIG_PATH: path.join(CHROMIUM_DIR, 'fonts') },
     });
@@ -188,6 +188,14 @@ async function launch(persona) {
     });
   }
   const cdp = await Cdp.connect(wsUrl);
+  // A browser that dies is dropped, so the next step relaunches it instead of
+  // timing out against a dead connection; its last words go to the log.
+  let errTail = '';
+  if (proc) {
+    proc.stderr.on('data', (c) => { errTail = (errTail + c).slice(-1500); });
+    proc.on('exit', (code, sig) => { console.error(`browse failed: Chrome for ${persona} exited (${code ?? sig}) — ${errTail.trim().split('\n').slice(-3).join(' | ').slice(0, 400)}`); if (browsers.get(persona)?.proc === proc) close(persona); });
+  }
+  cdp.ws.on('close', () => { if (browsers.get(persona)?.cdp === cdp) { console.error(`browse failed: lost the connection to ${persona}'s Chrome`); close(persona); } });
   const { targetInfos } = await cdp.send('Target.getTargets');
   let page = targetInfos.find((t) => t.type === 'page');
   const targetId = page ? page.targetId : (await cdp.send('Target.createTarget', { url: 'about:blank' })).targetId;
@@ -422,6 +430,7 @@ async function runTask({ persona, personaName = persona, task, ownerText = '', b
         }
       }
       try {
+        if (!browsers.has(persona)) { const nb = await browserFor(persona); Object.assign(b, nb, { busy: true }); log.push('(the browser had crashed — restarted it)'); }
         const did = await doAction(b, a);
         log.push(`${did}${a.why ? ` — ${a.why}` : ''}`);
         fails = 0;
