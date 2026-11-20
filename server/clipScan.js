@@ -273,7 +273,7 @@ async function clipScan(url, focus = '', { onProgress = () => {} } = {}) {
     onProgress('transcribing');
     const audioDir = path.join(dir, 'audio');
     fs.mkdirSync(audioDir);
-    const segments = await transcribeVideo(src, audioDir);
+    const segments = await transcribeVideo(src, audioDir, { prompt: '' });
     if (!segments.length) throw new Error('no speech found in that video');
 
     onProgress('reading viewer signals');
@@ -297,7 +297,8 @@ async function clipScan(url, focus = '', { onProgress = () => {} } = {}) {
       try {
         let look = '';
         try {
-          const r = await layout.renderClip({ src, start: p.start, end: p.end, dest: out, dir, pick: p, size: srcSize });
+          const r = await layout.renderClip({ src, start: p.start, end: p.end, dest: out, dir, pick: p, size: srcSize,
+            context: segments.filter((s) => s.end > p.start - 20 && s.start < p.end).map((s) => s.text.trim()).join(' ') });
           look = `${LAYOUT_WORDS[r.layout] || r.layout}${r.captions ? ', captions' : ''}${p.hook ? ', hook' : ''}${r.notes.length ? ` (${r.notes.join('; ')})` : ''}`;
         } catch (e) {
           await cutVertical(src, p.start, p.end, out);
@@ -340,4 +341,10 @@ function scanInBackground(url, focus) {
 
 const CLIP_TOOLS = ` - [CLIP_SCAN: drive link or YouTube URL | focus] — for a LONG video (podcast, stream, full recording): it reads what viewers already showed (YouTube's most-replayed graph, timestamps quoted in the comments, a past livestream's chat spikes, jumps in the audio), transcribes it, picks the 3-5 most viral moments (focus is optional, e.g. "funniest moments", "best trading calls"; blank = general virality), cut each into a finished 9:16 short (face cam on top and gameplay below for streams, a crop that follows the speaker for one person on camera, the full frame over a blurred background otherwise; word-by-word captions with key words colored; a hook line at the top) and upload them to his Drive. Takes several minutes; the ranked list (time range, why, link) and the clips themselves come back in this chat. Use it BEFORE [EDIT_CLIP] when the footage is long-form and he hasn't picked the moment; [EDIT_CLIP] on any one clip after that for captions, music, dress-up. One per turn, one scan at a time. Say it's done only from the result.`;
 
-module.exports = { clipScan, scanInBackground, CLIP_TOOLS, driveId, isYouTube, isSocialVideo, linkKind, downloadYouTube, transcribeVideo, duration, MAX_BYTES, MAX_SEC, parsePicks, sanitizePicks, mmss };
+// Length and live state of one video, before deciding to scan it.
+async function videoInfo(url) {
+  const [d, live] = (await ytdlp(['--skip-download', '--print', '%(duration)s\n%(live_status)s', String(url).trim()])).split('\n').map((x) => x.trim());
+  return { duration: Number(d) || 0, live: /is_live|is_upcoming/.test(live || '') };
+}
+
+module.exports = { ytdlp, videoInfo, clipScan, scanInBackground, CLIP_TOOLS, driveId, isYouTube, isSocialVideo, linkKind, downloadYouTube, transcribeVideo, duration, MAX_BYTES, MAX_SEC, parsePicks, sanitizePicks, mmss };
