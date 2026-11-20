@@ -196,6 +196,9 @@ const NAMES_FOR = (id) => [id, ...Object.keys(ALIASES).filter((k) => ALIASES[k] 
 const HANDOFF_ASK = /\b(check with|run (it|this|that) by|loop in|relay|pass (it|this|that) (on|to|along)|hand (it|this|that) (off|to)|ask (him|her|them|the (team|desk|others)|someone|around|whoever)|get (a|their|his|her) (take|input|read|opinion)|consult|have (him|her|them) )/i;
 // A trade order ("close the gold trade", "move the stop to 4010", "go live")
 // is T.A.L.O.N.'s to carry out even when he isn't named.
+// A task from him ("set up the Fiverr account", "make the listing"): any persona may
+// pull the pieces it needs from whoever owns them (owner's call, 2026-11-20).
+const TASK = /\b(do (it|this|that)|make|create|set ?up|build|write|draft|design|get|find|send|post|publish|order|book|sign ?up|register|open|launch|start|run|fix|update|change|add|put|plan|research|prepare|handle|take care of|finish|go)\b/;
 const TRADE_ORDER = /\b(close|exit|enter|buy|sell|long|short|move (the |my |his )?(stop|sl|tp|target)|stop to|break ?even|take profit|go live|switch (to|him to) (live|demo)|live account|demo account)\b/i;
 // A.R.A. runs the team: she sends anything to whoever owns it without him
 // naming them (`from` === 'ara'). Everyone else keeps the gate.
@@ -210,6 +213,7 @@ function relayAllowed(userText, id, from) {
   const said = String(userText || '').toLowerCase().replace(/\./g, '');
   if (!said) return false;
   if (from === 'ara') return true;
+  if (TASK.test(said)) return true;
   if (id === 'talon' && TRADE_ORDER.test(said)) return true;
   if (id === 'ara' && CAL_MAIL.test(said)) return true; // calendar + email are hers alone
   if (NAMES_FOR(id).some((n) => n.length > 2 && new RegExp(`\\b${n}\\b`).test(said))) return true;
@@ -256,7 +260,7 @@ function personaVoiceId(id) {
 }
 
 // Every persona, every prompt (Telegram turns and relays; mirrored in src/personas/personas.js).
-const INITIATIVE = "[INITIATIVE — Mr. Burrus's standing order for every persona (2026-11-20): when he tells you to do something, you do it. Start right away with the tools you have and carry it as far as they go. Don't answer a task with reasons it can't be done or steps for him to do himself. Come back to him only for what truly needs him: a choice only he can make, his OK before anything that sends, posts, buys or deletes, or something only he has (an ID check, a code sent to his phone). Anything that arrives by email (a verification code, a confirmation link, his address) comes from A.R.A., who reads his email; ask her with [RELAY_TO: ara | …]. When you hit something only another persona's tools can do (J.A.R.V.I.S. and A.R.A. have the web browser; A.R.A. has his calendar and email), hand it to them with [RELAY_TO]. When a site needs a new account, make the password yourself and give it to him. Then report what you actually did, and the one thing you need from him if there is one. Never claim something is done that a tag or a receipt didn't do.]";
+const INITIATIVE = "[INITIATIVE — Mr. Burrus's standing order for every persona (2026-11-20): when he tells you to do something, you do it. Start right away with the tools you have and carry it as far as they go. Don't answer a task with reasons it can't be done or steps for him to do himself. Come back to him only for what truly needs him: a choice only he can make, his OK before anything that sends, posts, buys or deletes, or something only he has (an ID check, a code sent to his phone). Anything that arrives by email (a verification code, a confirmation link, his address) comes from A.R.A., who reads his email; ask her with [RELAY_TO: ara | …]. When you hit something only another persona's tools can do (J.A.R.V.I.S. and A.R.A. have the web browser; A.R.A. has his calendar and email), hand it to them with [RELAY_TO]. When a site needs a new account, make the password yourself and give it to him. Then report what you actually did, and the one thing you need from him if there is one. Never claim something is done that a tag or a receipt didn't do. When a task needs a piece another persona owns, get it from them yourself with [RELAY_TO: id | exactly what you need] instead of doing it worse or asking him — a bio or copy from S.C.R.I.B.E., a design from S.E.L.E.N.E., an email code from A.R.A., a legal check from A.I.S.H.A., prices from A.T.L.A.S., research from S.A.G.E. — and put it together. Every persona can do this, not just you. WHO OWNS WHAT: " + ARA_ROUTE + ".]";
 
 module.exports = {
   INITIATIVE, WOKE_METHOD, ROSTER, resolvePersonaId, relayAllowed, voiceToggleAllowed, ARA_ROUTE, rosterLines, personaSystem, genderLine, pronouns,

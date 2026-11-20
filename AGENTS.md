@@ -418,7 +418,7 @@ repeats unless a story develops; nothing new stays quiet.
 
 ## Every persona acts on a task (`INITIATIVE`)
 
-`INITIATIVE` (`server/personas.js`, mirrored in `src/personas/personas.js`, keep in sync) is in every persona's prompt: Telegram turns and relays (`personaRuntime.js`, next to `OBEY`) and the app (`buildSys`). Owner's standing order, 2026-11-20: start a task right away with the tools at hand, come back only for a choice only he can make, his OK before sending/posting/buying/deleting, or something only he has; email codes and links come from A.R.A.; new-account passwords are made and handed to him.
+`INITIATIVE` (`server/personas.js`, mirrored in `src/personas/personas.js`, keep in sync) is in every persona's prompt: Telegram turns and relays (`personaRuntime.js`, next to `OBEY`) and the app (`buildSys`). Owner's standing order, 2026-11-20: start a task right away with the tools at hand, come back only for a choice only he can make, his OK before sending/posting/buying/deleting, or something only he has; email codes and links come from A.R.A.; new-account passwords are made and handed to him. It also carries the team map (`ARA_ROUTE`) and tells every persona to pull the pieces a task needs from whoever owns them (a bio from S.C.R.I.B.E., a design from S.E.L.E.N.E., an email code from A.R.A.); `relayAllowed` lets any relay through when his message is a task (`TASK`: make, set up, write, send, …), while questions and opinions stay in the persona's own lane.
 
 ## Persona hand-offs only on request
 
