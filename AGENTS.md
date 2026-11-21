@@ -568,7 +568,7 @@ as a Telegram video (`it.buffer` in `sendMedia`); bigger ones are links only. On
 time; caps `CLIP_SCAN_MAX_GB` (2) / `CLIP_SCAN_MAX_MIN` (180). The app's tag
 (`commandHandler.js` → `onClipScan` → `src/services/clipScan.js` → `POST /clips/scan`) runs it in the
 background and A.R.A. delivers the result on Telegram. `[EDIT_CLIP]` / `[WATCH_VIDEO]` are
-untouched. `node server/scripts/test-clip-scan.js`.
+untouched. YouTube scans no longer download the whole video: the audio alone comes down for the transcript and the loudness signal (`downloadYouTubeAudio`), and after the picks each clip's stretch alone, padded `SECTION_PAD` (3 s) each side, cut with `--download-sections` + `--force-keyframes-at-cuts` (`downloadSection`) and rendered from that file; `CLIP_SECTIONS=off` goes back to the whole download. Drive links are unchanged. `node server/scripts/test-clip-scan.js`.
 
 ## Transcripts of any video link (`server/transcribe.js`, `TRANSCRIBE=off` to stop)
 

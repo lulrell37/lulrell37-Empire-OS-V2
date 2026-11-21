@@ -164,6 +164,33 @@ async function downloadYouTube(url, dir) {
   return { file: full, name };
 }
 
+// YouTube, the light way: the audio alone (a small fraction of the video) for the
+// transcript and the loudness signal, then only the picked stretches as video.
+// A multi-hour stream used to come down whole for a few minutes of clips.
+async function downloadYouTubeAudio(url, dir) {
+  let meta;
+  try { meta = (await ytdlp(['--skip-download', '--print', '%(duration)s\n%(title)s', url])).split('\n'); } catch (e) { throw e; }
+  const secs = Number(meta[0]);
+  const name = meta.slice(1).join(' ').trim() || 'YouTube video';
+  if (Number.isFinite(secs) && secs > MAX_SEC) throw new Error(`that video is ${mmss(secs)} — the limit is ${mmss(MAX_SEC)}`);
+  await ytdlp(['-f', 'ba[ext=m4a]/ba/b', '--max-filesize', String(Math.floor(MAX_BYTES)), '-o', path.join(dir, 'audio-src.%(ext)s'), url]);
+  const file = fs.readdirSync(dir).find((f) => /^audio-src\.(?!part|ytdl)/.test(f) && !f.endsWith('.part'));
+  if (!file) throw new Error("the video's audio couldn't be downloaded");
+  return { file: path.join(dir, file), name };
+}
+const SECTION_PAD = 3;
+// One stretch of a YouTube video, cut at exactly start-pad (keyframes forced at
+// the cut), so the clip sits at SECTION_PAD seconds in. -> { file, offset }
+async function downloadSection(url, start, end, dir, tag) {
+  const from = Math.max(0, start - SECTION_PAD);
+  const to = end + SECTION_PAD;
+  await ytdlp(['-f', 'bv*[height<=720]+ba/b[height<=720]/b', '--merge-output-format', 'mp4', '--download-sections', `*${from.toFixed(2)}-${to.toFixed(2)}`,
+    '--force-keyframes-at-cuts', '-o', path.join(dir, `${tag}.%(ext)s`), url]);
+  const file = fs.readdirSync(dir).find((f) => f.startsWith(`${tag}.`) && !/\.(part|ytdl)$/.test(f));
+  if (!file) throw new Error("that stretch of the video couldn't be downloaded");
+  return { file: path.join(dir, file), offset: start - from };
+}
+
 function run(args, { allowFail = false } = {}) {
   return new Promise((resolve, reject) => {
     const ff = spawn(ffmpegPath, args);
@@ -282,11 +309,15 @@ async function clipScan(url, focus = '', { onProgress = () => {} } = {}) {
         .catch((e) => { sigNotes.push(`no YouTube metadata (${e.message})`); return null; });
     }
     const chatP = meta ? signals.startChat({ ytdlpBin: await ytdlpBin(), url: String(url).trim(), dir, ytdlpArgs: cookieArgs(url), meta }) : null;
-    onProgress('downloading');
-    if (kind === 'youtube') ({ file: src, name } = await downloadYouTube(String(url).trim(), dir));
+    // YouTube: audio only now, video only for the picked stretches (below).
+    // SECTIONS=off goes back to downloading the whole video.
+    const sections = kind === 'youtube' && String(process.env.CLIP_SECTIONS || '').toLowerCase() !== 'off';
+    onProgress(sections ? 'downloading the audio' : 'downloading');
+    if (sections) ({ file: src, name } = await downloadYouTubeAudio(String(url).trim(), dir));
+    else if (kind === 'youtube') ({ file: src, name } = await downloadYouTube(String(url).trim(), dir));
     else name = await google.driveDownloadTo(driveId(url), src, MAX_BYTES);
     const total = await duration(src);
-    if (!total) throw new Error('couldn\'t read that file as a video');
+    if (!total) throw new Error(`couldn't read that file as ${sections ? 'audio' : 'a video'}`);
     if (total > MAX_SEC) throw new Error(`that video is ${mmss(total)} — the limit is ${mmss(MAX_SEC)}`);
 
     onProgress('transcribing');
@@ -305,7 +336,7 @@ async function clipScan(url, focus = '', { onProgress = () => {} } = {}) {
     if (!picks.length) throw new Error('no moment in it was strong enough to cut' + (focus ? ` for "${focus}"` : ''));
 
     const base = String(name).replace(/\.[^.]+$/, '').slice(0, 60);
-    const srcSize = await layout.videoSize(src);
+    const srcSize = sections ? null : await layout.videoSize(src);
     const lines = [];
     const media = [];
     for (let i = 0; i < picks.length; i++) {
@@ -315,14 +346,23 @@ async function clipScan(url, focus = '', { onProgress = () => {} } = {}) {
       const out = path.join(dir, `clip${i + 1}.mp4`);
       try {
         let look = '';
+        // The clip's own source: just that stretch of the video, when sectioned.
+        let clipSrc = src, cs = p.start, ce = p.end, clipSize = srcSize;
+        if (sections) {
+          onProgress(`downloading clip ${i + 1}/${picks.length}`);
+          const sec = await downloadSection(String(url).trim(), p.start, p.end, dir, `section${i + 1}`);
+          clipSrc = sec.file; cs = sec.offset; ce = sec.offset + (p.end - p.start);
+          clipSize = await layout.videoSize(clipSrc);
+        }
         try {
-          const r = await layout.renderClip({ src, start: p.start, end: p.end, dest: out, dir, pick: p, size: srcSize,
+          const r = await layout.renderClip({ src: clipSrc, start: cs, end: ce, dest: out, dir, pick: p, size: clipSize,
             context: segments.filter((s) => s.end > p.start - 20 && s.start < p.end).map((s) => s.text.trim()).join(' ') });
           look = `${LAYOUT_WORDS[r.layout] || r.layout}${r.captions ? ', captions' : ''}${p.hook ? ', hook' : ''}${r.notes.length ? ` (${r.notes.join('; ')})` : ''}`;
         } catch (e) {
-          await cutVertical(src, p.start, p.end, out);
+          await cutVertical(clipSrc, cs, ce, out);
           look = `plain crop (the styled render failed: ${e.message.slice(0, 120)})`;
         }
+        if (sections) fs.rmSync(clipSrc, { force: true });
         const size = fs.statSync(out).size;
         const up = await google.driveUploadFile(out, `Clip ${i + 1} — ${p.title || base} (${range}).mp4`);
         lines.push(`${i + 1}. ${range} (${Math.round(p.end - p.start)}s) — ${p.title ? `${p.title}: ` : ''}${p.reason}${p.hook ? `\n   Hook: "${p.hook}"` : ''}\n   ${look}\n   ${up.link}`);
@@ -366,4 +406,4 @@ async function videoInfo(url) {
   return { duration: Number(d) || 0, live: /is_live|is_upcoming/.test(live || '') };
 }
 
-module.exports = { ytdlp, cookieArgs, isBotCheck, hasYouTubeCookies, videoInfo, clipScan, scanInBackground, CLIP_TOOLS, driveId, isYouTube, isSocialVideo, linkKind, downloadYouTube, transcribeVideo, duration, MAX_BYTES, MAX_SEC, parsePicks, sanitizePicks, mmss };
+module.exports = { downloadYouTubeAudio, downloadSection, SECTION_PAD, ytdlp, cookieArgs, isBotCheck, hasYouTubeCookies, videoInfo, clipScan, scanInBackground, CLIP_TOOLS, driveId, isYouTube, isSocialVideo, linkKind, downloadYouTube, transcribeVideo, duration, MAX_BYTES, MAX_SEC, parsePicks, sanitizePicks, mmss };
