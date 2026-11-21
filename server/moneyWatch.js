@@ -81,7 +81,7 @@ async function tick() {
   if (entries.length) {
     const fmt = (n) => `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
     const lines = entries.map((e) => `${e.direction === 'in' ? '+' : '−'}${fmt(e.amount)} · ${e.business} · ${e.source}${e.note ? ` (${e.note})` : ''}`);
-    await require('./talonAlerts').araNote(`💰 A.T.L.A.S. → A.R.A.: from the money emails A.R.A. passed me —\n${lines.join('\n')}`);
+    await require('./talonAlerts').araNote(`💰 A.T.L.A.S. → A.R.A.: from the money emails A.R.A. passed me —\n${lines.join('\n')}`, undefined, { remember: true });
   }
   return { logged: entries.length, read: emails.length };
 }
@@ -117,7 +117,7 @@ async function monthReport({ force = false } = {}) {
   if (!force && !lastDayOfMonth(day)) return { skipped: 'not the last day' };
   const month = day.slice(0, 7);
   const name = new Date(`${month}-15T12:00:00Z`).toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' });
-  await require('./talonAlerts').araNote(`📅 A.T.L.A.S. → A.R.A.: ${name} is done. ${monthSummary(await syncedRows('revenue').catch(() => []), month, `The month's total`)}`);
+  await require('./talonAlerts').araNote(`📅 A.T.L.A.S. → A.R.A.: ${name} is done. ${monthSummary(await syncedRows('revenue').catch(() => []), month, `The month's total`)}`, undefined, { remember: true });
   return { sent: true };
 }
 
@@ -142,7 +142,7 @@ async function dailyReport() {
   if (!enabled()) return { skipped: 'off' };
   await tick().catch((e) => console.error('money watch failed:', e.message));
   const text = dayReport(await syncedRows('revenue').catch(() => []), todayET());
-  await require('./talonAlerts').araNote(text);
+  await require('./talonAlerts').araNote(text, undefined, { remember: true });
   return { sent: true };
 }
 

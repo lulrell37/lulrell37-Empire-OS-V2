@@ -505,7 +505,7 @@ async function runCouncilMeeting(opts = {}) {
   // reported by A.R.A. herself in the chat that asked for it, so skip it here.
   if (!force) {
     try {
-      await require('./telegram').notifyOwner(`Empire Council — ${date}\n\n${headline}\n\nThe full transcript is saved as a Note.`);
+      await require('./telegram').notifyOwner(`Empire Council — ${date}\n\n${headline}\n\nThe full transcript is saved as a Note.`, { remember: true });
     } catch (e) { console.error('council telegram mirror failed:', e.message); }
   }
 

@@ -92,12 +92,12 @@ function transcribeInBackground(url, persona = 'ara') {
     const bot = (telegram.botFor(persona) && telegram.botFor(persona).isConfigured()) ? telegram.botFor(persona) : telegram.botFor('ara');
     if (!bot || !bot.isConfigured()) return;
     const saved = r.note && !r.note.error ? `Saved to Drive as "Transcript — ${r.title}"${r.note.link ? `: ${r.note.link}` : ''}` : '⚠️ Not saved to Drive';
-    await bot.sendMessage(telegram.OWNER_ID, `📝 Transcript — "${r.title}" (${SOURCE_NAME[r.kind]}, ${clip.mmss(r.total)})\n${saved}\n\n${r.text.slice(0, 20000)}${r.text.length > 20000 ? '\n…(the rest is in the note)' : ''}`);
+    await bot.sendMessage(telegram.OWNER_ID, `📝 Transcript — "${r.title}" (${SOURCE_NAME[r.kind]}, ${clip.mmss(r.total)})\n${saved}\n\n${r.text.slice(0, 20000)}${r.text.length > 20000 ? '\n…(the rest is in the note)' : ''}`, { remember: true });
   }).catch(async (e) => {
     console.error('transcribe failed:', e.message);
     const telegram = require('./telegram');
     const bot = telegram.botFor('ara');
-    if (bot && bot.isConfigured()) await bot.sendMessage(telegram.OWNER_ID, `📝 The transcript didn't come through: ${e.message}`).catch(() => {});
+    if (bot && bot.isConfigured()) await bot.sendMessage(telegram.OWNER_ID, `📝 The transcript didn't come through: ${e.message}`, { remember: true }).catch(() => {});
   });
 }
 

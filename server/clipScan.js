@@ -346,7 +346,7 @@ function scanInBackground(url, focus) {
     const telegram = require('./telegram');
     const ara = telegram.botFor('ara');
     if (ara && ara.isConfigured()) {
-      await ara.sendMessage(telegram.OWNER_ID, `🎬 **R.O.G.U.E. → A.R.A.**\n${text}`);
+      await ara.sendMessage(telegram.OWNER_ID, `🎬 **R.O.G.U.E. → A.R.A.**\n${text}`, { remember: true });
       for (const m of media) await ara.sendFile(telegram.OWNER_ID, 'video', m.buffer, { filename: m.filename, caption: m.caption }).catch((e) => console.error('clip-scan send failed:', e.message));
     }
     await require('./pushSender').pushAlert('clip-scan', 'R.O.G.U.E. found your clips', text.split('\n')[0], {}).catch(() => {});
@@ -354,7 +354,7 @@ function scanInBackground(url, focus) {
     console.error('clip-scan failed:', e.message);
     const telegram = require('./telegram');
     const ara = telegram.botFor('ara');
-    if (ara && ara.isConfigured()) await ara.sendMessage(telegram.OWNER_ID, `🎬 R.O.G.U.E.'s clip scan failed: ${e.message}`).catch(() => {});
+    if (ara && ara.isConfigured()) await ara.sendMessage(telegram.OWNER_ID, `🎬 R.O.G.U.E.'s clip scan failed: ${e.message}`, { remember: true }).catch(() => {});
   });
 }
 

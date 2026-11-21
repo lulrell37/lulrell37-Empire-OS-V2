@@ -207,20 +207,20 @@ async function sendMedia(bot, chatId, items) {
       switch (it.name) {
         case 'GENERATE_IMAGE':
           await bot.sendChatAction(chatId, 'upload_photo');
-          await bot.sendFile(chatId, 'photo', await generateImage(it.arg), { caption: it.arg.slice(0, 1000) });
+          await bot.sendFile(chatId, 'photo', await generateImage(it.arg), { log: false, caption: it.arg.slice(0, 1000) });
           break;
         case 'DIAGRAM':
           await bot.sendChatAction(chatId, 'upload_photo');
-          await bot.sendFile(chatId, 'photo', await renderDiagram(it.arg), { filename: 'diagram.png' });
+          await bot.sendFile(chatId, 'photo', await renderDiagram(it.arg), { log: false, filename: 'diagram.png' });
           break;
         case 'CHART':
           await bot.sendChatAction(chatId, 'upload_photo');
-          await bot.sendFile(chatId, 'photo', await renderChart(it.arg), { filename: 'chart.png' });
+          await bot.sendFile(chatId, 'photo', await renderChart(it.arg), { log: false, filename: 'chart.png' });
           break;
         case 'TRADE_CHART': {
           await bot.sendChatAction(chatId, 'upload_photo');
           const c = await require('./talonChart').buildChart(it.arg);
-          await bot.sendFile(chatId, 'photo', c.png, { filename: `${c.symbol}-${c.tf}.png`, caption: c.caption });
+          await bot.sendFile(chatId, 'photo', c.png, { log: false, filename: `${c.symbol}-${c.tf}.png`, caption: c.caption });
           break;
         }
         case 'SEND_LOCATION': {
@@ -234,13 +234,13 @@ async function sendMedia(bot, chatId, items) {
           if (it.buffer) { // held in memory: a rendered clip ([CLIP_SCAN]) or a browser screenshot ([BROWSE], kind 'photo')
             const k = it.kind || 'video';
             await bot.sendChatAction(chatId, k === 'photo' ? 'upload_photo' : 'upload_video');
-            await bot.sendFile(chatId, k, it.buffer, { filename: it.filename, caption: it.caption });
+            await bot.sendFile(chatId, k, it.buffer, { log: false, filename: it.filename, caption: it.caption });
             break;
           }
           const kind = { SEND_PHOTO: 'photo', SEND_IMAGE: 'photo', SEND_VIDEO: 'video', SEND_AUDIO: 'audio' }[it.name] || 'document';
           if (!/^https?:\/\//i.test(it.url)) throw new Error(`not a link: ${it.url.slice(0, 80)}`);
           await bot.sendChatAction(chatId, kind === 'photo' ? 'upload_photo' : kind === 'video' ? 'upload_video' : 'upload_document');
-          await bot.sendFile(chatId, kind, it.url, { caption: it.caption });
+          await bot.sendFile(chatId, kind, it.url, { log: false, caption: it.caption });
         }
       }
     } catch (e) {

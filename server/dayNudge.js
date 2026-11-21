@@ -41,7 +41,7 @@ async function tick() {
   const prompt = `NOW: ${now} ET\n\nCALENDAR (next 24h):\n${cal || '(not available)'}\n\nTASKS DUE TODAY OR OVERDUE:\n${tasks.join('\n') || '(none)'}\n\nOPEN THREADS:\n${threads || '(none)'}\n\nALREADY NUDGED TODAY: ${seenToday.join(', ') || '(nothing)'}`;
   const out = parse(await claudeText(SYSTEM, prompt, { maxTokens: 400 }));
   if (!out) return { quiet: true };
-  await require('./talonAlerts').araNote(`🔔 ${out.text}`);
+  await require('./talonAlerts').araNote(`🔔 ${out.text}`, undefined, { remember: true });
   await setSetting('day_nudge_seen', JSON.stringify({ day: today, keys: [...new Set([...seenToday, ...out.keys])] }));
   return { sent: true };
 }

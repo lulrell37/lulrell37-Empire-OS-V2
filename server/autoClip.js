@@ -129,8 +129,8 @@ async function deliver(v, r, err) {
   const telegram = require('./telegram');
   const ara = telegram.botFor('ara');
   if (!ara || !ara.isConfigured()) return;
-  if (err) return ara.sendMessage(telegram.OWNER_ID, `🎬 R.O.G.U.E.'s auto clip of ${v.channel}'s new video "${v.title}" didn't work: ${err}`).catch(() => {});
-  await ara.sendMessage(telegram.OWNER_ID, `🎬 **R.O.G.U.E. → A.R.A.** ${v.channel} just posted "${v.title}" — clipped automatically.\n${r.text}`);
+  if (err) return ara.sendMessage(telegram.OWNER_ID, `🎬 R.O.G.U.E.'s auto clip of ${v.channel}'s new video "${v.title}" didn't work: ${err}`, { remember: true }).catch(() => {});
+  await ara.sendMessage(telegram.OWNER_ID, `🎬 **R.O.G.U.E. → A.R.A.** ${v.channel} just posted "${v.title}" — clipped automatically.\n${r.text}`, { remember: true });
   for (const m of r.media) await ara.sendFile(telegram.OWNER_ID, 'video', m.buffer, { filename: m.filename, caption: m.caption }).catch((e) => console.error('auto clip send failed:', e.message));
   await require('./pushSender').pushAlert('auto-clip', `New clips: ${v.channel}`, v.title, {}).catch(() => {});
 }
