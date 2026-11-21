@@ -423,7 +423,7 @@ async function runMorningBrief({ force = false } = {}) {
   // A voice failure never holds up the text.
   const script = await spokenScript(text).catch((e) => { console.error('morning brief script failed:', e.message); return ''; });
   const voiced = await sendVoice(ara, telegram.OWNER_ID, script || fallbackScript(text), 'Give me my morning brief.', !!script);
-  await ara.sendMessage(telegram.OWNER_ID, text, { plain: true });
+  await ara.sendMessage(telegram.OWNER_ID, text, { plain: true, remember: true });
   // Into A.R.A.'s Telegram history, so a reply ("tell me more about the 2nd AP
   // story") has the brief in context.
   return { sent: true, voiced, today, chars: text.length };

@@ -39,8 +39,15 @@ function ownLine(text, ts = Date.now()) {
   const t = String(text || '').trim();
   return `${OWN_MARK}, ${when} ET — not a reply to him]\n${t.length > 6000 ? `${t.slice(0, 6000)}…` : t}`;
 }
-async function logOwn(personaId, chatId, text) {
+// remember: the meaningful ones (clip results, failures, recaps, reports) also go
+// to Mem0, labeled as this persona's message so it's never taken for his words.
+// Routine traffic (trade alerts, watch alerts, news, reminders) stays out of it.
+function mem0Line(personaId, text) {
+  return `[Sent by the Empire OS persona "${personaId}" to Mr. Burrus automatically, ${new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' })} — NOT his words, not something he said or decided]\n${String(text).slice(0, 4000)}`;
+}
+async function logOwn(personaId, chatId, text, { remember } = {}) {
   if (!isOwner(chatId) || !String(text || '').trim()) return;
+  if (remember) require('./mem0').mem0Remember(personaId, mem0Line(personaId, text), { source: 'auto' });
   try {
     await require('./db').query('INSERT INTO tg_messages (persona, role, content, ts) VALUES ($1, $2, $3, $4)', [personaId, 'assistant', ownLine(text), Date.now()]);
   } catch (e) { console.error(`tg ${personaId} history save failed:`, e.message); }
@@ -128,8 +135,8 @@ function makeBot(personaId, token) {
   }
 
   async function sendMessage(chatId, text, opts = {}) {
-    const { plain, log, ...rest } = opts;
-    if (log !== false) await logOwn(personaId, chatId, text);
+    const { plain, log, remember, ...rest } = opts;
+    if (log !== false) await logOwn(personaId, chatId, text, { remember });
     for (const part of chunk(text)) {
       if (plain) { await tg('sendMessage', { chat_id: chatId, text: part, ...rest }); continue; }
       try {
@@ -238,11 +245,11 @@ const isConfigured = () => configuredBots().length > 0;
 
 // Fire-and-forget DM to the owner from A.R.A.'s bot — the nightly council and the
 // nudge sender use this. Never throws.
-async function notifyOwner(text) {
+async function notifyOwner(text, opts = {}) {
   const ara = bots.ara;
   if (!ara || !ara.isConfigured()) return { skipped: 'telegram not configured' };
   try {
-    await ara.sendMessage(OWNER_ID, text);
+    await ara.sendMessage(OWNER_ID, text, opts);
     return { sent: true };
   } catch (e) {
     console.error('telegram notifyOwner failed:', e.message);
@@ -261,7 +268,7 @@ async function setWebhook(baseUrl) {
 }
 
 module.exports = {
-  ownLine, OWN_MARK,
+  ownLine, OWN_MARK, mem0Line,
   OWNER_ID, isOwner,
   bots, botFor, configuredBots, isConfigured,
   notifyOwner, setWebhook,

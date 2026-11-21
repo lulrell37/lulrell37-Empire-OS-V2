@@ -92,12 +92,12 @@ async function onBoot() {
   const running = `${info.source === 'github' ? 'main' : 'the bundled deploy'} @ ${info.sha || '?'}${what ? ` — "${what}"` : ''}`;
   if (fellBack) {
     araNote(`⚠️ **Redeploy didn't take, Mr. Burrus.** The new code crashed on startup, so the server went back to the last version that worked — everything's still running, just not the update.\nRunning: ${running}\n\nWhat broke:\n\`\`\`\n${String(fellBack).slice(0, 900)}\n\`\`\`\nJ.A.R.V.I.S. can file a fix ([BUILD_REQUEST]) — then redeploy again.`,
-    "Mr. Burrus, the redeploy didn't take. The new code crashed on startup, so I put the server back on the last version that worked. Everything's still running, just not the update. The error's below.");
+    "Mr. Burrus, the redeploy didn't take. The new code crashed on startup, so I put the server back on the last version that worked. Everything's still running, just not the update. The error's below.", { remember: true });
     return;
   }
   const changes = await changesSince(pending.from_sha, info.sha);
   const same = pending.from_sha && pending.from_sha === info.sha;
-  araNote(`✅ **Server's live on the new code, Mr. Burrus**${took ? ` — back in ${took}` : ''}.\nRunning: ${running}${same ? '\n(Nothing new on main since the last version — same code, fresh restart.)' : ''}${changes.length ? `\n\nWhat's new:\n${changes.map((m) => `• ${m}`).join('\n')}` : ''}`);
+  araNote(`✅ **Server's live on the new code, Mr. Burrus**${took ? ` — back in ${took}` : ''}.\nRunning: ${running}${same ? '\n(Nothing new on main since the last version — same code, fresh restart.)' : ''}${changes.length ? `\n\nWhat's new:\n${changes.map((m) => `• ${m}`).join('\n')}` : ''}`, undefined, { remember: true });
 }
 
 module.exports = { requestRedeploy, onBoot, codeInfo, RESTART_CODE };

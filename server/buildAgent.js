@@ -211,7 +211,7 @@ async function pollAndNotify() {
   for (const ev of events) {
     const { ogg } = await require('./personaVoice').voiceNote(persona, ev.text).catch(() => ({ ogg: null }));
     if (ogg) await bot.sendVoice(telegram.OWNER_ID, ogg).catch(() => {});
-    await bot.sendMessage(telegram.OWNER_ID, ev.text).catch((e) => console.error('build notify failed:', e.message));
+    await bot.sendMessage(telegram.OWNER_ID, ev.text, { remember: true }).catch((e) => console.error('build notify failed:', e.message));
   }
 }
 
