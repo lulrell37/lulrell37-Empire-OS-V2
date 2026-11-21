@@ -32,6 +32,8 @@ const STOP_FLOOR = { XAUUSD: () => 10, BTCUSD: (px) => px * 0.008 };
 // order: setups, swings, re-entries, news trades, quick scalps, add-ons, his own.
 const GOLD_MAX_LOSS = Number(process.env.GOLD_MAX_LOSS) || 40;
 const GOLD_OZ_PER_LOT = 100;
+const isIndex = (symbol) => /^(NAS|US100|USTEC|NDX|NQ)/i.test(String(symbol || ''));
+const INDEX_MAX_QTY = Number(process.env.INDEX_MAX_QTY || 10);
 const isGold = (symbol) => String(symbol || '').toUpperCase() === 'XAUUSD';
 function goldLots(stopDist, cap = MAX_QTY) {
   const d = Math.abs(Number(stopDist));
@@ -256,6 +258,13 @@ async function tlInstrument(symbol = 'XAUUSD') {
   return meta;
 }
 
+// Full instrument details (contract size etc.), for sizing an index to its stop.
+async function tlInstrumentDetails(symbol) {
+  const m = await tlInstrument(symbol);
+  const j = await api(`/trade/instruments/${m.id}`, { query: { routeId: m.infoRouteId } });
+  return j.d || {};
+}
+
 async function tlQuote(symbol = 'XAUUSD') {
   return cachedRead('q:' + symbol.toUpperCase(), 7000, async () => {
     const m = await tlInstrument(symbol);
@@ -324,7 +333,7 @@ const roundPx = (m, v) => +Number(v).toFixed(m?.pricePrecision ?? 2);
 // `limitPrice`: a resting limit order at that price (GTC) instead of a market
 // order — quick scalps wait back at the pullback zone rather than buying the
 // confirmation bar's close. Cancel with tlCancelOrder; tlOrderState says when it fills.
-async function tlPlaceOrder({ symbol = 'XAUUSD', side, qty = MAX_QTY, stopLoss, takeProfit, minStop = true, limitPrice = null }) {
+async function tlPlaceOrder({ symbol = 'XAUUSD', side, qty = MAX_QTY, stopLoss, takeProfit, minStop = true, limitPrice = null, maxQty = null }) {
   await tlFollowAccount();
   await ensureAccount();
   // The last gate before real money, for every path into here. If the setting
@@ -333,7 +342,10 @@ async function tlPlaceOrder({ symbol = 'XAUUSD', side, qty = MAX_QTY, stopLoss, 
     throw new Error('this is the LIVE account and live trading isn\'t armed, so no order was placed');
   }
   if (side !== 'buy' && side !== 'sell') throw new Error('side must be buy or sell');
-  const q = Math.min(Math.max(Number(qty) || 0, 0), MAX_QTY);
+  // MAX_QTY caps every gold/Bitcoin order. Only an index (the Nasdaq desk, sized to
+  // its own $ risk at the stop) may pass a larger maxQty, never over INDEX_MAX_QTY.
+  const cap = maxQty != null && isIndex(symbol) ? Math.min(Number(maxQty) || 0, INDEX_MAX_QTY) : MAX_QTY;
+  const q = Math.min(Math.max(Number(qty) || 0, 0), cap);
   if (!q) throw new Error('qty must be > 0');
   // Never a trade without a stop — same refusal as the app's tlPlaceOrder.
   if (stopLoss == null || !isFinite(Number(stopLoss))) throw new Error('no stop loss given — every trade needs one');
@@ -535,7 +547,7 @@ function tlFormatSnapshot(snap) {
   return L.join('\n');
 }
 
-module.exports = { goldLots, goldTooWide, GOLD_MAX_LOSS,
+module.exports = { tlInstrumentDetails, isIndex, goldLots, goldTooWide, GOLD_MAX_LOSS,
   MAX_QTY, ENTRY_COPIES, entryCopies, minStopDist, tlAtr1H,
   tlConnect, tlStatus, tlAccountState, tlListInstruments, tlInstrumentsById, tlInstrument,
   tlQuote, tlHistory, tlPositions, tlOrdersHistory, tlPlaceOrder, tlClosePosition, tlModifyPosition, tlOrders, tlCancelOrder, tlOrderState,

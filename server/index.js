@@ -274,6 +274,8 @@ function startTalonAutoTradeCron() {
   if (process.env.TALON_AUTOTRADE === 'off') return console.log('T.A.L.O.N. auto-trade cron disabled (TALON_AUTOTRADE=off)');
   if (!talonAutoTrade.cronEnabled()) return console.log('T.A.L.O.N. auto-trade cron off (no Claude subscription, ANTHROPIC_API_KEY or XAI_API_KEY)');
   talonAutoTrade.enableOnce().catch((e) => console.error('talon switch-on failed:', e.message));
+  // T.A.L.O.N.'s Nasdaq desk: 1m triggers, every minute 9:30-4 ET weekdays (server/talonNasdaq.js).
+  if (process.env.TALON_NASDAQ !== 'off') cron.schedule('5 * 9-15 * * 1-5', () => require('./talonNasdaq').tick().catch((e) => console.error('talon nasdaq failed:', e.message)), { timezone: 'America/New_York' });
   cron.schedule('20 */5 * * * *', () => talonAutoTrade.tick().catch((e) => console.error('talon auto-trade cron failed:', e.message)));
   console.log('T.A.L.O.N. auto-trade cron scheduled (every 5m, scans on each auto_trade_interval_min candle close)');
   // Nightly trading recap from A.R.A. on Telegram. TRADE_RECAP=off to stop.

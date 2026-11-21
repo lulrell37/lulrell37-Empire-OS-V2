@@ -325,6 +325,8 @@ carries into her next real conversation. W.I.R.E.'s brief and T.A.L.O.N.'s
 trades don't have this problem: they land in `hud_state` and `trades`, both
 already synced and already what the NEWS panel and Trade Journal UI read.
 
+**Nasdaq desk** (`server/talonNasdaq.js`, `TALON_NASDAQ=off` to stop; owner 2026-11-20): the Nasdaq 100 CFD (first of NAS100/US100/USTEC… on the account, `NAS_SYMBOL` overrides) on the 1m chart with the three triggers from the reel he sent (Nicholas Fischer's bots): a close across VWAP (from 9:30, typical-price mean when the feed has no volume), across the 50 EMA, or out of the 9:30-9:45 range (first break each way). Above = buy, below = sell. TradeLocker has no options, so it trades the index with a stop: past the trigger and the signal candle + 0.25× 1m ATR, min 10 / max 60 points (`plan`); sized so the stop loses `NAS_MAX_LOSS` $50 from the instrument's contract size (`tlInstrumentDetails`, `NAS_CONTRACT_SIZE` overrides; none → no trade) — the only orders allowed past `MAX_QTY` (`maxQty`, indices only, `INDEX_MAX_QTY` 10); 2R target; one position; flat by 3:58 PM ET; done for the day at +`NAS_DAILY_GOAL` $200 or 3 losses (`dayTally`). Every minute 9:30-4 ET weekdays while `auto_trade` is on, no AI, demo only unless `NAS_LIVE=1`. Journal `setup: 'nasdaq'`; state `app_settings.talon_nasdaq`; `[NASDAQ_DESK]` (T.A.L.O.N., A.R.A.). Not in `SYMBOLS`: the gold/Bitcoin playbook doesn't trade it. `node server/scripts/test-talon-nasdaq.js`.
+
 ## T.A.L.O.N. reads market structure (`server/marketStructure.js`)
 
 Pure code, no AI, mirrored in `src/services/marketStructure.js` (only the header
