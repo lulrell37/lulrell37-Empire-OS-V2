@@ -144,7 +144,7 @@ memory, `[RELAY_TO]`, Drive notes and Sheets. **Calendar and Gmail are A.R.A.'s
 alone** (`ARA_ONLY_READS` / `ARA_ONLY_WRITES` in `server/personaRuntime.js`,
 `araOnly` in `src/services/googleCommands.js`): anyone else's calendar/email
 tags are dropped with a ⚠️, their prompt tells them to `[RELAY_TO: ara | …]`,
-and `relayAllowed` lets a calendar/email hand-off to her through. A.R.A. also has tasks (+ Google Tasks), expenses, revenue,
+and `relayAllowed` lets a calendar/email hand-off to her through. A.R.A. also has tasks (+ Google Tasks — `[ADD_TASK]` mirrors there too now, server and app, not only `[CREATE_TASK]`), expenses, revenue,
 targets, dates, HUD edits (score, routine, Batman Protocol, word/verse/fact),
 the leads pipeline, the council, and THE FIRM (`[PROJECT_START]`, `[DELEGATE]`
 runs the specialists server-side). Send-email and deletes become `tg_pending`

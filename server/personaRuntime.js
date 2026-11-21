@@ -789,7 +789,10 @@ async function applyEffects(text, deliver, persona = 'ara', { full = false, owne
             title, notes: taskNote || '', due_date: dd,
             priority: 'normal', completed: 0, created_at: now, updated_at: now,
           });
-          notes.push(`task added: ${title}${dd ? ` (due ${dd})` : ''}`);
+          // Mirrored to Google Tasks too (owner, 2026-11-20: tasks he gave A.R.A. never reached it).
+          const gt = await require('./google').gTaskCreate({ title, notes: taskNote, due: dd }).then(() => '').catch((e) => e.message);
+          if (gt) warnings.push(`task added to the app, but the Google Tasks copy failed — ${gt.slice(0, 160)}`);
+          notes.push(`task added: ${title}${dd ? ` (due ${dd})` : ''}${gt ? '' : ' (app + Google Tasks)'}`);
         }
       } else if (name === 'COMPLETE_TASK' && arg) {
         const rows = await query("SELECT sync_id, data FROM sync_rows WHERE table_name = 'tasks' AND deleted = false");
