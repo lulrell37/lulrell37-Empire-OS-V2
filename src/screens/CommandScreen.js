@@ -8,7 +8,7 @@ import*as DocumentPicker from 'expo-document-picker';
 import*as VideoThumbnails from 'expo-video-thumbnails';
 import{Camera}from 'expo-camera';
 import*as FileSystem from 'expo-file-system';
-import{PERSONA_LIST,getPersona,resolveSpecialist,relayAllowed}from '../personas/personas';
+import{PERSONA_LIST,getPersona,resolveSpecialist,relayAllowed,promisedHandoffs,handoffNames}from '../personas/personas';
 import{callPersona,textToSpeech,transcribeAudio,queryMemory,webSearch,getLastTtsFailReason,araSpokenScript}from '../services/aiService';
 import{startAraLive,stopAraLive}from '../services/realtimeVoice';
 import{reportError}from '../../ErrorBanner';
@@ -1757,6 +1757,18 @@ export default function CommandScreen({navigation,route}){
         // reported it done. Balanced-bracket scan so a relay carrying a note
         // with [ ] in it isn't cut short.
         inFlight.step='relays';
+        // Said it's handing this to someone ("relaying the fix to Atlas now") with no
+        // [RELAY_TO] behind it: ask once for the tag, so the hand-off really goes out.
+        if(!scanTags(response).some(t=>t.name==='RELAY_TO')&&!myAbort.signal.aborted){
+          const owed=promisedHandoffs(stripCommands(response)||'',handoffNames(),pid);
+          if(owed.length){
+            try{
+              const fix=await callPersona(pid,[...hist,{role:'assistant',content:response},{role:'user',content:`[Your reply says you're handing this to ${owed.map(id=>getPersona(id)?.name||id).join(', ')}, but you emitted no [RELAY_TO], so nothing reached them. Emit [RELAY_TO: id | the complete instruction, with every number and detail they need] for each one now, and nothing else.]`}],myAbort.signal,null,{skipSave:true,maxTokens:800});
+              const tags=scanTags(fix||'').filter(t=>t.name==='RELAY_TO').map(t=>`[RELAY_TO: ${t.arg}]`);
+              if(tags.length)response=`${response}\n${tags.join('\n')}`;
+            }catch(e){if(e.name==='AbortError')throw e;}
+          }
+        }
         const relayTags=scanTags(response).filter(t=>t.name==='RELAY_TO'&&t.arg.includes('|'))
           .map(t=>{const i=t.arg.indexOf('|');return[null,t.arg.slice(0,i),t.arg.slice(i+1)];});
         if(relayTags.length&&!myAbort.signal.aborted){
@@ -2000,6 +2012,11 @@ export default function CommandScreen({navigation,route}){
           const hist3=[...hist,{role:'assistant',content:response||'(no reply)'},{role:'user',content:`[Your last reply had no words for Mr. Burrus${response?' — only command tags':''}. He asked: "${text}". Answer him now in plain words, using what's in your context.]`}];
           try{response=await callPersona(pid,hist3,myAbort.signal,null,{skipSave:true,...voiceModelOpts(p)});}catch(e){if(e.name==='AbortError')throw e;}
           display=(stripCommands(response||'')||'').trim()||`(${p.name} came back empty — try asking again.)`;
+        }
+        {
+          const sent=new Set(relayTags.map(r=>r[1].trim().toLowerCase()));
+          const owed=promisedHandoffs(display,handoffNames(),pid).filter(id=>!sent.has(id));
+          if(owed.length)pushSystemMsg(`— ⚠️ nothing was actually sent to ${owed.map(id=>getPersona(id)?.name||id).join(' or ')} this turn, although ${p.name} says so — ask again —`);
         }
         if(display){replies.push({name:p.name,text:display});lastSpokenRef.current=display;}
         // A tag that fails must not cost the reply its voice: it used to throw out
