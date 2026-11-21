@@ -423,11 +423,12 @@ function pageText(s) {
   return `URL: ${s.url}\nTITLE: ${s.title}\nSCROLL: ${s.scroll} of ${s.height}px\nELEMENTS:\n${s.elements.join('\n') || '(none)'}\n\nVISIBLE TEXT${s.more ? ' (first part)' : ''}:\n${s.text || '(empty)'}`;
 }
 
-async function doAction(b, a, last) {
+// secrets: {{NAME}} placeholders the brain types without ever seeing the value.
+async function doAction(b, a, last, secrets = {}) {
   switch (a.type) {
     case 'goto': await b.cdp.send('Page.navigate', { url: a.url }, b.session); await settle(b); return `opened ${a.url}`;
     case 'click': { const c = await click(b, a.id); await settle(b, 5000); return `clicked [${a.id}] "${c.text}"`; }
-    case 'type': { const c = await type(b, a.id, a.text); return `typed into [${a.id}] "${c.text}"`; }
+    case 'type': { const real = String(a.text).replace(/\{\{(\w+)\}\}/g, (m, k) => (k in secrets ? secrets[k] : m)); const c = await type(b, a.id, real); return `typed into [${a.id}] "${c.text}"${real !== a.text ? ' (a saved secret)' : ''}`; }
     case 'select': return `[${a.id}]: ${await selectOption(b, a.id, a.option)}`;
     case 'press': await press(b, a.key); await settle(b, 5000); return `pressed ${a.key}`;
     case 'scroll': await ev(b, `scrollBy(0, ${a.direction === 'up' ? -1 : 1} * innerHeight * 0.85)`); await new Promise((r) => setTimeout(r, 500)); return `scrolled ${a.direction === 'up' ? 'up' : 'down'}`;
@@ -439,7 +440,9 @@ async function doAction(b, a, last) {
 
 // One task. `brain(system, prompt)` returns text (claudeText in production).
 // Returns { status: 'done'|'ask'|'stopped', text, url, steps, shot }.
-async function runTask({ persona, personaName = persona, task, ownerText = '', brain }) {
+// allow: clicks that would normally stop to ask (consent buttons on a sign-in
+// he already authorized) and go through instead.
+async function runTask({ persona, personaName = persona, task, ownerText = '', brain, secrets = {}, allow = null }) {
   if (!enabled()) throw new Error('the browser is switched off (BROWSE=off)');
   const b = await browserFor(persona);
   if (b.busy) throw new Error(`${personaName} is already using the browser — one task at a time`);
@@ -466,7 +469,7 @@ async function runTask({ persona, personaName = persona, task, ownerText = '', b
       if (a.type === 'click' || a.type === 'press') {
         const target = a.type === 'click' ? await center(b, a.id).catch(() => null)
           : await ev(b, `(() => { const e = document.activeElement; return e ? { tag: e.tagName.toLowerCase(), type: e.getAttribute('type') || (e.isContentEditable ? 'contenteditable' : ''), text: (e.getAttribute('aria-label') || e.getAttribute('placeholder') || e.name || '').slice(0, 80) } : null; })()`).catch(() => null);
-        if (isCommit(a, target) && !approvedText) {
+        if (isCommit(a, target) && !approvedText && !(allow && target && allow.test(target.text || ''))) {
           const q = `I'm about to ${a.type === 'click' ? `click "${target.text}"` : 'press Enter to submit'} on ${page.title || page.url}${a.why ? ` (${a.why})` : ''}. Go ahead?`;
           b.pending = { question: q, action: q };
           return finish(b, 'ask', q, log);
@@ -474,7 +477,7 @@ async function runTask({ persona, personaName = persona, task, ownerText = '', b
       }
       try {
         if (!browsers.has(persona)) { const nb = await browserFor(persona); Object.assign(b, nb, { busy: true }); log.push('(the browser had crashed — restarted it)'); }
-        const did = await doAction(b, a);
+        const did = await doAction(b, a, undefined, secrets);
         log.push(`${did}${a.why ? ` — ${a.why}` : ''}`);
         fails = 0;
       } catch (e) {

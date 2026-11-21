@@ -411,7 +411,7 @@ PERSONA_EXTRA_TOOLS.selene = ` YOUR INSTAGRAM WATCH — runs itself Mondays and 
 PERSONA_EXTRA_TOOLS.stephanie = require('./stephanieCourse').COURSE_TOOLS;
 
 PERSONA_EXTRA_TOOLS.rogue = require('./clipScan').CLIP_TOOLS + '\n' + require('./autoClip').AUTO_CLIP_TOOLS;
-PERSONA_EXTRA_TOOLS.jarvis += '\n' + require('./autoClip').AUTO_CLIP_TOOLS;
+PERSONA_EXTRA_TOOLS.jarvis += '\n' + require('./autoClip').AUTO_CLIP_TOOLS + '\n' + require('./siteLogins').LOGIN_TOOLS;
 PERSONA_EXTRA_TOOLS.jarvis += '\n' + require('./browserAgent').BROWSE_TOOLS;
 
 PERSONA_EXTRA_TOOLS.scribe = ` - [MONDAY_SCRIPTS] — write this week's 7 video scripts now, and file them; A.R.A. tells him they came in. They go out on their own Mondays at 8 AM ET; only use this when he asks for them again or early.`;
@@ -644,6 +644,10 @@ async function runInjections(text, persona = 'ara', { convo = '', depth = 0, sin
       if (['AUTO_CLIP', 'AUTO_CLIP_OFF', 'AUTO_CLIP_LIST'].includes(name) && ['rogue', 'ara', 'jarvis'].includes(persona) && (arg || name === 'AUTO_CLIP_LIST')) {
         try { return `${name}: ${await require('./autoClip').tag(name, arg)}`; }
         catch (e) { return `${name} failed: ${e.message}`; }
+      }
+      if (name === 'SITE_LOGIN' && arg && persona === 'jarvis') {
+        try { return await require('./siteLogins').tag(arg); }
+        catch (e) { return `SITE_LOGIN failed: ${e.message}`; }
       }
       if (name === 'CLIP_SCAN' && arg && persona === 'rogue') {
         const [link, ...f] = arg.split('|');

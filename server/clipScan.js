@@ -112,22 +112,44 @@ function cookieFile(name) {
 }
 // Any youtube.com / youtu.be link: videos, channels, feeds.
 const isYouTubeAny = (url) => /^https?:\/\/([\w-]+\.)?(youtube\.com|youtu\.be)\//i.test(String(url || '').trim());
+// The site a link needs a login for: 'youtube' | 'instagram' | null.
+const loginSite = (url) => (isSocialVideo(url) === 'instagram' ? 'instagram' : isYouTubeAny(url) ? 'youtube' : null);
+// A cookies.txt he set wins; otherwise the one J.A.R.V.I.S.'s browser keeps signed in (siteLogins.js).
 function cookieArgs(url) {
-  const f = isSocialVideo(url) === 'instagram' ? cookieFile('INSTAGRAM_COOKIES') : isYouTubeAny(url) ? cookieFile('YOUTUBE_COOKIES') : null;
-  return f ? ['--cookies', f] : [];
+  const site = loginSite(url);
+  const f = site === 'instagram' ? cookieFile('INSTAGRAM_COOKIES') : site === 'youtube' ? cookieFile('YOUTUBE_COOKIES') : null;
+  const g = f || (site ? require('./siteLogins').cookieFor(site) : null);
+  return g ? ['--cookies', g] : [];
 }
-const hasYouTubeCookies = () => !!(process.env.YOUTUBE_COOKIES_FILE || process.env.YOUTUBE_COOKIES);
+const hasYouTubeCookies = () => !!(process.env.YOUTUBE_COOKIES_FILE || process.env.YOUTUBE_COOKIES || require('./siteLogins').cookieFor('youtube') || require('./siteLogins').hasAccount('youtube'));
+const isLoginWall = (msg) => /login required|log in|rate.?limit|empty media|checkpoint|cookies/i.test(String(msg || ''));
 const isBotCheck = (msg) => /confirm you.?re not a bot|sign in to confirm/i.test(String(msg || ''));
 function botCheckError(last) {
-  return new Error(hasYouTubeCookies()
-    ? `YouTube still blocked the server as a bot with the YouTube cookies set: they've likely expired, so export a fresh cookies.txt into YOUTUBE_COOKIES (yt-dlp: ${last.slice(0, 120)})`
-    : `YouTube blocked the server as a bot (it refuses logged-out downloads from datacenter IPs). A cookies.txt from a YouTube login, set as YOUTUBE_COOKIES on the server, fixes it (yt-dlp: ${last.slice(0, 120)})`);
+  const L = require('./siteLogins');
+  return new Error(L.hasAccount('youtube') || L.cookieFor('youtube') || process.env.YOUTUBE_COOKIES || process.env.YOUTUBE_COOKIES_FILE
+    ? `YouTube still blocked the server as a bot with a login in place, and signing back in didn't clear it (yt-dlp: ${last.slice(0, 120)})`
+    : `YouTube blocked the server as a bot (it refuses logged-out downloads from datacenter IPs). A YouTube account on the server (YOUTUBE_LOGIN_EMAIL and YOUTUBE_LOGIN_PASSWORD, which J.A.R.V.I.S.'s browser signs in with), or a cookies.txt as YOUTUBE_COOKIES, fixes it (yt-dlp: ${last.slice(0, 120)})`);
 }
 
-async function ytdlp(args) {
+// Every YouTube / Instagram read (channel lookups, length checks, downloads)
+// carries the login. Refused for a login: J.A.R.V.I.S.'s browser signs in again
+// (siteLogins.ensureLogin) and it's tried once more with the fresh one.
+async function ytdlp(args, { retried = false } = {}) {
+  const url = args.find((a) => loginSite(a));
+  const site = url ? loginSite(url) : null;
+  let full = args;
+  if (url && !args.includes('--cookies')) full = [...cookieArgs(url), ...args];
+  try { return await ytdlpOnce(full); } catch (e) {
+    const wall = site === 'youtube' ? isBotCheck(e.raw || e.message) : site === 'instagram' && isLoginWall(e.raw || e.message);
+    if (!wall || retried || args.includes('--cookies')) throw e;
+    if (!(await require('./siteLogins').ensureLogin(site).catch(() => false))) throw e;
+    // The fresh login, even if an older cookies.txt he set would normally win.
+    const fresh = require('./siteLogins').cookieFor(site);
+    return fresh ? ytdlpOnce(['--cookies', fresh, ...args]) : ytdlp(args, { retried: true });
+  }
+}
+async function ytdlpOnce(args) {
   const bin = await ytdlpBin();
-  // Every YouTube read (channel lookups, length checks, downloads) carries the cookies.
-  if (!args.includes('--cookies')) { const u = args.find(isYouTubeAny); if (u) args = [...cookieArgs(u), ...args]; }
   return new Promise((resolve, reject) => {
     const p = spawn(bin, ['--no-playlist', '--no-warnings', '--ffmpeg-location', ffmpegPath, ...args]);
     let out = '', err = '';
@@ -137,7 +159,9 @@ async function ytdlp(args) {
     p.on('close', (code) => {
       if (code === 0) return resolve(out);
       const last = (err.trim().split('\n').pop() || `exit ${code}`).slice(0, 240);
-      reject(isBotCheck(last) ? botCheckError(last) : new Error(`yt-dlp: ${last}`));
+      const err2 = isBotCheck(last) ? botCheckError(last) : new Error(`yt-dlp: ${last}`);
+      err2.raw = last;
+      reject(err2);
     });
   });
 }
@@ -145,17 +169,16 @@ async function ytdlp(args) {
 // YouTube URL -> local file at `dir`/source.<ext>. Checks duration before
 // downloading and the size cap during it. Returns { file, name }.
 async function downloadYouTube(url, dir) {
-  const ck = cookieArgs(url);
   let meta;
-  try { meta = (await ytdlp([...ck, '--skip-download', '--print', '%(duration)s\n%(title)s', url])).split('\n'); }
+  try { meta = (await ytdlp(['--skip-download', '--print', '%(duration)s\n%(title)s', url])).split('\n'); }
   catch (e) {
-    if (isSocialVideo(url) === 'instagram' && !ck.length && /login|cookie|empty media|rate.?limit|not available|private/i.test(e.message)) throw new Error(`Instagram wouldn't hand the video over without a login (${e.message.slice(0, 140)}). A cookies file for an Instagram account (INSTAGRAM_COOKIES on the server) fixes that`);
+    if (isSocialVideo(url) === 'instagram' && !cookieArgs(url).length && /login|cookie|empty media|rate.?limit|not available|private/i.test(e.message)) throw new Error(`Instagram wouldn't hand the video over without a login (${e.message.slice(0, 140)}). An Instagram account on the server (INSTAGRAM_LOGIN_USER and INSTAGRAM_LOGIN_PASSWORD, which J.A.R.V.I.S.'s browser signs in with) fixes that`);
     throw e;
   }
   const secs = Number(meta[0]);
   const name = (meta.slice(1).join(' ').trim() || (isSocialVideo(url) === 'instagram' ? 'Instagram video' : isSocialVideo(url) === 'tiktok' ? 'TikTok video' : 'YouTube video'));
   if (Number.isFinite(secs) && secs > MAX_SEC) throw new Error(`that video is ${mmss(secs)} — the limit is ${mmss(MAX_SEC)}`);
-  await ytdlp([...ck, '-f', 'bv*[height<=720]+ba/b[height<=720]/b', '--merge-output-format', 'mp4', '--max-filesize', String(Math.floor(MAX_BYTES)),
+  await ytdlp(['-f', 'bv*[height<=720]+ba/b[height<=720]/b', '--merge-output-format', 'mp4', '--max-filesize', String(Math.floor(MAX_BYTES)),
     '-o', path.join(dir, 'source.%(ext)s'), url]);
   const file = fs.readdirSync(dir).find((f) => /^source\.(?!part|ytdl)/.test(f) && !f.endsWith('.part'));
   if (!file) throw new Error('the video is over the size limit or couldn\'t be downloaded');
