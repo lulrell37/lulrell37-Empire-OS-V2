@@ -689,7 +689,7 @@ async function runInjections(text, persona = 'ara', { convo = '', depth = 0, sin
         const gc = require('./groupChat');
         await gc.relayAsked(persona, id, msg);
         const answer = await relayToPersona(id, msg, { from: persona, convo, depth: depth + 1, sink, asked });
-        await gc.relayAnswered(id, answer);
+        await gc.relayAnswered(id, answer, { from: persona, message: msg });
         return `YOU ASKED ${ROSTER[id].name}: "${msg}"\n${ROSTER[id].name} REPLIED (their words — their "I" is ${ROSTER[id].name}; tell Mr. Burrus what ${ROSTER[id].name} said/did, not as yours; don't paste or read out their reply, put it in your own words, what matters first):\n${answer}`;
       }
       return '';

@@ -26,5 +26,7 @@ const G = require('../groupChat');
     { id: 'ara', chat: '-100123', text: 'S.C.R.I.B.E.:\nScript done.' },
   ]);
   assert.ok(/everyone/.test(G.GROUP_FRAME) && /one at a time/.test(G.GROUP_FRAME));
+  const line = G.groupLine('ara', 'selene', 'make a cover', 'Here it is.', Date.parse('2026-11-21T14:03:00Z'));
+  assert.ok(line.startsWith('[IN THE EMPIRE GROUP CHAT, Sat 9:03 AM ET — A.R.A. asked you') && line.includes('You answered: Here it is.'), line);
   console.log('group chat: all checks passed');
 })().catch((e) => { console.error(e); process.exit(1); });

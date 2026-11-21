@@ -57,7 +57,21 @@ async function relayAsked(from, to, message) {
   const toName = (ROSTER[to] && ROSTER[to].name) || to;
   return post(from, `→ ${toName}: ${message}`).catch(() => false);
 }
-async function relayAnswered(to, answer) {
+// The exchange also goes into the answering persona's own Telegram history, so
+// in his private chat with them later they remember what they said in the group.
+// (The asking persona's turn already keeps the answer it got.)
+function groupLine(from, to, message, answer, ts = Date.now()) {
+  const when = new Date(ts).toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'short', hour: 'numeric', minute: '2-digit' });
+  const fromName = (ROSTER[from] && ROSTER[from].name) || from;
+  return `[IN THE EMPIRE GROUP CHAT, ${when} ET — ${fromName} asked you this in front of Mr. Burrus, not in this chat]\n${fromName}: ${String(message).slice(0, 3000)}\nYou answered: ${String(answer).slice(0, 5000)}`;
+}
+async function remember(from, to, message, answer) {
+  if (!(await group())) return;
+  await require('./db').query('INSERT INTO tg_messages (persona, role, content, ts) VALUES ($1, $2, $3, $4)', [to, 'assistant', groupLine(from, to, message, answer), Date.now()])
+    .catch((e) => console.error('group chat history save failed:', e.message));
+}
+async function relayAnswered(to, answer, { from, message } = {}) {
+  if (from && message) await remember(from, to, message, answer);
   // Their words and receipts, without the note meant only for the asking persona.
   const shown = String(answer || '').replace(/\n*\([^()]*ran no actions[^]*$/, '').trim();
   return post(to, shown).catch(() => false);
@@ -70,4 +84,4 @@ const GROUP_FRAME = `[THE EMPIRE GROUP CHAT — he wrote this in the Telegram gr
  - He names no one → answer it yourself, and bring in whoever should weigh in.
 Don't repeat what they said; they've already said it in the group.]`;
 
-module.exports = { group, setGroup, isGroupChat, post, relayAsked, relayAnswered, GROUP_FRAME };
+module.exports = { groupLine, group, setGroup, isGroupChat, post, relayAsked, relayAnswered, GROUP_FRAME };
