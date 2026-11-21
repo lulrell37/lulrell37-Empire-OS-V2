@@ -410,8 +410,8 @@ PERSONA_EXTRA_TOOLS.selene = ` YOUR INSTAGRAM WATCH — runs itself Mondays and 
 
 PERSONA_EXTRA_TOOLS.stephanie = require('./stephanieCourse').COURSE_TOOLS;
 
-PERSONA_EXTRA_TOOLS.rogue = require('./clipScan').CLIP_TOOLS + '\n' + require('./autoClip').AUTO_CLIP_TOOLS;
-PERSONA_EXTRA_TOOLS.jarvis += '\n' + require('./autoClip').AUTO_CLIP_TOOLS;
+PERSONA_EXTRA_TOOLS.rogue = require('./clipScan').CLIP_TOOLS + '\n' + require('./autoClip').AUTO_CLIP_TOOLS + '\n' + require('./rawEdit').RAW_EDIT_TOOLS;
+PERSONA_EXTRA_TOOLS.jarvis += '\n' + require('./autoClip').AUTO_CLIP_TOOLS + '\n' + require('./rawEdit').RAW_EDIT_TOOLS;
 PERSONA_EXTRA_TOOLS.jarvis += '\n' + require('./browserAgent').BROWSE_TOOLS;
 PERSONA_EXTRA_TOOLS.jarvis += '\n' + require('./siteDesk').SITE_TOOLS;
 PERSONA_EXTRA_TOOLS.scout = (PERSONA_EXTRA_TOOLS.scout ? PERSONA_EXTRA_TOOLS.scout + '\n' : '') + require('./siteDesk').SITE_TOOLS;
@@ -651,6 +651,10 @@ async function runInjections(text, persona = 'ara', { convo = '', depth = 0, sin
       }
       if (require('./siteDesk').SITE_TAGS.has(name) && ['jarvis', 'ara', 'scout'].includes(persona)) {
         try { return `${name}${arg ? ` "${arg}"` : ''} (the website desk): ${await require('./siteDesk').tag(name, arg, asked)}`; }
+        catch (e) { return `${name} failed: ${e.message}`; }
+      }
+      if (['RAW_EDIT', 'STYLE_LEARN', 'STYLE_NOTE'].includes(name) && arg && ['rogue', 'jarvis', 'ara'].includes(persona)) {
+        try { return `${name}: ${await require('./rawEdit').tag(name, arg)}`; }
         catch (e) { return `${name} failed: ${e.message}`; }
       }
       if (name === 'CLIP_SCAN' && arg && persona === 'rogue') {
