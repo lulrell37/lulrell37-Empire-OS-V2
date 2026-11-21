@@ -162,7 +162,7 @@ function relayFrom(text, loose = false) {
   const { ROSTER } = require('./personas');
   const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const names = Object.entries(ROSTER).filter(([id]) => id !== 'ara').flatMap(([id, p]) => [esc(p.name), esc(id)]);
-  const m = String(text || '').match(new RegExp(`^[^A-Za-z]*(${names.join('|')})\\s*(?:→|to)\\s*(?:A\\.R\\.A\\.|Arr?a\\b)`, 'i'))
+  const m = String(text || '').match(new RegExp(`^[^A-Za-z]*(${names.join('|')})\\s*(?:→|to)\\s*(?:A\\.R\\.A\\.|(?:Ara|Arra|Ar-rah)\\b)`, 'i'))
     // Names only, as written: "wire" or "scout" in lowercase is just a word.
     || (loose && String(text || '').split('\n')[0].match(new RegExp(`(?<![A-Za-z])(${Object.entries(ROSTER).filter(([id]) => id !== 'ara').flatMap(([, p]) => [esc(p.name), esc(speakNames(p.name).replace(/\.$/, ''))]).join('|')})(?![A-Za-z])`)));
   return m ? speakNames(m[1]).replace(/\.$/, '') : null; // alone, the name keeps its last dot
