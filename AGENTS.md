@@ -51,7 +51,7 @@ loop and GO LIVE's transcripts; GO LIVE's prompt also tells her "Aura" is her.
 
 `speakNames` (`server/voiceCues.js`, mirrored in `src/services/voiceCues.js`)
 turns "J.A.R.V.I.S." / "JARVIS" into "Jarvis" before any voice reads it (only
-persona names; other acronyms untouched): `voiceNote`, the app's
+persona names; other acronyms untouched; and, as he says them, Tarell → "Tah-rell" and Ara → "Arra", owner 2026-11-20 — `relayFrom` accepts "Arra"): `voiceNote`, the app's
 `textToSpeech` / `speak` / `speakAs`, and GO LIVE's prompt. Another persona's
 words passed through A.R.A. stay theirs: `ARA_SCRIPT` (both copies) and
 `araScript`'s relay hint (`relayFrom`, `relayHint`, which recognizes every persona off `ROSTER` and gives their real pronouns and role; the script pass in both copies also carries the team list) make her say "Talon says he…", and his
