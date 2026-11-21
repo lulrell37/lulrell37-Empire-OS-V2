@@ -398,7 +398,7 @@ PERSONA_EXTRA_TOOLS.woke = ` - [WOKE_READ: story or claim] — your full read, s
  - [X_STORIES] — find what's taking off on X right now and give those stories your full read, sent to him through A.R.A. It also runs on its own at 8 AM, noon, 4 PM and 8 PM ET.
  - [X_SEARCH: what to look for] — search X yourself: what's being said, by whom, a claim's spread, a handle's posts. Read only, you can't post. A post is a lead to check, never proof: reach and repetition don't make it true, and you only call coordination when you can show it. Each search costs money per post fetched, so use it when X actually matters to the question.`;
 
-PERSONA_EXTRA_TOOLS.atlas = ` YOUR STOCK DESK — you pick investments off W.I.R.E.'s news, short term and long term, and A.R.A. tells him: what to buy, the entry, the target, the stop, the date to be out by. It runs itself four times each weekday and when W.I.R.E. files a brief. T.A.L.O.N. owns the gold and Bitcoin desk; stocks are yours. You can't place orders; he buys through his own broker. Your record is paper. Never promise a return.
+PERSONA_EXTRA_TOOLS.atlas = require('./moneyWatch').MONEY_TOOLS + '\n' + ` YOUR STOCK DESK — you pick investments off W.I.R.E.'s news, short term and long term, and A.R.A. tells him: what to buy, the entry, the target, the stop, the date to be out by. It runs itself four times each weekday and when W.I.R.E. files a brief. T.A.L.O.N. owns the gold and Bitcoin desk; stocks are yours. You can't place orders; he buys through his own broker. Your record is paper. Never promise a return.
  - [STOCK_PICKS] — every open call with its live price, plus your record. Read it before talking about a call.
  - [STOCK_DESK] — run the desk now. Use it when he asks what to buy or get into. It sends him the result through A.R.A.; a pass is an honest answer. Never name a price, a buy or a stop from memory.`;
 
@@ -490,7 +490,7 @@ function systemPrompt(ctx, gs, custom, mem) {
     CONTINUITY,
     mem,
     memoryLine(),
-    ARA_TOOLS + '\n' + require('./browserAgent').BROWSE_TOOLS + '\n' + require('./openThreads').OPEN_THREADS_TOOLS,
+    ARA_TOOLS + '\n' + require('./browserAgent').BROWSE_TOOLS + '\n' + require('./openThreads').OPEN_THREADS_TOOLS + '\n' + require('./moneyWatch').MONEY_TOOLS,
     googleLine(gs),
     `[THE EMPIRE — you run the team. When Mr. Burrus tells you to DO something that's another persona's job, send it to whoever owns it with [RELAY_TO: id | the full instruction, every detail he gave] — he never has to name them. WHO OWNS WHAT: ${ARA_ROUTE}. Everyday things you have your own tags for (notes, tasks, calendar, email, reminders, expenses, the HUD, research, images) you just do yourself. A question or an opinion you answer yourself, unless he names someone or it needs their live tools (where his trades stand → T.A.L.O.N.; how something in the app's code works → J.A.R.V.I.S.). Several jobs for several people → several RELAY_TO tags in the same reply. Report what they actually did from their receipts. This overrides any hand-off instruction elsewhere in your prompt.\n${rosterLines()}\n]`,
     faithBlock('ara'),
@@ -630,6 +630,7 @@ async function runInjections(text, persona = 'ara', { convo = '', depth = 0, sin
           return r.text;
         } catch (e) { console.error('browse failed:', e.message); return `BROWSE failed: ${e.message}`; }
       }
+      if (name === 'MONEY_IN_OUT' && ['atlas', 'ara'].includes(persona)) return `MONEY IN / OUT:\n${await require('./moneyWatch').monthText()}`;
       if (name === 'OPEN_THREADS') return `OPEN THREADS (his Drive note "Open Threads"):\n${await require('./openThreads').readTag()}`;
       if (name === 'TRANSCRIBE' && arg) {
         try {

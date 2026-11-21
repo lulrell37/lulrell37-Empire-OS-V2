@@ -586,3 +586,7 @@ The "learns you" piece of his smart-AI ask (2026-11-20). Every 6 h (:45) one Cla
 
 Thinking ahead during the day (2026-11-20): at 11 AM, 3 PM and 7 PM ET one Claude call looks at the next 24 h of his calendar, open tasks due today or overdue, and the open threads, and A.R.A. sends one short nudge only when something needs him soon (`NOTHING` stays quiet). Items already nudged that day are skipped (`app_settings.day_nudge_seen`). `node server/scripts/test-day-nudge.js`.
 
+## A.T.L.A.S.'s money watch (`server/moneyWatch.js`, `MONEY_WATCH=off` to stop)
+
+Money in and out, logged without him telling her (2026-11-20; no bank statements, his call). Every 2 h (:30) it searches his Gmail (last 3 days, money words) for messages not yet seen (`app_settings.money_watch_seen`), and one Claude call keeps only real USD movements with an amount (sales, payouts, payments, charges, bills, refunds) and maps each to a business from `business_targets` or "Personal" (`matchBusiness`). Each goes into the synced `revenue` table (`auto: true`, `source_email`), which the HUD's month-to-date reads, and A.R.A. sends one summary of what was logged. `[MONEY_IN_OUT]` (A.T.L.A.S., A.R.A.) gives this month per business. T.A.L.O.N.'s demo trades aren't logged. `node server/scripts/test-money-watch.js`.
+

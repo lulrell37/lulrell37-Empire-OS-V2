@@ -99,6 +99,7 @@ db.init()
     startOpenThreadsCron();
     startOwnerProfileCron();
     startDayNudgeCron();
+    startMoneyWatchCron();
     startScoutOutreachCron();
     startAutoAtlasCron();
     startSentinelCron();
@@ -146,6 +147,14 @@ function startDayNudgeCron() {
   const dn = require('./dayNudge');
   cron.schedule('0 11,15,19 * * *', () => dn.tick().catch((e) => console.error('day nudge failed:', e.message)), { timezone: 'America/New_York' });
   console.log('day nudge cron scheduled (11 AM, 3 PM, 7 PM ET)');
+}
+
+// A.T.L.A.S.'s money watch: money in/out logged from his email every 2h.
+function startMoneyWatchCron() {
+  if (String(process.env.MONEY_WATCH || '').toLowerCase() === 'off') return console.log('money watch cron disabled (MONEY_WATCH=off)');
+  const mw = require('./moneyWatch');
+  cron.schedule('30 */2 * * *', () => mw.tick().catch((e) => console.error('money watch failed:', e.message)));
+  console.log('money watch cron scheduled (every 2h)');
 }
 
 function startNudgeCron() {
