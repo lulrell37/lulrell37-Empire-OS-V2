@@ -154,7 +154,8 @@ function startMoneyWatchCron() {
   if (String(process.env.MONEY_WATCH || '').toLowerCase() === 'off') return console.log('money watch cron disabled (MONEY_WATCH=off)');
   const mw = require('./moneyWatch');
   cron.schedule('30 */2 * * *', () => mw.tick().catch((e) => console.error('money watch failed:', e.message)));
-  console.log('money watch cron scheduled (every 2h)');
+  cron.schedule('45 21 * * *', () => mw.dailyReport().catch((e) => console.error('money watch failed:', e.message)), { timezone: 'America/New_York' });
+  console.log('money watch cron scheduled (every 2h, day report 9:45 PM ET)');
 }
 
 function startNudgeCron() {

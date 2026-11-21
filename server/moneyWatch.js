@@ -104,6 +104,32 @@ async function monthText() {
   return `${month} so far (${rows.length} entries, ${auto} logged automatically from email):\n${lines.join('\n')}\nTotal: in ${f(tin)}, out ${f(tout)}, net ${f(tin - tout)}`;
 }
 
+// End of day (9:45 PM ET): A.T.L.A.S. gives A.R.A. today's in and out — totals,
+// the in:out ratio, net, and each entry — after one last sweep of the inbox.
+// Quiet days say so in one line. (Owner's request, 2026-11-20.)
+function dayReport(rows, day) {
+  const f = (n) => `$${n.toFixed(2)}`;
+  const today = rows.filter((r) => String(r.date || '') === day);
+  if (!today.length) return `💰 A.T.L.A.S. → A.R.A.: nothing came in or went out today (${day}).`;
+  let tin = 0, tout = 0;
+  const lines = today.map((r) => {
+    const out = String(r.type).toLowerCase() === 'expense';
+    const a = Number(r.amount) || 0;
+    if (out) tout += a; else tin += a;
+    return `${out ? '−' : '+'}${f(a)} · ${r.business || 'Personal'}${r.note ? ` · ${String(r.note).replace(/^auto · /, '')}` : ''}`;
+  });
+  const ratio = tout > 0 ? `${(tin / tout).toFixed(2)} : 1` : (tin > 0 ? 'all in, nothing out' : '—');
+  return `💰 A.T.L.A.S. → A.R.A.: today's money (${day})\nIn ${f(tin)} · Out ${f(tout)} · Net ${f(tin - tout)} · In:out ${ratio}\n${lines.join('\n')}`;
+}
+
+async function dailyReport() {
+  if (!enabled()) return { skipped: 'off' };
+  await tick().catch((e) => console.error('money watch failed:', e.message));
+  const text = dayReport(await syncedRows('revenue').catch(() => []), todayET());
+  await require('./talonAlerts').araNote(text);
+  return { sent: true };
+}
+
 const MONEY_TOOLS = ' - [MONEY_IN_OUT] — this month\'s money in and out, per business and total, from everything logged (yours, his, and what you log automatically from his email every 2 hours: sales, payouts, payments, charges, bills). Read it whenever he asks how the money looks.';
 
-module.exports = { tick, parse, matchBusiness, monthText, MONEY_TOOLS, enabled };
+module.exports = { dailyReport, dayReport, tick, parse, matchBusiness, monthText, MONEY_TOOLS, enabled };
