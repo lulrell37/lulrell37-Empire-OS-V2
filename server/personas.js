@@ -262,7 +262,39 @@ function personaVoiceId(id) {
 // Every persona, every prompt (Telegram turns and relays; mirrored in src/personas/personas.js).
 const INITIATIVE = "[INITIATIVE — Mr. Burrus's standing order for every persona (2026-11-20): when he tells you to do something, you do it. Start right away with the tools you have and carry it as far as they go. Don't answer a task with reasons it can't be done or steps for him to do himself. Come back to him only for what truly needs him: a choice only he can make, his OK before anything that sends, posts, buys or deletes, or something only he has (an ID check, a code sent to his phone). Anything that arrives by email (a verification code, a confirmation link, his address) comes from A.R.A., who reads his email; ask her with [RELAY_TO: ara | …]. When you hit something only another persona's tools can do (J.A.R.V.I.S. and A.R.A. have the web browser; A.R.A. has his calendar and email), hand it to them with [RELAY_TO]. When a site needs a new account, make the password yourself and give it to him. Then report what you actually did, and the one thing you need from him if there is one. Never claim something is done that a tag or a receipt didn't do. When a task needs a piece another persona owns, get it from them yourself with [RELAY_TO: id | exactly what you need] instead of doing it worse or asking him — a bio or copy from S.C.R.I.B.E., a design from S.E.L.E.N.E., an email code from A.R.A., a legal check from A.I.S.H.A., prices from A.T.L.A.S., research from S.A.G.E. — and put it together. Every persona can do this, not just you. WHO OWNS WHAT: " + ARA_ROUTE + ".]";
 
+// "Relaying the fix to Atlas now", with no [RELAY_TO] behind it: which personas a
+// reply says it's handing something to. Names count only as written for a persona
+// (A.T.L.A.S., ATLAS, Atlas), never lowercase words ("pen", "hook"); offers and
+// negatives ("want me to ask Atlas?", "no need to tell Talon") don't count. Keep the
+// server and app copies the same.
+const HANDOFF_VERB=/\b(relay\w*|pass\w*|hand\w*|send\w*|sent|forward\w*|loop\w*|tell\w*|told|let\w*|ping\w*|flag\w*|check\w* (with|in with)|ask\w*|bring\w*|brought|get\w* (with|to)|have|having|routing|route\w*|giv\w*|push\w*|notif\w*|updat\w*|correct\w*)\b/i;
+const HANDOFF_NOT=/\b(not|never|no need|won'?t|can'?t|cannot|didn'?t|don'?t|want me to|should i|shall i|if you|would you|do you want|whether)\b|n't\b/i;
+function promisedHandoffs(text,names,self){
+  let s=String(text||'');
+  for(const [id,name] of Object.entries(names)){
+    const plain=String(name).replace(/\./g,'');
+    const word=plain.charAt(0)+plain.slice(1).toLowerCase();
+    const dotted=plain.split('').join('\\.?')+'\\.?';
+    s=s.replace(new RegExp(`\\b(?:${dotted}|${word})(?![A-Za-z])`,'g'),` @@${id}@@ `);
+  }
+  const out=new Set();
+  for(const sentence of s.split(/[.!?\n]+/)){
+    const re=/@@(\w+)@@/g;let m;
+    while((m=re.exec(sentence))){
+      const id=m[1];
+      if(id===self)continue;
+      const before=sentence.slice(0,m.index).replace(/@@\w+@@/g,'them');
+      if(HANDOFF_VERB.test(before)&&!HANDOFF_NOT.test(before))out.add(id);
+    }
+  }
+  return [...out];
+}
+
+// Every persona's display name, for promisedHandoffs.
+const handoffNames = () => Object.fromEntries(Object.entries(ROSTER).map(([id, r]) => [id, r.name]));
+
 module.exports = {
+  promisedHandoffs, handoffNames,
   INITIATIVE, WOKE_METHOD, ROSTER, resolvePersonaId, relayAllowed, voiceToggleAllowed, ARA_ROUTE, rosterLines, personaSystem, genderLine, pronouns,
   personaTgIdentity, personaVoiceId,
 };

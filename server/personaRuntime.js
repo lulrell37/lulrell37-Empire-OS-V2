@@ -695,6 +695,7 @@ async function runInjections(text, persona = 'ara', { convo = '', depth = 0, sin
         const gc = require('./groupChat');
         await gc.relayAsked(persona, id, msg);
         const answer = await relayToPersona(id, msg, { from: persona, convo, depth: depth + 1, sink, asked });
+        if (sink) (sink.relayed || (sink.relayed = new Set())).add(id);
         await gc.relayAnswered(id, answer, { from: persona, message: msg });
         return `YOU ASKED ${ROSTER[id].name}: "${msg}"\n${ROSTER[id].name} REPLIED (their words — their "I" is ${ROSTER[id].name}; tell Mr. Burrus what ${ROSTER[id].name} said/did, not as yours; don't paste or read out their reply, put it in your own words, what matters first):\n${answer}`;
       }
@@ -1255,6 +1256,27 @@ async function runPersonaTurn(personaId, userText, deliver, { reply: given, resu
     replies.push(reply);
   }
 
+  // Said it was handing something to another persona ("relaying the fix to Atlas
+  // now") but no [RELAY_TO] went through: saying it isn't doing it. One more round
+  // to actually send it, then the reply is rewritten from what really happened.
+  const { promisedHandoffs, handoffNames } = require('./personas');
+  const unsent = () => promisedHandoffs(stripCues(stripTags(reply)), handoffNames(), persona).filter((id) => !(sink.relayed && sink.relayed.has(id)));
+  let owed = unsent();
+  if (owed.length) {
+    const who = owed.map((id) => `${ROSTER[id].name} (${id})`).join(', ');
+    messages.push({ role: 'assistant', content: reply });
+    messages.push({ role: 'user', content: `[Your reply tells Mr. Burrus you're handing this to ${who}, but no [RELAY_TO] went out this turn, so nothing reached them. Saying it isn't doing it. Do it now: emit [RELAY_TO: id | the complete instruction or question, with every number and detail they need] for each one, and nothing else. If you can do it yourself with your own tags instead, emit those.]` });
+    const fix = await brain(messages);
+    replies.push(fix);
+    const inj = await runInjections(fix, persona, { convo, sink, asked: userText });
+    if (inj) looked.push(inj);
+    messages.push({ role: 'assistant', content: fix });
+    messages.push({ role: 'user', content: `[tool results — these receipts are what really happened:]\n\n${inj || '(nothing ran)'}\n\n[Now give Mr. Burrus your reply again, reporting what actually happened: what you sent, to whom, and what they said or did. Don't say you're about to hand anything off — it's either done above or it isn't.]` });
+    reply = await brain(messages);
+    replies.push(reply);
+    owed = unsent();
+  }
+
   // Side-effect tags fire once, from anywhere across the rounds (deduped).
   const fx = await applyEffects(replies.join('\n'), deliver, persona, { ownerText: userText })
     .catch((e) => ({ notes: [], warnings: [`actions failed: ${e.message}`], confirms: [] }));
@@ -1289,6 +1311,7 @@ async function runPersonaTurn(personaId, userText, deliver, { reply: given, resu
   if (!calRan && /\b(added|put|set|scheduled|booked|moved|updated|blocked)\b[^.\n]{0,50}\b(calendar|schedule)\b|\b(calendar|schedule)\b[^.\n]{0,30}\b(added|updated|set)\b/i.test(clean)) {
     fx.warnings.push('nothing actually went on your Google Calendar this turn (no calendar tag ran) — tell me again and I\'ll add it');
   }
+  if (owed.length) fx.warnings.push(`nothing was actually sent to ${owed.map((id) => ROSTER[id].name).join(' or ')} this turn, although the reply says so — tell me again and I'll send it`);
   if (!clean) spoken = clean = fx.notes.length ? `Done — ${fx.notes.join('; ')}.` : media.length ? 'Here you go.' : 'On it.';
   spoken = forSpeech(spoken);
   // A receipt under the reply for every write — the reply is written before the

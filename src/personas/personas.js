@@ -326,6 +326,35 @@ const CAL_MAIL=/\b(calendar|schedule|scheduled|event|meeting|appointment|email|e
 const VOICE_TOGGLE=/\b(voice|grok|eleven ?labs)\b/i;
 export const voiceToggleAllowed=(persona,ownerText)=>persona==='jarvis'&&VOICE_TOGGLE.test(String(ownerText||''));
 
+// "Relaying the fix to Atlas now", with no [RELAY_TO] behind it: which personas a
+// reply says it's handing something to. Names count only as written for a persona
+// (A.T.L.A.S., ATLAS, Atlas), never lowercase words ("pen", "hook"); offers and
+// negatives ("want me to ask Atlas?", "no need to tell Talon") don't count. Keep the
+// server and app copies the same.
+const HANDOFF_VERB=/\b(relay\w*|pass\w*|hand\w*|send\w*|sent|forward\w*|loop\w*|tell\w*|told|let\w*|ping\w*|flag\w*|check\w* (with|in with)|ask\w*|bring\w*|brought|get\w* (with|to)|have|having|routing|route\w*|giv\w*|push\w*|notif\w*|updat\w*|correct\w*)\b/i;
+const HANDOFF_NOT=/\b(not|never|no need|won'?t|can'?t|cannot|didn'?t|don'?t|want me to|should i|shall i|if you|would you|do you want|whether)\b|n't\b/i;
+export function promisedHandoffs(text,names,self){
+  let s=String(text||'');
+  for(const [id,name] of Object.entries(names)){
+    const plain=String(name).replace(/\./g,'');
+    const word=plain.charAt(0)+plain.slice(1).toLowerCase();
+    const dotted=plain.split('').join('\\.?')+'\\.?';
+    s=s.replace(new RegExp(`\\b(?:${dotted}|${word})(?![A-Za-z])`,'g'),` @@${id}@@ `);
+  }
+  const out=new Set();
+  for(const sentence of s.split(/[.!?\n]+/)){
+    const re=/@@(\w+)@@/g;let m;
+    while((m=re.exec(sentence))){
+      const id=m[1];
+      if(id===self)continue;
+      const before=sentence.slice(0,m.index).replace(/@@\w+@@/g,'them');
+      if(HANDOFF_VERB.test(before)&&!HANDOFF_NOT.test(before))out.add(id);
+    }
+  }
+  return [...out];
+}
+export const handoffNames=()=>Object.fromEntries(Object.entries(PERSONAS).map(([id,r])=>[id,r.name]));
+
 export function relayAllowed(userText,id,from){
   const said=String(userText||'').toLowerCase().replace(/\./g,'');
   if(!said)return false;
