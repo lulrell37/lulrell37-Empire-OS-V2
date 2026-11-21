@@ -97,29 +97,48 @@ function isSocialVideo(url) {
   return null;
 }
 
-// Instagram often wants a logged-in session. INSTAGRAM_COOKIES_FILE (a path) or
-// INSTAGRAM_COOKIES (the cookies.txt text itself) is passed to yt-dlp when set.
+// Instagram often wants a logged-in session, and YouTube refuses logged-out
+// downloads from the server's datacenter IP ("Sign in to confirm you're not a
+// bot"). A cookies.txt for each is passed to yt-dlp when set:
+// INSTAGRAM_COOKIES_FILE / YOUTUBE_COOKIES_FILE (a path) or INSTAGRAM_COOKIES /
+// YOUTUBE_COOKIES (the cookies.txt text itself).
+function cookieFile(name) {
+  if (process.env[`${name}_FILE`]) return process.env[`${name}_FILE`];
+  if (!process.env[name]) return null;
+  const f = path.join(os.tmpdir(), 'empire-bin', `${name.toLowerCase()}.txt`);
+  fs.mkdirSync(path.dirname(f), { recursive: true });
+  fs.writeFileSync(f, process.env[name].replace(/\\n/g, '\n'), { mode: 0o600 });
+  return f;
+}
+// Any youtube.com / youtu.be link: videos, channels, feeds.
+const isYouTubeAny = (url) => /^https?:\/\/([\w-]+\.)?(youtube\.com|youtu\.be)\//i.test(String(url || '').trim());
 function cookieArgs(url) {
-  if (isSocialVideo(url) !== 'instagram') return [];
-  if (process.env.INSTAGRAM_COOKIES_FILE) return ['--cookies', process.env.INSTAGRAM_COOKIES_FILE];
-  if (process.env.INSTAGRAM_COOKIES) {
-    const f = path.join(os.tmpdir(), 'empire-bin', 'ig-cookies.txt');
-    fs.mkdirSync(path.dirname(f), { recursive: true });
-    fs.writeFileSync(f, process.env.INSTAGRAM_COOKIES.replace(/\\n/g, '\n'), { mode: 0o600 });
-    return ['--cookies', f];
-  }
-  return [];
+  const f = isSocialVideo(url) === 'instagram' ? cookieFile('INSTAGRAM_COOKIES') : isYouTubeAny(url) ? cookieFile('YOUTUBE_COOKIES') : null;
+  return f ? ['--cookies', f] : [];
+}
+const hasYouTubeCookies = () => !!(process.env.YOUTUBE_COOKIES_FILE || process.env.YOUTUBE_COOKIES);
+const isBotCheck = (msg) => /confirm you.?re not a bot|sign in to confirm/i.test(String(msg || ''));
+function botCheckError(last) {
+  return new Error(hasYouTubeCookies()
+    ? `YouTube still blocked the server as a bot with the YouTube cookies set: they've likely expired, so export a fresh cookies.txt into YOUTUBE_COOKIES (yt-dlp: ${last.slice(0, 120)})`
+    : `YouTube blocked the server as a bot (it refuses logged-out downloads from datacenter IPs). A cookies.txt from a YouTube login, set as YOUTUBE_COOKIES on the server, fixes it (yt-dlp: ${last.slice(0, 120)})`);
 }
 
 async function ytdlp(args) {
   const bin = await ytdlpBin();
+  // Every YouTube read (channel lookups, length checks, downloads) carries the cookies.
+  if (!args.includes('--cookies')) { const u = args.find(isYouTubeAny); if (u) args = [...cookieArgs(u), ...args]; }
   return new Promise((resolve, reject) => {
     const p = spawn(bin, ['--no-playlist', '--no-warnings', '--ffmpeg-location', ffmpegPath, ...args]);
     let out = '', err = '';
     p.stdout.on('data', (c) => { out += c; });
     p.stderr.on('data', (c) => { err = (err + c).slice(-2000); });
     p.on('error', (e) => reject(new Error(`yt-dlp isn't available on this server (${e.message})`)));
-    p.on('close', (code) => (code === 0 ? resolve(out) : reject(new Error(`yt-dlp: ${(err.trim().split('\n').pop() || `exit ${code}`).slice(0, 240)}`))));
+    p.on('close', (code) => {
+      if (code === 0) return resolve(out);
+      const last = (err.trim().split('\n').pop() || `exit ${code}`).slice(0, 240);
+      reject(isBotCheck(last) ? botCheckError(last) : new Error(`yt-dlp: ${last}`));
+    });
   });
 }
 
@@ -347,4 +366,4 @@ async function videoInfo(url) {
   return { duration: Number(d) || 0, live: /is_live|is_upcoming/.test(live || '') };
 }
 
-module.exports = { ytdlp, videoInfo, clipScan, scanInBackground, CLIP_TOOLS, driveId, isYouTube, isSocialVideo, linkKind, downloadYouTube, transcribeVideo, duration, MAX_BYTES, MAX_SEC, parsePicks, sanitizePicks, mmss };
+module.exports = { ytdlp, cookieArgs, isBotCheck, hasYouTubeCookies, videoInfo, clipScan, scanInBackground, CLIP_TOOLS, driveId, isYouTube, isSocialVideo, linkKind, downloadYouTube, transcribeVideo, duration, MAX_BYTES, MAX_SEC, parsePicks, sanitizePicks, mmss };

@@ -16,4 +16,14 @@ assert.deepStrictEqual(A.newUploads(feed, ch, s).map((v) => v.id), ['bbbbbbbbbbb
 assert.deepStrictEqual(A.newUploads(feed, ch, { queue: [{ id: 'bbbbbbbbbbb' }], done: [] }), [], 'not queued twice');
 assert.deepStrictEqual(A.newUploads(feed, ch, { queue: [], done: [{ id: 'bbbbbbbbbbb' }] }), [], 'not clipped twice');
 assert.ok(/\[AUTO_CLIP:/.test(A.AUTO_CLIP_TOOLS));
+const C = require('../clipScan');
+assert.ok(C.isBotCheck('yt-dlp: ERROR: [youtube] KAgxDihEu4M: Sign in to confirm you’re not a bot. This helps protect our community.'));
+assert.ok(!C.isBotCheck('yt-dlp: ERROR: Video unavailable'));
+delete process.env.YOUTUBE_COOKIES; delete process.env.YOUTUBE_COOKIES_FILE;
+assert.deepStrictEqual(C.cookieArgs('https://www.youtube.com/watch?v=KAgxDihEu4M'), [], 'no cookies set, none passed');
+process.env.YOUTUBE_COOKIES_FILE = '/tmp/yt.txt';
+assert.deepStrictEqual(C.cookieArgs('https://www.youtube.com/watch?v=KAgxDihEu4M'), ['--cookies', '/tmp/yt.txt']);
+assert.deepStrictEqual(C.cookieArgs('https://www.youtube.com/@FanumLive/videos'), ['--cookies', '/tmp/yt.txt'], 'channel lookups too');
+assert.deepStrictEqual(C.cookieArgs('https://www.tiktok.com/@x/video/123'), [], 'YouTube cookies stay on YouTube');
+delete process.env.YOUTUBE_COOKIES_FILE;
 console.log('auto clip: all checks passed');

@@ -7,6 +7,10 @@
 //   - skipped: Shorts and anything under AUTO_CLIP_MIN_MIN (3) minutes, a stream
 //     that is still live (tried again once it's over), anything past the clip
 //     scan's own length cap
+//   - YouTube blocking the server as a bot doesn't drop the video: it stays
+//     queued (told once, not counted toward the day), up to BLOCK_HOLD_MS, and
+//     goes as soon as YOUTUBE_COOKIES is set; ones that failed that way earlier
+//     are put back too
 //   - AUTO_CLIP_MAX_PER_DAY (3) scans a day at most, since each one bills
 //     Whisper and Claude; the rest wait for the next day, oldest first
 // Tags: [AUTO_CLIP: channel or video link], [AUTO_CLIP_OFF: channel],
@@ -19,6 +23,7 @@ const KEY = 'auto_clip';
 const MAX_PER_DAY = Number(process.env.AUTO_CLIP_MAX_PER_DAY || 3);
 const MIN_SEC = Number(process.env.AUTO_CLIP_MIN_MIN || 3) * 60;
 const MAX_CHANNELS = 10;
+const BLOCK_HOLD_MS = 3 * 864e5;
 
 function enabled() { return String(process.env.AUTO_CLIP || '').toLowerCase() !== 'off'; }
 
@@ -146,6 +151,12 @@ async function tick() {
         if (feed.length) ch.since = Math.max(ch.since || 0, feed[0].published);
       } catch (e) { console.error(`auto clip failed: ${ch.name} feed — ${e.message}`); }
     }
+    // Videos YouTube refused as a bot, once there are cookies to try: back on the queue.
+    if (clip.hasYouTubeCookies()) {
+      const back = s.done.filter((d) => d.status === 'failed' && clip.isBotCheck(d.why) && Date.now() - d.at < BLOCK_HOLD_MS && !s.queue.some((q) => q.id === d.id));
+      for (const d of back) s.queue.unshift({ id: d.id, title: d.title, url: `https://www.youtube.com/watch?v=${d.id}`, channel: d.channel, tries: 0, blockedAt: d.at });
+      if (back.length) s.done = s.done.filter((d) => !back.includes(d));
+    }
     await save(s);
     // 2. One scan per tick, oldest first, within the daily cap.
     const v = s.queue[0];
@@ -158,6 +169,19 @@ async function tick() {
       if (status === 'clipped' || status === 'failed') { const t = todayET(); st.ranToday = (st.day === t ? st.ranToday || 0 : 0) + 1; st.day = t; }
       await save(st);
     };
+    // YouTube refused the server as a bot: hold it (told once) rather than burn it.
+    const blocked = async (why) => {
+      const st = await load();
+      const q = st.queue.find((x) => x.id === v.id);
+      if (!q) return;
+      q.blockedAt = q.blockedAt || Date.now();
+      if (Date.now() - q.blockedAt > BLOCK_HOLD_MS) { await finish('failed', why.slice(0, 200)); return; }
+      const tell = !q.blockedTold;
+      q.blockedTold = true;
+      await save(st);
+      if (tell) await deliver(v, null, `${why}. I'm holding it in the queue and will clip it as soon as that's sorted.`);
+    };
+    if (meta.error && clip.isBotCheck(meta.error)) { console.error(`auto clip failed: "${v.title}" — ${meta.error}`); await blocked(meta.error); return { blocked: v.id }; }
     if (meta.live) { v.tries++; if (v.tries > 72) await finish('skipped', 'still live after a day'); else await save(s); return { waiting: 'still live' }; }
     if (meta.error) {
       v.tries++;
@@ -172,6 +196,7 @@ async function tick() {
       await deliver(v, r);
     } catch (e) {
       if (/already running/.test(e.message)) return { waiting: 'another scan running' };
+      if (clip.isBotCheck(e.message)) { console.error(`auto clip failed: "${v.title}" — ${e.message}`); await blocked(e.message); return { blocked: v.id }; }
       console.error(`auto clip failed: "${v.title}" — ${e.message}`);
       await finish('failed', e.message.slice(0, 200));
       await deliver(v, null, e.message);
