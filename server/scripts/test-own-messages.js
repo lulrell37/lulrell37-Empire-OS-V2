@@ -20,6 +20,6 @@ assert.ok(src('personaRuntime.js').includes('[SENT ON YOUR OWN'), 'her prompt kn
 // The meaningful ones also go to Mem0, labeled as the persona's, never his.
 const m = T.mem0Line('ara', 'auto clip failed');
 assert.ok(/NOT his words/.test(m) && /"ara"/.test(m) && m.endsWith('auto clip failed'));
-for (const f of ['autoClip.js', 'clipScan.js', 'transcribe.js', 'sentinel.js', 'councilMeeting.js', 'morningBrief.js', 'buildAgent.js', 'dayNudge.js', 'moneyWatch.js', 'redeploy.js', 'talonAlerts.js']) assert.ok(src(f).includes('remember: true'), `${f} remembers its reports`);
-for (const f of ['talonWatch.js', 'tradeJournal.js', 'newsWire.js', 'reminders.js']) assert.ok(!src(f).includes('remember: true'), `${f} stays out of Mem0`);
+for (const f of ['autoClip.js', 'clipScan.js', 'transcribe.js', 'councilMeeting.js', 'morningBrief.js', 'buildAgent.js', 'dayNudge.js', 'moneyWatch.js', 'redeploy.js', 'talonAlerts.js']) assert.ok(src(f).includes('remember: true'), `${f} remembers its reports`);
+for (const f of ['sentinel.js', 'talonWatch.js', 'tradeJournal.js', 'newsWire.js', 'reminders.js']) assert.ok(!src(f).includes('remember: true'), `${f} stays out of Mem0`);
 console.log('own messages: all checks passed');

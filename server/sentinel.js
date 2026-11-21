@@ -128,7 +128,7 @@ async function loadState() {
 }
 
 async function tell(text, pushTitle, pushKey) {
-  try { await require('./telegram').notifyOwner(text, { remember: true }); } catch {}
+  try { await require('./telegram').notifyOwner(text); } catch {}
   try { await require('./pushSender').pushAlert(pushKey, pushTitle, text.replace(/[*_`]/g, '').slice(0, 200), { kind: 'sentinel' }); } catch {}
 }
 
