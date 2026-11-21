@@ -104,3 +104,17 @@ const readTurns = () => { try { return JSON.parse(fs.readFileSync(turnsFile, 'ut
   console.log('test-jarvis-engine: all checks passed');
   fs.rmSync(tmp, { recursive: true, force: true });
 })().catch((e) => { console.error(e); process.exit(1); });
+
+// A fresh session after an hour with no turns, and every new ET day.
+{
+  const os2 = require('os'), fs2 = require('fs'), path2 = require('path');
+  const prev = process.env.JARVIS_WORKDIR;
+  process.env.JARVIS_WORKDIR = fs2.mkdtempSync(path2.join(os2.tmpdir(), 'jv-'));
+  const E = require('../jarvisEngine');
+  E.saveSession('abc');
+  const t = Date.now();
+  if (E.loadSession(t + 30 * 60000) !== 'abc' && new Date(t + 30 * 60000).toLocaleDateString('en-CA', { timeZone: 'America/New_York' }) === new Date(t).toLocaleDateString('en-CA', { timeZone: 'America/New_York' })) throw new Error('30 min quiet should resume');
+  if (E.loadSession(t + 61 * 60000) !== null) throw new Error('an hour quiet should start fresh');
+  if (prev === undefined) delete process.env.JARVIS_WORKDIR; else process.env.JARVIS_WORKDIR = prev;
+  console.log('jarvis engine: idle reset checks passed');
+}

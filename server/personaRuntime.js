@@ -1227,7 +1227,7 @@ async function runPersonaTurn(personaId, userText, deliver, { reply: given, resu
   const brain = async (msgs) => {
     if (given != null) { const out = String(given); given = null; engineUsed = !!engine; return out; }
     if (engine && !engineNote) {
-      try { const out = await engine.turn(String(msgs[msgs.length - 1].content), { persona: sys, source: 'telegram', ownerText: userText, resumes }); engineUsed = true; return out; }
+      try { const out = await engine.turn(String(msgs[msgs.length - 1].content), { persona: sys, source: 'telegram', ownerText: userText, resumes, recent: convoLines(history.slice(-12), '', persona).split('\n').slice(0, -1).join('\n') }); engineUsed = true; return out; }
       catch (e) { engineNote = `⚠️ Claude Code (his engine) failed, so this answer is from the plain chat model: ${e.message.slice(0, 200)}`; console.error('jarvis engine:', e.message); }
     }
     return chatAs(p.api, p.model, sys, msgs, { maxTokens: 4000, fallback: persona !== 'ara' });
