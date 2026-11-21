@@ -630,6 +630,7 @@ async function runInjections(text, persona = 'ara', { convo = '', depth = 0, sin
           return r.text;
         } catch (e) { console.error('browse failed:', e.message); return `BROWSE failed: ${e.message}`; }
       }
+      if (name === 'SUBSCRIPTIONS' && ['atlas', 'ara'].includes(persona)) return `SUBSCRIPTIONS (from his email):\n${await require('./moneyWatch').subscriptionsTag()}`;
       if (name === 'MONEY_IN_OUT' && ['atlas', 'ara'].includes(persona)) return `MONEY IN / OUT:\n${await require('./moneyWatch').monthText()}`;
       if (name === 'OPEN_THREADS') return `OPEN THREADS (his Drive note "Open Threads"):\n${await require('./openThreads').readTag()}`;
       if (name === 'TRANSCRIBE' && arg) {
