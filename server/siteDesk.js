@@ -30,7 +30,7 @@ const KEY = 'site_desk';
 const REVIEW_FIRST = 3;
 const MAX_WAITING = 3;
 const MODEL = process.env.SITE_DESK_MODEL || CLAUDE_MODEL;
-const DEFAULT_OFFER = 'Since we built it before you asked, the setup is half off: $500 instead of $1,000 to put it live on your own domain, then $347 a month for hosting, updates, changes whenever you need them, and your Google Business Profile kept up to date.';
+const DEFAULT_OFFER = 'Because we built this for you before you asked, you get our early-bird rate: $497 to put it live on your own domain (normally $995), then $347 a month for hosting, updates, changes whenever you need them, and your Google Business Profile kept up to date.';
 const LIVE_URL = 'https://lulrell-37-empire-os-v-2--lulrell37.replit.app';
 
 // Businesses that live on how they look and get found locally.
