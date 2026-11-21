@@ -38,6 +38,10 @@ const PERMISSION = () => process.env.JARVIS_PERMISSION_MODE || 'auto';
 const ROOT = () => process.env.JARVIS_WORKDIR || path.join(os.homedir(), 'jarvis-workspace');
 const TIMEOUT_MS = () => (Number(process.env.JARVIS_ENGINE_TIMEOUT_MIN) || 30) * 60000;
 const SESSION_IDLE_MS = 3 * 24 * 3600 * 1000; // a fresh session after 3 quiet days
+// …and a fresh session every night (owner's call, 2026-11-20): every turn resends
+// the whole conversation, so a day-long session got heavy on his Max limit. What
+// matters carries over anyway (Mem0, the owner profile, open threads, notes).
+const dayET = (ms = Date.now()) => new Date(ms).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
 const READ_ONLY_TOOLS = 'Read,Grep,Glob,WebSearch,WebFetch';
 
 function enabled() {
@@ -94,12 +98,17 @@ const sessionFile = () => path.join(ROOT(), 'session.json');
 function loadSession() {
   try {
     const s = JSON.parse(fs.readFileSync(sessionFile(), 'utf8'));
-    if (s.id && Date.now() - (s.at || 0) < SESSION_IDLE_MS) return s.id;
+    if (s.id && Date.now() - (s.at || 0) < SESSION_IDLE_MS && (s.day || dayET(s.at || 0)) === dayET()) return s.id;
   } catch { /* none yet */ }
   return null;
 }
 function saveSession(id) {
-  try { fs.mkdirSync(ROOT(), { recursive: true }); fs.writeFileSync(sessionFile(), JSON.stringify({ id, at: Date.now() })); } catch {}
+  try {
+    let day = dayET();
+    try { const old = JSON.parse(fs.readFileSync(sessionFile(), 'utf8')); if (old.id === id && old.day) day = old.day; } catch {}
+    fs.mkdirSync(ROOT(), { recursive: true });
+    fs.writeFileSync(sessionFile(), JSON.stringify({ id, at: Date.now(), day }));
+  } catch {}
 }
 function resetSession() { try { fs.unlinkSync(sessionFile()); } catch {} }
 

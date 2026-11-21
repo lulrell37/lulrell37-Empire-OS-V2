@@ -1,4 +1,6 @@
-// A.T.L.A.S.'s money watch: the Empire's money in and out, logged without him
+// A.T.L.A.S.'s money watch — A.R.A.'s inbox handed to A.T.L.A.S. (owner's framing,
+// 2026-11-20): every money email across all his accounts is hers to log.
+// The Empire's money in and out, logged without him
 // telling her each one (owner's request, 2026-11-20). Every 2 h she reads his
 // Gmail for the emails money already sends — sales and orders (Etsy, Fiverr,
 // Shopify, YouTube/AdSense, affiliate payouts), payments received (PayPal, Cash
@@ -21,9 +23,10 @@ function enabled() { return String(process.env.MONEY_WATCH || '').toLowerCase() 
 
 const SYSTEM = (businesses) => `You are A.T.L.A.S., Mr. Burrus's money manager, reading his recent emails to log money that moved. His businesses: ${businesses.join(', ')}. Anything not tied to one of them is "Personal".
 
+A.R.A. reads his inbox and hands you every money email from every account he has (banks, cards, PayPal, Cash App, Zelle, Venmo, Stripe, Etsy, Fiverr, YouTube, affiliate programs) — track all of them, not one account.
 For each email decide whether it records an ACTUAL money movement to or from him with a clear amount: a sale or order he received money for, a payment or payout received, a deposit, a purchase, a bill or subscription charged, a transfer sent, a refund. NOT money: marketing and promos, "your order shipped" with no charge, quotes, abandoned carts, failed or pending payments, statements, price alerts, anything without an amount.
 Reply with ONLY a JSON array, one object per money email (skip the rest):
-[{"id":"<message id>","direction":"in"|"out","amount":<number, no currency sign>,"currency":"USD","business":"<one of his businesses, exactly as written, or Personal>","source":"<who: Etsy, PayPal, Chase…>","note":"<what it was, under 60 chars>"}]
+[{"id":"<message id>","direction":"in"|"out","amount":<number, no currency sign>,"currency":"USD","business":"<one of his businesses, exactly as written, or Personal>","source":"<which account or service the money moved through: Chase checking, Capital One card, PayPal, Cash App, Etsy…>","note":"<what it was, under 60 chars>"}]
 If none qualify, reply []. Never guess an amount that isn't in the email.`;
 
 function parse(raw, ids) {
@@ -78,7 +81,7 @@ async function tick() {
   if (entries.length) {
     const fmt = (n) => `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
     const lines = entries.map((e) => `${e.direction === 'in' ? '+' : '−'}${fmt(e.amount)} · ${e.business} · ${e.source}${e.note ? ` (${e.note})` : ''}`);
-    await require('./talonAlerts').araNote(`💰 A.T.L.A.S. → A.R.A.: logged from your email —\n${lines.join('\n')}`);
+    await require('./talonAlerts').araNote(`💰 A.T.L.A.S. → A.R.A.: from the money emails A.R.A. passed me —\n${lines.join('\n')}`);
   }
   return { logged: entries.length, read: emails.length };
 }
