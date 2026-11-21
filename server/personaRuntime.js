@@ -1162,6 +1162,19 @@ async function runDeepResearch(topic, deliver, persona = 'ara') {
   }
 }
 
+// His calendar, live, for A.R.A.'s prompt: today plus the next 14 days, cached a
+// minute so a burst of messages is one Google call. Fresh after any calendar write.
+let calCache = { at: 0, text: '' };
+const CAL_RULE = 'Questions about when, what time, where or whether something is happening (a party, a meeting, an appointment, "what do I have today", "am I free Friday") are answered from THIS list first, never from the chat or memory: name the event and its time exactly as listed. Not on it? Say it isn\'t on his calendar for the next two weeks, then check tasks, dates and reminders, or [READ_CALENDAR: YYYY-MM-DD | 30] further out.';
+async function calendarBlock() {
+  if (Date.now() - calCache.at > 60000) {
+    try { calCache = { at: Date.now(), text: await require('./google').calendarList({ startISO: todayET(), days: 15 }) }; }
+    catch (e) { return `[HIS CALENDAR: couldn't be read this turn (${e.message}). For any when/what-time question, emit [READ_CALENDAR] before answering.]`; }
+  }
+  return `[HIS GOOGLE CALENDAR — live, read this turn, ${momentET()}:\n${calCache.text}\n${CAL_RULE}]`;
+}
+const calendarFresh = () => { calCache.at = 0; };
+
 // --- history ---------------------------------------------------------
 
 async function loadHistory(persona = 'ara') {
@@ -1220,6 +1233,9 @@ async function runPersonaTurn(personaId, userText, deliver, { reply: given, resu
     const course = await require('./stephanieCourse').statusText().catch((e) => `(couldn't read it: ${e.message})`);
     sys = `${sys}\n\n[YOUR COURSE — live from Drive this turn:\n${course}\n]`;
   }
+  // A.R.A. always has his calendar in front of her (owner's call, 2026-11-21: "what
+  // time is the party?" was answered from chat memory because she never looked).
+  if (persona === 'ara' && gs && gs.ok) sys = `${sys}\n\n${await calendarBlock()}`;
   const history = await loadHistory(persona);
   const messages = [...history, { role: 'user', content: `[${momentET()}] ${group ? `${require('./groupChat').GROUP_FRAME}\n\n` : ''}${userText}` }];
   const convo = convoLines(history, userText, persona);
@@ -1284,6 +1300,7 @@ async function runPersonaTurn(personaId, userText, deliver, { reply: given, resu
   fx.warnings.push(...sink.warnings);
   fx.confirms.push(...sink.confirms);
   const all = replies.join('\n');
+  if (findTags(all).some((t) => /EVENT$/.test(t.name))) calendarFresh();
   for (const t of openTags(all)) {
     fx.warnings.push(`${t} was cut off before it closed — what ran may be incomplete; ask again for the rest`);
   }
