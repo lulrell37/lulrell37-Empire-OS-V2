@@ -15,4 +15,13 @@ assert.ok(M.lastDayOfMonth('2026-11-30') && M.lastDayOfMonth('2026-12-31') && M.
 assert.ok(!M.lastDayOfMonth('2026-11-20') && !M.lastDayOfMonth('2028-02-28'));
 const mon = M.monthSummary([{ date: '2026-11-02', amount: 100, type: 'income', business: 'Trading' }, { date: '2026-11-20', amount: 40, type: 'expense' }, { date: '2026-10-30', amount: 999, type: 'income' }], '2026-11', 'total');
 assert.ok(/Total: in \$100\.00, out \$40\.00, net \$60\.00/.test(mon), mon);
+for (const n of ['You sent $200 to Lulrell Burrus', 'from TARELL BURRUS', 'Lulrel Burus', 'Terrell J. Burrus', 'Lorell Burrus']) assert.ok(M.ownName(n), n);
+assert.ok(!M.ownName('Darrell Smith') && !M.ownName('Burrus Plumbing'));
+assert.strictEqual(M.parse('[{"id":"a","direction":"out","amount":50,"transfer":true}]', ids)[0].transfer, true);
+const batch = [{ direction: 'out', amount: 500, source: 'Chase' }, { direction: 'in', amount: 500, source: 'Cash App' }, { direction: 'out', amount: 12, source: 'Netflix' }];
+M.pairTransfers(batch, []);
+assert.deepStrictEqual(batch.map((e) => !!e.transfer), [true, true, false]);
+const late = [{ direction: 'in', amount: 300, source: 'Cash App' }];
+const prev = [{ auto: true, amount: 300, type: 'expense', created_at: Date.now() - 3600e3, note: 'auto · Chase' }];
+assert.strictEqual(M.pairTransfers(late, prev).length, 1); assert.ok(late[0].transfer);
 console.log('money watch: all checks passed');
