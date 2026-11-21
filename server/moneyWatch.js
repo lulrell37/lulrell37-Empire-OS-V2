@@ -19,8 +19,8 @@ const QUERY = 'newer_than:3d -in:spam -in:trash (order OR sale OR sold OR paymen
 const MAX_MSGS = 25;
 const SEEN_MAX = 800;
 
-// His own name, and the spellings voice and email apps turn it into (Lulrell,
-// Lulrel, Tarell, Terrell, Lorell…) — on both ends of a transfer it's him paying himself.
+// His own name, Tarell Burrus, and the spellings voice and email apps turn it into
+// (Terrell, Tarrell, Lulrell, Lorell…) — on both ends of a transfer it's him paying himself.
 const OWNER_NAME = /\b(l[uo]l+r?el+|lu\s?rel+|t[ae]r+el+|lor+el+|lul+)\s+(?:[a-z]\.?\s+)?bur+[eiou]?s+\b/i;
 const ownName = (text) => OWNER_NAME.test(String(text || ''));
 
@@ -29,7 +29,7 @@ function enabled() { return String(process.env.MONEY_WATCH || '').toLowerCase() 
 const SYSTEM = (businesses) => `You are A.T.L.A.S., Mr. Burrus's money manager, reading his recent emails to log money that moved. His businesses: ${businesses.join(', ')}. Anything not tied to one of them is "Personal".
 
 A.R.A. reads his inbox and hands you every money email from every account he has (banks, cards, PayPal, Cash App, Zelle, Venmo, Stripe, Etsy, Fiverr, YouTube, affiliate programs) — track all of them, not one account.
-His name is Lulrell Burrus (it may be misspelled: Lulrel, Tarell, Terrell, Lorell Burrus or close to it). Money moving between HIS OWN accounts is a transfer, not money in or out: his name on both ends ("You sent $200 to Lulrell Burrus", "from Lulrell Burrus"), the bank calling it a transfer between his accounts ("Transfer to savings", "added cash from your bank", "transfer to your bank account"), or the same amount leaving one of his accounts and arriving in another in these emails. Mark those "transfer": true. Emails flagged [HIS NAME APPEARS] have his name in them — check whether he is on both ends.
+His name is Tarell Burrus (it may be misspelled: Terrell, Tarrell, Terell, Lulrell, Lorell Burrus or close to it). Money moving between HIS OWN accounts is a transfer, not money in or out: his name on both ends ("You sent $200 to Lulrell Burrus", "from Lulrell Burrus"), the bank calling it a transfer between his accounts ("Transfer to savings", "added cash from your bank", "transfer to your bank account"), or the same amount leaving one of his accounts and arriving in another in these emails. Mark those "transfer": true. Emails flagged [HIS NAME APPEARS] have his name in them — check whether he is on both ends.
 For each email decide whether it records an ACTUAL money movement to or from him with a clear amount: a sale or order he received money for, a payment or payout received, a deposit, a purchase, a bill or subscription charged, a transfer sent, a refund. NOT money: marketing and promos, "your order shipped" with no charge, quotes, abandoned carts, failed or pending payments, statements, price alerts, anything without an amount.
 Reply with ONLY a JSON array, one object per money email (skip the rest):
 [{"id":"<message id>","direction":"in"|"out","amount":<number, no currency sign>,"currency":"USD","business":"<one of his businesses, exactly as written, or Personal>","source":"<which account or service the money moved through: Chase checking, Capital One card, PayPal, Cash App, Etsy…>","note":"<what it was, under 60 chars>","transfer":true|false}]
