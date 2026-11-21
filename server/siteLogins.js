@@ -5,8 +5,8 @@
 // when YOUTUBE_COOKIES / INSTAGRAM_COOKIES aren't set).
 // When a download is refused (bot check, login required), ensureLogin signs in
 // again and the download is retried once. R.O.G.U.E. -> J.A.R.V.I.S. hand-off is
-// shown in the Empire group; he only hears about it when it couldn't be done
-// (a code or a phone approval only he can give, or no account set).
+// shown in the Empire group; when it needs him (a code, a phone approval, a
+// checkpoint) J.A.R.V.I.S. hands it to A.R.A. and she tells him what to do.
 // Secrets: YOUTUBE_LOGIN_EMAIL + YOUTUBE_LOGIN_PASSWORD (a spare Google account),
 // INSTAGRAM_LOGIN_USER + INSTAGRAM_LOGIN_PASSWORD. The passwords never reach the
 // model: the browser's brain types {{PASSWORD}} and the code fills it in.
@@ -98,12 +98,15 @@ async function ensureLogin(site, who = 'rogue') {
   // Told once every 12 h at most while it keeps failing.
   if (!r.ok && Date.now() - (told[site] || 0) > 12 * 3600e3) {
     told[site] = Date.now();
+    // J.A.R.V.I.S. hands it to A.R.A.; she tells him what's needed (voice + text,
+    // her bot), and the hand-off shows in the group.
+    const ask = `${SITES[site].name} needs Mr. Burrus to finish my sign-in for R.O.G.U.E.'s downloads: ${r.text}`;
+    await gc.post('jarvis', `→ A.R.A.: ${ask}`).catch(() => {});
+    const msg = `🔑 **J.A.R.V.I.S. → A.R.A.** ${ask}\nWhen it's sorted (a code entered, the sign-in approved on his phone), tell J.A.R.V.I.S. to sign in to ${SITES[site].name} again.`;
+    await require('./talonAlerts').sendFromAra(msg, undefined, { remember: true }).catch(() => {});
     const telegram = require('./telegram');
-    const bot = telegram.botFor('jarvis') && telegram.botFor('jarvis').isConfigured() ? telegram.botFor('jarvis') : telegram.botFor('ara');
-    if (bot && bot.isConfigured()) {
-      await bot.sendMessage(telegram.OWNER_ID, `🔑 Sir, ${SITES[site].name} logged R.O.G.U.E.'s downloads out and I couldn't sign back in on my own: ${r.text}`, { remember: true }).catch(() => {});
-      if (r.shot) await bot.sendFile(telegram.OWNER_ID, 'photo', r.shot, { filename: 'signin.jpg', caption: `${SITES[site].name} sign-in` }).catch(() => {});
-    }
+    const ara = telegram.botFor('ara');
+    if (r.shot && ara && ara.isConfigured()) await ara.sendFile(telegram.OWNER_ID, 'photo', r.shot, { filename: 'signin.jpg', caption: `${SITES[site].name} sign-in page` }).catch(() => {});
   }
   return r.ok;
 }
