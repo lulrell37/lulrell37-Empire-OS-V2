@@ -66,6 +66,8 @@ app.get('/mem0/status', auth, async (req, res) => {
 // Telegram bots — one headless front door per persona. Each webhook is guarded
 // by its own persona-namespaced secret path + header + owner-id check (no bearer).
 app.use('/telegram', express.json({ limit: '1mb' }), require('./routes/telegram'));
+// The website desk's pages (server/siteDesk.js): public, since the business owners open them.
+app.use('/sites', require('./routes/sites'));
 
 app.use((req, res) => res.status(404).json({ error: 'not found' }));
 app.use((err, req, res, next) => {
@@ -96,6 +98,7 @@ db.init()
     startBuildPollCron();
     startNewsWireCron();
     startAutoClipCron();
+    startSiteDeskCron();
     startOpenThreadsCron();
     startOwnerProfileCron();
     startDayNudgeCron();
@@ -123,6 +126,14 @@ function startAutoClipCron() {
   const autoClip = require('./autoClip');
   cron.schedule('*/20 * * * *', () => autoClip.tick().catch((e) => console.error('auto clip failed:', e.message)));
   console.log('auto clip cron scheduled (every 20m)');
+}
+
+// The website desk: S.C.O.U.T. finds businesses, J.A.R.V.I.S. builds their sites, S.C.O.U.T. emails them.
+function startSiteDeskCron() {
+  if (String(process.env.SITE_DESK || '').toLowerCase() === 'off') return console.log('site desk cron disabled (SITE_DESK=off)');
+  const desk = require('./siteDesk');
+  cron.schedule('10,40 * * * *', () => desk.tick().then((r) => r && !r.skipped && console.log('site desk:', JSON.stringify(r))).catch((e) => console.error('site desk failed:', e.message)));
+  console.log('site desk cron scheduled (every 30m, 9 AM-6 PM ET)');
 }
 
 // Open threads: topics he started and set aside, kept in the Drive note "Open Threads".

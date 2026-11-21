@@ -100,4 +100,4 @@ async function onBoot() {
   araNote(`✅ **Server's live on the new code, Mr. Burrus**${took ? ` — back in ${took}` : ''}.\nRunning: ${running}${same ? '\n(Nothing new on main since the last version — same code, fresh restart.)' : ''}${changes.length ? `\n\nWhat's new:\n${changes.map((m) => `• ${m}`).join('\n')}` : ''}`, undefined, { remember: true });
 }
 
-module.exports = { requestRedeploy, onBoot, codeInfo, RESTART_CODE };
+module.exports = { requestRedeploy, onBoot, codeInfo, publicUrl, RESTART_CODE };

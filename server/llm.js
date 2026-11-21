@@ -53,12 +53,12 @@ function creditStatus() {
 // Anthropic API -> Grok. The subscription is skipped while it's parked on a
 // usage limit (claudeSub.js resumes it at the reported reset time); the API
 // and Grok are skipped while their accounts are known to be out of credits.
-async function claudeText(system, messages, { maxTokens = 900, tools, model = CLAUDE_MODEL } = {}) {
+async function claudeText(system, messages, { maxTokens = 900, tools, model = CLAUDE_MODEL, timeoutMs } = {}) {
   const msgs = typeof messages === 'string' ? [{ role: 'user', content: messages }] : messages;
   const errs = [];
   if (subscriptionAvailable()) {
     try {
-      const out = await claudeSubRun(system, msgs, { model, search: !!tools });
+      const out = await claudeSubRun(system, msgs, { model, search: !!tools, timeoutMs });
       if (out) return out;
       errs.push('subscription: empty reply');
     } catch (e) {

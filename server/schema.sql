@@ -113,3 +113,12 @@ CREATE TABLE IF NOT EXISTS reminders (
   sent_at    bigint
 );
 CREATE INDEX IF NOT EXISTS reminders_due_idx ON reminders (due_at) WHERE sent_at IS NULL;
+
+-- The website desk's pages (server/siteDesk.js): one row per business, served at /sites/<slug>.
+CREATE TABLE IF NOT EXISTS demo_sites (
+  slug       text PRIMARY KEY,
+  data       jsonb NOT NULL DEFAULT '{}'::jsonb,
+  html       text,
+  created_at bigint NOT NULL,
+  updated_at bigint NOT NULL
+);
