@@ -77,6 +77,7 @@ export async function handleCommands(response,personaId,callbacks={}){
     const title=m[1]?.trim();if(!title)continue;
     const id=await addTask(title,m[2]?.trim()||'',m[3]?.trim()||null);
     callbacks.onTaskAdded?.({id,title});
+    gtask.taskCreate({title,notes:m[2]?.trim()||'',due:m[3]?.trim()||null}).catch(()=>{}); // Google Tasks too
   }
   // [CREATE_TASK: title | notes | due-date] — distinct from [ADD_TASK]; mirrors
   // to Google Tasks as well as the app's own synced task list.

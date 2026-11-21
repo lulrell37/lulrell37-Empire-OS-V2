@@ -51,7 +51,7 @@ loop and GO LIVE's transcripts; GO LIVE's prompt also tells her "Aura" is her.
 
 `speakNames` (`server/voiceCues.js`, mirrored in `src/services/voiceCues.js`)
 turns "J.A.R.V.I.S." / "JARVIS" into "Jarvis" before any voice reads it (only
-persona names; other acronyms untouched): `voiceNote`, the app's
+persona names; other acronyms untouched; and, as he says them, Tarell → "Tah-rell" and Ara → "Ar-rah", owner 2026-11-20 — `relayFrom` accepts "Ar-rah"): `voiceNote`, the app's
 `textToSpeech` / `speak` / `speakAs`, and GO LIVE's prompt. Another persona's
 words passed through A.R.A. stay theirs: `ARA_SCRIPT` (both copies) and
 `araScript`'s relay hint (`relayFrom`, `relayHint`, which recognizes every persona off `ROSTER` and gives their real pronouns and role; the script pass in both copies also carries the team list) make her say "Talon says he…", and his
@@ -144,7 +144,7 @@ memory, `[RELAY_TO]`, Drive notes and Sheets. **Calendar and Gmail are A.R.A.'s
 alone** (`ARA_ONLY_READS` / `ARA_ONLY_WRITES` in `server/personaRuntime.js`,
 `araOnly` in `src/services/googleCommands.js`): anyone else's calendar/email
 tags are dropped with a ⚠️, their prompt tells them to `[RELAY_TO: ara | …]`,
-and `relayAllowed` lets a calendar/email hand-off to her through. A.R.A. also has tasks (+ Google Tasks), expenses, revenue,
+and `relayAllowed` lets a calendar/email hand-off to her through. A.R.A. also has tasks (+ Google Tasks — `[ADD_TASK]` mirrors there too now, server and app, not only `[CREATE_TASK]`), expenses, revenue,
 targets, dates, HUD edits (score, routine, Batman Protocol, word/verse/fact),
 the leads pipeline, the council, and THE FIRM (`[PROJECT_START]`, `[DELEGATE]`
 runs the specialists server-side). Send-email and deletes become `tg_pending`
@@ -325,6 +325,8 @@ carries into her next real conversation. W.I.R.E.'s brief and T.A.L.O.N.'s
 trades don't have this problem: they land in `hud_state` and `trades`, both
 already synced and already what the NEWS panel and Trade Journal UI read.
 
+**Nasdaq desk** (`server/talonNasdaq.js`, `TALON_NASDAQ=off` to stop; owner 2026-11-20): the Nasdaq 100 CFD (first of NAS100/US100/USTEC… on the account, `NAS_SYMBOL` overrides) on the 1m chart with the three triggers from the reel he sent (Nicholas Fischer's bots): a close across VWAP (from 9:30, typical-price mean when the feed has no volume), across the 50 EMA, or out of the 9:30-9:45 range (first break each way). Above = buy, below = sell. TradeLocker has no options, so it trades the index with a stop: past the trigger and the signal candle + 0.25× 1m ATR, min 10 / max 60 points (`plan`); sized so the stop loses `NAS_MAX_LOSS` $50 from the instrument's contract size (`tlInstrumentDetails`, `NAS_CONTRACT_SIZE` overrides; none → no trade) — the only orders allowed past `MAX_QTY` (`maxQty`, indices only, `INDEX_MAX_QTY` 10); 2R target; one position; flat by 3:58 PM ET; done for the day at +`NAS_DAILY_GOAL` $200 or 3 losses (`dayTally`). Every minute 9:30-4 ET weekdays while `auto_trade` is on, no AI, on whichever account he is on — live too, owner 2026-11-20, still only with `talon_live` armed (`NAS_LIVE=0` holds it to demo). Journal `setup: 'nasdaq'`; state `app_settings.talon_nasdaq`; `[NASDAQ_DESK]` (T.A.L.O.N., A.R.A.). Not in `SYMBOLS`: the gold/Bitcoin playbook doesn't trade it. `node server/scripts/test-talon-nasdaq.js`.
+
 ## T.A.L.O.N. reads market structure (`server/marketStructure.js`)
 
 Pure code, no AI, mirrored in `src/services/marketStructure.js` (only the header
@@ -417,6 +419,8 @@ day, checks it against the reporting and sends it. `app_settings.woke_x_seen` st
 repeats unless a story develops; nothing new stays quiet.
 
 ## Every persona acts on a task (`INITIATIVE`)
+
+It opens with HIS NAME: Tarell Burrus (owner, 2026-11-20; Lulrell/Terrell are mishearings). It doesn't change how anyone addresses him (Mr. Burrus / sir).
 
 `INITIATIVE` (`server/personas.js`, mirrored in `src/personas/personas.js`, keep in sync) is in every persona's prompt: Telegram turns and relays (`personaRuntime.js`, next to `OBEY`) and the app (`buildSys`). Owner's standing order, 2026-11-20: start a task right away with the tools at hand, come back only for a choice only he can make, his OK before sending/posting/buying/deleting, or something only he has; email codes and links come from A.R.A.; new-account passwords are made and handed to him. It also carries the team map (`ARA_ROUTE`) and tells every persona to pull the pieces a task needs from whoever owns them (a bio from S.C.R.I.B.E., a design from S.E.L.E.N.E., an email code from A.R.A.); `relayAllowed` lets any relay through when his message is a task (`TASK`: make, set up, write, send, …), while questions and opinions stay in the persona's own lane.
 
@@ -600,7 +604,7 @@ Thinking ahead during the day (2026-11-20): at 11 AM, 3 PM and 7 PM ET one Claud
 
 ## A.T.L.A.S.'s money watch (`server/moneyWatch.js`, `MONEY_WATCH=off` to stop)
 
-Money in and out, logged without him telling her (2026-11-20; no bank statements, his call). Every 2 h (:30) it searches his Gmail (last 3 days, money words) for messages not yet seen (`app_settings.money_watch_seen`), and one Claude call keeps only real USD movements with an amount (sales, payouts, payments, charges, bills, refunds) and maps each to a business from `business_targets` or "Personal" (`matchBusiness`). Each goes into the synced `revenue` table (`auto: true`, `source_email`), which the HUD's month-to-date reads, and A.R.A. sends one summary of what was logged. At 9:45 PM ET `dailyReport` runs a last sweep and A.T.L.A.S. gives A.R.A. the day's in, out and net in dollars (no ratio, his call) with each entry (`dayReport`). On the last day of the month, 9:50 PM ET, `monthReport` sends the month's total in, out and net per business (`monthSummary`). `[MONEY_IN_OUT]` (A.T.L.A.S., A.R.A.) gives this month per business. T.A.L.O.N.'s demo trades aren't logged. `node server/scripts/test-money-watch.js`.
+Money in and out, logged without him telling her (2026-11-20; no bank statements, his call). Every 2 h (:30) it searches his Gmail (last 3 days, money words) for messages not yet seen (`app_settings.money_watch_seen`), and one Claude call keeps only real USD movements with an amount (sales, payouts, payments, charges, bills, refunds) and maps each to a business from `business_targets` or "Personal" (`matchBusiness`). Each goes into the synced `revenue` table (`auto: true`, `source_email`), which the HUD's month-to-date reads, and A.R.A. sends one summary of what was logged. Transfers between his own accounts aren't counted (owner's call): his name on both ends (`OWNER_NAME`/`ownName` — Tarell Burrus and its misspellings, flagged to the model), the bank calling it a transfer, or the same amount out of one account and into another within 2 days (`pairTransfers`); the summary lists them, and an earlier logged entry that turns out to be the other side is flagged to check. At 9:45 PM ET `dailyReport` runs a last sweep and A.T.L.A.S. gives A.R.A. the day's in, out and net in dollars (no ratio, his call) with each entry (`dayReport`). On the last day of the month, 9:50 PM ET, `monthReport` sends the month's total in, out and net per business (`monthSummary`). `[MONEY_IN_OUT]` (A.T.L.A.S., A.R.A.) gives this month per business. **Subscriptions** (owner's request, 2026-11-20): the same pass marks recurring charges (`subscription`, `cycle`) and subscription notices with no charge yet (renewal, trial ending, price change, cancelled, payment failed; `parseNotices`); `updateSubs` keeps `app_settings.atlas_subscriptions` (amount, cycle, last charged, next due, status, price change), the summary flags new ones and notices, the 9:45 report lists renewals in the next 3 days (`dueSoon`), and `[SUBSCRIPTIONS]` (A.T.L.A.S., A.R.A.) reads the list with a monthly total. Cancelling stays his call. T.A.L.O.N.'s demo trades aren't logged. `node server/scripts/test-money-watch.js`.
 
 
 ## The website desk (`server/siteDesk.js`, `SITE_DESK=off` to stop)
