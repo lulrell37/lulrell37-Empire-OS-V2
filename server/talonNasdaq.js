@@ -17,8 +17,8 @@
 //   - DAY STOPS: NAS_DAILY_GOAL ($200) made → done for the day (his bots' "stop at
 //     a set amount"); 3 losses in a day → done (ours, for choppy days).
 //   - Regular session only, 9:30-3:55 ET weekdays; no triggers before 9:31.
-//   - DEMO ONLY until he says otherwise (NAS_LIVE=1 to allow live; even then
-//     tlPlaceOrder's live arming still applies).
+//   - Trades whichever account T.A.L.O.N. is on, live included (owner, 2026-11-20);
+//     tlPlaceOrder's live arming still applies. NAS_LIVE=0 holds it to demo.
 // Pure code, no AI calls. Runs every minute in market hours, only while the app's
 // auto-trade toggle is on. TALON_NASDAQ=off stops it. State: app_settings.talon_nasdaq.
 // node server/scripts/test-talon-nasdaq.js.
@@ -178,7 +178,8 @@ async function run(now) {
   const journal = require('./tradeJournal');
   const alerts = require('./talonAlerts');
   const env = await tl.tlActiveEnv().catch(() => 'demo');
-  if (env !== 'demo' && process.env.NAS_LIVE !== '1') return { skipped: 'Nasdaq desk is demo-only for now' };
+  // Live allowed (owner, 2026-11-20); tlPlaceOrder still refuses unless LIVE TRADING is armed. NAS_LIVE=0 keeps it on demo.
+  if (env !== 'demo' && process.env.NAS_LIVE === '0') return { skipped: 'Nasdaq desk is held to demo (NAS_LIVE=0)' };
   const s = await load();
   const day = etDay(now);
   if (s.day !== day) Object.assign(s, { day, orUsed: {}, done: '', lastBar: 0 });
@@ -254,7 +255,7 @@ async function statusText() {
   const s = await load();
   const t = dayTally(await require('./tradeJournal').allTrades().catch(() => []));
   const log = (s.log || []).filter((x) => etDay(x.at) === etDay()).slice(-8).map((x) => `- ${new Date(x.at).toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit' })} ${x.side} on ${x.trigger}: ${x.what}`);
-  return `Nasdaq desk (${symbolCache || 'NAS100'}, 1m VWAP / 50 EMA / opening-range triggers, demo): today ${t.count} closed, net $${t.net}, ${t.losses} losses. Goal $${DAILY_GOAL}, $${MAX_LOSS} max per trade, done after ${MAX_LOSSES} losses.${s.done && s.day === etDay() ? ` Done for today: ${s.done}.` : ''}${log.length ? `\n${log.join('\n')}` : ''}`;
+  return `Nasdaq desk (${symbolCache || 'NAS100'}, 1m VWAP / 50 EMA / opening-range triggers, same account as gold and Bitcoin): today ${t.count} closed, net $${t.net}, ${t.losses} losses. Goal $${DAILY_GOAL}, $${MAX_LOSS} max per trade, done after ${MAX_LOSSES} losses.${s.done && s.day === etDay() ? ` Done for today: ${s.done}.` : ''}${log.length ? `\n${log.join('\n')}` : ''}`;
 }
 
 module.exports = { tick, statusText, signal, plan, lotsFor, dayTally, vwapSeries, emaSeries, openingRange, sessionBars, enabled, getLastRun: () => lastRun, SETUP };
