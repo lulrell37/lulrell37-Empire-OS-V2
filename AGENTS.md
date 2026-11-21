@@ -514,6 +514,10 @@ folder) only runs when he asks. `[EDIT_EVENT: title or id | title=;
 start=; minutes=; location=; notes=]` (`calendarUpdate` in `server/google.js`)
 edits an event in place — A.R.A. only, no confirm (deletes still confirm).
 
+## Recall reads the full conversation, not just Mem0's facts (`memoryQuery`, `server/personaRuntime.js`)
+
+Mem0 stores short extracted facts. When a `[MEMORY_QUERY]` names a day ("November 17", "2026-11-17", "yesterday"; `recallDays`), the whole conversation that day goes to the memory index word for word first: his Telegram chat with that persona (`tg_messages`) and the app exchanges synced into `persona_memory` (`dayTranscript`), and the answer covers every topic, decision and open item. A question with no date also gets the Telegram messages containing its key words (`tgMatches`). Mem0 fills in behind. The app's own `[MEMORY_QUERY]` (`aiService.queryMemory`) is unchanged. `node server/scripts/test-recall-days.js`.
+
 ## Telegram reply guards
 
 Telegram blips (502/503/504, timeouts) are retried in `tg()` (`server/telegram.js`, 3 tries): reads that change nothing (`SAFE_METHODS`: `getFile`, `sendChatAction`, …) and voice-note downloads on any of them; sends only on 429, since a timed-out send may have been delivered. `node server/scripts/test-telegram-retry.js`.

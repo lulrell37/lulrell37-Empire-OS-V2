@@ -1020,6 +1020,63 @@ function recallRows(rows, question) {
   return [...picked.keys()].sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
 }
 
+// Days a recall question names, as YYYY-MM-DD (ET): "2026-11-17", "November 17",
+// "Nov 17th, 2026", "yesterday", "today". A month and day with no year is the
+// latest one not in the future.
+function recallDays(question, now = Date.now()) {
+  const q = String(question || '').toLowerCase();
+  const out = new Set(q.match(/\b\d{4}-\d{2}-\d{2}\b/g) || []);
+  const etDay = (ms) => new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(ms));
+  const today = etDay(now);
+  const re = new RegExp(`\\b(${MONTHS.map((m) => `${m.slice(0, 3)}(?:${m.slice(3)})?`).join('|')})\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?\\b(?:,?\\s+(\\d{4}))?`, 'g');
+  for (const m of q.matchAll(re)) {
+    const mon = MONTHS.findIndex((x) => x.startsWith(m[1].slice(0, 3))) + 1;
+    const dd = Number(m[2]);
+    if (!mon || dd < 1 || dd > 31) continue;
+    let y = Number(m[3]) || Number(today.slice(0, 4));
+    let iso = `${y}-${String(mon).padStart(2, '0')}-${String(dd).padStart(2, '0')}`;
+    if (!m[3] && iso > today) iso = `${y - 1}${iso.slice(4)}`;
+    out.add(iso);
+  }
+  if (/\byesterday\b/.test(q)) out.add(etDay(now - 864e5));
+  if (/\btoday\b|\bthis morning\b|\btonight\b/.test(q)) out.add(today);
+  return [...out].sort().slice(-3);
+}
+
+// The full conversation on those days, word for word: his Telegram chat with this
+// persona (tg_messages) and the app exchanges synced into persona_memory. Mem0
+// keeps only short facts, so this is what makes "what did we talk about on the
+// 17th" answerable in full.
+async function dayTranscript(persona, days, appRows) {
+  if (!days.length) return '';
+  const etDay = (ms) => new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(ms));
+  const lo = Date.parse(`${days[0]}T00:00:00Z`) - 864e5, hi = Date.parse(`${days[days.length - 1]}T00:00:00Z`) + 2 * 864e5;
+  const { rows } = await query('SELECT role, content, ts FROM tg_messages WHERE persona = $1 AND ts >= $2 AND ts < $3 ORDER BY ts ASC', [persona, lo, hi]).catch(() => ({ rows: [] }));
+  const who = (ROSTER[persona] && ROSTER[persona].name) || persona;
+  const items = [
+    ...rows.filter((r) => days.includes(etDay(Number(r.ts)))).map((r) => ({ at: Number(r.ts), text: `(Telegram) ${r.role === 'user' ? 'Mr. Burrus' : who}: ${r.content}` })),
+    ...appRows.filter((r) => days.includes(r.created_at ? etDay(Number(r.created_at)) : r.date)).map((r) => ({ at: Number(r.created_at) || 0, text: `(App) ${r.content}` })),
+  ].sort((a, b) => a.at - b.at);
+  if (!items.length) return `FULL CONVERSATION ON ${days.join(', ')}: nothing in his Telegram chat with you or the synced app exchanges on that day.`;
+  let body = items.map((i) => `[${i.at ? shortMomentET(i.at) : ''}] ${String(i.text).slice(0, 4000)}`).join('\n\n');
+  if (body.length > 50000) body = `${body.slice(0, 25000)}\n\n…(middle of the day cut for length)…\n\n${body.slice(-25000)}`;
+  return `FULL CONVERSATION ON ${days.join(', ')}, word for word, oldest first (${items.length} messages):\n${body}`;
+}
+
+// His Telegram messages with this persona that contain the question's key words,
+// any date (Mem0 may have only a line on it, or nothing).
+async function tgMatches(persona, question) {
+  const words = [...new Set(String(question || '').toLowerCase().match(/[a-z0-9]{4,}/g) || [])].filter((w) => !RECALL_STOP.has(w) && !MONTHS.includes(w)).slice(0, 6);
+  if (!words.length) return '';
+  const { rows } = await query(
+    `SELECT role, content, ts FROM tg_messages WHERE persona = $1 AND (${words.map((_, i) => `content ILIKE ${i + 2}`).join(' OR ')}) ORDER BY ts DESC LIMIT 40`,
+    [persona, ...words.map((w) => `%${w}%`)],
+  ).catch(() => ({ rows: [] }));
+  if (!rows.length) return '';
+  const who = (ROSTER[persona] && ROSTER[persona].name) || persona;
+  return `TELEGRAM MESSAGES MATCHING THE QUESTION (newest first, full text):\n${rows.map((r) => `[${shortMomentET(Number(r.ts))}] ${r.role === 'user' ? 'Mr. Burrus' : who}: ${String(r.content).slice(0, 2500)}`).join('\n\n')}`;
+}
+
 async function memoryQuery(question, persona = 'ara') {
   const all = (await syncedRows('persona_memory').catch(() => []))
     .filter((r) => r.persona === persona)
@@ -1027,23 +1084,26 @@ async function memoryQuery(question, persona = 'ara') {
   // Mem0 is the memory: its semantic matches first, then its WHOLE dated
   // history for this persona so date questions ("in August", "when did I")
   // can be answered. The synced raw exchanges only fill in behind it.
-  const [hits, everything] = await Promise.all([
+  const days = recallDays(question);
+  const [hits, everything, day, tgHits] = await Promise.all([
     mem0Search(persona, question, { topK: 60, threshold: 0.01 }),
     mem0All(persona),
+    dayTranscript(persona, days, all),
+    days.length ? '' : tgMatches(persona, question),
   ]);
   const rows = recallRows(all, question).slice(0, everything.length ? 40 : 200);
-  if (!rows.length && !hits.length && !everything.length) return 'No stored memories yet.';
+  if (!rows.length && !hits.length && !everything.length && !day && !tgHits) return 'No stored memories yet.';
   const m0 = hits.map((h) => `- ${mem0Line(h)}`).join('\n');
   const span = (xs) => (xs.length ? `${mem0Line(xs[xs.length - 1]).slice(1, 11)} → ${mem0Line(xs[0]).slice(1, 11)}` : 'none');
   const history = everything.map((h) => `- ${mem0Line(h)}`).join('\n');
-  const corpus = ((m0 ? `MEM0 — BEST MATCHES FOR THE QUESTION (dated):\n${m0}\n\n` : '')
+  const corpus = ((day ? `${day}\n\n` : '') + (tgHits ? `${tgHits.slice(0, 30000)}\n\n` : '') + (m0 ? `MEM0 — BEST MATCHES FOR THE QUESTION (dated):\n${m0}\n\n` : '')
     + (history ? `MEM0 — EVERYTHING YOU KNOW, newest first (${everything.length} memories, ${span(everything)}):\n${history.slice(0, 60000)}\n\n` : '')
-    + (rows.length ? `RAW EXCHANGES (synced from the app):\n` + rows.map((r) => `[${r.created_at ? shortMomentET(Number(r.created_at)) : r.date || ''}${r.category ? ' · ' + r.category : ''}]\n${r.content}`).join('\n\n') : '')).slice(0, 90000);
+    + (rows.length ? `RAW EXCHANGES (synced from the app):\n` + rows.map((r) => `[${r.created_at ? shortMomentET(Number(r.created_at)) : r.date || ''}${r.category ? ' · ' + r.category : ''}]\n${r.content}`).join('\n\n') : '')).slice(0, 140000);
   const who = (ROSTER[persona] && ROSTER[persona].name) || persona;
   return claudeText(
-    `You are the private memory index for ${who}, one of Mr. Burrus's personas. Below are stored exchanges, newest first. Answer the recall question using ONLY what's here. Be specific — quote dates and details. If it's not covered, say so in one sentence. No preamble.\n\n=== MEMORIES ===\n${corpus}\n=== END ===`,
+    `You are the private memory index for ${who}, one of Mr. Burrus's personas. Below are stored exchanges, newest first. Answer the recall question using ONLY what's here. When there is a FULL CONVERSATION section, that is the real record of the day: go through it in order and give every topic, decision, request and open item, with times and specifics (numbers, names, what was agreed, what was left undone), not a summary of the gist. Mem0's lines are short extracted facts; use them to fill in. Be specific — quote dates and details. If it's not covered, say so in one sentence. No preamble.\n\n=== MEMORIES ===\n${corpus}\n=== END ===`,
     question,
-    { maxTokens: 600 },
+    { maxTokens: days.length ? 1500 : 800 },
   );
 }
 
@@ -1240,4 +1300,5 @@ async function runPersonaTurn(personaId, userText, deliver, { reply: given, resu
 // Back-compat: A.R.A.'s turn.
 const runAraTurn = (userText, deliver) => runPersonaTurn('ara', userText, deliver);
 
-module.exports = { runPersonaTurn, runAraTurn, gatherContext, contextBlock, applyEffects, runInjections };
+module.exports = {
+  recallDays, runPersonaTurn, runAraTurn, gatherContext, contextBlock, applyEffects, runInjections };
