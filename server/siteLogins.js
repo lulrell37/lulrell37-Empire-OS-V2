@@ -63,6 +63,22 @@ async function exportCookies(site) {
   return text.split('\n').length - 4;
 }
 
+// A code the site emailed: A.R.A.'s Gmail (the same inbox she reads), newest
+// message from that site in the last 15 min, its first 6-8 digit code. (pure part: codeIn)
+const SENDERS = { youtube: 'from:(google.com OR accounts.google.com)', instagram: 'from:(instagram.com OR mail.instagram.com)' };
+function codeIn(text) { const m = String(text || '').match(/(?<![\d#])(\d{6,8})(?!\d)/); return m ? m[1] : null; }
+const wantsEmailCode = (text) => /e-?mail|inbox|sent (a|the) code|check your email/i.test(String(text || '')) && /code|verif/i.test(String(text || ''));
+async function emailCode(site) {
+  const g = require('./google');
+  for (let i = 0; i < 6; i++) { // the email can take a minute
+    const list = await g.gmailList({ q: `${SENDERS[site]} newer_than:1h`, max: 3 }).catch(() => '');
+    const id = (String(list).match(/\[id:([\w-]+)\]/) || [])[1];
+    if (id) { const c = codeIn((await g.gmailRead(id).catch(() => '')).split('\n').slice(4).join('\n')); if (c) return c; }
+    await new Promise((r) => setTimeout(r, 15000));
+  }
+  return null;
+}
+
 // Sign in through the browser, then write the cookies out. -> { ok, text }
 async function signIn(site) {
   const s = SITES[site];
@@ -75,7 +91,20 @@ async function signIn(site) {
     secrets: { USER: process.env[s.user], PASSWORD: process.env[s.pass] },
     brain: (sys, prompt) => claudeText(sys, prompt, { maxTokens: 700 }),
   });
-  if (r.status !== 'done') return { ok: false, text: r.text, shot: r.shot };
+  // An emailed code: A.R.A.'s inbox has it, so fetch it and finish without him.
+  if (r.status !== 'done' && wantsEmailCode(r.text)) {
+    const code = await emailCode(site);
+    if (code) {
+      await require('./groupChat').post('ara', `→ J.A.R.V.I.S.: the ${s.name} code just came into his email, here it is.`).catch(() => {});
+      const r2 = await browser.runTask({
+        persona: 'jarvis', personaName: 'J.A.R.V.I.S.', ownerText: '', allow: ALLOW,
+        task: `You are partway through signing in to ${s.name}; the page is asking for the code that was emailed. Type {{CODE}} into the code box and continue. Then do the rest: ${s.task}`,
+        secrets: { USER: process.env[s.user], PASSWORD: process.env[s.pass], CODE: code },
+        brain: (sys, prompt) => claudeText(sys, prompt, { maxTokens: 700 }),
+      });
+      if (r2.status !== 'done') return { ok: false, text: r2.text, shot: r2.shot };
+    } else return { ok: false, text: `${r.text} (A.R.A. didn't find the code in his email within 90 seconds)`, shot: r.shot };
+  } else if (r.status !== 'done') return { ok: false, text: r.text, shot: r.shot };
   const n = await exportCookies(site);
   return n ? { ok: true, text: `signed in to ${s.name}; ${n} cookies saved for the downloads` } : { ok: false, text: `the browser said it signed in to ${s.name}, but no ${s.name} cookies came out of it`, shot: r.shot };
 }
@@ -121,4 +150,4 @@ async function tag(arg) {
 
 const LOGIN_TOOLS = ` - [SITE_LOGIN: youtube|instagram] — sign your browser in to that site with the account saved on the server, so R.O.G.U.E.'s downloads, transcripts and style learning get past the bot check. It also runs by itself whenever a login expires; he's told only when it can't be done (a code or phone approval only he can give). Report only what the result says.`;
 
-module.exports = { toNetscape, cookieFor, ensureLogin, signIn, tag, hasAccount, LOGIN_TOOLS, SITES, ALLOW };
+module.exports = { codeIn, wantsEmailCode, toNetscape, cookieFor, ensureLogin, signIn, tag, hasAccount, LOGIN_TOOLS, SITES, ALLOW };

@@ -37,6 +37,9 @@ assert.strictEqual(L.hasAccount('youtube'), true);
 for (const t of ['Allow all cookies', 'Accept all', 'Not now', 'Save info', 'Continue']) assert.ok(L.ALLOW.test(t), t);
 for (const t of ['Delete account', 'Post', 'Follow']) assert.ok(!L.ALLOW.test(t), t);
 assert.ok(/\{\{PASSWORD\}\}/.test(L.SITES.youtube.task) && !/x@gmail/.test(L.SITES.youtube.task), 'the brain never sees the password');
+assert.strictEqual(L.codeIn('Your Google verification code is 482913. Order #12'), '482913');
+assert.strictEqual(L.codeIn('no code here, ref #1234567'), null);
+assert.ok(L.wantsEmailCode('Google sent a verification code to your email') && !L.wantsEmailCode('Google wants an approval on his phone'));
 (async () => {
   delete process.env.YOUTUBE_LOGIN_PASSWORD;
   assert.strictEqual(await L.ensureLogin('youtube'), false, 'no account: no sign-in attempt, no message');
