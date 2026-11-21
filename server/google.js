@@ -586,6 +586,16 @@ async function driveUploadFile(filePath, name, mime = 'video/mp4') {
 
 // Stream a Drive file's bytes to a local path (the owner's own file, so it uses
 // his token). Returns the file name.
+// Audio files in the Drive folder with this name (his music library for R.O.G.U.E.).
+async function driveFolderAudio(folderName) {
+  const esc = String(folderName).replace(/'/g, "\\'");
+  const f = await gapi('/drive/v3/files', { query: { q: `trashed=false and mimeType='application/vnd.google-apps.folder' and name='${esc}'`, pageSize: 5, fields: 'files(id,name)' } });
+  const folder = f && f.files && f.files[0];
+  if (!folder) return null;
+  const d = await gapi('/drive/v3/files', { query: { q: `trashed=false and '${folder.id}' in parents and (mimeType contains 'audio/' or name contains '.mp3' or name contains '.m4a' or name contains '.wav')`, pageSize: 200, fields: 'files(id,name,size)' } });
+  return (d && d.files) || [];
+}
+
 async function driveDownloadTo(fileId, destPath, maxBytes) {
   const fs = require('fs');
   const { Readable } = require('stream');
@@ -601,7 +611,7 @@ async function driveDownloadTo(fileId, destPath, maxBytes) {
 }
 
 module.exports = {
-  driveUploadFile, driveDownloadTo,
+  driveUploadFile, driveDownloadTo, driveFolderAudio,
   calendarFind, calendarUpdate, driveMoveNote,
   accessToken, googleLinked, googleStatus, readDriveNote, saveDriveNote, gmailSend,
   gmailList, gmailRead, calendarList, calendarCreate, calendarDelete,
