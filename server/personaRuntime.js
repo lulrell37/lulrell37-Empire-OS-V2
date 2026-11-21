@@ -594,7 +594,11 @@ function stripTags(text) {
 // relay (one hop further is allowed — A.T.L.A.S. → T.A.L.O.N. — not a chain).
 // `sink` ({ notes, warnings, confirms, deliver }) collects what a relayed
 // persona's own write tags actually did, so the turn's receipt shows it.
-async function runInjections(text, persona = 'ara', { convo = '', depth = 0, sink = null, asked = '' } = {}) {
+// KEEP MOVING (owner's rule, 2026-11-21): inside a job, any persona can hand the
+// next step to whoever can do it, up to MAX_RELAY_DEPTH hand-offs deep; `chain`
+// is everyone already on it, so a job never bounces back and forth.
+const MAX_RELAY_DEPTH = 3;
+async function runInjections(text, persona = 'ara', { convo = '', depth = 0, sink = null, asked = '', chain = [] } = {}) {
   // Run in parallel — "weather, my calendar and my email" is three lookups, and
   // one at a time (a web search alone is 10-20s) made combined asks crawl.
   const one = async ({ name, arg }) => {
@@ -682,13 +686,14 @@ async function runInjections(text, persona = 'ara', { convo = '', depth = 0, sin
         const id = resolvePersonaId(ref);
         if (!id || !msg) return `RELAY_TO "${arg}": couldn't route that.`;
         if (id === persona) return `RELAY_TO "${ref}": that's you — just answer him directly.`;
-        if (depth > 1) return `RELAY_TO "${ref}": not from inside a relay — answer with what you have.`;
-        // Mr. Burrus didn't ask for them — answer it yourself.
-        if (!relayAllowed(asked, id, persona)) return `RELAY_TO "${ref}": not sent — Mr. Burrus didn't ask you to bring ${ROSTER[id].name} in. Answer it yourself from your own knowledge; don't mention the hand-off.`;
+        if (depth >= MAX_RELAY_DEPTH) return `RELAY_TO "${ref}": this job is already ${depth} hand-offs deep — finish it with what you have and say what's still open.`;
+        if (chain.includes(id)) return `RELAY_TO "${ref}": ${ROSTER[id].name} is already on this job (they handed it to you) — finish your part and give it back in your answer.`;
+        // Top level: questions and opinions stay in your lane unless he asked. Inside a job (depth 1+), the next step goes to whoever can do it.
+        if (depth === 0 && !relayAllowed(asked, id, persona)) return `RELAY_TO "${ref}": not sent — Mr. Burrus didn't ask you to bring ${ROSTER[id].name} in. Answer it yourself from your own knowledge; don't mention the hand-off.`;
         // Shown in the Empire group chat as it happens (nothing when no group is set).
         const gc = require('./groupChat');
         await gc.relayAsked(persona, id, msg);
-        const answer = await relayToPersona(id, msg, { from: persona, convo, depth: depth + 1, sink, asked });
+        const answer = await relayToPersona(id, msg, { from: persona, convo, depth: depth + 1, sink, asked, chain: [...chain, persona] });
         await gc.relayAnswered(id, answer, { from: persona, message: msg });
         return `YOU ASKED ${ROSTER[id].name}: "${msg}"\n${ROSTER[id].name} REPLIED (their words — their "I" is ${ROSTER[id].name}; tell Mr. Burrus what ${ROSTER[id].name} said/did, not as yours; don't paste or read out their reply, put it in your own words, what matters first):\n${answer}`;
       }
@@ -916,7 +921,7 @@ ${SHARED_OPS}
 // relay like "ask Atlas about gold" carries what was actually being discussed),
 // and one round of its own lookups before it answers — without that, a reply
 // that was just "[TRADE_SCAN: XAUUSD]" came back as the whole answer.
-async function relayToPersona(id, message, { from = 'ara', convo = '', depth = 1, sink = null, asked = '' } = {}) {
+async function relayToPersona(id, message, { from = 'ara', convo = '', depth = 1, sink = null, asked = '', chain = [] } = {}) {
   const p = ROSTER[id];
   const [ctx, gs] = await Promise.all([
     gatherContext().catch(() => null),
@@ -941,7 +946,7 @@ async function relayToPersona(id, message, { from = 'ara', convo = '', depth = 1
   // Room for a long note or several in one go.
   let reply = await chatAs(p.api, p.model, sys, messages, { maxTokens: 2500, fallback: id !== 'ara' });
   const replies = [reply];
-  const inj = await runInjections(reply, id, { convo, depth, sink, asked });
+  const inj = await runInjections(reply, id, { convo, depth, sink, asked, chain });
   if (inj) {
     messages.push({ role: 'assistant', content: reply });
     messages.push({ role: 'user', content: `[tool results — now answer using these. Don't repeat the read tags; write tags you already emitted will run — emit only ones you still need.]\n\n${inj}` });
