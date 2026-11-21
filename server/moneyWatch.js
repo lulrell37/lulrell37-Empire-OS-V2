@@ -86,10 +86,9 @@ async function tick() {
   return { logged: entries.length, read: emails.length };
 }
 
-// This month, in and out, per business — for [MONEY_IN_OUT].
-async function monthText() {
-  const month = todayET().slice(0, 7);
-  const rows = (await syncedRows('revenue').catch(() => [])).filter((r) => String(r.date || '').startsWith(month));
+// A month (YYYY-MM), in and out, per business and total — pure, on the revenue rows.
+function monthSummary(all, month, label = `${month} so far`) {
+  const rows = all.filter((r) => String(r.date || '').startsWith(month));
   if (!rows.length) return `Nothing logged in ${month} yet.`;
   const by = {};
   for (const r of rows) {
@@ -101,11 +100,29 @@ async function monthText() {
   let tin = 0, tout = 0;
   const lines = Object.entries(by).sort((a, b) => (b[1].in - b[1].out) - (a[1].in - a[1].out)).map(([b, v]) => { tin += v.in; tout += v.out; return `- ${b}: in ${f(v.in)}, out ${f(v.out)}, net ${f(v.in - v.out)}`; });
   const auto = rows.filter((r) => r.auto).length;
-  return `${month} so far (${rows.length} entries, ${auto} logged automatically from email):\n${lines.join('\n')}\nTotal: in ${f(tin)}, out ${f(tout)}, net ${f(tin - tout)}`;
+  return `${label} (${rows.length} entries, ${auto} logged automatically from email):\n${lines.join('\n')}\nTotal: in ${f(tin)}, out ${f(tout)}, net ${f(tin - tout)}`;
+}
+
+// This month so far — for [MONEY_IN_OUT].
+async function monthText() {
+  return monthSummary(await syncedRows('revenue').catch(() => []), todayET().slice(0, 7));
+}
+
+// End of the month (last day, 9:50 PM ET, after the day report): A.T.L.A.S. gives
+// A.R.A. the month's total in, out and net, per business. (Owner's request, 2026-11-20.)
+const lastDayOfMonth = (day) => new Date(Date.UTC(+day.slice(0, 4), +day.slice(5, 7) - 1, +day.slice(8, 10) + 1)).getUTCDate() === 1;
+async function monthReport({ force = false } = {}) {
+  if (!enabled()) return { skipped: 'off' };
+  const day = todayET();
+  if (!force && !lastDayOfMonth(day)) return { skipped: 'not the last day' };
+  const month = day.slice(0, 7);
+  const name = new Date(`${month}-15T12:00:00Z`).toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+  await require('./talonAlerts').araNote(`📅 A.T.L.A.S. → A.R.A.: ${name} is done. ${monthSummary(await syncedRows('revenue').catch(() => []), month, `The month's total`)}`);
+  return { sent: true };
 }
 
 // End of day (9:45 PM ET): A.T.L.A.S. gives A.R.A. today's in and out — totals,
-// the in:out ratio, net, and each entry — after one last sweep of the inbox.
+// in, out and net in dollars, and each entry — after one last sweep of the inbox.
 // Quiet days say so in one line. (Owner's request, 2026-11-20.)
 function dayReport(rows, day) {
   const f = (n) => `$${n.toFixed(2)}`;
@@ -118,8 +135,7 @@ function dayReport(rows, day) {
     if (out) tout += a; else tin += a;
     return `${out ? '−' : '+'}${f(a)} · ${r.business || 'Personal'}${r.note ? ` · ${String(r.note).replace(/^auto · /, '')}` : ''}`;
   });
-  const ratio = tout > 0 ? `${(tin / tout).toFixed(2)} : 1` : (tin > 0 ? 'all in, nothing out' : '—');
-  return `💰 A.T.L.A.S. → A.R.A.: today's money (${day})\nIn ${f(tin)} · Out ${f(tout)} · Net ${f(tin - tout)} · In:out ${ratio}\n${lines.join('\n')}`;
+  return `💰 A.T.L.A.S. → A.R.A.: today's money (${day})\nIn ${f(tin)} · Out ${f(tout)} · Net ${f(tin - tout)}\n${lines.join('\n')}`;
 }
 
 async function dailyReport() {
@@ -132,4 +148,4 @@ async function dailyReport() {
 
 const MONEY_TOOLS = ' - [MONEY_IN_OUT] — this month\'s money in and out, per business and total, from everything logged (yours, his, and what you log automatically from his email every 2 hours: sales, payouts, payments, charges, bills). Read it whenever he asks how the money looks.';
 
-module.exports = { dailyReport, dayReport, tick, parse, matchBusiness, monthText, MONEY_TOOLS, enabled };
+module.exports = { dailyReport, dayReport, monthReport, monthSummary, lastDayOfMonth, tick, parse, matchBusiness, monthText, MONEY_TOOLS, enabled };
