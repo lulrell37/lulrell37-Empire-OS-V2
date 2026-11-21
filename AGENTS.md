@@ -522,6 +522,10 @@ Every message or file a bot sends him on its own (trade alerts, clip results and
 
 Mem0 stores short extracted facts. When a `[MEMORY_QUERY]` names a day ("November 17", "2026-11-17", "yesterday"; `recallDays`), the whole conversation that day goes to the memory index word for word first: his Telegram chat with that persona (`tg_messages`) and the app exchanges synced into `persona_memory` (`dayTranscript`), and the answer covers every topic, decision and open item. A question with no date also gets the Telegram messages containing its key words (`tgMatches`). Mem0 fills in behind. The app's own `[MEMORY_QUERY]` (`aiService.queryMemory`) is unchanged. `node server/scripts/test-recall-days.js`.
 
+## The Empire group chat (`server/groupChat.js`)
+
+He makes a Telegram group with the persona bots; A.R.A.'s bot (Group Privacy off in BotFather) saves the first group it hears him in as `app_settings.tg_group` and answers there (other bots ignore group messages; anyone but him is ignored quietly). Bots can't see each other, so the server posts every `[RELAY_TO]` hand-off there as it happens, from his private chats too: the ask from the asking persona's bot, the answer from the other's (its own bot if it has one, else A.R.A.'s with the name on the line). In the group (`GROUP_FRAME`, `sink.group`) a message naming nobody goes to A.R.A., who can bring in anyone; a named persona or "everyone"/"council" is relayed one at a time, each hearing the ones before. Group turns live in A.R.A.'s Telegram history. App-side relays aren't posted. `node server/scripts/test-group-chat.js`.
+
 ## Telegram reply guards
 
 Telegram blips (502/503/504, timeouts) are retried in `tg()` (`server/telegram.js`, 3 tries): reads that change nothing (`SAFE_METHODS`: `getFile`, `sendChatAction`, …) and voice-note downloads on any of them; sends only on 429, since a timed-out send may have been delivered. `node server/scripts/test-telegram-retry.js`.

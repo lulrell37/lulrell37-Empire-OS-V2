@@ -49,6 +49,10 @@ async function handleUpdate(personaId, bot, update) {
   if (!cb && (!msg || !msg.chat)) return;
 
   const from = cb ? cb.from : msg.from;
+  // The Empire group chat: only A.R.A.'s bot answers there (the others only post
+  // hand-offs), and only to him; anyone else in the group is ignored quietly.
+  const inGroup = !cb && require('../groupChat').isGroupChat(msg.chat);
+  if (inGroup && (personaId !== 'ara' || !tg.isOwner(from && from.id))) return;
   if (!tg.isOwner(from && from.id)) {
     if (cb) await bot.tg('answerCallbackQuery', { callback_query_id: cb.id, text: 'This bot is private.' }).catch(() => {});
     else await bot.sendMessage(msg.chat.id, 'This bot is private.').catch(() => {});
@@ -66,6 +70,10 @@ async function handleUpdate(personaId, bot, update) {
 
   if (cb) return handleConfirmTap(personaId, bot, cb);
   // An album arrives as one update per photo/video — gather them into one turn.
+  if (inGroup) {
+    const gc = require('../groupChat');
+    if (await gc.setGroup(msg.chat)) await bot.sendMessage(msg.chat.id, `This is the Empire group now, Mr. Burrus. Every hand-off between the team shows up here as it happens. Talk to me here, name anyone to bring them in, or say "everyone" for the whole team.`, { log: false }).catch(() => {});
+  }
   if (msg.media_group_id && mediaOf(msg)) return queueAlbum(personaId, bot, msg);
   return handleMessages(personaId, bot, [msg]);
 }
@@ -260,7 +268,7 @@ async function handleMessages(personaId, bot, msgs) {
   const keepTyping = setInterval(() => bot.sendChatAction(chatId, 'record_voice').catch(() => {}), 6000);
   const started = Date.now();
   try {
-    const result = await runPersonaTurn(personaId, text, deliver);
+    const result = await runPersonaTurn(personaId, text, deliver, { group: require('../groupChat').isGroupChat(msg.chat) });
     console.log(`tg ${personaId}: reply ready in ${Math.round((Date.now() - started) / 1000)}s`);
     await sendTurnResult(personaId, bot, chatId, result, text, deliver);
   } catch (e) {

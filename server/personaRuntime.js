@@ -685,7 +685,12 @@ async function runInjections(text, persona = 'ara', { convo = '', depth = 0, sin
         if (depth > 1) return `RELAY_TO "${ref}": not from inside a relay — answer with what you have.`;
         // Mr. Burrus didn't ask for them — answer it yourself.
         if (!relayAllowed(asked, id, persona)) return `RELAY_TO "${ref}": not sent — Mr. Burrus didn't ask you to bring ${ROSTER[id].name} in. Answer it yourself from your own knowledge; don't mention the hand-off.`;
-        return `YOU ASKED ${ROSTER[id].name}: "${msg}"\n${ROSTER[id].name} REPLIED (their words — their "I" is ${ROSTER[id].name}; tell Mr. Burrus what ${ROSTER[id].name} said/did, not as yours; don't paste or read out their reply, put it in your own words, what matters first):\n${await relayToPersona(id, msg, { from: persona, convo, depth: depth + 1, sink, asked })}`;
+        // Shown in the Empire group chat as it happens (nothing when no group is set).
+        const gc = require('./groupChat');
+        await gc.relayAsked(persona, id, msg);
+        const answer = await relayToPersona(id, msg, { from: persona, convo, depth: depth + 1, sink, asked });
+        await gc.relayAnswered(id, answer);
+        return `YOU ASKED ${ROSTER[id].name}: "${msg}"\n${ROSTER[id].name} REPLIED (their words — their "I" is ${ROSTER[id].name}; tell Mr. Burrus what ${ROSTER[id].name} said/did, not as yours; don't paste or read out their reply, put it in your own words, what matters first):\n${answer}`;
       }
       return '';
     } catch (e) {
@@ -700,7 +705,15 @@ async function runInjections(text, persona = 'ara', { convo = '', depth = 0, sin
     seen.add(k);
     return true;
   });
-  return (await Promise.all(tags.map(one))).filter(Boolean).join('\n\n');
+  if (!(sink && sink.group)) return (await Promise.all(tags.map(one))).filter(Boolean).join('\n\n');
+  // In the group chat the hand-offs go one at a time, each hearing the ones before.
+  const out = await Promise.all(tags.filter((t) => t.name !== 'RELAY_TO').map(one));
+  for (const t of tags.filter((x) => x.name === 'RELAY_TO')) {
+    const r = await one(t);
+    out.push(r);
+    if (r) convo = `${convo}\n${String(r).replace(/\s+/g, ' ').slice(0, 1500)}`;
+  }
+  return out.filter(Boolean).join('\n\n');
 }
 
 const { COURSE_TAGS, courseTag } = require('./stephanieCourse');
@@ -1180,7 +1193,7 @@ async function saveMessage(persona, role, content) {
 // { text, effects }. `reply`: J.A.R.V.I.S.'s engine already wrote the first answer
 // (an app job finished after the app stopped listening) — use it instead of
 // asking again; its tags and any lookup rounds still run.
-async function runPersonaTurn(personaId, userText, deliver, { reply: given, resumes = 0 } = {}) {
+async function runPersonaTurn(personaId, userText, deliver, { reply: given, resumes = 0, group = false } = {}) {
   userText = require('./llm').fixNames(userText); // "Aura" is always A.R.A.
   const persona = ROSTER[personaId] ? personaId : 'ara';
   const p = ROSTER[persona];
@@ -1201,9 +1214,9 @@ async function runPersonaTurn(personaId, userText, deliver, { reply: given, resu
     sys = `${sys}\n\n[YOUR COURSE — live from Drive this turn:\n${course}\n]`;
   }
   const history = await loadHistory(persona);
-  const messages = [...history, { role: 'user', content: `[${momentET()}] ${userText}` }];
+  const messages = [...history, { role: 'user', content: `[${momentET()}] ${group ? `${require('./groupChat').GROUP_FRAME}\n\n` : ''}${userText}` }];
   const convo = convoLines(history, userText, persona);
-  const sink = { notes: [], warnings: [], confirms: [], media: [], deliver };
+  const sink = { notes: [], warnings: [], confirms: [], media: [], deliver, group };
 
   // 4000: a long note lives inside the reply's tag — at 1200 it was cut off
   // mid-note, the tag never closed, and nothing was saved.
