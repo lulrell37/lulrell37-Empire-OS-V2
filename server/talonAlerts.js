@@ -25,8 +25,6 @@ async function sendFromAra(text, spoken = text) {
     .catch((e) => { console.error('trade alert voice failed:', e.message); return { ogg: null }; });
   if (ogg) await ara.sendVoice(telegram.OWNER_ID, ogg).catch((e) => console.error('trade alert sendVoice failed:', e.message));
   await ara.sendMessage(telegram.OWNER_ID, text);
-  await query('INSERT INTO tg_messages (persona, role, content, ts) VALUES ($1, $2, $3, $4)', ['ara', 'assistant', text, Date.now()])
-    .catch((e) => console.error('trade alert history save failed:', e.message));
   return true;
 }
 

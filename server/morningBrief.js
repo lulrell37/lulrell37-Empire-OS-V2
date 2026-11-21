@@ -426,8 +426,6 @@ async function runMorningBrief({ force = false } = {}) {
   await ara.sendMessage(telegram.OWNER_ID, text, { plain: true });
   // Into A.R.A.'s Telegram history, so a reply ("tell me more about the 2nd AP
   // story") has the brief in context.
-  await query('INSERT INTO tg_messages (persona, role, content, ts) VALUES ($1, $2, $3, $4)', ['ara', 'assistant', text, Date.now()])
-    .catch((e) => console.error('morning brief history save failed:', e.message));
   return { sent: true, voiced, today, chars: text.length };
 }
 
@@ -442,8 +440,6 @@ async function runWordReminder() {
   const spoken = text.replace(/📖\s*/, '').replace(/\/[^/\n]+\//, '').replace(/In a sentence:/, 'Used in a sentence:');
   await sendVoice(ara, telegram.OWNER_ID, spoken, 'Remind me of the word of the day.');
   await ara.sendMessage(telegram.OWNER_ID, text);
-  await query('INSERT INTO tg_messages (persona, role, content, ts) VALUES ($1, $2, $3, $4)', ['ara', 'assistant', text, Date.now()])
-    .catch(() => {});
   return { sent: true, word: hud.word_of_day };
 }
 

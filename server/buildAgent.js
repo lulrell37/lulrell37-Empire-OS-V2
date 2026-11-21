@@ -212,7 +212,6 @@ async function pollAndNotify() {
     const { ogg } = await require('./personaVoice').voiceNote(persona, ev.text).catch(() => ({ ogg: null }));
     if (ogg) await bot.sendVoice(telegram.OWNER_ID, ogg).catch(() => {});
     await bot.sendMessage(telegram.OWNER_ID, ev.text).catch((e) => console.error('build notify failed:', e.message));
-    await query('INSERT INTO tg_messages (persona, role, content, ts) VALUES ($1, $2, $3, $4)', [persona, 'assistant', ev.text, Date.now()]).catch(() => {});
   }
 }
 

@@ -128,7 +128,7 @@ async function seeMedia(bot, msgs) {
 async function sendTurnResult(personaId, bot, chatId, { text: reply, spoken, footer, confirms, media }, userText, deliver) {
   const muted = await sendSpoken(personaId, bot, chatId, spoken || reply, userText);
   const tail = [footer, muted].filter(Boolean).join('\n\n');
-  await deliver(tail ? `${reply}\n\n${tail}` : reply);
+  await deliver(tail ? `${reply}\n\n${tail}` : reply, { log: false }); // the turn saved it
   // Generated images, diagrams, charts, photos and files — after the text.
   // (These were built every turn but never sent, so [GENERATE_IMAGE] did nothing.)
   if (media && media.length) {
@@ -142,6 +142,7 @@ async function sendTurnResult(personaId, bot, chatId, { text: reply, spoken, foo
     const { ogg } = await voiceNote(personaId, confirmScript(c), { scripted: true }).catch(() => ({ ogg: null }));
     if (ogg) await bot.sendVoice(chatId, ogg).catch((e) => console.error(`tg ${personaId} confirm voice:`, e.message));
     await bot.sendMessage(chatId, `${c.label}?\n\n${c.detail}`, {
+      log: false,
       reply_markup: { inline_keyboard: [[
         { text: '✅ Confirm', callback_data: `ok:${c.id}` },
         { text: '✖ Cancel', callback_data: `no:${c.id}` },
@@ -160,7 +161,7 @@ async function jarvisOutOfBand(text, { reply, notice, resumes = 0 } = {}) {
   const bot = tg.botFor(personaId);
   if (!bot || !bot.isConfigured() || !tg.OWNER_ID) return false;
   const chatId = tg.OWNER_ID;
-  const deliver = (t) => bot.sendMessage(chatId, t).catch((e) => console.error(`tg ${personaId} send:`, e.message));
+  const deliver = (t, o) => bot.sendMessage(chatId, t, o).catch((e) => console.error(`tg ${personaId} send:`, e.message));
   deliver.voiced = async (t) => {
     const muted = await sendSpoken(personaId, bot, chatId, String(t).slice(0, 1500), text);
     return deliver(muted ? `${t}\n\n${muted}` : t);
@@ -193,7 +194,7 @@ async function sendSpoken(personaId, bot, chatId, script, userText) {
 async function handleMessages(personaId, bot, msgs) {
   const msg = msgs[0];
   const chatId = msg.chat.id;
-  const deliver = (t) => bot.sendMessage(chatId, t).catch((e) => console.error(`tg ${personaId} send:`, e.message));
+  const deliver = (t, o) => bot.sendMessage(chatId, t, o).catch((e) => console.error(`tg ${personaId} send:`, e.message));
   // Results that land after the turn (council, deep research) are replies too —
   // voice note first, then the text.
   deliver.voiced = async (t) => {
@@ -224,7 +225,7 @@ async function handleMessages(personaId, bot, msgs) {
     if (!text) { await deliver("That came through silent — say again?"); return; }
     // What he said, as text, threaded under his voice note — so scrolling back
     // (or Telegram search) finds his side of the conversation too.
-    await bot.sendMessage(chatId, `🎙 ${text}`, { plain: true, reply_parameters: { message_id: msg.message_id, allow_sending_without_reply: true } })
+    await bot.sendMessage(chatId, `🎙 ${text}`, { plain: true, log: false, reply_parameters: { message_id: msg.message_id, allow_sending_without_reply: true } })
       .catch((e) => console.error(`tg ${personaId} transcript echo:`, e.message));
   }
   if (!text) return;
@@ -249,7 +250,7 @@ async function handleMessages(personaId, bot, msgs) {
     const at = require('../talonAutoTrade');
     const st = await at.status().catch((e) => ({ error: e.message }));
     const run = await at.tick({ force: true }).catch((e) => ({ skipped: e.message }));
-    await bot.sendMessage(chatId, `T.A.L.O.N. status\n${JSON.stringify(st, null, 1).slice(0, 2500)}\n\nScan just now\n${JSON.stringify(run, null, 1).slice(0, 1200)}`, { plain: true })
+    await bot.sendMessage(chatId, `T.A.L.O.N. status\n${JSON.stringify(st, null, 1).slice(0, 2500)}\n\nScan just now\n${JSON.stringify(run, null, 1).slice(0, 1200)}`, { plain: true, log: false })
       .catch((e) => console.error('tg /talon:', e.message));
     return;
   }

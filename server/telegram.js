@@ -29,6 +29,23 @@ const BOT_TOKENS = {
 
 const isOwner = (id) => OWNER_ID && String(id) === OWNER_ID;
 
+// Anything a bot sends him on its own (alerts, clip results, briefs, reminders,
+// the sentinel, build news...) is saved in that persona's Telegram history, so
+// "what happened?" right after one is about that message. Replies to his turns
+// are saved by runPersonaTurn and pass { log: false }.
+const OWN_MARK = '[SENT ON YOUR OWN';
+function ownLine(text, ts = Date.now()) {
+  const when = new Date(ts).toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'short', hour: 'numeric', minute: '2-digit' });
+  const t = String(text || '').trim();
+  return `${OWN_MARK}, ${when} ET — not a reply to him]\n${t.length > 6000 ? `${t.slice(0, 6000)}…` : t}`;
+}
+async function logOwn(personaId, chatId, text) {
+  if (!isOwner(chatId) || !String(text || '').trim()) return;
+  try {
+    await require('./db').query('INSERT INTO tg_messages (persona, role, content, ts) VALUES ($1, $2, $3, $4)', [personaId, 'assistant', ownLine(text), Date.now()]);
+  } catch (e) { console.error(`tg ${personaId} history save failed:`, e.message); }
+}
+
 // Per-bot webhook secret — unguessable path segment + secret_token header,
 // derived from SYNC_TOKEN so there's no extra secret to set. Namespaced by
 // persona so each bot has a distinct one.
@@ -111,7 +128,8 @@ function makeBot(personaId, token) {
   }
 
   async function sendMessage(chatId, text, opts = {}) {
-    const { plain, ...rest } = opts;
+    const { plain, log, ...rest } = opts;
+    if (log !== false) await logOwn(personaId, chatId, text);
     for (const part of chunk(text)) {
       if (plain) { await tg('sendMessage', { chat_id: chatId, text: part, ...rest }); continue; }
       try {
@@ -131,12 +149,13 @@ function makeBot(personaId, token) {
     const method = { photo: 'sendPhoto', video: 'sendVideo', audio: 'sendAudio', document: 'sendDocument' }[kind] || 'sendDocument';
     const field = method === 'sendDocument' ? 'document' : kind;
     const caption = opts.caption ? String(opts.caption).slice(0, 1000) : undefined;
+    if (opts.log !== false && !opts.logged) await logOwn(personaId, chatId, `[sent him a ${kind}${caption ? `: ${caption}` : ''}]`);
     if (typeof src === 'string') {
       try { return await tg(method, { chat_id: chatId, [field]: src, caption }); } catch (e) {
         const res = await fetch(src, { headers: { 'user-agent': 'Mozilla/5.0 (EmpireOS bot)' } });
         if (!res.ok) throw new Error(`${e.message}; download ${res.status}`);
         const name = decodeURIComponent((new URL(src).pathname.split('/').pop() || '')) || `${kind}`;
-        return sendFile(chatId, kind, Buffer.from(await res.arrayBuffer()), { ...opts, filename: opts.filename || name });
+        return sendFile(chatId, kind, Buffer.from(await res.arrayBuffer()), { ...opts, filename: opts.filename || name, logged: true });
       }
     }
     const upload = async (m, f) => {
@@ -242,6 +261,7 @@ async function setWebhook(baseUrl) {
 }
 
 module.exports = {
+  ownLine, OWN_MARK,
   OWNER_ID, isOwner,
   bots, botFor, configuredBots, isConfigured,
   notifyOwner, setWebhook,

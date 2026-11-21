@@ -514,6 +514,10 @@ folder) only runs when he asks. `[EDIT_EVENT: title or id | title=;
 start=; minutes=; location=; notes=]` (`calendarUpdate` in `server/google.js`)
 edits an event in place — A.R.A. only, no confirm (deletes still confirm).
 
+## Everything a bot sends is in its context (`logOwn`, `server/telegram.js`)
+
+Every message or file a bot sends him on its own (trade alerts, clip results and failures, briefs, reminders, the sentinel, build news, deep research landing later, the council) is saved in that persona's `tg_messages` history at the bot's `sendMessage` / `sendFile`, marked `[SENT ON YOUR OWN, <time> ET — not a reply to him]`; CONTINUITY tells the persona that when one is the newest thing in the chat, "what happened?" is about it. Turn replies, their media and Confirm cards pass `{ log: false }` (the turn saves them). Senders don't save their own copy any more. The app's A.R.A. chat doesn't read Telegram history. `node server/scripts/test-own-messages.js`.
+
 ## Telegram reply guards
 
 Telegram blips (502/503/504, timeouts) are retried in `tg()` (`server/telegram.js`, 3 tries): reads that change nothing (`SAFE_METHODS`: `getFile`, `sendChatAction`, …) and voice-note downloads on any of them; sends only on 429, since a timed-out send may have been delivered. `node server/scripts/test-telegram-retry.js`.
