@@ -391,7 +391,9 @@ function parseAction(raw) {
   const m = String(raw || '').match(/\{[\s\S]*\}/);
   if (!m) return { error: 'no JSON in the reply' };
   let j; try { j = JSON.parse(m[0]); } catch { return { error: 'the JSON did not parse' }; }
-  const a = j.action || j;
+  // The brain doesn't always nest it: {"action":"scroll"}, {"action":"click","id":7}
+  // and {"type":"click",...} all mean the same step (Canva run, 2026-11-22).
+  const a = typeof j.action === 'string' ? { ...j, type: j.action } : j.action && typeof j.action === 'object' ? { ...j, ...j.action, type: j.action.type || j.action.action || j.type } : j;
   const t = String(a.type || '').toLowerCase();
   const ok = { goto: ['url'], click: ['id'], type: ['id', 'text'], select: ['id', 'option'], press: ['key'], scroll: [], back: [], wait: [], done: ['result'], ask: ['question'] };
   if (!ok[t]) return { error: `unknown action "${a.type}"` };

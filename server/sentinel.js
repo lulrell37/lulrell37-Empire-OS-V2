@@ -13,7 +13,9 @@
 //   google       the linked Google account failing (Drive, Calendar, Gmail)
 //   telegram:<p> a persona bot's webhook failing or missing
 //   boot         the server fell back to an older copy on its last start
-//   loop:<name>  any loop / cron / desk logging "... failed" (2+ times in 30 min)
+//   loop:<name>  any loop / cron / desk logging "... failed" (2+ times in 30 min;
+//                once is enough for the jobs that run a few times a day, SCHEDULED)
+//   profile      the "How Mr. Burrus Works" list past PROFILE_WARN lines
 //   push         no phone registered for push notifications
 // State is app_settings.sentinel_state, so a restart doesn't repeat alerts.
 const serverLog = require('./serverLog');
@@ -21,6 +23,11 @@ const { getSetting, setSetting } = require('./syncStore');
 
 const REMIND_MS = 12 * 3600e3;
 const LOOP_WINDOW_MS = 30 * 60e3;
+// Jobs that run hourly or less often: one failure means the run is lost until the
+// next one hours later, so it is never a blip to wait out (owner, 2026-11-22:
+// nothing we build breaks quietly). Names as their cron logs them in index.js.
+const SCHEDULED = new Set(['open threads', 'owner profile', 'day nudge', 'money watch', 'daily briefing', 'morning brief', 'word reminder', 'council meeting', 'trade recap', 'talon market update', 'econ desk', 'stock desk', 'instagram watch', 'woke x stories', 'monday scripts']);
+const PROFILE_WARN = 150;
 let lastRun = 0;
 
 const short = (s, n = 180) => { const t = String(s || '').replace(/\s+/g, ' ').trim(); return t.length > n ? t.slice(0, n - 1) + '…' : t; };
@@ -110,8 +117,14 @@ function checkLoops(now) {
     const name = m[1].trim().toLowerCase().replace(/\s+cron$/, '');
     (by[name] = by[name] || []).push(m[2] || l.text);
   }
-  return Object.entries(by).filter(([, v]) => v.length >= 2).map(([name, v]) =>
-    ({ key: 'loop:' + name.replace(/\W+/g, '_'), label: name, msg: `failed ${v.length}× in the last 30 min: ${short(v[v.length - 1], 140)}` }));
+  return Object.entries(by).filter(([name, v]) => v.length >= 2 || SCHEDULED.has(name)).map(([name, v]) =>
+    ({ key: 'loop:' + name.replace(/\W+/g, '_'), label: name, msg: v.length >= 2 ? `failed ${v.length}× in the last 30 min: ${short(v[v.length - 1], 140)}` : `its last run failed: ${short(v[0], 140)}` }));
+}
+
+// Nothing is ever cut from the profile, so a long one is his call to tidy.
+async function checkProfile() {
+  const n = String((await getSetting('owner_profile', '')) || '').split('\n').filter((l) => /^-\s+\S/.test(l.trim())).length;
+  return n > PROFILE_WARN ? [{ key: 'profile', label: 'How Mr. Burrus Works', severity: 'warn', msg: `the list is at ${n} lines; nothing is cut automatically, so say which ones to merge or drop` }] : [];
 }
 
 async function checkPush() {
@@ -137,7 +150,7 @@ async function tick() {
   const now = Date.now();
   const since = lastRun || now - 15 * 60e3;
   lastRun = now;
-  const groups = await Promise.all([checkElevenLabs(), checkAi(), checkAppAi(since), checkGoogle(), checkTelegram(), checkBoot(), checkLoops(now), checkPush()].map((p) => Promise.resolve(p).catch(() => [])));
+  const groups = await Promise.all([checkElevenLabs(), checkAi(), checkAppAi(since), checkGoogle(), checkTelegram(), checkBoot(), checkLoops(now), checkProfile(), checkPush()].map((p) => Promise.resolve(p).catch(() => [])));
   const found = {};
   for (const i of groups.flat()) if (!found[i.key]) found[i.key] = i;
   const state = await loadState();
@@ -170,4 +183,15 @@ async function status() {
   return Object.entries(s).map(([key, v]) => ({ key, label: v.label, msg: v.msg, severity: v.severity, since: v.since }));
 }
 
-module.exports = { tick, status };
+// The sentinel can't report itself through itself: a failed tick goes to him
+// directly, at most every 12 h.
+let toldOwnFailure = 0;
+async function safeTick() {
+  try { return await tick(); } catch (e) {
+    console.error('sentinel failed:', e.message);
+    if (Date.now() - toldOwnFailure > REMIND_MS) { toldOwnFailure = Date.now(); await tell(`⚠️ The sentinel itself failed, so problems may not be reaching you: ${short(e.message, 160)}`, '⚠️ Sentinel', `sentinel:self:${Date.now()}`); }
+    return { error: e.message };
+  }
+}
+
+module.exports = { tick, safeTick, status, SCHEDULED, PROFILE_WARN };

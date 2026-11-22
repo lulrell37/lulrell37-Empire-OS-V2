@@ -6,6 +6,9 @@ const B = require('../browserAgent');
 assert.strictEqual(B.parseAction('{"thought":"x","action":{"type":"click","id":3}}').type, 'click');
 assert.ok(B.parseAction('{"action":{"type":"goto","url":"linkedin.com"}}').error, 'goto needs a full URL');
 assert.ok(B.parseAction('{"action":{"type":"type","id":2}}').error, 'type needs text');
+assert.strictEqual(B.parseAction('{"thought":"x","action":"scroll"}').type, 'scroll', 'flat action string');
+assert.strictEqual(B.parseAction('{"action":"click","id":7}').id, 7, 'flat click');
+assert.strictEqual(B.parseAction('{"action":{"action":"press","key":"PageDown"}}').key, 'PageDown', 'nested action key');
 assert.ok(B.parseAction('no json').error);
 assert.strictEqual(B.parseAction('{"action":{"type":"done","result":"found it"}}').type, 'done');
 

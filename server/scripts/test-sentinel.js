@@ -76,6 +76,19 @@ const sentinel = require(path.join(__dirname, '..', 'sentinel'));
   assert(sent.some((t) => /news wire: failed 2×.*boom again/.test(t)), sent.join('\n'));
   assert(!sent.some((t) => /ara voice/.test(t)));
 
+  // a job that runs a few times a day: one failure is enough
+  sent.length = 0;
+  console.error('morning brief failed: claude 529');
+  await sentinel.tick();
+  assert(sent.some((t) => /morning brief: its last run failed: claude 529/.test(t)), sent.join('\n'));
+
+  // the profile past 150 lines (nothing is cut, so he hears about it)
+  sent.length = 0;
+  settings.owner_profile = Array.from({ length: 151 }, (_, i) => `- [all] rule ${i}`).join('\n');
+  await sentinel.tick();
+  assert(sent.some((t) => /How Mr. Burrus Works: the list is at 151 lines/.test(t)), sent.join('\n'));
+  delete settings.owner_profile;
+
   // app's ElevenLabs calls refused through the proxy
   sent.length = 0;
   serverLog.recordAi({ provider: 'elevenlabs', ok: false, status: 401, detail: 'quota_exceeded', method: 'POST', path: 'v1/text-to-speech/x' });
