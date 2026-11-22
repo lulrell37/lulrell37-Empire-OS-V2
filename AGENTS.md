@@ -658,3 +658,7 @@ Owner's complaint, 2026-11-22: she answered weather questions without looking. E
 
 His standing rule ("How Mr. Burrus Works", 2026-11-22): if anything dies, A.R.A. tells him. `tellAra(key, text)` is the last resort for code whose own message to him failed: A.R.A.'s bot as plain text (no voice), a phone push if Telegram is down, never throws, the same `key` at most once per 30 min. Used when a build request's follow-up fails all three tries, a worker's report can't be sent, an auto-fix message can't go out or can't start, an auto-fix is skipped after A.R.A. said one was coming, and (push only) when the memory guard's own report fails. New code that sends him something should fall back to it. `node server/scripts/test-loud.js`.
 
+## Telegram "reply to message" (`repliedTo`, `server/routes/telegram.js`)
+
+Owner's ask, 2026-11-22: when notifications land in between, he replies to the message he means. Every persona's turn now starts with `[HE IS REPLYING TO … from <time> ET: "…"]` when his message is a Telegram reply: the message's text or caption; a voice note, photo or anything without text is matched to the nearest saved message (±5 min) in that persona's `tg_messages`; his highlighted part (Telegram's quote) is named; in the group, another bot's message is named by its bot. It rides in front of his text, so it's saved in the history too. The app's own chat is unchanged. `node server/scripts/test-reply-context.js`.
+

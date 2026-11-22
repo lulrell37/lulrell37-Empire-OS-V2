@@ -159,6 +159,37 @@ async function sendTurnResult(personaId, bot, chatId, { text: reply, spoken, foo
   }
 }
 
+// Telegram's "reply to message" (owner's ask, 2026-11-22: when other notifications
+// land in between, he replies to the one he means). The persona gets that message
+// in front of his words, so "is that still on?" lands on the right thing. Text and
+// captions come straight from Telegram; a voice note (or anything without text) is
+// matched to the nearest saved message in that persona's history by its time. A
+// part he highlighted (Telegram's quote) is named too.
+const etClock = (sec) => new Date(sec * 1000).toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'short', hour: 'numeric', minute: '2-digit' });
+async function repliedTo(msg, personaId) {
+  const r = msg.reply_to_message;
+  if (!r) return null;
+  const fromBot = !!(r.from && r.from.is_bot);
+  let body = String(r.text || r.caption || '').trim();
+  if (!body) {
+    const { rows } = await query(
+      'SELECT content FROM tg_messages WHERE persona = $1 AND role = $2 AND ts BETWEEN $3 AND $4 ORDER BY ABS(ts - $5) LIMIT 1',
+      [personaId, fromBot ? 'assistant' : 'user', (r.date - 300) * 1000, (r.date + 300) * 1000, r.date * 1000],
+    ).catch(() => ({ rows: [] }));
+    body = rows[0] ? String(rows[0].content) : '';
+    const kind = r.voice ? 'a voice note' : r.photo ? 'a photo' : r.video ? 'a video' : r.document ? 'a file' : 'a message';
+    body = body ? `${kind}; its text: ${body}` : `${kind} (its words weren't saved)`;
+  }
+  // In his private chat with a bot, a bot message is that persona's own; in the group it's whoever's bot sent it.
+  const who = !fromBot ? 'his own earlier message' : msg.chat && msg.chat.type === 'private' ? 'your message' : `${r.from.first_name || 'a bot'}'s message`;
+  const quote = msg.quote && msg.quote.text ? ` — the part he highlighted: "${String(msg.quote.text).slice(0, 500)}"` : '';
+  return `[HE IS REPLYING TO ${who.toUpperCase()} from ${etClock(r.date)} ET${quote}: "${body.replace(/\s+/g, ' ').slice(0, 1500)}"${body.length > 1500 ? '…' : ''}. What he says next is about THAT message, not whatever came in after it.]`;
+}
+async function withReplyContext(msg, personaId, text) {
+  try { const ctx = await repliedTo(msg, personaId); return ctx ? `${ctx}\n${text}` : text; }
+  catch (e) { console.error(`tg ${personaId} reply context:`, e.message); return text; }
+}
+
 // A J.A.R.V.I.S. turn that didn't start from a Telegram message: an app job he
 // finished after the app stopped listening (`reply` = what Claude Code already
 // wrote; his tags still run here), or one a server restart cut off (no `reply`:
@@ -265,6 +296,9 @@ async function handleMessages(personaId, bot, msgs) {
     return;
   }
 
+  // He used Telegram's reply on an earlier message: tell the persona which one.
+  text = await withReplyContext(msg, personaId, text);
+
   // Every reply goes out as both a voice note and text, however he wrote in.
   await bot.sendChatAction(chatId, 'record_voice');
   const keepTyping = setInterval(() => bot.sendChatAction(chatId, 'record_voice').catch(() => {}), 6000);
@@ -326,6 +360,7 @@ r.get('/info', auth, async (req, res) => {
 });
 
 module.exports = r;
+module.exports.repliedTo = repliedTo;
 module.exports.jarvisOutOfBand = jarvisOutOfBand;
 
 // Any persona's turn that didn't start from his message (a build he was waiting
