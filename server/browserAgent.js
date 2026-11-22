@@ -203,7 +203,8 @@ class Cdp {
 const browsers = new Map(); // persona -> { proc, cdp, session, idleTimer, busy, pending }
 
 async function launch(persona) {
-  let wsUrl = process.env.BROWSER_WS_URL, proc = null;
+  // A hosted browser: the env, else the one J.A.R.V.I.S. saved with [BROWSER_KEY].
+  let wsUrl = process.env.BROWSER_WS_URL || String((await require('./syncStore').getSetting('browser_ws_url', '').catch(() => '')) || '').trim(), proc = null;
   if (!wsUrl) {
     const { exe, libs } = await chromePath();
     const dir = path.join(PROFILES, persona.replace(/[^\w-]/g, ''));
@@ -398,7 +399,7 @@ function parseAction(raw) {
   const a = typeof j.action === 'string' ? { ...j, type: j.action } : j.action && typeof j.action === 'object' ? { ...j, ...j.action, type: j.action.type || j.action.action || j.type } : j;
   const t = String(a.type || '').toLowerCase();
   const ok = { goto: ['url'], click: ['id'], type: ['id', 'text'], select: ['id', 'option'], press: ['key'], scroll: [], back: [], wait: [], done: ['result'], ask: ['question'] };
-  if (!ok[t]) return { error: `unknown action "${a.type}"` };
+  if (!ok[t]) return { error: `unknown action "${a.type}" in ${String(m[0]).slice(0, 160)}` };
   for (const k of ok[t]) if (a[k] == null || a[k] === '') return { error: `"${t}" needs "${k}"` };
   if (t === 'goto' && !/^https?:\/\//i.test(String(a.url))) return { error: 'goto needs a full http(s) URL' };
   return { type: t, ...a, why: String(j.thought || a.why || '').slice(0, 300) };
@@ -516,6 +517,18 @@ async function emailedCode() {
   return null;
 }
 
+// [BROWSER_KEY: steel API key, or a full wss:// CDP url] — the hosted browser to use
+// (gets past bot checks the free Chrome can't), saved in app_settings so no Replit
+// secret is needed. Next [BROWSE] uses it.
+async function browserKeyTag(arg) {
+  const v = String(arg || '').trim();
+  if (!v) return 'BROWSER_KEY: give the Steel API key or a wss:// URL';
+  const url = /^wss?:\/\//i.test(v) ? v : `wss://connect.steel.dev?apiKey=${encodeURIComponent(v)}`;
+  await require('./syncStore').setSetting('browser_ws_url', url);
+  await close('jarvis').catch(() => {}); await close('ara').catch(() => {});
+  return `BROWSER_KEY: ✓ saved — the next [BROWSE] runs on the hosted browser (${url.replace(/apiKey=[^&]+/, 'apiKey=…')})`;
+}
+
 // --- the tag ---------------------------------------------------------------------
 
 const NAMES = () => { try { return Object.fromEntries(require('./personas').ROSTER.map((p) => [p.id, p.name])); } catch { return {}; } };
@@ -546,6 +559,7 @@ async function browseTag(persona, arg, { ownerText = '' } = {}) {
   return { text, media, status: r.status };
 }
 
-const BROWSE_TOOLS = ` - [BROWSE: the task, in full] — your own computer: a real Chrome in the cloud that you drive like a person (open sites, search, read, click, fill in forms), with your own saved logins. For anything with no direct tool: looking someone up on LinkedIn, checking a supplier's prices, reading a site, filling a form. The result comes back to you this turn and he gets a screenshot. Sign-ups go through on their own (make the password yourself and save it with [SAVE_NOTE]), and a code a site emails is fetched from his Gmail automatically. It stops and asks only before anything else that acts in the world (sending, posting, connecting, buying, booking, deleting): put that question to him, and when he answers run [BROWSE] again with the same task — his reply is what approves it. A minute or several. One per turn. Report only what it found.`;
+const BROWSE_TOOLS = ` - [BROWSE: the task, in full] — your own computer: a real Chrome in the cloud that you drive like a person (open sites, search, read, click, fill in forms), with your own saved logins. For anything with no direct tool: looking someone up on LinkedIn, checking a supplier's prices, reading a site, filling a form. The result comes back to you this turn and he gets a screenshot. Sign-ups go through on their own (make the password yourself and save it with [SAVE_NOTE]), and a code a site emails is fetched from his Gmail automatically. It stops and asks only before anything else that acts in the world (sending, posting, connecting, buying, booking, deleting): put that question to him, and when he answers run [BROWSE] again with the same task — his reply is what approves it. A minute or several. One per turn. Report only what it found.
+ - [BROWSER_KEY: Steel API key or wss:// URL] — switch your browser to a hosted one (Steel) that gets past Cloudflare checks; saved on the server, no Replit secret needed.`;
 
-module.exports = { ensureSqlite, BROWSE_PERSONAS, runTask, browseTag, BROWSE_TOOLS, close, browserFor, snapshot, click, type, press, screenshot, unzip, chromePath, parseAction, isCommit, approves, enabled };
+module.exports = { browserKeyTag, ensureSqlite, BROWSE_PERSONAS, runTask, browseTag, BROWSE_TOOLS, close, browserFor, snapshot, click, type, press, screenshot, unzip, chromePath, parseAction, isCommit, approves, enabled };

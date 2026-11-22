@@ -98,13 +98,29 @@ async function onBoot() {
     return;
   }
   if (fellBack) {
+    wakeJarvis(pending, `the redeploy did NOT take: the new code crashed on startup and the server fell back to ${running}. The error: ${String(fellBack).slice(0, 600)}`);
     araNote(`⚠️ **Redeploy didn't take, Mr. Burrus.** The new code crashed on startup, so the server went back to the last version that worked — everything's still running, just not the update.\nRunning: ${running}\n\nWhat broke:\n\`\`\`\n${String(fellBack).slice(0, 900)}\n\`\`\`\nJ.A.R.V.I.S. can file a fix ([BUILD_REQUEST]) — then redeploy again.`,
     "Mr. Burrus, the redeploy didn't take. The new code crashed on startup, so I put the server back on the last version that worked. Everything's still running, just not the update. The error's below.", { remember: true });
     return;
   }
   const changes = await changesSince(pending.from_sha, info.sha);
   const same = pending.from_sha && pending.from_sha === info.sha;
+  wakeJarvis(pending, `the server is live on the new code: ${running}`);
   araNote(`✅ **Server's live on the new code, Mr. Burrus**${took ? ` — back in ${took}` : ''}.\nRunning: ${running}${same ? '\n(Nothing new on main since the last version — same code, fresh restart.)' : ''}${changes.length ? `\n\nWhat's new:\n${changes.map((m) => `• ${m}`).join('\n')}` : ''}`, undefined, { remember: true });
 }
 
-module.exports = { requestRedeploy, onBoot, codeInfo, publicUrl, RESTART_CODE };
+// A redeploy J.A.R.V.I.S. asked for (or the app's button) usually has work
+// waiting on it ("once we're on the new code I'll run the Canva batch"), so A.R.A.'s
+// confirmation goes to him too and he carries on by himself; he never has to be told
+// the server is back (owner, 2026-11-22). Nothing waiting → he stays quiet.
+const WAKE_QUIET = /^\s*NOTHING\s*\.?\s*$/i;
+function wakeJarvis(pending, what) {
+  if (!pending || !['jarvis', 'app'].includes(pending.by) || process.env.REDEPLOY_WAKE === 'off') return false;
+  if (!require('./jarvisEngine').enabled()) return false;
+  const ask = `[SENT ON YOUR OWN — A.R.A. just confirmed the redeploy you asked for: ${what}. Mr. Burrus did not send this; it's the confirmation you were waiting on. If you told him you would carry something on once the server was back on the new code, do it now, all the way, and report the result to him. If it fell back, look at why. If nothing was waiting on this redeploy, reply with exactly NOTHING and nothing else.]`;
+  // After A.R.A.'s note, so he hears hers first.
+  setTimeout(() => require('./routes/telegram').jarvisOutOfBand(ask, { quiet: WAKE_QUIET }).catch((e) => console.error('redeploy wake failed:', e.message)), 8000);
+  return true;
+}
+
+module.exports = { wakeJarvis, WAKE_QUIET, requestRedeploy, onBoot, codeInfo, publicUrl, RESTART_CODE };
