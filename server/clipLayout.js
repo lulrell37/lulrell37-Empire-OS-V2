@@ -234,7 +234,12 @@ function phrases(words) {
 // The .ass file: a Hook style (black on a white box, top) and a Caption style
 // (big white caps, thick black outline). One event per word: the whole phrase,
 // with the spoken word yellow and keywords green.
-function buildAss({ words = [], hook = '', keywords = [], duration, captionY, hookY }) {
+function buildAss({ words = [], hook = '', keywords = [], duration, captionY, hookY, speed = 1 }) {
+  // Playback speed: every time is on the clip's own clock, so divide by the factor to match the sped-up video.
+  if (speed && speed !== 1) {
+    words = words.map((w) => ({ ...w, start: w.start / speed, end: w.end / speed }));
+    duration = duration / speed;
+  }
   const keys = new Set((keywords || []).map(norm).filter(Boolean));
   const YELLOW = '&H0000E5FF&', GREEN = '&H0050E04A&', WHITE = '&H00FFFFFF&';
   const L = [
@@ -278,6 +283,23 @@ async function clipWords(src, start, end, dir, tag, context = '') {
 
 // --- the render ------------------------------------------------------------------
 
+// Playback speed of finished clips: app_settings.rogue_clip_speed, then env CLIP_SPEED, default 1.1,
+// clamped 1.0-1.5 (1.0 = off). Clip ranges reported to him stay in the source video's own time.
+const DEFAULT_SPEED = 1.1;
+function parseSpeed(...vals) {
+  for (const v of vals) {
+    if (v === undefined || v === null || String(v).trim() === '') continue;
+    const n = Number(v);
+    if (Number.isFinite(n)) return Math.min(1.5, Math.max(1, n));
+  }
+  return DEFAULT_SPEED;
+}
+async function clipSpeed() {
+  let stored;
+  try { stored = await require('./syncStore').getSetting('rogue_clip_speed', ''); } catch { /* no db: env/default */ }
+  return parseSpeed(stored, process.env.CLIP_SPEED);
+}
+
 // Cut [start,end] of src to dest as a finished 1080x1920 clip. pick = { hook, keywords }.
 // Returns { layout, captions: bool, notes: [] }.
 async function renderClip({ src, start, end, dest, dir, pick = {}, size, context = '' }) {
@@ -295,20 +317,24 @@ async function renderClip({ src, start, end, dest, dir, pick = {}, size, context
   if (lay.note) notes.push(lay.note);
   const g = layoutGraph(lay, size.w, size.h);
   if (!fontsDir) notes.push('caption font unavailable, used the system font');
+  const speed = await clipSpeed();
   const ass = path.join(dir, `${tag}.ass`);
-  fs.writeFileSync(ass, buildAss({ words, hook: pick.hook, keywords: pick.keywords, duration: dur, captionY: g.captionY, hookY: g.hookY }));
+  fs.writeFileSync(ass, buildAss({ words, hook: pick.hook, keywords: pick.keywords, duration: dur, captionY: g.captionY, hookY: g.hookY, speed }));
+  const fast = speed !== 1 ? `[v]setpts=PTS/${speed}[vf];` : '';
+  const vin = speed !== 1 ? '[vf]' : '[v]';
+  const af = speed !== 1 ? ['-af', `atempo=${speed}`] : [];
   const subs = `ass=${ass.replace(/[:\\']/g, '\\$&')}${fontsDir ? `:fontsdir=${fontsDir.replace(/[:\\']/g, '\\$&')}` : ''}`;
   const enc = ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '21', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart'];
-  const base = ['-hide_banner', '-loglevel', 'error', '-y', '-ss', start.toFixed(2), '-i', src, '-t', dur.toFixed(2)];
+  const base = ['-hide_banner', '-loglevel', 'error', '-y', '-ss', start.toFixed(2), '-i', src, '-t', (dur / speed).toFixed(2)];
   try {
-    await run([...base, '-filter_complex', `${g.graph};[v]${subs}[out]`, '-map', '[out]', '-map', '0:a?', ...enc, dest]);
+    await run([...base, '-filter_complex', `${g.graph};${fast}${vin}${subs}[out]`, '-map', '[out]', '-map', '0:a?', ...af, ...enc, dest]);
   } catch (e) {
     // Captions are the fragile part (fonts, odd characters) — the layout alone still beats a plain crop.
     notes.push(`captions failed to render (${e.message.slice(-120)})`);
-    await run([...base, '-filter_complex', g.graph, '-map', '[v]', '-map', '0:a?', ...enc, dest]);
+    await run([...base, '-filter_complex', speed !== 1 ? `${g.graph};[v]setpts=PTS/${speed}[vf]` : g.graph, '-map', vin, '-map', '0:a?', ...af, ...enc, dest]);
     return { layout: lay.layout, captions: false, notes };
   }
   return { layout: lay.layout, captions: words.length > 0, notes };
 }
 
-module.exports = { gridAss, parseCheck, adjustBox, renderClip, layoutGraph, parseLayout, buildAss, phrases, videoSize, ensureFont };
+module.exports = { gridAss, parseCheck, adjustBox, renderClip, layoutGraph, parseLayout, buildAss, parseSpeed, clipSpeed, phrases, videoSize, ensureFont };

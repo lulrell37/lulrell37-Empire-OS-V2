@@ -49,4 +49,23 @@ try {
 } finally {
   fs.rmSync(dir, { recursive: true, force: true });
 }
+
+// playback speed: captions + hook rescaled by the same factor, clamp 1.0-1.5, default 1.1
+{
+  const ws = [{ word: 'all', start: 1.1, end: 1.4 }, { word: 'money', start: 2.2, end: 2.8 }];
+  const times = (a) => a.split('\n').filter((l) => l.startsWith('Dialogue')).map((l) => l.split(',').slice(1, 3));
+  const base = times(L.buildAss({ words: ws, hook: 'hi', duration: 3, captionY: 1300, hookY: 200 }));
+  const fast = times(L.buildAss({ words: ws, hook: 'hi', duration: 3.3, captionY: 1300, hookY: 200, speed: 1.1 }));
+  assert.deepStrictEqual(base[0], ['0:00:00.00', '0:00:03.00'], 'hook spans the clip at 1x');
+  assert.deepStrictEqual(fast[0], ['0:00:00.00', '0:00:03.00'], 'hook spans the sped-up clip (3.3s / 1.1)');
+  assert.strictEqual(fast[1][0], '0:00:01.00', 'word at 1.1s lands at 1.0s at 1.1x');
+  assert.strictEqual(fast[2][0], '0:00:02.00', 'word at 2.2s lands at 2.0s at 1.1x');
+  assert.strictEqual(L.parseSpeed(undefined, undefined), 1.1, 'default 1.1');
+  assert.strictEqual(L.parseSpeed('', '1.25'), 1.25, 'env used when no setting');
+  assert.strictEqual(L.parseSpeed('1.3', '1.25'), 1.3, 'setting wins over env');
+  assert.strictEqual(L.parseSpeed('3'), 1.5, 'clamped high');
+  assert.strictEqual(L.parseSpeed('0.5'), 1, 'clamped low');
+  assert.strictEqual(L.parseSpeed('1.0'), 1, '1.0 = off');
+  assert.strictEqual(L.parseSpeed('abc', '1.2'), 1.2, 'junk setting falls to env');
+}
 console.log('clip layout: all checks passed');
