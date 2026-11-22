@@ -525,7 +525,7 @@ async function browserKeyTag(arg) {
   if (!v) return 'BROWSER_KEY: give the Steel API key or a wss:// URL';
   const url = /^wss?:\/\//i.test(v) ? v : `wss://connect.steel.dev?apiKey=${encodeURIComponent(v)}`;
   await require('./syncStore').setSetting('browser_ws_url', url);
-  await close('jarvis').catch(() => {}); await close('ara').catch(() => {});
+  try { close('jarvis'); close('ara'); } catch {}
   return `BROWSER_KEY: ✓ saved — the next [BROWSE] runs on the hosted browser (${url.replace(/apiKey=[^&]+/, 'apiKey=…')})`;
 }
 
