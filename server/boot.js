@@ -238,6 +238,56 @@ function topProcs(n = 6) {
   return rows.sort((a, b) => b.kb - a.kb).slice(0, n).map((r) => r.line).join('\n');
 }
 
+// Memory guard: on a 2 GB machine, running out of RAM doesn't crash anything —
+// it thrashes, and everything (this supervisor's own /health checks included)
+// stalls, so the freeze watchdog can't act and nobody hears about it (2026-11-22:
+// down 20+ min, A.R.A. silent). Every GUARD_MS (5 s) this reads MemAvailable; under
+// MEM_GUARD_MB (150) it kills the biggest process the server started (a `claude`
+// CLI, J.A.R.V.I.S.'s engine, Chrome, ffmpeg — never the server itself) and leaves
+// a line in GUARD_FILE, which the server reports through A.R.A. MEM_GUARD=off stops it.
+const GUARD_MS = Number(process.env.GUARD_MS || 5000);
+const GUARD_MB = () => Number(process.env.MEM_GUARD_MB || 150);
+const GUARD_FILE = path.join(os.tmpdir(), 'empire-memory-guard.log');
+function availableMb() {
+  try { const m = /MemAvailable:\s*(\d+)/.exec(fs.readFileSync('/proc/meminfo', 'utf8')); if (m) return Number(m[1]) / 1024; } catch { /* not linux */ }
+  return os.freemem() / 1048576;
+}
+// Processes in the server's process group, biggest first, the server itself left out.
+function groupProcs(leader) {
+  const out = [];
+  let pids = [];
+  try { pids = fs.readdirSync('/proc').filter((d) => /^\d+$/.test(d)); } catch { return out; }
+  for (const pid of pids) {
+    if (Number(pid) === leader) continue;
+    try {
+      const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+      const f = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+      if (Number(f[2]) !== leader) continue; // pgrp
+      const kb = Number((/VmRSS:\s*(\d+)/.exec(fs.readFileSync(`/proc/${pid}/status`, 'utf8')) || [])[1] || 0);
+      const cmd = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').filter(Boolean).map((a) => a.replace(/^.*\//, '')).join(' ').replace(/sk-ant-\S+|gh[pousr]_\S+/g, '…').slice(0, 60);
+      out.push({ pid: Number(pid), kb, cmd });
+    } catch { /* gone */ }
+  }
+  return out.sort((a, b) => b.kb - a.kb);
+}
+function memoryGuard(proc) {
+  if (process.env.MEM_GUARD === 'off' || process.platform !== 'linux') return () => {};
+  let lastKill = 0;
+  const t = setInterval(() => {
+    if (proc.exitCode != null || proc.signalCode) return clearInterval(t);
+    const avail = availableMb();
+    if (avail >= GUARD_MB() || Date.now() - lastKill < 10000) return; // give a kill time to free its memory
+    const [big] = groupProcs(proc.pid);
+    if (!big || big.kb < 50 * 1024) return;
+    try { process.kill(big.pid, 'SIGKILL'); } catch { return; }
+    lastKill = Date.now();
+    const line = `${new Date().toISOString()} killed ${big.cmd} (${Math.round(big.kb / 1024)} MB) — the machine had ${Math.round(avail)} MB left`;
+    log(`memory guard: ${line}`);
+    try { fs.appendFileSync(GUARD_FILE, line + '\n'); } catch { /* best effort */ }
+  }, GUARD_MS);
+  return () => clearInterval(t);
+}
+
 function watch(run) {
   if (process.env.FREEZE_WATCH === 'off') return;
   let misses = 0;
@@ -286,6 +336,8 @@ async function cycle() {
       lastGood = code;
       restartReason = '';
       watch(run);
+      const stopGuard = memoryGuard(child);
+      run.exit.then(stopGuard);
       return run.exit.then((c) => {
         if (!restartReason && c !== RESTART_CODE && !shuttingDown) restartReason = `crashed (exit ${c}). Last output:\n${run.tail.slice(-12).join('\n').slice(-1500)}`;
         return c;

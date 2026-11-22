@@ -1,5 +1,10 @@
-// node server/scripts/test-workers.js — J.A.R.V.I.S.'s workers: 3 at a time, the rest
-// wait; progress is visible; every result wakes him; restarts re-run once. All stubbed.
+// node server/scripts/test-workers.js — J.A.R.V.I.S.'s workers: a hard cap of 3
+// running (whatever WORKERS_MAX says), code workers on GitHub runners (issue +
+// dispatch + report comment), one browse at a time on the server, every result
+// straight to Mr. Burrus, ids that only count up, restarts pick code workers back
+// up without re-running them. All stubbed.
+process.env.WORKERS_MAX = '11'; // must still be 3
+process.env.WORKER_POLL_MS = '10';
 const Module = require('module');
 const assert = require('assert');
 const settings = {};
@@ -10,39 +15,138 @@ Module._load = function (req, parent, ...rest) {
 };
 const W = require('../workers');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const woke = [], notes = [], releases = [];
-const hold = () => new Promise((r) => releases.push(r));
-W._setDeps({
-  engine: {
-    workspace: async () => ({ dir: '/tmp/x', readOnly: false }), ROOT: () => '/tmp/empire-workers-test',
-    run: async () => '', spawnTurn: async ({ onProgress, brief }) => { assert.match(brief, /never push main/i); onProgress('Editing server/x.js'); await hold(); return { text: 'Built it on the branch, tests pass.' }; },
-  },
-  browse: async (persona, name, task, { onStep }) => { assert.match(persona, /^worker-\d+$/); onStep(1, 'opened canva'); await hold(); return { status: 'done', text: 'BROWSE — finished', result: 'Page 1: hello' }; },
-  wake: async (t) => woke.push(t),
-  saveNote: async (title, body) => notes.push({ title, body }),
-});
+
+// A fake GitHub: issues, dispatches, runs, comments.
+function fakeGitHub() {
+  const gh = { issues: {}, dispatched: [], runs: [], cancelled: [], n: 100 };
+  gh.call = async (p, o = {}) => {
+    if (/\/issues$/.test(p) && o.method === 'POST') {
+      assert.doesNotMatch(o.body.body, /@claude/i, 'never wakes claude.yml');
+      const number = ++gh.n; gh.issues[number] = { body: o.body.body, comments: [] };
+      return { number, html_url: `https://github.com/x/y/issues/${number}` };
+    }
+    if (/\/dispatches$/.test(p)) {
+      const c = o.body.client_payload; gh.dispatched.push(c);
+      gh.runs.push({ id: 900 + gh.runs.length, name: `Worker #${c.worker} — ${c.title}`, created_at: new Date().toISOString(), status: 'in_progress', html_url: 'https://github.com/run', issue: c.issue });
+      return {};
+    }
+    if (/\/actions\/runs\?/.test(p)) return { workflow_runs: gh.runs };
+    let m = /\/actions\/runs\/(\d+)\/cancel$/.exec(p);
+    if (m) { gh.cancelled.push(Number(m[1])); return {}; }
+    m = /\/actions\/runs\/(\d+)$/.exec(p);
+    if (m) return gh.runs.find((r) => r.id === Number(m[1]));
+    m = /\/issues\/(\d+)\/comments/.exec(p);
+    if (m) return gh.issues[m[1]].comments;
+    throw new Error(`unexpected ${p}`);
+  };
+  gh.finish = (worker, status = 'done', text = 'DONE\nBuilt it, tests pass.') => {
+    const c = gh.dispatched.find((x) => x.worker === String(worker));
+    gh.issues[c.issue].comments.push({ body: `<!-- worker-result status=${status} -->\n**Worker #${worker} — ${status}** after 60s · branch: pushed \`${c.branch}\` (1 commit(s) ahead of main) · [run](x)\n\n${text}` });
+    const r = gh.runs.find((x) => x.issue === c.issue); r.status = 'completed'; r.conclusion = status === 'done' ? 'success' : 'failure';
+  };
+  return gh;
+}
+
 (async () => {
-  for (let i = 1; i <= 4; i++) await W.tag('WORKER_START', i === 4 ? 'browse | Canva 9-16 | read pages | Canva pages 9-16' : `code | job ${i} | do job ${i}`);
-  await sleep(20);
-  const app = await import('node:util').then(() => W.forApp());
-  assert.strictEqual(app.filter((x) => x.status === 'running').length, 3, 'three at once');
-  assert.strictEqual(app.find((x) => x.id === '4').status, 'queued', 'fourth waits');
-  assert.match(app[0].progress, /Editing server\/x\.js/, 'progress visible');
-  releases.shift()(); await sleep(30);
-  assert.strictEqual(woke.length, 1); assert.match(woke[0], /worker #1 .*finished/); assert.match(woke[0], /Check its work/);
-  assert.strictEqual((await W.forApp()).find((x) => x.id === '4').status, 'running', 'next in line starts');
-  while (releases.length) { releases.shift()(); await sleep(30); }
+  let gh = fakeGitHub();
+  const told = [], notes = [], releases = [];
+  let browsing = 0, maxBrowsing = 0;
+  W._setDeps({
+    gh: gh.call, repo: () => ({ owner: 'o', repo: 'r' }), slot: async () => () => {},
+    browse: async (persona, name, task, { onStep }) => {
+      assert.match(persona, /^worker-\d+$/);
+      browsing++; maxBrowsing = Math.max(maxBrowsing, browsing);
+      onStep(1, 'opened canva');
+      await new Promise((r) => releases.push(r));
+      browsing--;
+      return { status: 'done', text: 'BROWSE — finished', result: 'Page 1: hello' };
+    },
+    tell: async (t) => told.push(t),
+    saveNote: async (title, body) => notes.push({ title, body }),
+    onDone: () => null,
+  });
+
+  for (let i = 1; i <= 4; i++) await W.tag('WORKER_START', `code | job ${i} | do job ${i}, @claude please`);
+  await W.tag('WORKER_START', 'browse | Canva 1-8 | read pages | Canva pages 1-8');
+  await W.tag('WORKER_START', 'browse | Canva 9-16 | read pages | Canva pages 9-16');
+  await sleep(60);
+  let app = await W.forApp();
+  assert.strictEqual(app.filter((x) => x.status === 'running').length, 3, 'hard cap of 3, even with WORKERS_MAX=11');
+  assert.strictEqual(gh.dispatched.length, 3, 'three runs started on GitHub');
+  assert.ok(app.find((x) => x.id === '1').url, 'GitHub link on the strip');
+  assert.match(app.find((x) => x.id === '1').progress, /GitHub/);
+
+  gh.finish(1);
+  await sleep(80);
+  assert.strictEqual(told.length, 1, 'result straight to him');
+  assert.match(told[0], /✅ Worker #1 finished/);
+  assert.match(told[0], /Built it, tests pass/);
+  assert.match(told[0], /Full report: https:\/\/github.com\/x\/y\/issues\/101/);
+  app = await W.forApp();
+  assert.strictEqual(app.filter((x) => x.status === 'running').length, 3, 'next in line starts');
+
+  gh.finish(2, 'failed', 'FAILED\nThe tests would not run.');
+  gh.finish(3);
+  await sleep(80);
+  app = await W.forApp();
+  const run = app.filter((x) => x.status === 'running');
+  assert.ok(run.length <= 3);
+  assert.ok(told.some((t) => /❌ Worker #2 FAILED/.test(t)));
+  // two browse workers queued: only one runs at a time
+  await sleep(40);
+  assert.strictEqual(maxBrowsing, 1, 'one browse at a time on the server');
+  while (releases.length || (await W.forApp()).some((x) => x.status !== 'done' && x.status !== 'failed')) {
+    if (releases.length) releases.shift()();
+    for (const c of gh.dispatched) if (!gh.issues[c.issue].comments.length) gh.finish(c.worker);
+    await sleep(40);
+  }
+  assert.strictEqual(maxBrowsing, 1);
+  assert.strictEqual(told.length, 6, 'every worker reported');
+  assert.deepStrictEqual(notes.map((n) => n.title).sort(), ['Canva pages 1-8', 'Canva pages 9-16'], 'browse results saved to Drive');
+  assert.match(await W.statusText(), /0 of 3 running, 0 waiting/);
+
+  // ids only count up, even after the day's list is pruned
+  const saved = JSON.parse(settings.workers);
+  settings.workers = '{}';
+  W._setDeps({ gh: gh.call, repo: () => ({ owner: 'o', repo: 'r' }), slot: async () => () => {}, browse: null, tell: async (t) => told.push(t), saveNote: async () => {}, onDone: () => null });
+  await W.tag('WORKER_START', 'code | later | another job');
   await sleep(30);
-  assert.strictEqual(woke.length, 4, 'every result wakes him');
-  assert.deepStrictEqual(notes.map((n) => n.title), ['Canva pages 9-16'], 'browse result saved to Drive');
-  assert.match(await W.statusText(), /0 running, 0 waiting/);
-  // a restart mid-run: queued again once, then reported
-  const saved = JSON.parse(settings.workers); saved['1'].status = 'running'; saved['1'].attempts = 1; saved['2'].status = 'running'; saved['2'].attempts = 2;
-  settings.workers = JSON.stringify(saved);
-  W._setDeps({ engine: { workspace: async () => ({ readOnly: false, dir: '/tmp/x' }), ROOT: () => '/tmp/empire-workers-test', run: async () => '', spawnTurn: async () => ({ text: 'redone' }) }, browse: null, wake: async (t) => woke.push(t), saveNote: async () => {} });
-  await W.recover(); await sleep(30);
-  assert.ok(woke.some((t) => /#2 .*FAILED/.test(t) && /restarted/.test(t)), 'second cut-off is reported, not retried');
-  assert.ok(woke.some((t) => /#1 .*finished/.test(t) && /redone/.test(t)), 'first cut-off re-runs');
+  assert.ok(Object.keys(W._list()).includes('7'), 'the next id is 7, not 1');
+  gh.finish(7);
+  await sleep(60);
+
+  // A restart: a code worker still running on GitHub is watched again, not re-run.
+  gh = fakeGitHub();
+  saved['1'].status = 'running'; // was dispatched as issue 101
+  gh.issues[101] = { body: 'x', comments: [] };
+  gh.dispatched.push({ worker: '1', issue: 101, branch: saved['1'].branch });
+  gh.runs.push({ id: saved['1'].runId, name: 'Worker #1 — job 1', created_at: new Date().toISOString(), status: 'in_progress', issue: 101, html_url: 'r' });
+  settings.workers = JSON.stringify({ 1: saved['1'] });
+  W._setDeps({ gh: gh.call, repo: () => ({ owner: 'o', repo: 'r' }), slot: async () => () => {}, browse: null, tell: async (t) => told.push(t), saveNote: async () => {}, onDone: () => null });
+  await W.recover();
+  await sleep(40);
+  assert.strictEqual(Object.keys(gh.issues).length, 1, 'no new issue on a restart');
+  assert.strictEqual(W._list()['1'].status, 'running');
+  // and a stop cancels its GitHub run
+  assert.match(await W.tag('WORKER_STOP', '1'), /stopping/);
+  await sleep(40);
+  assert.deepStrictEqual(gh.cancelled, [saved['1'].runId]);
+  assert.strictEqual(W._list()['1'].status, 'stopped');
+
+  // GitHub never starts the run → it fails and says why
+  gh = fakeGitHub();
+  const orig = gh.call;
+  gh.call = async (p, o) => (/\/dispatches$/.test(p) ? {} : orig(p, o));
+  settings.workers = '{}';
+  W._setDeps({ gh: gh.call, repo: () => ({ owner: 'o', repo: 'r' }), slot: async () => () => {}, browse: null, tell: async (t) => told.push(t), saveNote: async () => {}, onDone: () => null });
+  await W.tag('WORKER_START', 'code | lost | never starts');
+  await sleep(20);
+  const w = Object.values(W._list())[0];
+  w.dispatchedAt = Date.now() - 7 * 60e3; // as if dispatched 7 min ago
+  await sleep(60);
+  assert.ok(told.some((t) => /FAILED/.test(t) && /never started its run/.test(t)), 'a run GitHub never started is reported');
+
   assert.match(await W.tag('WORKER_STOP', '99'), /no worker #99/);
   console.log('workers: all checks passed');
+  process.exit(0);
 })().catch((e) => { console.error(e); process.exit(1); });

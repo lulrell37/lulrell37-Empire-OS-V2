@@ -137,13 +137,16 @@ function toCliPrompt(system, messages) {
 //   cli   — the personas' one-shot calls: CLAUDE_CLI_MAX (2) at once; one that
 //           can't start in CLAUDE_CLI_WAIT_S (90 s) fails, so the caller uses
 //           the metered API instead of the server thrashing.
-//   heavy — J.A.R.V.I.S.'s engine and his workers (code or browser), long runs:
-//           CLAUDE_HEAVY_MAX (2) at once, extras wait their turn.
+//   jarvis — J.A.R.V.I.S.'s own engine: always one of his own, so he's never
+//           stuck behind a worker (owner: "I need Jarvis open 100% of the time").
+//   heavy — browser workers on the server (a Chrome each): CLAUDE_HEAVY_MAX (1)
+//           at once. Code workers run on GitHub, not here (server/workers.js).
 // Nothing new starts in either while the machine has under
 // CLAUDE_CLI_MIN_FREE_MB (350) available.
 const POOLS = {
   cli: { max: () => Number(process.env.CLAUDE_CLI_MAX) || 2, running: 0, waiters: [] },
-  heavy: { max: () => Number(process.env.CLAUDE_HEAVY_MAX) || 2, running: 0, waiters: [] },
+  jarvis: { max: () => 1, running: 0, waiters: [] },
+  heavy: { max: () => Number(process.env.CLAUDE_HEAVY_MAX) || 1, running: 0, waiters: [] },
 };
 const MIN_FREE = () => (Number(process.env.CLAUDE_CLI_MIN_FREE_MB) || 350) * 1048576;
 const WAIT_MS = () => (Number(process.env.CLAUDE_CLI_WAIT_S) || 90) * 1000;
@@ -162,7 +165,7 @@ function pump() {
 // Resolves to a release() once a slot is free; rejects after the wait, or on `signal`.
 function cliSlot({ pool = 'cli', waitMs, signal } = {}) {
   const p = POOLS[pool] || POOLS.cli;
-  const wait = waitMs || (pool === 'heavy' ? 6 * 3600000 : WAIT_MS());
+  const wait = waitMs || (pool === 'cli' ? WAIT_MS() : 6 * 3600000);
   return new Promise((resolve, reject) => {
     let released = false;
     const release = () => { if (released) return; released = true; p.running--; pump(); };

@@ -1,12 +1,14 @@
 // Auto-fix after the server goes down (owner's ask, 2026-11-22: "Jarvis can
 // just auto find and fix the problem whenever server goes down").
 //
-// When boot.js restarts a child that froze or crashed, or a redeploy falls back
-// because the new code wouldn't start, onBoot() calls afterRestart(). A few
-// minutes later (the restart settles first) J.A.R.V.I.S.'s engine (Claude Code,
-// his own repo clone) gets the incident report: find the root cause from the
-// evidence, make the smallest fix on an `autofix/…` branch, run the tests, push
-// the branch. This module opens the PR and sends him, on J.A.R.V.I.S.'s bot,
+// When boot.js restarts a child that froze or crashed, a redeploy falls back
+// because the new code wouldn't start, or the whole machine went down
+// (heartbeat), onBoot() calls afterRestart(). A few minutes later one of
+// J.A.R.V.I.S.'s code workers (its own Claude Code on a GitHub runner — not his
+// engine, so he stays free to talk) gets the incident report: find the root
+// cause from the evidence, make the smallest fix on its worker/ branch, run the
+// tests, commit (the job pushes the branch). When it reports, finish() opens the
+// PR and sends him, on J.A.R.V.I.S.'s bot,
 // what broke, the proof and the fix, with a Merge & redeploy Confirm card:
 // one tap from his phone. AUTO_FIX_MERGE=on merges and redeploys with no tap.
 // No code fix (out of memory from load, a provider outage, a secret) → he says
@@ -47,18 +49,18 @@ ${String(reason).slice(0, 4000)}
 
 Find out why and fix it, the way you'd fix it if he'd asked you to:
 1. Evidence first. Read the code the report points at (server/, AGENTS.md has the map), git log for what changed recently. Name the root cause and the line or log that proves it. Don't guess.
-2. If a code change fixes it: start a branch from the latest origin/main named autofix/<short-name>, make the smallest change that fixes the root cause (no unrelated cleanups), run the server tests it touches (node server/scripts/test-*.js) and \`node -e "require('./server/index.js')"\`-style load checks where they're safe, commit, and push the BRANCH. Never push to main, never merge, never [REDEPLOY] — he approves the merge with one tap. Update AGENTS.md if you change how something works.
+2. If a code change fixes it: make the smallest change that fixes the root cause (no unrelated cleanups), run the server tests it touches (node server/scripts/test-*.js) and \`node --check\` on what you changed, and commit it on your branch. Never touch main, never merge — he approves the merge with one tap. Update AGENTS.md if you change how something works.
 3. If no code change fixes it (load spike, provider outage, credits, a secret, Replit itself), change nothing and say what he should do, if anything.
 
-Reply to him as J.A.R.V.I.S., short and plain: what broke, the proof, what you changed (or why nothing). Then, on their own lines at the very end:
-AUTOFIX_BRANCH: <branch you pushed, or none>
-AUTOFIX_TITLE: <one-line PR title, if you pushed>`;
+Your report is for him, short and plain: what broke, the proof, what you changed (or why nothing). Then, on its own line at the very end:
+AUTOFIX_TITLE: <one-line PR title, or none if you changed nothing>`;
 }
 
 function parseReply(text) {
   const t = String(text || '');
   const branch = (/^AUTOFIX_BRANCH:\s*(\S+)/m.exec(t) || [])[1] || '';
-  const title = ((/^AUTOFIX_TITLE:\s*(.+)$/m.exec(t) || [])[1] || '').trim();
+  let title = ((/^AUTOFIX_TITLE:\s*(.+)$/m.exec(t) || [])[1] || '').trim();
+  if (/^none$/i.test(title)) title = '';
   const body = t.replace(/^AUTOFIX_(BRANCH|TITLE):.*$/gm, '').trim();
   return { branch: /^none$/i.test(branch) ? '' : branch, title, body };
 }
@@ -108,37 +110,39 @@ async function send(text, confirm) {
 }
 
 async function run(kind, reason) {
-  const engine = require('./jarvisEngine');
-  if (!engine.enabled()) return console.log('auto-fix: J.A.R.V.I.S.\'s engine is off — skipping');
-  if (!process.env.GITHUB_TOKEN) return console.log('auto-fix: no GITHUB_TOKEN, so he can\'t push a fix — skipping');
+  if (!process.env.GITHUB_TOKEN) return console.log('auto-fix: no GITHUB_TOKEN, so no worker can be started — skipping');
   const sha = process.env.EMPIRE_CODE_SHA || '';
-  console.log('auto-fix: J.A.R.V.I.S. is looking into the restart');
-  let reply;
-  try {
-    reply = await engine.turn(prompt(kind, reason, sha), { source: 'telegram', ownerText: '[auto-fix after a server restart]' });
-  } catch (e) {
-    console.error('auto-fix failed:', e.message);
-    return send(`⚠️ I tried to find what took the server down, sir, but my engine failed: ${e.message.slice(0, 200)}`);
-  }
-  const { branch, title, body } = parseReply(reply);
-  if (!branch) return send(`🛠 **Auto-fix — the server restart**\n\n${body}\n\nNo code change, so there's nothing to merge.`);
+  const w = await require('./workers').start({ kind: 'code', title: `Auto-fix: server ${kind}`, task: prompt(kind, reason, sha), purpose: 'autofix' });
+  console.log(`auto-fix: worker #${w.id} is looking into the restart`);
+}
+
+// The auto-fix worker reported (workers.report → onDone). Returns true: handled here.
+async function finish(w) {
+  const { title, body } = parseReply(w.result);
+  const head = `🛠 **Auto-fix — the server ${String(w.title).replace(/^Auto-fix: server /, '')}** (worker #${w.id})`;
+  const report = `${head}\n\n${body.slice(0, 3000)}${w.issueUrl ? `\n\nFull report: ${w.issueUrl}` : ''}`;
+  if (w.status !== 'done') { await send(`${report}\n\n⚠️ The worker didn't finish (${w.status}).`); return true; }
+  if (!/pushed/.test(w.pushed || '') || !title) { await send(`${report}\n\nNo code change, so there's nothing to merge.`); return true; }
   let pr;
-  try { pr = await openPR(branch, title, body); } catch (e) {
+  try { pr = await openPR(w.branch, title, body); } catch (e) {
     console.error('auto-fix failed: PR:', e.message);
-    return send(`🛠 **Auto-fix — the server restart**\n\n${body}\n\n⚠️ The fix is pushed on \`${branch}\`, but I couldn't open the PR: ${e.message.slice(0, 200)}`);
+    await send(`${report}\n\n⚠️ The fix is pushed on \`${w.branch}\`, but I couldn't open the PR: ${e.message.slice(0, 200)}`);
+    return true;
   }
   if (process.env.AUTO_FIX_MERGE === 'on') {
     let done;
     try { done = await mergeFix(pr.number); } catch (e) { done = `⚠️ Merging it failed: ${e.message.slice(0, 200)}`; }
-    return send(`🛠 **Auto-fix — the server restart**\n\n${body}\n\nPR #${pr.number}: ${pr.url}\n${done}`);
+    await send(`${report}\n\nPR #${pr.number}: ${pr.url}\n${done}`);
+    return true;
   }
   const { query } = require('./db');
   const cid = require('crypto').randomBytes(6).toString('hex');
   const label = `Merge auto-fix PR #${pr.number} and redeploy`;
-  const detail = `${title || branch}\n${pr.url}\nSquash-merges it into main; server changes go live on a redeploy (the server restarts, about 2 min).`;
+  const detail = `${title}\n${pr.url}\nSquash-merges it into main; server changes go live on a redeploy (the server restarts, about 2 min).`;
   await query('INSERT INTO tg_pending (id, persona, kind, label, detail, payload, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7)',
     [cid, 'jarvis', 'autofix_merge', label, detail, JSON.stringify({ pr: pr.number }), Date.now()]);
-  return send(`🛠 **Auto-fix — the server restart**\n\n${body}\n\nPR #${pr.number}: ${pr.url}`, { id: cid, label, detail });
+  await send(`${report}\n\nPR #${pr.number}: ${pr.url}`, { id: cid, label, detail });
+  return true;
 }
 
 // Called from onBoot() when the server came back from a freeze/crash, or fell back.
@@ -152,6 +156,6 @@ async function afterRestart(kind, reason) {
 }
 
 // Will a restart get looked at? (So A.R.A.'s report doesn't promise a fix that won't come.)
-const willTry = () => enabled() && !!process.env.GITHUB_TOKEN && require('./jarvisEngine').enabled();
+const willTry = () => enabled() && !!process.env.GITHUB_TOKEN && require('./workers').enabled();
 
-module.exports = { afterRestart, willTry, mergeFix, signature, shouldRun, parseReply, prompt };
+module.exports = { afterRestart, willTry, finish, mergeFix, signature, shouldRun, parseReply, prompt };

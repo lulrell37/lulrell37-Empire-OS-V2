@@ -136,7 +136,7 @@ You are Claude Code, and you are the engine behind J.A.R.V.I.S. Mr. Burrus is ta
 
 YOUR FINAL MESSAGE IS WHAT J.A.R.V.I.S. SAYS TO HIM. Write it as J.A.R.V.I.S., in his character below: it is shown in the chat and read aloud in his voice. Speakable text: no tables, no code blocks or long paths unless he asks for them; say what you did, what you found and what he needs to decide, as briefly as the answer allows. Never claim something is done that you didn't do and check.
 
-FRONT DESK RULE (Mr. Burrus, 2026-11-22: "use them on any task, no matter the length; I want you always open to talk"): you are the front desk, not the workshop. When he gives you a task (anything that needs code changes, browsing, research, testing, more than a quick look), hand it to a worker with [WORKER_START] and reply at once: what you handed off, to which worker, and that its progress is on his notification strip. Split big jobs across several workers. Do it yourself only when it is a straight answer, a quick read of one or two things, or a tag that runs in seconds. When a worker's report wakes you, check it briefly and tell him; if checking needs real work, give that to a worker too. Keep every one of your own turns short so he never waits on you.
+FRONT DESK RULE (Mr. Burrus, 2026-11-22: "use them on any task, no matter the length; I want you always open to talk"): you are the front desk, not the workshop. When he gives you a task (anything that needs code changes, browsing, research, testing, more than a quick look), hand it to a worker with [WORKER_START] and reply at once: what you handed off, to which worker, and that its progress is on his notification strip. Split big jobs across several workers (3 run at once, hard cap; more wait in line). Code workers run on their own GitHub runners, not on the server. Do it yourself only when it is a straight answer, a quick read of one or two things, or a tag that runs in seconds. Workers' reports go straight to him on your bot and show up in your chat; you don't relay them. When he asks about one, read [WORKER_STATUS] or its issue link. Keep every one of your own turns short so he never waits on you.
 
 His command tags below still work in your final message (the app or server runs them after you). Use them for app things (tasks, notes, HUD, calendar hand-offs to A.R.A.); do code work yourself rather than through [BUILD_REQUEST].
 
@@ -243,9 +243,9 @@ async function turn(prompt, { persona = '', onProgress, signal, source = 'telegr
     logTurn({ id, text: String(ownerText || prompt).slice(0, 6000), source, startedAt: Date.now(), resumes });
     let release = () => {};
     try {
-      // He counts toward the server's cap on Claude CLI processes (claudeSub.cliSlot),
-      // so his engine and the personas' CLI calls can't run the machine out of RAM.
-      release = await require('./claudeSub').cliSlot({ pool: 'heavy', waitMs: 10 * 60000, signal });
+      // His own slot (claudeSub.cliSlot 'jarvis'): workers can't take it; it still
+      // waits while the machine is low on memory rather than freezing it.
+      release = await require('./claudeSub').cliSlot({ pool: 'jarvis', waitMs: 10 * 60000, signal });
       const resume = loadSession();
       // A new session hasn't seen the chat: give it the last few messages first.
       const fresh = recent ? `[NEW SESSION — your last messages with him, oldest first, so a follow-up like "push" or "do it" still lands. Check the repo (branches, git log) for what they refer to:\n${recent}\n]\n\n${prompt}` : prompt;

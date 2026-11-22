@@ -1,29 +1,37 @@
 // J.A.R.V.I.S.'s workers (owner's idea, 2026-11-22): he stays at the front desk
-// and hands each task to a worker of its own, watches them all, and when one
-// finishes the result comes back to him to check before Mr. Burrus hears it.
+// and hands each task to a worker of its own, so he is free to talk 100% of the time.
 //
-//   code    — a headless Claude Code run in its own git worktree on branch
-//             worker/<id>, cut from main: it may commit and push that branch,
-//             never main (his push rule stands).
-//   browse  — a browser task on its own browser profile (worker-<id>), so it
-//             never collides with his or A.R.A.'s browser; its result can be
-//             saved straight to a Drive note.
+//   code    — its own Claude Code on its own GitHub Actions runner
+//             (.github/workflows/worker.yml), NOT on the server: the server opens
+//             an issue holding the task (label `worker`), fires repository_dispatch
+//             `worker-run`, and polls the issue for the job's report. The job works
+//             on branch worker/<id> cut from main and pushes only that branch.
+//             (Running them on the 2 GB server froze it, 2026-11-22.)
+//   browse  — a browser task on the server, on its own browser profile
+//             (worker-<id>); one at a time, behind the memory gate
+//             (claudeSub.cliSlot 'heavy'), since each Chrome is ~400 MB.
 //
-// MAX_WORKERS (3, WORKERS_MAX) at once — they share the Claude subscription and
-// the server's memory; the rest wait in line. Every step shows on his
-// notification strip in the app (GET /workers → NudgeBar). A finished, failed
-// or stuck worker wakes J.A.R.V.I.S. (jarvisOutOfBand) with what it found. State
-// is app_settings.workers, so a restart re-runs what it cut off, once, and says
-// so; nothing ends quietly. WORKERS=off stops it. Tags: [WORKER_START: code|browse
-// | title | task | note title], [WORKER_STATUS], [WORKER_STOP: id].
-// node server/scripts/test-workers.js.
+// HARD CAP: 3 running at once, total, whatever WORKERS_MAX says (owner's order:
+// "3 and 3 only"); the rest wait in line. Ids only ever count up (the 11th worker
+// of the day is #11; that's not 11 running). Every result goes straight to Mr.
+// Burrus on J.A.R.V.I.S.'s bot (logged in his chat history, so J.A.R.V.I.S. knows
+// it) — no engine turn, so J.A.R.V.I.S. is never busy checking a worker when he
+// wants to talk. The issue holds the task and the full report: the proof it ran.
+// State: app_settings.workers (+ workers_seq); a restart picks code workers back
+// up where they are (the runner keeps going) and re-runs a cut-off browse once.
+// WORKERS=off stops it. Tags: [WORKER_START: code|browse | title | task | note
+// title], [WORKER_STATUS], [WORKER_STOP: id]. node server/scripts/test-workers.js.
 const fs = require('fs');
 const path = require('path');
 const { getSetting, setSetting } = require('./syncStore');
 
 const KEY = 'workers';
-const MAX = () => Math.max(1, Number(process.env.WORKERS_MAX) || 3);
-const CODE_TIMEOUT_MS = () => (Number(process.env.WORKER_CODE_MIN) || 90) * 60e3;
+const HARD_CAP = 3;
+const MAX = () => Math.min(HARD_CAP, Math.max(1, Number(process.env.WORKERS_MAX) || HARD_CAP));
+const BROWSE_MAX = 1; // Chrome on the 2 GB server: one at a time
+const POLL_MS = () => Number(process.env.WORKER_POLL_MS) || 60e3;
+const NO_RUN_MS = 6 * 60e3; // dispatched but GitHub never started it
+const CODE_TIMEOUT_MS = () => (Number(process.env.WORKER_CODE_MIN) || 130) * 60e3; // the job's own limit is 120
 const KEEP_MS = 24 * 3600e3; // finished ones stay listed a day
 const SHOW_DONE_MS = 15 * 60e3; // and on his strip for 15 minutes
 const enabled = () => String(process.env.WORKERS || '').toLowerCase() !== 'off';
@@ -34,9 +42,18 @@ let deps = null; // swapped in by the test
 
 function d() {
   return deps || {
-    engine: require('./jarvisEngine'),
+    gh: (p, o) => require('./buildAgent').gh(p, o),
+    repo: () => require('./buildAgent').REPO,
+    slot: (o) => require('./claudeSub').cliSlot({ pool: 'heavy', ...o }),
     browse: (persona, name, task, opts) => require('./browserAgent').browseRun(persona, name, task, opts),
-    wake: (text) => require('./routes/telegram').jarvisOutOfBand(text, { quiet: /^\s*NOTHING\s*\.?\s*$/i }),
+    tell: async (text) => {
+      const tg = require('./telegram');
+      const id = tg.botFor('jarvis') && tg.botFor('jarvis').isConfigured() ? 'jarvis' : 'ara';
+      const bot = tg.botFor(id);
+      if (!bot || !bot.isConfigured() || !tg.OWNER_ID) throw new Error('no Telegram bot to send it on');
+      await bot.sendMessage(tg.OWNER_ID, id === 'jarvis' ? text : `J.A.R.V.I.S.:\n${text}`);
+    },
+    onDone: (w) => (w.purpose === 'autofix' ? require('./autoFix').finish(w) : null),
     saveNote: (title, body) => require('./google').saveDriveNote(title, body),
   };
 }
@@ -55,25 +72,39 @@ function save() {
   return saving;
 }
 
-const nextId = () => String(1 + Math.max(0, ...Object.keys(list).map(Number).filter(Number.isFinite)));
+let seq = 0;
+async function nextId() {
+  if (!seq) seq = Number(await getSetting('workers_seq', 0)) || 0;
+  seq = Math.max(seq, ...Object.keys(list).map(Number).filter(Number.isFinite)) + 1;
+  await setSetting('workers_seq', String(seq));
+  return String(seq);
+}
 const running = () => Object.values(list).filter((w) => w.status === 'running');
 const queued = () => Object.values(list).filter((w) => w.status === 'queued').sort((a, b) => a.createdAt - b.createdAt);
 
-async function start({ kind = 'code', title, task, note = '' }) {
+async function start({ kind = 'code', title, task, note = '', purpose = '' }) {
   if (!enabled()) throw new Error('workers are switched off (WORKERS=off)');
   kind = /^b/i.test(kind) ? 'browse' : 'code';
   if (!String(task || '').trim()) throw new Error('a worker needs its task');
   await load();
-  const id = nextId();
-  list[id] = { id, kind, title: String(title || task).slice(0, 80), task: String(task), note: String(note || ''), status: 'queued', createdAt: Date.now(), step: 0, progress: 'Waiting for a free slot', attempts: 0 };
+  const id = await nextId();
+  list[id] = { id, kind, purpose, title: String(title || task).slice(0, 80), task: String(task), note: String(note || ''), status: 'queued', createdAt: Date.now(), step: 0, progress: 'Waiting for a free slot', attempts: 0 };
   await save();
   pump();
   return list[id];
 }
 
+// Next in line that may start: total under 3, and browse only while no other browse runs.
 function pump() {
   if (!list) return;
-  while (running().length < MAX() && queued().length) launch(queued()[0]);
+  for (;;) {
+    const run = running();
+    if (run.length >= MAX()) return;
+    const browsing = run.filter((w) => w.kind === 'browse').length;
+    const next = queued().find((w) => w.kind !== 'browse' || browsing < BROWSE_MAX);
+    if (!next) return;
+    launch(next);
+  }
 }
 
 function update(w, patch) { Object.assign(w, patch, { updatedAt: Date.now() }); save(); }
@@ -81,25 +112,25 @@ function update(w, patch) { Object.assign(w, patch, { updatedAt: Date.now() }); 
 async function launch(w) {
   const ctrl = new AbortController();
   ctrls.set(w.id, ctrl);
-  update(w, { status: 'running', startedAt: Date.now(), attempts: (w.attempts || 0) + 1, progress: 'Starting' });
+  const resuming = w.kind === 'code' && w.issue; // a restart: the runner kept going, just watch it again
+  update(w, { status: 'running', startedAt: w.startedAt && resuming ? w.startedAt : Date.now(), attempts: (w.attempts || 0) + (resuming ? 0 : 1), progress: resuming ? 'Watching it again after a server restart' : 'Starting' });
   let out;
   let release = () => {};
   try {
-    // A worker is a whole Claude Code run or a Chrome (~400 MB each): it waits
-    // for a heavy slot and free memory (claudeSub.cliSlot) so workers can't
-    // freeze the 2 GB server the way 2026-11-22's did.
-    update(w, { progress: 'Waiting for room on the server' });
-    release = await require('./claudeSub').cliSlot({ pool: 'heavy', signal: ctrl.signal });
-    update(w, { progress: 'Starting' });
-    out = w.kind === 'browse' ? await runBrowse(w) : await runCode(w, ctrl.signal);
+    if (w.kind === 'browse') {
+      update(w, { progress: 'Waiting for room on the server' });
+      release = await d().slot({ signal: ctrl.signal });
+      update(w, { progress: 'Starting' });
+      out = await runBrowse(w);
+    } else out = await runCode(w, ctrl.signal);
   } catch (e) {
     out = { status: ctrl.signal.aborted ? 'stopped' : 'failed', result: e.message };
     if (!ctrl.signal.aborted) console.error(`worker failed: #${w.id} ${w.title}: ${e.message}`);
   }
   release();
   ctrls.delete(w.id);
-  update(w, { status: out.status, result: String(out.result || '').slice(0, 20000), branch: out.branch || w.branch, endedAt: Date.now(), progress: out.status === 'done' ? 'Finished' : out.status === 'needs_you' ? 'Needs Mr. Burrus' : out.status === 'stopped' ? 'Stopped' : 'Failed' });
-  if (w.status !== 'stopped') report(w);
+  update(w, { status: out.status, result: String(out.result || '').slice(0, 20000), branch: out.branch || w.branch, pushed: out.pushed || '', endedAt: Date.now(), progress: out.status === 'done' ? 'Finished' : out.status === 'needs_you' ? 'Needs Mr. Burrus' : out.status === 'stopped' ? 'Stopped' : 'Failed' });
+  report(w);
   pump();
 }
 
@@ -117,42 +148,77 @@ async function runBrowse(w) {
   return { status, result: `${r.text}${saved}` };
 }
 
-const WORKER_BRIEF = (w, branch) => `[YOU ARE ONE OF J.A.R.V.I.S.'S WORKERS — #${w.id}: "${w.title}"]
-J.A.R.V.I.S. (the Empire OS engineer, running on Claude Code like you) handed you this one task so he can keep talking with Mr. Burrus. Do it fully and properly. If it is code: read the real code, change what's needed, run the tests that cover it, check your work. If it is research, a check or any other job: do it the same way, thoroughly, and report what you found with sources; you don't need to commit anything if nothing in the repo changes.
-You are in your own git worktree of the Empire OS repo on branch ${branch}, cut from main. The repo's AGENTS.md / CLAUDE.md rules apply. Commit your work on this branch and push THIS branch to origin. Never merge into main and never push main: Mr. Burrus says "push" and J.A.R.V.I.S. ships it. Don't redeploy. Other workers may be editing other branches at the same time; stay on yours.
-Your final message is a report for J.A.R.V.I.S., not for Mr. Burrus: what you did, the branch and commits, test results, anything unfinished or that needs a decision. Plain and short.`;
+const sleepFor = (ms, signal) => new Promise((r) => {
+  const wake = () => { clearTimeout(t); if (signal) signal.removeEventListener('abort', wake); r(); };
+  const t = setTimeout(wake, ms);
+  if (signal) signal.addEventListener('abort', wake, { once: true });
+});
+const noMention = (t) => String(t).replace(/@claude/gi, '@ claude'); // claude.yml answers "@claude"
 
+// A code worker on its own GitHub runner (.github/workflows/worker.yml).
 async function runCode(w, signal) {
-  const E = d().engine;
-  const ws = await E.workspace();
-  if (ws.readOnly) throw new Error('no GITHUB_TOKEN on the server, so a code worker has no repo to work in');
+  if (!process.env.GITHUB_TOKEN && !deps) throw new Error('no GITHUB_TOKEN on the server, so a code worker can\'t be started on GitHub');
+  const R = d().repo();
+  const base = `/repos/${R.owner}/${R.repo}`;
   const branch = w.branch || `worker/${w.id}-${String(w.title).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 30) || 'task'}`;
-  const dir = path.join(E.ROOT(), 'workers', w.id);
-  update(w, { branch, progress: 'Setting up its own copy of the repo' });
-  await E.run('git', ['fetch', '--quiet', 'origin'], { cwd: ws.dir }).catch(() => {});
-  if (!fs.existsSync(path.join(dir, '.git'))) {
-    await E.run('git', ['worktree', 'prune'], { cwd: ws.dir }).catch(() => {});
-    const exists = await E.run('git', ['rev-parse', '--verify', '--quiet', branch], { cwd: ws.dir }).then(() => true, () => false);
-    await E.run('git', ['worktree', 'add', ...(exists ? [dir, branch] : ['-b', branch, dir, 'origin/main'])], { cwd: ws.dir, timeout: 300000 });
+  if (!w.issue) {
+    update(w, { branch, progress: 'Opening its GitHub issue' });
+    const issue = await d().gh(`${base}/issues`, { method: 'POST', body: { title: `Worker #${w.id}: ${w.title}`.slice(0, 120), body: noMention(w.task), labels: ['worker'] } });
+    update(w, { issue: issue.number, issueUrl: issue.html_url, progress: 'Starting its own Claude Code on GitHub' });
+    await d().gh(`${base}/dispatches`, { method: 'POST', body: { event_type: 'worker-run', client_payload: { worker: w.id, issue: issue.number, branch, title: w.title.slice(0, 60) } } });
+    update(w, { dispatchedAt: Date.now() });
   }
-  try {
-    const r = await E.spawnTurn({
-      prompt: w.task, persona: '', dir, brief: WORKER_BRIEF(w, branch), ownSession: false, signal, timeoutMs: CODE_TIMEOUT_MS(),
-      onProgress: (line) => update(w, { step: (w.step || 0) + 1, progress: String(line).slice(0, 140) }),
-    });
-    return { status: 'done', result: r.text, branch };
-  } finally {
-    // The branch (and anything pushed) stays; the folder goes, to keep the disk clear.
-    await E.run('git', ['worktree', 'remove', '--force', dir], { cwd: ws.dir }).catch(() => {});
+  const deadline = (w.dispatchedAt || Date.now()) + CODE_TIMEOUT_MS();
+  for (;;) {
+    if (signal.aborted) {
+      if (w.runId) await d().gh(`${base}/actions/runs/${w.runId}/cancel`, { method: 'POST' }).catch(() => {});
+      return { status: 'stopped', result: 'stopped on request', branch };
+    }
+    const comments = await d().gh(`${base}/issues/${w.issue}/comments?per_page=100`).catch(() => null);
+    const done = (comments || []).find((c) => /<!-- worker-result/.test(c.body || ''));
+    if (done) {
+      const body = String(done.body);
+      const ok = /status=done/.test(body);
+      const pushed = (/branch: ([^·\n]+)/.exec(body) || [])[1] || '';
+      return { status: ok ? 'done' : 'failed', result: body.replace(/<!--[^>]*-->\n?/, '').trim(), branch, pushed: pushed.trim() };
+    }
+    if (!w.runId) {
+      const runs = await d().gh(`${base}/actions/runs?event=repository_dispatch&per_page=30`).catch(() => null);
+      const run = runs && (runs.workflow_runs || []).find((r) => String(r.name || '').startsWith(`Worker #${w.id} `) && Date.parse(r.created_at) >= (w.dispatchedAt || 0) - 120e3);
+      if (run) update(w, { runId: run.id, runUrl: run.html_url, progress: 'Working on its own GitHub runner' });
+      else if (Date.now() - (w.dispatchedAt || 0) > NO_RUN_MS) throw new Error('GitHub never started its run — check that .github/workflows/worker.yml is on main and the repo has the CLAUDE_CODE_OAUTH_TOKEN secret');
+    } else {
+      const run = await d().gh(`${base}/actions/runs/${w.runId}`).catch(() => null);
+      if (run && run.status === 'completed') {
+        // Give the report comment a minute to land, then call it.
+        if (!w.completedSeen) update(w, { completedSeen: Date.now() });
+        else if (Date.now() - w.completedSeen > 90e3) throw new Error(`its GitHub run ended (${run.conclusion}) without a report — ${run.html_url}`);
+      } else if (run) {
+        const mins = Math.round((Date.now() - (w.startedAt || Date.now())) / 60000);
+        update(w, { progress: `Working on GitHub, ${mins} min in` });
+      }
+    }
+    if (Date.now() > deadline) {
+      if (w.runId) await d().gh(`${base}/actions/runs/${w.runId}/cancel`, { method: 'POST' }).catch(() => {});
+      throw new Error(`ran past ${Math.round(CODE_TIMEOUT_MS() / 60000)} minutes, so it was stopped`);
+    }
+    await sleepFor(POLL_MS(), signal);
   }
 }
 
-// The result goes to J.A.R.V.I.S. first; he checks it, then tells Mr. Burrus.
+// The result goes straight to Mr. Burrus on J.A.R.V.I.S.'s bot (and so into
+// J.A.R.V.I.S.'s chat history): no engine turn, so he's never tied up by it.
 function report(w) {
-  const mins = Math.max(1, Math.round(((w.endedAt || Date.now()) - (w.startedAt || w.createdAt)) / 60000));
-  const head = { done: 'finished', needs_you: 'stopped and needs Mr. Burrus', failed: 'FAILED' }[w.status] || w.status;
-  const text = `[SENT ON YOUR OWN — your worker #${w.id} ("${w.title}", ${w.kind}${w.branch ? `, branch ${w.branch}` : ''}) ${head} after ${mins} min. Mr. Burrus did not send this. Check its work (for code: look at the branch, run its tests) before you tell him anything, then report to him in a few sentences. If it failed or stopped, say exactly why and what you're doing about it, or start a fresh worker if it's worth another try. If there is more of the same job queued for other workers, mention where the whole job stands. Its report:]\n${String(w.result || '(empty)').slice(0, 12000)}`;
-  Promise.resolve(d().wake(text)).catch((e) => console.error(`worker failed: couldn't hand #${w.id}'s result to J.A.R.V.I.S.: ${e.message}`));
+  if (w.status === 'stopped') return;
+  Promise.resolve(d().onDone && d().onDone(w)).then((handled) => {
+    if (handled) return;
+    const mins = Math.max(1, Math.round(((w.endedAt || Date.now()) - (w.startedAt || w.createdAt)) / 60000));
+    const icon = { done: '✅', needs_you: '✋', failed: '❌' }[w.status] || '•';
+    const head = { done: 'finished', needs_you: 'stopped — it needs you', failed: 'FAILED' }[w.status] || w.status;
+    const links = [w.pushed ? `Branch: ${w.pushed}` : (w.branch && w.kind === 'code' ? `Branch: ${w.branch} (nothing pushed)` : ''), w.issueUrl ? `Full report: ${w.issueUrl}` : ''].filter(Boolean).join('\n');
+    const text = `${icon} Worker #${w.id} ${head} — "${w.title}" (${w.kind}, ${mins} min)\n\n${String(w.result || '(no report)').slice(0, 3000)}${links ? `\n\n${links}` : ''}${w.kind === 'code' && w.status === 'done' && w.pushed && /pushed/.test(w.pushed) ? '\n\nSay "push" to J.A.R.V.I.S. to ship it.' : ''}`;
+    return d().tell(text);
+  }).catch((e) => console.error(`worker failed: couldn't report #${w.id}: ${e.message}`));
 }
 
 async function stop(id) {
@@ -171,6 +237,7 @@ async function recover() {
   await load();
   for (const w of Object.values(list)) {
     if (w.status !== 'running') continue;
+    if (w.kind === 'code' && w.issue) { update(w, { status: 'queued', progress: 'Watching it again after a server restart' }); continue; }
     if ((w.attempts || 0) >= 2) {
       update(w, { status: 'failed', endedAt: Date.now(), progress: 'Failed', result: 'the server restarted in the middle of it twice, so it was not started a third time' });
       report(w);
@@ -181,14 +248,14 @@ async function recover() {
 
 function line(w) {
   const mins = Math.max(0, Math.round((Date.now() - (w.startedAt || w.createdAt)) / 60000));
-  return `#${w.id} ${w.kind} "${w.title}" — ${w.status}${w.status === 'running' ? `, ${mins} min, step ${w.step || 0}: ${w.progress}` : ''}${w.branch ? ` (branch ${w.branch})` : ''}`;
+  return `#${w.id} ${w.kind} "${w.title}" — ${w.status}${w.status === 'running' ? `, ${mins} min: ${w.progress}` : ''}${w.branch ? ` (branch ${w.branch})` : ''}${w.issueUrl ? ` ${w.issueUrl}` : ''}`;
 }
 
 async function statusText() {
   await load();
   const all = Object.values(list).sort((a, b) => a.createdAt - b.createdAt);
   if (!all.length) return 'No workers in the last day.';
-  return `${running().length} running, ${queued().length} waiting (${MAX()} at once):\n${all.map(line).join('\n')}`;
+  return `${running().length} of ${MAX()} running, ${queued().length} waiting (3 at once, hard cap):\n${all.map(line).join('\n')}`;
 }
 
 // For the app's strip: what's working and what just finished.
@@ -198,7 +265,7 @@ async function forApp() {
   return Object.values(list)
     .filter((w) => ['running', 'queued'].includes(w.status) || (w.endedAt && now - w.endedAt < SHOW_DONE_MS))
     .sort((a, b) => a.createdAt - b.createdAt)
-    .map((w) => ({ id: w.id, kind: w.kind, title: w.title, status: w.status, step: w.step || 0, progress: w.progress || '', branch: w.branch || null, startedAt: w.startedAt || null, endedAt: w.endedAt || null }));
+    .map((w) => ({ id: w.id, kind: w.kind, title: w.title, status: w.status, step: w.step || 0, progress: w.progress || '', branch: w.branch || null, startedAt: w.startedAt || null, endedAt: w.endedAt || null, url: w.runUrl || w.issueUrl || null }));
 }
 
 async function tag(name, arg) {
@@ -209,10 +276,10 @@ async function tag(name, arg) {
   if (!/^(code|browse)$/i.test(kind || '')) { note = task; task = title; title = kind; kind = 'code'; }
   if (!task) { task = title; title = String(title || '').slice(0, 60); }
   const w = await start({ kind, title, task, note });
-  return `WORKER_START: ✓ worker #${w.id} (${w.kind}) "${w.title}" ${running().some((x) => x.id === w.id) ? 'is working on it now' : `is in line (${running().length} already running)`}. Its progress shows on his notification strip; the result comes back to you when it's done.`;
+  return `WORKER_START: ✓ worker #${w.id} (${w.kind}) "${w.title}" ${running().some((x) => x.id === w.id) ? 'is working on it now' : `is in line (${running().length} of 3 already running)`}${w.kind === 'code' ? ', on its own GitHub runner' : ''}. Its progress shows on his notification strip; its report goes straight to him on your bot when it's done (you'll see it in this chat).`;
 }
 
-const WORKER_TOOLS = ` - [WORKER_START: code|browse | short title | the full task, self-contained | Drive note title (browse only, optional)] — hand a task to a worker of your own so you stay free to talk to him. code = its own Claude Code run in its own worktree on a worker/ branch (commits and pushes that branch only, never main); browse = a browser task on its own browser, its result saved to that Drive note. 3 run at once, the rest wait in line; several workers can split one big job (e.g. Canva pages 1-8, 9-16…). Each one's progress shows live on his notification strip. When one finishes, fails or gets stuck you're woken with its report: check it, then tell him. Use them for EVERY task, whatever its length (his standing order, 2026-11-22), so you are always free to talk to him: code is for any general job (code, research, checks, writing); browse is for anything on a website. Only straight answers and seconds-long lookups stay with you.
- - [WORKER_STATUS] — every worker: running, waiting, done, with its current step. [WORKER_STOP: id] — stop one.`;
+const WORKER_TOOLS = ` - [WORKER_START: code|browse | short title | the full task, self-contained | Drive note title (browse only, optional)] — hand a task to a worker of your own so you stay free to talk to him. code = its own Claude Code on its own GitHub runner (not the server), on a worker/ branch cut from main: it commits, the job pushes that branch only, never main; good for any general job (code, research, checks, writing). browse = a browser task on the server on its own browser, its result saved to that Drive note; one browse at a time. HARD CAP: 3 workers running at once, total; the rest wait in line. Ids count up all day (#11 is the eleventh, not eleven running). Each one's progress shows live on his notification strip, and its report goes straight to him on your bot when it ends (you'll see it in this chat), so you don't need to relay it; if he asks, read [WORKER_STATUS]. A code worker's work ships when he says push: merge its branch into main then. Use them for EVERY task, whatever its length (his standing order, 2026-11-22), so you are always free to talk to him. Only straight answers and seconds-long lookups stay with you.
+ - [WORKER_STATUS] — every worker: running, waiting, done, with its current step and GitHub link. [WORKER_STOP: id] — stop one (a GitHub run is cancelled).`;
 
 module.exports = { start, stop, recover, statusText, forApp, tag, WORKER_TOOLS, enabled, _setDeps: (x) => { deps = x; list = null; }, _list: () => list };

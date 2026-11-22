@@ -1,0 +1,94 @@
+# One of J.A.R.V.I.S.'s code workers (server/workers.js), on its own GitHub
+# runner with its own Claude Code — none of it on the 2 GB server (owner's call,
+# 2026-11-22, after workers froze it). The server opens an issue holding the task
+# (label `worker`, never "@claude", so claude.yml stays out of it) and fires a
+# repository_dispatch `worker-run`. This job works on branch worker/<id> cut from
+# main, pushes that branch (never main), and posts its report on the issue under
+# a <!-- worker-result --> marker, which the server polls and sends to Mr. Burrus
+# on J.A.R.V.I.S.'s bot. The server keeps at most 3 of these running.
+#
+# Repo setup: secret CLAUDE_CODE_OAUTH_TOKEN (the same one claude.yml uses).
+name: Worker
+run-name: "Worker #${{ github.event.client_payload.worker }} — ${{ github.event.client_payload.title }}"
+on:
+  repository_dispatch:
+    types: [worker-run]
+concurrency:
+  group: worker-${{ github.event.client_payload.worker }}
+jobs:
+  work:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+      id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ISSUE: ${{ github.event.client_payload.issue }}
+      BRANCH: ${{ github.event.client_payload.branch }}
+      WORKER: ${{ github.event.client_payload.worker }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - id: task
+        name: Branch and task
+        run: |
+          git config user.name "J.A.R.V.I.S. worker"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+            git fetch origin "$BRANCH" && git checkout -B "$BRANCH" "origin/$BRANCH"
+          else
+            git checkout -B "$BRANCH" origin/main
+          fi
+          (cd server && npm ci --ignore-scripts --no-audit --no-fund >/dev/null 2>&1) || echo "server npm ci failed; tests may not run"
+          gh issue comment "$ISSUE" --repo "$GITHUB_REPOSITORY" --body "Worker #$WORKER started on branch \`$BRANCH\` — [run]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)"
+          {
+            echo 'prompt<<WORKER_TASK_EOF'
+            echo "[YOU ARE J.A.R.V.I.S.'S WORKER #$WORKER, on your own GitHub runner. You are on branch $BRANCH of the Empire OS repo, cut from main. The repo's AGENTS.md / CLAUDE.md rules apply.]"
+            echo "Do the task below fully. Code: read the real code, change what's needed, run the tests that cover it (node server/scripts/test-*.js), check your work, and COMMIT on this branch (don't push, don't merge, never touch main: the job pushes the branch and Mr. Burrus ships it). Research, checks, writing: do it thoroughly and report with sources; commit only if something in the repo changes."
+            echo "Your final message is your report to Mr. Burrus (he reads it on Telegram): first line DONE, PARTLY DONE or FAILED; then what you did, the proof (test output, sources), anything unfinished or that needs his decision. Short and plain."
+            echo
+            echo "TASK:"
+            gh issue view "$ISSUE" --repo "$GITHUB_REPOSITORY" --json body -q .body
+            echo 'WORKER_TASK_EOF'
+          } >> "$GITHUB_OUTPUT"
+      - id: claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ github.token }}
+          prompt: ${{ steps.task.outputs.prompt }}
+          claude_args: --allowedTools "Bash,Read,Edit,Write,MultiEdit,Glob,Grep,WebSearch,WebFetch,Task,TodoWrite"
+      - name: Push the branch and report
+        if: always()
+        env:
+          LOG: ${{ steps.claude.outputs.execution_file }}
+          OUTCOME: ${{ steps.claude.outcome }}
+        run: |
+          pushed="no commits"
+          if [ -n "$(git status --porcelain)" ]; then git add -A && git commit -qm "Worker #$WORKER: uncommitted work at the end of the run" || true; fi
+          if [ "$(git rev-list --count origin/main..HEAD)" != "0" ]; then
+            if git push -q origin "HEAD:$BRANCH"; then pushed="pushed \`$BRANCH\` ($(git rev-list --count origin/main..HEAD) commit(s) ahead of main)"; else pushed="push of \`$BRANCH\` FAILED"; fi
+          fi
+          result="(no report: Claude didn't finish — outcome $OUTCOME)"
+          secs=0
+          if [ -n "$LOG" ] && [ -f "$LOG" ]; then
+            r=$(jq -r '[.[] | select(.type == "result")] | last | (.result // .subtype // "") | tostring' "$LOG")
+            [ -n "$r" ] && result="$r"
+            secs=$(jq -r '[.[] | select(.type == "result")] | last | ((.duration_ms // 0) / 1000 | floor)' "$LOG")
+          fi
+          status=done; [ "$OUTCOME" = "success" ] || status=failed
+          {
+            echo "<!-- worker-result status=$status -->"
+            echo "**Worker #$WORKER — $status** after ${secs}s · branch: $pushed · [run]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)"
+            echo
+            printf '%s\n' "$result" | head -c 60000
+          } > result.md
+          gh issue comment "$ISSUE" --repo "$GITHUB_REPOSITORY" --body-file result.md
+          gh issue close "$ISSUE" --repo "$GITHUB_REPOSITORY" >/dev/null || true

@@ -74,8 +74,60 @@ async function headline(sha) {
   } catch { return ''; }
 }
 
+// Heartbeat: a minute-by-minute "still alive" in app_settings.server_heartbeat,
+// marked clean on a normal shutdown. When the whole machine goes down (boot.js
+// and all; Replit restarting it, usually out of memory), no restart reason ever
+// reaches the next server — that's how 2026-11-22's outage went unreported. A
+// heartbeat that stopped without a clean shutdown, 5+ min before this boot, is
+// reported by A.R.A. and handed to the auto-fix.
+const BOOT_AT = Date.now();
+const VANISHED_MS = 5 * 60000;
+function heartbeat() {
+  const beat = (clean = false) => setSetting('server_heartbeat', JSON.stringify({ at: Date.now(), boot: BOOT_AT, sha: process.env.EMPIRE_CODE_SHA || null, clean })).catch(() => {});
+  setInterval(() => beat(), 60000).unref();
+  process.once('SIGTERM', () => {
+    Promise.race([beat(true), new Promise((r) => setTimeout(r, 3000))]).finally(() => process.exit(0));
+  });
+}
+const etTime = (ms) => new Date(ms).toLocaleString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit', month: 'short', day: 'numeric' });
+// What the last heartbeat says about how the previous server ended. Pure, for the test.
+function vanished(prev, now = Date.now()) {
+  if (!prev || prev.clean || !prev.at || prev.boot === BOOT_AT) return null;
+  const gap = now - prev.at;
+  if (gap < VANISHED_MS) return null;
+  return `went down without warning — the whole machine, so the watchdog couldn't report it (usually it ran out of memory and Replit restarted it). Last sign of life ${etTime(prev.at)} ET; back after about ${Math.round(gap / 60000)} min.`;
+}
+
+// The memory guard in boot.js kills the biggest helper process when the machine
+// is nearly out of RAM; it leaves a line in a file, and A.R.A. tells him (at most
+// every 30 min, text only — the voice is often what's short of memory).
+function guardReports() {
+  const file = require('path').join(require('os').tmpdir(), 'empire-memory-guard.log');
+  const fs = require('fs');
+  let seen = 0; let lastTold = 0; let pending = [];
+  try { seen = fs.statSync(file).size; } catch { /* none yet */ }
+  setInterval(() => {
+    let size = 0;
+    try { size = fs.statSync(file).size; } catch { return; }
+    if (size > seen) {
+      try { const fd = fs.openSync(file, 'r'); const b = Buffer.alloc(size - seen); fs.readSync(fd, b, 0, b.length, seen); fs.closeSync(fd); pending.push(...b.toString().split('\n').filter(Boolean)); } catch { /* next time */ }
+      seen = size;
+      for (const l of pending) console.warn(`memory guard: ${l}`);
+    }
+    if (pending.length && Date.now() - lastTold > 30 * 60000) {
+      const lines = pending.slice(-5).map((l) => `• ${l.replace(/^\S+ /, '')}`).join('\n');
+      pending = [];
+      lastTold = Date.now();
+      require('./telegram').botFor('ara') && require('./telegram').botFor('ara').sendMessage(require('./telegram').OWNER_ID,
+        `⚠️ The server was about to run out of memory, Mr. Burrus, so it stopped what was using the most to stay up:\n${lines}\n\nIf that was J.A.R.V.I.S. mid-job, ask him to pick it back up.`).catch((e) => console.error('memory guard report failed:', e.message));
+    }
+  }, 30000).unref();
+}
+
 async function onBoot() {
   const info = codeInfo();
+  let prevBeat = null;
+  try { const raw = await getSetting('server_heartbeat', ''); prevBeat = raw ? (typeof raw === 'string' ? JSON.parse(raw) : raw) : null; } catch { prevBeat = null; }
   let pending = null;
   try {
     const raw = await getSetting('redeploy_pending', '');
@@ -83,7 +135,17 @@ async function onBoot() {
   } catch { pending = null; }
   const fellBack = process.env.EMPIRE_FALLBACK_ERROR;
   const restarted = process.env.EMPIRE_RESTART_REASON;
-  if (!pending && !fellBack && !restarted) return;
+  if (!pending && !fellBack && !restarted) {
+    const gone = vanished(prevBeat);
+    if (!gone) return;
+    const what = await headline(info.sha);
+    const running = `${info.source === 'github' ? 'main' : 'the bundled deploy'} @ ${info.sha || '?'}${what ? ` — "${what}"` : ''}`;
+    const fixing = require('./autoFix').willTry();
+    require('./talonAlerts').araNote(`⚠️ **The server ${gone.split(' — ')[0]}, Mr. Burrus — it's back up now.**\nRunning: ${running}\n\n${gone.split(' — ').slice(1).join(' — ')}\n\n${fixing ? 'J.A.R.V.I.S. has a worker looking into why; you\'ll get its fix to approve.' : 'J.A.R.V.I.S. can dig in with [SERVER_LOGS].'}`,
+      `Mr. Burrus, the server went down for about ${Math.round((Date.now() - prevBeat.at) / 60000)} minutes, and it's back up now.${fixing ? ' Jarvis has a worker on it.' : ''}`, { remember: true });
+    if (fixing) require('./autoFix').afterRestart('went down', `went down — ${gone}`).catch((e) => console.error('auto-fix failed:', e.message));
+    return;
+  }
   if (pending) await setSetting('redeploy_pending', '').catch(() => {});
 
   const { araNote } = require('./talonAlerts');
@@ -127,4 +189,4 @@ function wakeJarvis(pending, what) {
   return true;
 }
 
-module.exports = { wakeJarvis, WAKE_QUIET, requestRedeploy, onBoot, codeInfo, publicUrl, RESTART_CODE };
+module.exports = { heartbeat, guardReports, vanished, wakeJarvis, WAKE_QUIET, requestRedeploy, onBoot, codeInfo, publicUrl, RESTART_CODE };
