@@ -73,13 +73,15 @@ function fakeGitHub() {
   let app = await W.forApp();
   assert.strictEqual(app.filter((x) => x.status === 'running').length, 3, 'hard cap of 3, even with WORKERS_MAX=11');
   assert.strictEqual(gh.dispatched.length, 3, 'three runs started on GitHub');
+  const slots = app.filter((x) => x.status === 'running').map((x) => x.slot).sort();
+  assert.deepStrictEqual(slots, [1, 2, 3], 'he sees slots 1-3, never a running count');
   assert.ok(app.find((x) => x.id === '1').url, 'GitHub link on the strip');
   assert.match(app.find((x) => x.id === '1').progress, /GitHub/);
 
   gh.finish(1);
   await sleep(80);
   assert.strictEqual(told.length, 1, 'result straight to him');
-  assert.match(told[0], /✅ Worker #1 finished/);
+  assert.match(told[0], /✅ Worker 1 of 3 finished/);
   assert.match(told[0], /Built it, tests pass/);
   assert.match(told[0], /Full report: https:\/\/github.com\/x\/y\/issues\/101/);
   app = await W.forApp();
@@ -91,7 +93,7 @@ function fakeGitHub() {
   app = await W.forApp();
   const run = app.filter((x) => x.status === 'running');
   assert.ok(run.length <= 3);
-  assert.ok(told.some((t) => /❌ Worker #2 FAILED/.test(t)));
+  assert.ok(told.some((t) => /❌ Worker [1-3] of 3 FAILED/.test(t)));
   // two browse workers queued: only one runs at a time
   await sleep(40);
   assert.strictEqual(maxBrowsing, 1, 'one browse at a time on the server');
@@ -102,6 +104,7 @@ function fakeGitHub() {
   }
   assert.strictEqual(maxBrowsing, 1);
   assert.strictEqual(told.length, 6, 'every worker reported');
+  assert.ok(told.every((t) => /Worker [1-3] of 3/.test(t)), 'every report names a slot of 1-3');
   assert.deepStrictEqual(notes.map((n) => n.title).sort(), ['Canva pages 1-8', 'Canva pages 9-16'], 'browse results saved to Drive');
   assert.match(await W.statusText(), /0 of 3 running, 0 waiting/);
 
@@ -146,7 +149,25 @@ function fakeGitHub() {
   await sleep(60);
   assert.ok(told.some((t) => /FAILED/.test(t) && /never started its run/.test(t)), 'a run GitHub never started is reported');
 
-  assert.match(await W.tag('WORKER_STOP', '99'), /no worker #99/);
+  assert.match(await W.tag('WORKER_STOP', '99'), /no worker 99/);
+  // A worker that needs him (a sign-in) is reported from A.R.A., not J.A.R.V.I.S.
+  settings.workers = '{}';
+  const fromAra = [];
+  const rel = [];
+  W._setDeps({ gh: gh.call, repo: () => ({ owner: 'o', repo: 'r' }), slot: async () => () => {}, tell: async (t) => told.push(t), tellAra: async (t, spoken) => fromAra.push({ t, spoken }), saveNote: async () => {}, onDone: () => null,
+    browse: async () => { await new Promise((r) => rel.push(r)); return { status: 'ask', text: 'BROWSE — paused, needs Mr. Burrus\nGoogle Drive is asking me to sign in.', result: '' }; } });
+  await W.tag('WORKER_START', 'browse | Drive pages | read the pages');
+  await sleep(20); rel.shift()(); await sleep(40);
+  assert.strictEqual(fromAra.length, 1, 'needs-you goes through A.R.A.');
+  assert.match(fromAra[0].t, /✋ Worker 1 of 3 stopped — it needs you/);
+  assert.match(fromAra[0].spoken, /sign in/);
+  // [WORKER_STOP: 1] stops the worker in slot 1
+  W._setDeps({ gh: gh.call, repo: () => ({ owner: 'o', repo: 'r' }), slot: async () => () => {}, tell: async (t) => told.push(t), saveNote: async () => {}, onDone: () => null,
+    browse: async () => new Promise(() => {}) });
+  await W.tag('WORKER_START', 'browse | long one | a long task');
+  await sleep(20);
+  assert.match(await W.tag('WORKER_STOP', '1'), /stopping/);
+
   console.log('workers: all checks passed');
   process.exit(0);
 })().catch((e) => { console.error(e); process.exit(1); });

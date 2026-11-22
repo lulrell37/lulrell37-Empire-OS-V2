@@ -89,8 +89,9 @@ export default function NudgeBar({active,activityOnly=false}){
   const WSTATE={running:'',queued:'waiting · ',done:'✓ done · ',needs_you:'needs you · ',failed:'✗ failed · ',stopped:'stopped · '};
   const workerChips=workers.map(w=>{
     const mins=w.startedAt?Math.max(0,Math.round(((w.endedAt||Date.now())-w.startedAt)/60000)):0;
-    const text=`#${w.id} ${w.title.slice(0,28)} · ${WSTATE[w.status]??''}${w.status==='running'?`${mins}m · step ${w.step} · ${w.progress.slice(0,42)}`:w.status==='queued'?'':`${mins}m`}`;
-    const detail=`Worker #${w.id} (${w.kind})\n${w.title}\n\nStatus: ${w.status}\nStep ${w.step}: ${w.progress}${w.branch?`\nBranch: ${w.branch}`:''}${w.startedAt?`\nStarted ${new Date(w.startedAt).toLocaleTimeString()}`:''}`;
+    const tag=w.slot?`${w.slot}/3`:'waiting';
+    const text=`Worker ${tag} ${w.title.slice(0,26)} · ${WSTATE[w.status]??''}${w.status==='running'?`${mins}m · step ${w.step} · ${w.progress.slice(0,42)}`:w.status==='queued'?'':`${mins}m`}`;
+    const detail=`Worker ${w.slot?`${w.slot} of 3`:'(waiting for a free slot)'} (${w.kind})\n${w.title}\n\nStatus: ${w.status}\nStep ${w.step}: ${w.progress}${w.branch?`\nBranch: ${w.branch}`:''}${w.startedAt?`\nStarted ${new Date(w.startedAt).toLocaleTimeString()}`:''}`;
     return{key:'worker:'+w.id,persona:'jarvis',text,severity:{done:'info',failed:'error',needs_you:'warn',stopped:'info'}[w.status]||'activity',activity:w.status==='running'||w.status==='queued',issue:!(w.status==='running'||w.status==='queued'),noX:true,detail,frac:null,onPress:()=>Alert.alert('J.A.R.V.I.S. worker',detail)};
   });
   const issueChips=Object.entries(firmIssues).map(([key,v])=>({

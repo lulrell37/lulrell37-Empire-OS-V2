@@ -198,6 +198,35 @@ class Cdp {
   close() { try { this.ws.close(); } catch {} }
 }
 
+// --- one shared set of logins -----------------------------------------------------
+// Every browser (J.A.R.V.I.S.'s, A.R.A.'s, each worker's, a hosted one) loads the
+// same cookies when it starts and saves them back after every task, so a login
+// made in one is there in all of them. Before this each worker started with an
+// empty profile and asked him to sign in to Google Drive again (2026-11-22).
+// File: <BROWSER_PROFILES>/shared-cookies.json (mode 600, never sent anywhere).
+const JAR = () => path.join(PROFILES, 'shared-cookies.json');
+function readJar() { try { return JSON.parse(fs.readFileSync(JAR(), 'utf8')) || []; } catch { return []; } }
+const cookieKey = (c) => `${c.name}|${c.domain}|${c.path}`;
+async function loadJar(cdp) {
+  const now = Date.now() / 1000;
+  const cookies = readJar().filter((c) => !(c.expires > 0 && c.expires < now))
+    .map(({ name, value, domain, path: p, secure, httpOnly, sameSite, expires }) => ({ name, value, domain, path: p, secure, httpOnly, ...(sameSite ? { sameSite } : {}), ...(expires > 0 ? { expires } : {}) }));
+  if (cookies.length) await cdp.send('Storage.setCookies', { cookies }).catch((e) => console.warn(`browse: couldn't load the shared logins: ${e.message}`));
+  return cookies.length;
+}
+async function saveJar(b) {
+  try {
+    const { cookies } = await b.cdp.send('Storage.getCookies', {});
+    const now = Date.now() / 1000;
+    const merged = new Map(readJar().map((c) => [cookieKey(c), c]));
+    for (const c of cookies || []) merged.set(cookieKey(c), c);
+    const keep = [...merged.values()].filter((c) => !(c.expires > 0 && c.expires < now));
+    fs.mkdirSync(PROFILES, { recursive: true });
+    fs.writeFileSync(JAR() + '.tmp', JSON.stringify(keep), { mode: 0o600 });
+    fs.renameSync(JAR() + '.tmp', JAR());
+  } catch (e) { console.warn(`browse: couldn't save the shared logins: ${e.message}`); }
+}
+
 // --- one persona's browser ----------------------------------------------------------
 
 const browsers = new Map(); // persona -> { proc, cdp, session, idleTimer, busy, pending }
@@ -232,6 +261,7 @@ async function launch(persona) {
     });
   }
   const cdp = await Cdp.connect(wsUrl);
+  await loadJar(cdp);
   // A browser that dies is dropped, so the next step relaunches it instead of
   // timing out against a dead connection; its last words go to the log.
   let errTail = '';
@@ -494,6 +524,7 @@ async function runTask({ persona, personaName = persona, task, ownerText = '', b
     }
     return finish(b, 'stopped', `used all ${MAX_STEPS} steps without finishing`, log);
   } finally {
+    await saveJar(b);
     b.busy = false;
   }
 }
@@ -579,4 +610,5 @@ async function browseRun(persona, name, arg, { ownerText = '', onStep = null } =
 const BROWSE_TOOLS = ` - [BROWSE: the task, in full] — your own computer: a real Chrome in the cloud that you drive like a person (open sites, search, read, click, fill in forms), with your own saved logins. For anything with no direct tool: looking someone up on LinkedIn, checking a supplier's prices, reading a site, filling a form. The result comes back to you this turn and he gets a screenshot. Sign-ups go through on their own (make the password yourself and save it with [SAVE_NOTE]), and a code a site emails is fetched from his Gmail automatically. It stops and asks only before anything else that acts in the world (sending, posting, connecting, buying, booking, deleting): put that question to him, and when he answers run [BROWSE] again with the same task — his reply is what approves it. A minute or several. One per turn. Report only what it found.
  - [BROWSER_KEY: Steel API key or wss:// URL] — switch your browser to a hosted one (Steel) that gets past Cloudflare checks; saved on the server, no Replit secret needed.`;
 
-module.exports = { browseRun, browserKeyTag, ensureSqlite, BROWSE_PERSONAS, runTask, browseTag, BROWSE_TOOLS, close, browserFor, snapshot, click, type, press, screenshot, unzip, chromePath, parseAction, isCommit, approves, enabled };
+module.exports = {
+  readJar, saveJar, loadJar, browseRun, browserKeyTag, ensureSqlite, BROWSE_PERSONAS, runTask, browseTag, BROWSE_TOOLS, close, browserFor, snapshot, click, type, press, screenshot, unzip, chromePath, parseAction, isCommit, approves, enabled };
