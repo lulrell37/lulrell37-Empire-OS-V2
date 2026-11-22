@@ -313,6 +313,62 @@ function fakeGitHub() {
   console.error = realErr;
   assert.match(tgCalls[tgCalls.length - 1].text, /all done/, 'recovers after a failed edit');
 
+  // Failures are always logged with the cause, and kept in app_settings.worker_failures.
+  {
+    const errs2 = []; const re = console.error; console.error = (...x) => errs2.push(x.join(' '));
+    settings.workers = '{}'; delete settings.worker_failures; tgCalls.length = 0;
+    W._setDeps(baseDeps(gh, { browse: async () => ({ status: 'failed', text: 'page never loaded' }) }));
+    const bf = await W.start({ kind: 'browse', title: 'broken browse', task: 'open example.com' }); await sleep(GAP * 3);
+    assert.ok(errs2.some((e) => e === `workers failed: #${bf.id} broken browse: page never loaded`), 'browse failure logged with cause');
+    W._setDeps(baseDeps(gh, { browse: async () => { throw new Error('chrome crashed'); } }));
+    const bt = await W.start({ kind: 'browse', title: 'throwing browse', task: 'open example.org' }); await sleep(GAP * 3);
+    assert.ok(errs2.some((e) => e === `workers failed: #${bt.id} throwing browse: chrome crashed`), 'thrown failure logged');
+    assert.ok(!errs2.some((e) => /^worker failed/.test(e)), 'never the singular prefix');
+    // a report that can't be sent
+    W._setDeps(baseDeps(gh, { browse: async () => ({ status: 'done', text: 'ok', result: '' }), tell: async () => { throw new Error('no bot'); } }));
+    await W.start({ kind: 'browse', title: 'unsent', task: 'open example.net' }); await sleep(GAP * 3);
+    assert.ok(errs2.some((e) => /^workers failed: couldn't report/.test(e)), 'report failure uses the plural prefix');
+    // persisted log
+    const saved = JSON.parse(settings.worker_failures);
+    assert.ok(saved.length >= 2); const last = saved[saved.length - 1];
+    assert.deepStrictEqual(Object.keys(last).sort(), ['at', 'id', 'kind', 'reason', 'title']);
+    assert.strictEqual(last.reason, 'chrome crashed'); assert.strictEqual(last.kind, 'browse');
+    // keeps the last 50
+    for (let i = 0; i < 60; i++) await W.logFailure({ id: 900 + i, title: 't', kind: 'code' }, `r${i}`);
+    const kept = JSON.parse(settings.worker_failures);
+    assert.strictEqual(kept.length, 50); assert.strictEqual(kept[49].reason, 'r59'); assert.strictEqual(kept[0].reason, 'r10');
+    // empty reason
+    await W.logFailure({ id: 1, title: 'x', kind: 'code' }, '');
+    assert.strictEqual(JSON.parse(settings.worker_failures).pop().reason, 'no reason recorded');
+    // [WORKER_STATUS] shows why
+    const l = W._list();
+    l.s1 = { id: 's1', kind: 'code', title: 'F', status: 'failed', createdAt: 1, result: 'x'.repeat(300) };
+    l.s2 = { id: 's2', kind: 'code', title: 'S', status: 'stopped', createdAt: 2, result: '' };
+    l.s3 = { id: 's3', kind: 'browse', title: 'N', status: 'needs_you', createdAt: 3, result: 'needs a code' };
+    const st = await W.statusText();
+    assert.ok(st.includes(`reason: ${'x'.repeat(200)}`) && !st.includes('x'.repeat(201)), 'first 200 chars');
+    assert.match(st, /"S" — stopped.*no reason recorded/); assert.match(st, /"N" — needs_you.*needs a code/);
+    delete l.s1; delete l.s2; delete l.s3;
+    // Drive file links are refused for browse workers (and logged), fine for code workers
+    errs2.length = 0; let refused = '';
+    await W.start({ kind: 'browse', title: 'drive', task: 'read https://docs.google.com/document/d/abc/edit' }).catch((e) => { refused = e.message; });
+    assert.match(refused, /READ_FILE_ID/); assert.match(refused, /Drive tags/);
+    assert.ok(errs2.some((e) => /^workers failed: .*drive.*READ_FILE_ID/.test(e)), 'refusal logged');
+    refused = '';
+    await W.start({ kind: 'browse', title: 'drive2', task: 'see https://drive.google.com/file/d/abc/view' }).catch((e) => { refused = e.message; });
+    assert.match(refused, /Drive tags/);
+    const okc = await W.start({ kind: 'code', title: 'mentions drive', task: 'summarise https://docs.google.com/document/d/abc' });
+    assert.strictEqual(okc.kind, 'code');
+    // a queued legacy browse worker with such a link fails at run time, never opens it
+    let opened = false;
+    W._setDeps(baseDeps(gh, { browse: async () => { opened = true; return { status: 'done', text: 'x' }; } }));
+    settings.workers = JSON.stringify({ q1: { id: 'q1', kind: 'browse', title: 'old', task: 'go to https://drive.google.com/x', status: 'queued', createdAt: 1 } });
+    await W.recover(); await sleep(GAP * 3);
+    assert.strictEqual(opened, false); assert.match(String(W._list().q1.result), /READ_FILE_ID/); assert.strictEqual(W._list().q1.status, 'failed');
+    console.error = re;
+    assert.match(require('fs').readFileSync(require('path').join(__dirname, '..', 'jarvisEngine.js'), 'utf8'), /never opens a drive\.google\.com or docs\.google\.com file link[^]*READ_FILE_ID/, 'FRONT DESK carries the rule');
+  }
+
   // WORKER_TG_BOARD=off: no board at all.
   process.env.WORKER_TG_BOARD = 'off'; tgCalls.length = 0;
   await W.start({ kind: 'code', title: 'quiet job', task: 'do it' }); await sleep(GAP * 3);

@@ -44,6 +44,32 @@ let list = null; // id -> worker
 const ctrls = new Map(); // id -> AbortController
 let deps = null; // swapped in by the test
 
+// ── Failures are always logged, with the cause ───────────────────────────────
+// Owner's rule, 2026-11-22: nothing dies silently. Every failure prints
+// "workers failed: #id title: reason" (the sentinel watches "<name> failed") and is
+// appended to app_settings.worker_failures (last 50), which survives a restart
+// where the in-memory server log doesn't.
+const FAIL_KEY = 'worker_failures';
+const FAIL_KEEP = 50;
+let failLog = Promise.resolve();
+function logFailure(w, reason) {
+  const why = String(reason || '').trim() || 'no reason recorded';
+  console.error(`workers failed: #${w.id} ${w.title}: ${why.slice(0, 500)}`);
+  const entry = { at: new Date().toISOString(), id: w.id, title: w.title, kind: w.kind, reason: why.slice(0, 1000) };
+  failLog = failLog.then(async () => {
+    let rows;
+    try { rows = JSON.parse(await getSetting(FAIL_KEY, '[]')); } catch { rows = []; }
+    if (!Array.isArray(rows)) rows = [];
+    await setSetting(FAIL_KEY, JSON.stringify([...rows, entry].slice(-FAIL_KEEP)));
+  }).catch((e) => console.error('workers failed: saving the failure log:', e.message));
+  return failLog;
+}
+
+// A Drive/Docs file link must never be opened in a browser worker: Drive files are
+// read with the Drive tags.
+const DRIVE_LINK = /https?:\/\/(?:drive|docs)\.google\.com\/\S*/i;
+const DRIVE_REFUSAL = 'a browse worker must not open a Google Drive / Docs file link (drive.google.com, docs.google.com): Drive files are read with the Drive tags ([READ_FILE_ID], [READ_NOTE], [SEARCH_DRIVE]), not a browser';
+
 function d() {
   return deps || {
     gh: (p, o) => require('./buildAgent').gh(p, o),
@@ -93,6 +119,10 @@ async function start({ kind = 'code', title, task, note = '', purpose = '' }) {
   if (!enabled()) throw new Error('workers are switched off (WORKERS=off)');
   kind = /^b/i.test(kind) ? 'browse' : 'code';
   if (!String(task || '').trim()) throw new Error('a worker needs its task');
+  if (kind === 'browse' && DRIVE_LINK.test(String(task))) {
+    logFailure({ id: '-', title: String(title || task).slice(0, 80), kind }, `refused: ${DRIVE_REFUSAL}`);
+    throw new Error(`refused: ${DRIVE_REFUSAL}`);
+  }
   await load();
   const id = await nextId();
   list[id] = { id, kind, purpose, title: String(title || task).slice(0, 80), task: String(task), note: String(note || ''), status: 'queued', createdAt: Date.now(), step: 0, progress: 'Waiting for a free slot', attempts: 0 };
@@ -186,10 +216,10 @@ async function launch(w) {
     } else out = await runCode(w, ctrl.signal);
   } catch (e) {
     out = { status: ctrl.signal.aborted ? 'stopped' : 'failed', result: e.message };
-    if (!ctrl.signal.aborted) console.error(`worker failed: #${w.id} ${w.title}: ${e.message}`);
   }
   release();
   ctrls.delete(w.id);
+  if (out.status === 'failed') logFailure(w, out.result); // every failed worker, whichever way it failed
   update(w, { status: out.status, result: String(out.result || '').slice(0, 20000), branch: out.branch || w.branch, pushed: out.pushed || '', endedAt: Date.now(), progress: out.status === 'done' ? 'Finished' : out.status === 'needs_you' ? 'Needs Mr. Burrus' : out.status === 'stopped' ? 'Stopped' : 'Failed', ...(out.status === 'done' ? { percent: 100, current: '' } : {}) });
   report(w);
   pump();
@@ -199,6 +229,7 @@ async function runBrowse(w) {
   const onStep = (n, line) => update(w, { step: n, progress: line.slice(0, 140) });
   // The brain's plan and the plan step it's on: the ones before it are done.
   const onPlan = (names, at) => update(w, planPatch(w, names.map((name, i) => ({ name, done: i < at - 1 }))));
+  if (DRIVE_LINK.test(w.task)) return { status: 'failed', result: `refused: ${DRIVE_REFUSAL}` };
   let r = await d().browse(`worker-${w.id}`, `J.A.R.V.I.S.'s worker`, w.task, { ownerText: '', onStep, onPlan });
   // Stopped for information (a sign-in, an account email, a code…): A.R.A. looks
   // in his email and notes first, and it carries on with what she finds. He hears
@@ -286,7 +317,7 @@ function report(w) {
     if (handled) return;
     return defaultReport(w);
   }).catch((e) => {
-    console.error(`worker failed: couldn't report #${w.id}: ${e.message}`);
+    console.error(`workers failed: couldn't report #${w.id}: ${e.message}`);
     require('./loud').tellAra(`worker:${w.id}`, `J.A.R.V.I.S.'s worker #${w.id} ("${w.title}") ${w.status === 'done' ? 'finished' : w.status}, but its report couldn't be sent (${e.message.slice(0, 120)}).${w.issueUrl ? ` Full report: ${w.issueUrl}` : ''}`);
   });
 }
@@ -321,7 +352,9 @@ async function recover() {
     if (w.status !== 'running') continue;
     if (w.kind === 'code' && w.issue) { update(w, { status: 'queued', progress: 'Watching it again after a server restart' }); continue; }
     if ((w.attempts || 0) >= 2) {
-      update(w, { status: 'failed', endedAt: Date.now(), progress: 'Failed', result: 'the server restarted in the middle of it twice, so it was not started a third time' });
+      const why = 'the server restarted in the middle of it twice, so it was not started a third time';
+      logFailure(w, why);
+      update(w, { status: 'failed', endedAt: Date.now(), progress: 'Failed', result: why });
       report(w);
     } else update(w, { status: 'queued', progress: 'Restarting after a server restart' });
   }
@@ -441,7 +474,7 @@ async function boardTick() {
 function line(w) {
   const mins = Math.max(0, Math.round((Date.now() - (w.startedAt || w.createdAt)) / 60000));
   const now = w.percent != null ? `${w.percent}%${w.current ? ` (${w.current})` : ''}` : progressLabel(w);
-  return `${w.slot && w.status === 'running' ? `Worker ${w.slot} of 3` : w.status === 'queued' ? 'Waiting' : 'Done'} (id ${w.id}) ${w.kind} "${w.title}" — ${w.status}${w.status === 'running' ? `, ${mins} min, ${now}: ${w.progress}` : w.percent != null ? `, ${w.percent}%` : ''}${w.branch ? ` (branch ${w.branch})` : ''}${w.issueUrl ? ` ${w.issueUrl}` : ''}`;
+  return `${w.slot && w.status === 'running' ? `Worker ${w.slot} of 3` : w.status === 'queued' ? 'Waiting' : 'Done'} (id ${w.id}) ${w.kind} "${w.title}" — ${w.status}${w.status === 'running' ? `, ${mins} min, ${now}: ${w.progress}` : w.percent != null ? `, ${w.percent}%` : ''}${w.branch ? ` (branch ${w.branch})` : ''}${w.issueUrl ? ` ${w.issueUrl}` : ''}${['failed', 'stopped', 'needs_you'].includes(w.status) ? ` — ${w.status === 'failed' ? 'reason' : 'note'}: ${String(w.result || '').trim().slice(0, 200) || 'no reason recorded'}` : ''}`;
 }
 
 async function statusText() {
@@ -476,4 +509,4 @@ async function tag(name, arg) {
 const WORKER_TOOLS = ` - [WORKER_START: code|browse | short title | the full task, self-contained | Drive note title (browse only, optional)] — hand a task to a worker of your own so you stay free to talk to him. code = its own Claude Code on its own GitHub runner (not the server), on a worker/ branch cut from main: it commits, the job pushes that branch only, never main; good for any general job (code, research, checks, writing). browse = a browser task on the server, its result saved to that Drive note; one browse at a time. Every browser shares the same saved logins, so a site you or A.R.A. are signed in to works for a worker too. A file in his Google Drive is read with your Drive tags ([READ_NOTE], [SEARCH_DRIVE], [READ_FILE_ID]), not a browse worker. HARD CAP: 3 workers running at once, total; the rest wait in line. Call them by their slot, "worker 1, 2 or 3", never by a running count; [WORKER_STOP: 2] stops the one in slot 2. A browse worker stuck on information (a sign-in, an account email, a code) gets it from A.R.A., who searches his email and notes, and carries on; only what nobody can supply comes to him, from you. Each one's progress shows live on his notification strip, and its report goes straight to him on your bot when it ends (you'll see it in this chat), so you don't need to relay it; if he asks, read [WORKER_STATUS]. A code worker's work ships when he says push: merge its branch into main then. Use them for EVERY task, whatever its length (his standing order, 2026-11-22), so you are always free to talk to him. Only straight answers and seconds-long lookups stay with you.
  - [WORKER_STATUS] — every worker: running, waiting, done, with its current step and GitHub link. [WORKER_STOP: id] — stop one (a GitHub run is cancelled).`;
 
-module.exports = { start, stop, recover, statusText, forApp, tag, WORKER_TOOLS, enabled, _setDeps: (x) => { deps = x; list = null; board = undefined; boardLast = 0; }, _list: () => list, _boardText: () => boardText(), _tgBoardDeps: tgBoardDeps, parsePlan, percentOf, progressLabel, readPlanComment, PLAN_FILE };
+module.exports = { start, stop, recover, statusText, forApp, tag, WORKER_TOOLS, enabled, _setDeps: (x) => { deps = x; list = null; board = undefined; boardLast = 0; }, _list: () => list, _boardText: () => boardText(), logFailure, FAIL_KEY, _tgBoardDeps: tgBoardDeps, parsePlan, percentOf, progressLabel, readPlanComment, PLAN_FILE };
