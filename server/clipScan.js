@@ -199,21 +199,60 @@ async function downloadYouTubeAudio(url, dir, heatmap = null) {
   const secs = Number(meta[0]);
   const name = meta.slice(1).join(' ').trim() || 'YouTube video';
   const win = Number.isFinite(secs) && secs > MAX_SEC ? signals.bestWindow(heatmap, secs, MAX_SEC) : null;
-  await ytdlp(['-f', 'ba[ext=m4a]/ba/b', '--max-filesize', String(Math.floor(MAX_BYTES)),
-    ...(win ? ['--download-sections', `*${win.start.toFixed(0)}-${win.end.toFixed(0)}`] : []),
-    '-o', path.join(dir, 'audio-src.%(ext)s'), url]);
+  const get = (extra) => ytdlp(['-f', 'ba[ext=m4a]/ba/b', '--max-filesize', String(Math.floor(MAX_BYTES)),
+    ...extra, '-o', path.join(dir, 'audio-src.%(ext)s'), url]);
+  await (win ? withFfmpegProxy((px) => get(['--download-sections', `*${win.start.toFixed(0)}-${win.end.toFixed(0)}`, ...px])) : get([]));
   const file = fs.readdirSync(dir).find((f) => /^audio-src\.(?!part|ytdl)/.test(f) && !f.endsWith('.part'));
   if (!file) throw new Error("the video's audio couldn't be downloaded");
   return { file: path.join(dir, file), name, offset: win ? win.start : 0, full: Number.isFinite(secs) ? secs : null };
 }
+// --download-sections makes yt-dlp hand the stream URLs to ffmpeg itself, and the
+// bundled ffmpeg-static (a static glibc build) segfaults on any hostname lookup on
+// this VM: exit -11 before a byte is read (2026-11-22, every clip of a scan failed).
+// So for those calls ffmpeg only dials 127.0.0.1: a local proxy, open just for
+// that call, does the DNS and tunnels the connection (CONNECT for https).
+async function withFfmpegProxy(fn) {
+  const http = require('http');
+  const net = require('net');
+  const server = http.createServer((req, res) => { // plain http: absolute-URI requests
+    let u;
+    try { u = new URL(req.url); } catch { res.writeHead(400); return res.end(); }
+    const up = http.request(u, { method: req.method, headers: req.headers }, (r) => { res.writeHead(r.statusCode, r.headers); r.pipe(res); });
+    up.on('error', () => res.destroy());
+    req.pipe(up);
+  });
+  server.on('connect', (req, sock, head) => {
+    const i = req.url.lastIndexOf(':');
+    const up = net.connect(Number(req.url.slice(i + 1)) || 443, req.url.slice(0, i).replace(/^\[|\]$/g, ''), () => {
+      sock.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+      if (head && head.length) up.write(head);
+      up.pipe(sock); sock.pipe(up);
+    });
+    up.on('error', () => sock.destroy());
+    sock.on('error', () => up.destroy());
+  });
+  const sockets = new Set();
+  server.on('connection', (c) => { sockets.add(c); c.on('close', () => sockets.delete(c)); });
+  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+  try {
+    return await fn(['--downloader-args', `ffmpeg_i:-http_proxy http://127.0.0.1:${server.address().port}`]);
+  } finally {
+    server.close();
+    for (const c of sockets) c.destroy();
+  }
+}
 const SECTION_PAD = 3;
+// The forced-keyframe cut re-encodes the whole stretch, and x264's default preset
+// took ~8 min for 36 s of 720p60 on this VM. The render re-encodes it anyway, so
+// this copy only has to be fast and near-lossless.
+const SECTION_ENCODE = 'ffmpeg_o:-c:v libx264 -preset ultrafast -crf 18 -c:a aac';
 // One stretch of a YouTube video, cut at exactly start-pad (keyframes forced at
 // the cut), so the clip sits at SECTION_PAD seconds in. -> { file, offset }
 async function downloadSection(url, start, end, dir, tag) {
   const from = Math.max(0, start - SECTION_PAD);
   const to = end + SECTION_PAD;
-  await ytdlp(['-f', 'bv*[height<=720]+ba/b[height<=720]/b', '--merge-output-format', 'mp4', '--download-sections', `*${from.toFixed(2)}-${to.toFixed(2)}`,
-    '--force-keyframes-at-cuts', '-o', path.join(dir, `${tag}.%(ext)s`), url]);
+  await withFfmpegProxy((px) => ytdlp(['-f', 'bv*[height<=720]+ba/b[height<=720]/b', '--merge-output-format', 'mp4', '--download-sections', `*${from.toFixed(2)}-${to.toFixed(2)}`,
+    '--force-keyframes-at-cuts', ...px, '--downloader-args', SECTION_ENCODE, '-o', path.join(dir, `${tag}.%(ext)s`), url]));
   const file = fs.readdirSync(dir).find((f) => f.startsWith(`${tag}.`) && !/\.(part|ytdl)$/.test(f));
   if (!file) throw new Error("that stretch of the video couldn't be downloaded");
   return { file: path.join(dir, file), offset: start - from };
@@ -438,4 +477,4 @@ async function videoInfo(url) {
   return { duration: Number(d) || 0, live: /is_live|is_upcoming/.test(live || '') };
 }
 
-module.exports = { downloadYouTubeAudio, downloadSection, SECTION_PAD, ytdlp, cookieArgs, isBotCheck, hasYouTubeCookies, videoInfo, clipScan, scanInBackground, CLIP_TOOLS, driveId, isYouTube, isSocialVideo, linkKind, downloadYouTube, transcribeVideo, duration, MAX_BYTES, MAX_SEC, parsePicks, sanitizePicks, mmss };
+module.exports = { downloadYouTubeAudio, downloadSection, withFfmpegProxy, SECTION_PAD, ytdlp, cookieArgs, isBotCheck, hasYouTubeCookies, videoInfo, clipScan, scanInBackground, CLIP_TOOLS, driveId, isYouTube, isSocialVideo, linkKind, downloadYouTube, transcribeVideo, duration, MAX_BYTES, MAX_SEC, parsePicks, sanitizePicks, mmss };

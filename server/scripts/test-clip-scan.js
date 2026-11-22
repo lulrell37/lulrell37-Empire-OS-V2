@@ -46,3 +46,71 @@ try {
   assert(/1080x1920/.test(probe), probe);
 } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 console.log('clip scan: ok');
+
+// ffmpeg-static segfaults (exit -11) on any hostname lookup on the VM, so every
+// --download-sections call routes ffmpeg through withFfmpegProxy: ffmpeg dials
+// 127.0.0.1 only and the proxy does the DNS. Here ffmpeg reads a file served as
+// http://localhost:… through it, and an https-style CONNECT tunnel carries a request.
+// CLIP_SCAN_NET=1 also cuts a real 20 s YouTube section with downloadSection.
+(async () => {
+  const http = require('http');
+  const net = require('net');
+  const { withFfmpegProxy, downloadSection } = require('../clipScan');
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'cliproxy-'));
+  const src = path.join(d, 's.mp4');
+  const made = spawnSync(ffmpeg, ['-loglevel', 'error', '-f', 'lavfi', '-i', 'testsrc=size=320x240:rate=25', '-t', '4', '-c:v', 'libx264', src]);
+  assert.strictEqual(made.status, 0, String(made.stderr));
+  const body = fs.readFileSync(src);
+  const origin = http.createServer((req, res) => {
+    const m = /bytes=(\d+)-(\d*)/.exec(req.headers.range || '');
+    if (!m) { res.writeHead(200, { 'content-length': body.length, 'accept-ranges': 'bytes', 'content-type': 'video/mp4' }); return res.end(body); }
+    const a = Number(m[1]), b = m[2] ? Number(m[2]) : body.length - 1;
+    res.writeHead(206, { 'content-range': `bytes ${a}-${b}/${body.length}`, 'content-length': b - a + 1, 'accept-ranges': 'bytes', 'content-type': 'video/mp4' });
+    res.end(body.subarray(a, b + 1));
+  });
+  await new Promise((r) => origin.listen(0, '127.0.0.1', r));
+  const port = origin.address().port;
+  try {
+    let px;
+    await withFfmpegProxy(async (args) => {
+      px = args;
+      assert.strictEqual(args[0], '--downloader-args');
+      const proxy = /^ffmpeg_i:-http_proxy (http:\/\/127\.0\.0\.1:\d+)$/.exec(args[1]);
+      assert(proxy, args[1]);
+      const out = path.join(d, 'o.mp4');
+      const { spawn } = require('child_process');
+      const code = await new Promise((resolve) => {
+        const p = spawn(ffmpeg, ['-loglevel', 'error', '-y', '-http_proxy', proxy[1], '-ss', '1', '-t', '2', '-i', `http://localhost:${port}/s.mp4`, '-c:v', 'libx264', '-preset', 'ultrafast', out]);
+        p.on('close', (c, sig) => resolve(sig || c));
+      });
+      assert.strictEqual(code, 0, `ffmpeg through the proxy exited ${code}`);
+      assert(fs.statSync(out).size > 0);
+      const viaTunnel = await new Promise((resolve, reject) => {
+        const s = net.connect(Number(proxy[1].split(':').pop()), '127.0.0.1', () => s.write(`CONNECT localhost:${port} HTTP/1.1\r\nHost: localhost:${port}\r\n\r\n`));
+        let buf = '';
+        s.on('data', (c) => {
+          buf += c;
+          if (/200 Connection Established\r\n\r\n$/.test(buf)) s.write(`GET /s.mp4 HTTP/1.1\r\nHost: localhost\r\nRange: bytes=0-9\r\nConnection: close\r\n\r\n`);
+        });
+        s.on('end', () => resolve(buf));
+        s.on('error', reject);
+      });
+      assert(/206 Partial Content/.test(viaTunnel), viaTunnel.slice(0, 200));
+    });
+    // The proxy is closed once the call is done.
+    const port2 = Number(px[1].split(':').pop());
+    await assert.rejects(new Promise((resolve, reject) => { const s = net.connect(port2, '127.0.0.1', () => { s.destroy(); resolve(); }); s.on('error', reject); }));
+    console.log('clip scan ffmpeg proxy: ok');
+
+    if (process.env.CLIP_SCAN_NET === '1') {
+      const t = Date.now();
+      const sec = await downloadSection(process.env.CLIP_SCAN_NET_URL || 'https://www.youtube.com/watch?v=lmQTgODLWVU', 300, 314, d, 'live');
+      const probe = spawnSync(ffmpeg, ['-hide_banner', '-i', sec.file]).stderr.toString();
+      assert(/Duration: 00:00:(19|20)\./.test(probe) && /Video: h264/.test(probe) && /Audio: aac/.test(probe), probe);
+      console.log(`clip scan live section: ok (${Math.round((Date.now() - t) / 1000)}s)`);
+    }
+  } finally {
+    origin.close();
+    fs.rmSync(d, { recursive: true, force: true });
+  }
+})().catch((e) => { console.error(e); process.exit(1); });
