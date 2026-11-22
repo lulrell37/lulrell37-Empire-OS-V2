@@ -119,7 +119,10 @@ function guardReports() {
       pending = [];
       lastTold = Date.now();
       require('./telegram').botFor('ara') && require('./telegram').botFor('ara').sendMessage(require('./telegram').OWNER_ID,
-        `⚠️ The server was about to run out of memory, Mr. Burrus, so it stopped what was using the most to stay up:\n${lines}\n\nIf that was J.A.R.V.I.S. mid-job, ask him to pick it back up.`).catch((e) => console.error('memory guard report failed:', e.message));
+        `⚠️ The server was about to run out of memory, Mr. Burrus, so it stopped what was using the most to stay up:\n${lines}\n\nIf that was J.A.R.V.I.S. mid-job, ask him to pick it back up.`).catch((e) => {
+          console.error('memory guard report failed:', e.message);
+          require('./pushSender').pushAlert(`guard:${Date.now()}`, 'A.R.A. — server memory', 'The server nearly ran out of memory and stopped a process to stay up.', { kind: 'loud' }).catch(() => {});
+        });
     }
   }, 30000).unref();
 }

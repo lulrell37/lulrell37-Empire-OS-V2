@@ -654,3 +654,7 @@ Owner's idea, 2026-11-22, after A.R.A. bluffed about his calendar and then the w
 
 Owner's complaint, 2026-11-22: she answered weather questions without looking. Every A.R.A. turn now carries the live Open-Meteo forecast for his home (`weatherLive` in `server/morningBrief.js`: now, the next 24 hours by the hour, the next 7 days; server cache 15 min; `weather_place` setting, default Waldorf, MD), with the rule to answer weather questions from it only. Another city → `[WEATHER: city, ST]` on Telegram. The app gets it from `GET /weather/live` (`liveWeather` in `src/services/clipScan.js`, 4 s timeout).
 
+## Nothing dies in silence (`server/loud.js`)
+
+His standing rule ("How Mr. Burrus Works", 2026-11-22): if anything dies, A.R.A. tells him. `tellAra(key, text)` is the last resort for code whose own message to him failed: A.R.A.'s bot as plain text (no voice), a phone push if Telegram is down, never throws, the same `key` at most once per 30 min. Used when a build request's follow-up fails all three tries, a worker's report can't be sent, an auto-fix message can't go out or can't start, an auto-fix is skipped after A.R.A. said one was coming, and (push only) when the memory guard's own report fails. New code that sends him something should fall back to it. `node server/scripts/test-loud.js`.
+

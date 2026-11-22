@@ -213,7 +213,10 @@ function report(w) {
   Promise.resolve(d().onDone && d().onDone(w)).then((handled) => {
     if (handled) return;
     return defaultReport(w);
-  }).catch((e) => console.error(`worker failed: couldn't report #${w.id}: ${e.message}`));
+  }).catch((e) => {
+    console.error(`worker failed: couldn't report #${w.id}: ${e.message}`);
+    require('./loud').tellAra(`worker:${w.id}`, `J.A.R.V.I.S.'s worker #${w.id} ("${w.title}") ${w.status === 'done' ? 'finished' : w.status}, but its report couldn't be sent (${e.message.slice(0, 120)}).${w.issueUrl ? ` Full report: ${w.issueUrl}` : ''}`);
+  });
 }
 function defaultReport(w) {
   {

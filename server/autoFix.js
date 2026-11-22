@@ -99,9 +99,12 @@ async function send(text, confirm) {
   const tg = require('./telegram');
   const id = tg.botFor('jarvis') && tg.botFor('jarvis').isConfigured() ? 'jarvis' : 'ara';
   const bot = tg.botFor(id);
-  if (!bot || !bot.isConfigured() || !tg.OWNER_ID) return;
+  if (!bot || !bot.isConfigured() || !tg.OWNER_ID) return require('./loud').tellAra(`autofix:${String(text).slice(0, 40)}`, String(text).slice(0, 1500));
   const prefix = id === 'jarvis' ? '' : 'J.A.R.V.I.S.:\n';
-  await bot.sendMessage(tg.OWNER_ID, `${prefix}${text}`).catch((e) => console.error('auto-fix send:', e.message));
+  await bot.sendMessage(tg.OWNER_ID, `${prefix}${text}`).catch((e) => {
+    console.error('auto-fix failed: send:', e.message);
+    return require('./loud').tellAra(`autofix:${String(text).slice(0, 40)}`, `J.A.R.V.I.S. couldn't send you this (${e.message.slice(0, 80)}):\n${String(text).slice(0, 1500)}`);
+  });
   if (confirm) {
     await bot.sendMessage(tg.OWNER_ID, `${confirm.label}?\n\n${confirm.detail}`, {
       log: false,
@@ -151,9 +154,18 @@ async function afterRestart(kind, reason) {
   if (!enabled() || !reason) return;
   const sig = signature(reason);
   const state = await loadState();
-  if (!shouldRun(state, sig)) return console.log('auto-fix: ran recently or already on this incident — skipping');
+  if (!shouldRun(state, sig)) {
+    console.log('auto-fix: ran recently or already on this incident — skipping');
+    // A.R.A.'s restart note said J.A.R.V.I.S. would look; say why he isn't, rather than going quiet.
+    return require('./loud').tellAra('autofix:skip', `About that restart: J.A.R.V.I.S. isn't starting another auto-fix, because ${state.sig === sig ? 'he already looked into this same problem today' : `one already ran in the last ${Math.round(GAP_MS() / 3600000)} hours`}. If it keeps happening, tell him and he'll dig in.`);
+  }
   await setSetting('auto_fix', JSON.stringify({ last_at: Date.now(), sig, kind })).catch(() => {});
-  setTimeout(() => { run(kind, reason).catch((e) => console.error('auto-fix failed:', e.message)); }, DELAY_MS()).unref();
+  setTimeout(() => {
+    run(kind, reason).catch((e) => {
+      console.error('auto-fix failed:', e.message);
+      require('./loud').tellAra('autofix:start', `The server ${kind}, and J.A.R.V.I.S. couldn't start looking into it: ${e.message.slice(0, 200)}. Ask him to check [SERVER_LOGS].`);
+    });
+  }, DELAY_MS()).unref();
 }
 
 // Will a restart get looked at? (So A.R.A.'s report doesn't promise a fix that won't come.)

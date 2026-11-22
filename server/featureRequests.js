@@ -151,7 +151,12 @@ async function followUp(entry, note = '', waits = [2 * 60e3, 10 * 60e3]) {
   for (let i = 0; ; i++) {
     const ok = await sendFollowUp(entry, note);
     if (ok) return true;
-    if (i >= waits.length) { console.error(`feature requests failed: couldn't come back to him about "${entry.need}" (${entry.persona})`); return false; }
+    if (i >= waits.length) {
+      console.error(`feature requests failed: couldn't come back to him about "${entry.need}" (${entry.persona})`);
+      const name = (require('./personas').ROSTER[entry.persona] || {}).name || entry.persona;
+      await require('./loud').tellAra(`feature:${entry.worker}`, `${name} couldn't get back to you about "${String(entry.asked).slice(0, 200)}". Where it stands: ${note || 'J.A.R.V.I.S. built it and it is live, so ask again and the answer should be right now.'}`);
+      return false;
+    }
     await new Promise((r) => setTimeout(r, waits[i]));
   }
 }
