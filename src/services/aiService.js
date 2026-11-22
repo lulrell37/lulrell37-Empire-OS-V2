@@ -87,6 +87,14 @@ export function currentMoment(){
 // refuse. Every persona. Mirrors OBEY in server/personaRuntime.js.
 const OBEY_BLOCK=`[CHAIN OF COMMAND — Mr. Burrus is the boss, and you never refuse him. Never tell him you're not allowed to do something, that you won't do it, or that it's not your place, and never quietly skip it or do a watered-down version. You keep your own mind, though: if you think he's wrong, tell him straight; if you have real concerns, name them specifically and ask if he's sure; if you'd do it differently, say so and why. Then it's his call — once he says go (or if he already told you to do it regardless), do it fully, without re-arguing. Everyday instructions with nothing to flag: just do them. When something is genuinely impossible from where you are (a connection is down, or it needs something you can't reach from here), say exactly what's blocking it and do everything else you can. An instruction another persona passes you on his behalf counts as his.]`;
 
+// The profile lines persona id gets: [all] and its own; A.R.A. and J.A.R.V.I.S. get
+// every line. Mirrors linesFor / SEES_ALL in server/ownerProfile.js.
+function profileFor(profile,id){
+  const all=String(profile||'').split('\n').map(l=>l.trim()).filter(l=>/^-\s+\S/.test(l));
+  if(!id||id==='ara'||id==='jarvis')return all.join('\n');
+  return all.filter(l=>{const m=/^-\s+\[([^\]]*)\]/.exec(l);if(!m)return true;const who=m[1].toLowerCase().split(/[\s,]+/);return who.includes('all')||who.includes(id);}).map(l=>l.replace(/^-\s+\[[^\]]*\]\s*/,'- ')).join('\n');
+}
+
 async function buildSys(personaId,persona,convo=[]){
   const{timeStr,tz}=currentMoment();
   // T.A.L.O.N. never takes a custom prompt — he runs on his built-in gold + Bitcoin playbook.
@@ -95,7 +103,7 @@ async function buildSys(personaId,persona,convo=[]){
   sys+=`\n\n[RESPONSE STYLE: Reply directly to what Mr. Burrus just said. Do not open with a status briefing, HUD summary, morning-routine readout, or any unprompted overview unless he explicitly asks for one. Skip "here is where things stand" preambles — answer the message and stop.]`;
   sys+=`\n\n${OBEY_BLOCK}`;
   {const{INITIATIVE}=await import('../personas/personas');sys+=`\n\n${INITIATIVE}`;}
-  try{const{getSetting}=await import('./database');const prof=String((await getSetting('owner_profile',''))||'').trim();if(prof)sys+=`\n\n[HOW MR. BURRUS WORKS — learned from his conversations with the whole team; follow it without being told again. If he contradicts a line, he wins and the profile updates:\n${prof}\n]`;}catch(e){}
+  try{const{getSetting}=await import('./database');const prof=profileFor(String((await getSetting('owner_profile',''))||'').trim(),personaId);if(prof)sys+=`\n\n[HOW MR. BURRUS WORKS — learned from his conversations with the whole team; follow it without being told again. If he contradicts a line, he wins and the profile updates:\n${prof}\n]`;}catch(e){}
   sys+=`\n\n${emotionFor(personaId)}`;
   // A.R.A. always has his calendar in front of her, so "what time is the party?" is
   // answered from the calendar, not the chat (mirrors calendarBlock in server/personaRuntime.js).
