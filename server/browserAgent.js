@@ -447,13 +447,15 @@ async function doAction(b, a, last, secrets = {}) {
 // Returns { status: 'done'|'ask'|'stopped', text, url, steps, shot }.
 // allow: clicks that would normally stop to ask (consent buttons on a sign-in
 // he already authorized) and go through instead.
-async function runTask({ persona, personaName = persona, task, ownerText = '', brain, secrets = {}, allow = null }) {
+async function runTask({ persona, personaName = persona, task, ownerText = '', brain, secrets = {}, allow = null, onStep = null }) {
   if (!enabled()) throw new Error('the browser is switched off (BROWSE=off)');
   const b = await browserFor(persona);
   if (b.busy) throw new Error(`${personaName} is already using the browser — one task at a time`);
   b.busy = true;
   const started = Date.now();
   const log = [];
+  // A worker shows each step on his notification strip as it happens.
+  if (onStep) { const push = log.push.bind(log); log.push = (...x) => { const n = push(...x); try { onStep(log.length, String(x[x.length - 1] || '')); } catch {} return n; }; }
   // A pending action he's now answering: carry it, and allow it only on his yes.
   const pending = b.pending;
   b.pending = null;
@@ -543,19 +545,24 @@ const NAMES = () => { try { return Object.fromEntries(require('./personas').ROST
 
 async function browseTag(persona, arg, { ownerText = '' } = {}) {
   if (!BROWSE_PERSONAS.has(persona)) throw new Error('the browser is J.A.R.V.I.S.\'s and A.R.A.\'s only — hand it to one of them');
+  return browseRun(persona, NAMES()[persona] || persona, arg, { ownerText });
+}
+
+// One browser task, consent banners and emailed codes handled. Also what a worker
+// (server/workers.js) runs, on its own browser profile.
+async function browseRun(persona, name, arg, { ownerText = '', onStep = null } = {}) {
   const { claudeText } = require('./llm');
-  const name = NAMES()[persona] || persona;
   const brain = (sys, prompt) => claudeText(sys, prompt, { maxTokens: 700 });
   // Cookie / consent banners are not acts in the world: let them through (Canva's
   // banner ignores Reject all, 2026-11-22).
-  let r = await runTask({ persona, personaName: name, task: String(arg || '').trim(), ownerText, brain, allow: CONSENT });
+  let r = await runTask({ persona, personaName: name, task: String(arg || '').trim(), ownerText, brain, allow: CONSENT, onStep });
   // A site emailed a code: it's in his Gmail, so fetch it and carry on without him
   // (owner, 2026-11-22: "it's supposed to be automatic").
   const logins = require('./siteLogins');
   if (r.status !== 'done' && logins.wantsEmailCode(r.text)) {
     const code = await emailedCode().catch(() => null);
     if (code) {
-      const r2 = await runTask({ persona, personaName: name, ownerText: 'yes', brain, secrets: { CODE: code },
+      const r2 = await runTask({ persona, personaName: name, ownerText: 'yes', brain, secrets: { CODE: code }, allow: CONSENT, onStep,
         task: `You are partway through this task and the page asked for the code that was emailed. Type {{CODE}} into the code box and continue. The task: ${String(arg || '').trim()}` });
       r2.steps = [...r.steps, '(fetched the emailed code from his Gmail)', ...r2.steps];
       r = r2;
@@ -566,10 +573,10 @@ async function browseTag(persona, arg, { ownerText = '' } = {}) {
     (r.status === 'ask' ? `\n\n(Put this question to him in plain words. When he answers, run [BROWSE: the same task] again — the browser is still on that page, and his reply is what approves or stops it.)` : '') +
     `\n(Report only what's above. A screenshot of the last page goes to him after your reply.)`;
   const media = r.shot ? [{ name: 'SEND_PHOTO', buffer: r.shot, kind: 'photo', filename: 'browser.jpg', caption: `${name}'s browser — ${r.url}`.slice(0, 1000) }] : [];
-  return { text, media, status: r.status };
+  return { text, media, status: r.status, result: r.text };
 }
 
 const BROWSE_TOOLS = ` - [BROWSE: the task, in full] — your own computer: a real Chrome in the cloud that you drive like a person (open sites, search, read, click, fill in forms), with your own saved logins. For anything with no direct tool: looking someone up on LinkedIn, checking a supplier's prices, reading a site, filling a form. The result comes back to you this turn and he gets a screenshot. Sign-ups go through on their own (make the password yourself and save it with [SAVE_NOTE]), and a code a site emails is fetched from his Gmail automatically. It stops and asks only before anything else that acts in the world (sending, posting, connecting, buying, booking, deleting): put that question to him, and when he answers run [BROWSE] again with the same task — his reply is what approves it. A minute or several. One per turn. Report only what it found.
  - [BROWSER_KEY: Steel API key or wss:// URL] — switch your browser to a hosted one (Steel) that gets past Cloudflare checks; saved on the server, no Replit secret needed.`;
 
-module.exports = { browserKeyTag, ensureSqlite, BROWSE_PERSONAS, runTask, browseTag, BROWSE_TOOLS, close, browserFor, snapshot, click, type, press, screenshot, unzip, chromePath, parseAction, isCommit, approves, enabled };
+module.exports = { browseRun, browserKeyTag, ensureSqlite, BROWSE_PERSONAS, runTask, browseTag, BROWSE_TOOLS, close, browserFor, snapshot, click, type, press, screenshot, unzip, chromePath, parseAction, isCommit, approves, enabled };

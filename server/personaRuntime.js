@@ -412,7 +412,7 @@ PERSONA_EXTRA_TOOLS.stephanie = require('./stephanieCourse').COURSE_TOOLS;
 
 PERSONA_EXTRA_TOOLS.rogue = require('./clipScan').CLIP_TOOLS + '\n' + require('./autoClip').AUTO_CLIP_TOOLS + '\n' + require('./rawEdit').RAW_EDIT_TOOLS;
 PERSONA_EXTRA_TOOLS.jarvis += '\n' + require('./autoClip').AUTO_CLIP_TOOLS + '\n' + require('./rawEdit').RAW_EDIT_TOOLS + '\n' + require('./siteLogins').LOGIN_TOOLS;
-PERSONA_EXTRA_TOOLS.jarvis += '\n' + require('./browserAgent').BROWSE_TOOLS;
+PERSONA_EXTRA_TOOLS.jarvis += '\n' + require('./browserAgent').BROWSE_TOOLS + '\n' + require('./workers').WORKER_TOOLS;
 PERSONA_EXTRA_TOOLS.jarvis += '\n' + require('./siteDesk').SITE_TOOLS;
 PERSONA_EXTRA_TOOLS.scout = (PERSONA_EXTRA_TOOLS.scout ? PERSONA_EXTRA_TOOLS.scout + '\n' : '') + require('./siteDesk').SITE_TOOLS;
 
@@ -660,6 +660,10 @@ async function runInjections(text, persona = 'ara', { convo = '', depth = 0, sin
       if (['RAW_EDIT', 'STYLE_LEARN', 'STYLE_NOTE'].includes(name) && arg && ['rogue', 'jarvis', 'ara'].includes(persona)) {
         try { return `${name}: ${await require('./rawEdit').tag(name, arg)}`; }
         catch (e) { return `${name} failed: ${e.message}`; }
+      }
+      if (['WORKER_START', 'WORKER_STATUS', 'WORKER_STOP'].includes(name) && persona === 'jarvis') {
+        try { return await require('./workers').tag(name, arg); }
+        catch (e) { console.error(`workers failed: ${name}: ${e.message}`); return `${name} failed: ${e.message}`; }
       }
       if (name === 'BROWSER_KEY' && arg && persona === 'jarvis') {
         try { return await require('./browserAgent').browserKeyTag(arg); }

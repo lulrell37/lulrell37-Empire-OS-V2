@@ -9,7 +9,7 @@ import{View,Text,StyleSheet,ScrollView,TouchableOpacity,Animated,Easing,Alert}fr
 import{computeNudges}from '../../services/nudges';
 import useEmpireStore from '../../store/useEmpireStore';
 import{getPersona}from '../../personas/personas';
-import{fetchSentinel}from '../../services/sentinel';
+import{fetchSentinel,fetchWorkers}from '../../services/sentinel';
 
 const TONE={
   error:{border:'#7A2E2E',fg:'#E8938C',x:'#8a4a4a'},
@@ -37,6 +37,17 @@ export default function NudgeBar({active,activityOnly=false}){
     return()=>{alive=false;clearInterval(id);};
   },[active]);
 
+  // J.A.R.V.I.S.'s workers: what each is doing right now, every 10 s while shown.
+  const[workers,setWorkers]=useState([]);
+  useEffect(()=>{
+    if(!active)return;
+    let alive=true;
+    const pull=()=>fetchWorkers().then(x=>{if(alive)setWorkers(x);}).catch(()=>{});
+    pull();
+    const id=setInterval(pull,10000);
+    return()=>{alive=false;clearInterval(id);};
+  },[active]);
+
   // Drop TTL'd error chips so transient failures fade instead of piling up.
   useEffect(()=>{
     sweepFirmIssues();
@@ -56,17 +67,18 @@ export default function NudgeBar({active,activityOnly=false}){
     return()=>{alive=false;};
   },[active,firmIssues]);
 
+  const busyWorkers=workers.filter(w=>w.status==='running').length;
   // Slow breathe loop for the live-activity dots — runs only while something is
   // actually working, so an idle banner has nothing animating.
   useEffect(()=>{
-    if(!activity.length){pulse.stopAnimation();pulse.setValue(0);return;}
+    if(!activity.length&&!busyWorkers){pulse.stopAnimation();pulse.setValue(0);return;}
     const loop=Animated.loop(Animated.sequence([
       Animated.timing(pulse,{toValue:1,duration:900,easing:Easing.inOut(Easing.sin),useNativeDriver:true}),
       Animated.timing(pulse,{toValue:0,duration:900,easing:Easing.inOut(Easing.sin),useNativeDriver:true}),
     ]));
     loop.start();
     return()=>loop.stop();
-  },[activity.length]);// eslint-disable-line react-hooks/exhaustive-deps
+  },[activity.length,busyWorkers]);// eslint-disable-line react-hooks/exhaustive-deps
 
   // Merge: live activity first (what personas are doing right now), then live
   // problems (errors before warn/info), then proactive nudges.
@@ -74,6 +86,13 @@ export default function NudgeBar({active,activityOnly=false}){
     key:'act:'+a.key,persona:a.persona,text:a.label,severity:'activity',activity:true,
     frac:typeof a.frac==='number'?a.frac:null,onPress:typeof a.onPress==='function'?a.onPress:null,
   }));
+  const WSTATE={running:'',queued:'waiting · ',done:'✓ done · ',needs_you:'needs you · ',failed:'✗ failed · ',stopped:'stopped · '};
+  const workerChips=workers.map(w=>{
+    const mins=w.startedAt?Math.max(0,Math.round(((w.endedAt||Date.now())-w.startedAt)/60000)):0;
+    const text=`#${w.id} ${w.title.slice(0,28)} · ${WSTATE[w.status]??''}${w.status==='running'?`${mins}m · step ${w.step} · ${w.progress.slice(0,42)}`:w.status==='queued'?'':`${mins}m`}`;
+    const detail=`Worker #${w.id} (${w.kind})\n${w.title}\n\nStatus: ${w.status}\nStep ${w.step}: ${w.progress}${w.branch?`\nBranch: ${w.branch}`:''}${w.startedAt?`\nStarted ${new Date(w.startedAt).toLocaleTimeString()}`:''}`;
+    return{key:'worker:'+w.id,persona:'jarvis',text,severity:{done:'info',failed:'error',needs_you:'warn',stopped:'info'}[w.status]||'activity',activity:w.status==='running'||w.status==='queued',issue:!(w.status==='running'||w.status==='queued'),noX:true,detail,frac:null,onPress:()=>Alert.alert('J.A.R.V.I.S. worker',detail)};
+  });
   const issueChips=Object.entries(firmIssues).map(([key,v])=>({
     key:'firm:'+key,rawKey:key,text:v.text,detail:v.detail,severity:v.severity||'error',issue:true,
   })).sort((a,b)=>(a.severity==='error'?0:1)-(b.severity==='error'?0:1));
@@ -82,7 +101,7 @@ export default function NudgeBar({active,activityOnly=false}){
     key:'sentinel:'+x.key,text:`${x.label}: ${x.msg}`.slice(0,90),detail:`${x.label}\n\n${x.msg}\n\nSince ${new Date(x.since).toLocaleString()}`,
     severity:x.severity==='warn'?'warn':'error',issue:true,
   }));
-  const shown=(activityOnly?[...activityChips,...sentinelChips]:[...activityChips,...sentinelChips,...issueChips,...nudgeChips]).filter(n=>!dismissed[n.key]);
+  const shown=(activityOnly?[...activityChips,...workerChips,...sentinelChips]:[...activityChips,...workerChips,...sentinelChips,...issueChips,...nudgeChips]).filter(n=>!dismissed[n.key]);
 
   const belt=active&&oneW>0&&cw>0&&oneW>cw+8&&shown.length>1;
 
@@ -125,7 +144,7 @@ export default function NudgeBar({active,activityOnly=false}){
         <Wrap key={prefix+n.key} activeOpacity={0.7} onPress={n.onPress?()=>onChipPress(n):undefined} style={[s.chip,s.actChip,{borderColor:col+'55'}]}>
           <Animated.View style={[s.actDot,{backgroundColor:col,opacity:pulse.interpolate({inputRange:[0,1],outputRange:[0.35,1]})}]}/>
           <Text style={[s.actName,{color:col}]}>{name}</Text>
-          <Text style={s.actLabel}>{n.text}{n.onPress?'  ✕':''}</Text>
+          <Text style={s.actLabel}>{n.text}{n.onPress&&!n.noX?'  ✕':''}</Text>
           {n.frac!=null&&<View style={[s.actProg,{width:`${Math.round(Math.max(0,Math.min(1,n.frac))*100)}%`,backgroundColor:col}]}/>}
         </Wrap>
       );

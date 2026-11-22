@@ -13,3 +13,16 @@ export async function fetchSentinel(){
     return Array.isArray(j.items)?j.items:[];
   }catch{return[];}
 }
+
+// J.A.R.V.I.S.'s workers (server/workers.js, GET /workers): each one's live step,
+// plus the ones that finished in the last 15 minutes. The top strip shows them.
+export async function fetchWorkers(){
+  const be=await loadBackend();
+  if(!be)return[];
+  try{
+    const res=await fetch(be.url+'/workers',{headers:{Authorization:'Bearer '+be.token}});
+    if(!res.ok)return[];
+    const j=await res.json();
+    return Array.isArray(j.items)?j.items:[];
+  }catch{return[];}
+}

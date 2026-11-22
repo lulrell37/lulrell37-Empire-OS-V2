@@ -136,6 +136,8 @@ You are Claude Code, and you are the engine behind J.A.R.V.I.S. Mr. Burrus is ta
 
 YOUR FINAL MESSAGE IS WHAT J.A.R.V.I.S. SAYS TO HIM. Write it as J.A.R.V.I.S., in his character below: it is shown in the chat and read aloud in his voice. Speakable text: no tables, no code blocks or long paths unless he asks for them; say what you did, what you found and what he needs to decide, as briefly as the answer allows. Never claim something is done that you didn't do and check.
 
+FRONT DESK RULE (Mr. Burrus, 2026-11-22: "use them on any task, no matter the length; I want you always open to talk"): you are the front desk, not the workshop. When he gives you a task (anything that needs code changes, browsing, research, testing, more than a quick look), hand it to a worker with [WORKER_START] and reply at once: what you handed off, to which worker, and that its progress is on his notification strip. Split big jobs across several workers. Do it yourself only when it is a straight answer, a quick read of one or two things, or a tag that runs in seconds. When a worker's report wakes you, check it briefly and tell him; if checking needs real work, give that to a worker too. Keep every one of your own turns short so he never waits on you.
+
 His command tags below still work in your final message (the app or server runs them after you). Use them for app things (tasks, notes, HUD, calendar hand-offs to A.R.A.); do code work yourself rather than through [BUILD_REQUEST].
 
 ${persona}`;
@@ -159,12 +161,14 @@ function describeTool(b) {
   }
 }
 
-function spawnTurn({ prompt, persona, resume, onProgress, signal }) {
+// dir/brief/ownSession: a worker (server/workers.js) runs in its own worktree with
+// its own brief and never touches his resumed session.
+function spawnTurn({ prompt, persona, resume, onProgress, signal, dir = null, brief = null, ownSession = true, timeoutMs = null }) {
   return new Promise(async (resolve, reject) => {
     let ws;
-    try { ws = await workspace(); } catch (e) { return reject(new Error(`couldn't set up the workspace: ${e.message}`)); }
+    try { ws = dir ? { dir, readOnly: false } : await workspace(); } catch (e) { return reject(new Error(`couldn't set up the workspace: ${e.message}`)); }
     const briefFile = path.join(os.tmpdir(), `jarvis-brief-${process.pid}-${crypto.randomBytes(6).toString('hex')}.txt`);
-    fs.writeFileSync(briefFile, engineBrief(persona, ws), { mode: 0o600 });
+    fs.writeFileSync(briefFile, brief || engineBrief(persona, ws), { mode: 0o600 });
     const args = [
       '-p',
       '--model', MODEL(),
@@ -189,12 +193,13 @@ function spawnTurn({ prompt, persona, resume, onProgress, signal }) {
     };
     const onAbort = () => { child.kill('SIGTERM'); done(() => reject(Object.assign(new Error('cancelled'), { name: 'AbortError' }))); };
     if (signal) { if (signal.aborted) return onAbort(); signal.addEventListener('abort', onAbort); }
-    const timer = setTimeout(() => { child.kill('SIGTERM'); done(() => reject(Object.assign(new Error(`ran past ${Math.round(TIMEOUT_MS() / 60000)} minutes`), { partial: lastText, sessionId }))); }, TIMEOUT_MS());
+    const limit = timeoutMs || TIMEOUT_MS();
+    const timer = setTimeout(() => { child.kill('SIGTERM'); done(() => reject(Object.assign(new Error(`ran past ${Math.round(limit / 60000)} minutes`), { partial: lastText, sessionId }))); }, limit);
     const handle = (line) => {
       let ev; try { ev = JSON.parse(line); } catch { return; }
       if (ev.session_id && ev.session_id !== sessionId) {
         sessionId = ev.session_id;
-        saveSession(sessionId); // now, not at the end: a restart mid-turn can then resume this session
+        if (ownSession) saveSession(sessionId); // now, not at the end: a restart mid-turn can then resume this session
       }
       if (ev.type === 'assistant' && !ev.parent_tool_use_id && ev.message && Array.isArray(ev.message.content)) {
         for (const b of ev.message.content) {
@@ -337,4 +342,4 @@ function status() {
 }
 
 module.exports = {
-  loadSession, saveSession, enabled, turn, recover, startJob, jobStatus, cancelJob, detachJob, resetSession, status, engineBrief, describeTool };
+  spawnTurn, workspace, run, ROOT, loadSession, saveSession, enabled, turn, recover, startJob, jobStatus, cancelJob, detachJob, resetSession, status, engineBrief, describeTool };
