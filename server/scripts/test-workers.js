@@ -1,6 +1,7 @@
 // node server/scripts/test-workers.js — J.A.R.V.I.S.'s workers: 3 at a time, the rest
 // wait; progress is visible; every result wakes him; restarts re-run once; the live
-// Telegram board (one silent message, edited in place, throttled). All stubbed.
+// Telegram board (one silent message, edited in place, throttled); the real percentage
+// from each worker's own plan. All stubbed.
 process.env.TELEGRAM_BOT_TOKEN_JARVIS = 'test-token';
 process.env.TELEGRAM_OWNER_ID = '1';
 const Module = require('module');
@@ -31,7 +32,7 @@ const boardSaved = () => JSON.parse(settings.workers_tg_board || 'null');
 W._setDeps({
   engine: {
     workspace: async () => ({ dir: '/tmp/x', readOnly: false }), ROOT: () => '/tmp/empire-workers-test',
-    run: async () => '', spawnTurn: async ({ onProgress, brief }) => { assert.match(brief, /never push main/i); onProgress('Editing server/x.js'); await hold(); return { text: 'Built it on the branch, tests pass.' }; },
+    run: async () => '', spawnTurn: async ({ onProgress, brief }) => { assert.match(brief, /never push main/i); assert.ok(brief.includes(W.PLAN_FILE) && /3 to 10 numbered steps/.test(brief) && /\[x\]/.test(brief), 'brief asks for the plan file'); onProgress('Editing server/x.js'); await hold(); return { text: 'Built it on the branch, tests pass.' }; },
   },
   browse: async (persona, name, task, { onStep }) => { assert.match(persona, /^worker-\d+$/); onStep(1, 'opened canva'); await hold(); return { status: 'done', text: 'BROWSE — finished', result: 'Page 1: hello' }; },
   wake: async (t) => woke.push(t),
@@ -50,7 +51,7 @@ W._setDeps({
   assert.strictEqual(tgCalls.filter((c) => c.op === 'send').length, 1, 'one board message');
   const live = tgCalls[tgCalls.length - 1].text;
   assert.match(live, /3 running, 1 waiting/);
-  assert.match(live, /#1 job 1 · \d+ min · step 1\n\s+Editing server\/x\.js/, 'number, title, minutes, step, action');
+  assert.match(live, /#1 job 1 · \d+ min\n\s+planning\n\s+Editing server\/x\.js/, 'number, title, minutes, planning (no plan yet), action');
   assert.match(live, /#4 Canva 9-16 · waiting/, 'queued shown as waiting');
   assert.strictEqual(boardSaved().messageId, 501, 'board id saved for restarts');
   assert.strictEqual(boardLogs.length, 1, 'first send logged once'); assert.ok(boardLogs[0].length < 200, 'as one short line');
@@ -129,5 +130,105 @@ W._setDeps({
   assert.strictEqual(dbRows.length, 0, 'sends and edits not logged');
   await real.log('[board posted]');
   assert.strictEqual(dbRows.length, 1); assert.strictEqual(dbRows[0][0], 'jarvis');
+
+  // ── Percent from the worker's own plan ──
+  assert.deepStrictEqual(W.parsePlan('Plan:\n1. [x] Read the code\n2) [ ] Change it\n- [X] Tick\n3. not a step'), [{ name: 'Read the code', done: true }, { name: 'Change it', done: false }, { name: 'Tick', done: true }]);
+  assert.strictEqual(W.parsePlan('no plan here'), null);
+  const P = (d, n) => Array.from({ length: n }, (_, i) => ({ name: 's' + i, done: i < d }));
+  assert.strictEqual(W.percentOf(null, 'running'), null, 'no plan, no number');
+  assert.strictEqual(W.percentOf(P(1, 4), 'running'), 25);
+  assert.strictEqual(W.percentOf(P(4, 4), 'running'), 95, 'every step ticked still caps at 95 until it ends');
+  assert.strictEqual(W.percentOf(P(1, 4), 'done'), 100, '100 only on success');
+  assert.strictEqual(W.progressLabel({ kind: 'code', status: 'running', percent: 50, current: 'Run the tests' }), '▓▓▓▓▓░░░░░ 50% · Run the tests');
+  assert.strictEqual(W.progressLabel({ kind: 'code', status: 'running', percent: null }), 'planning');
+  assert.strictEqual(W.progressLabel({ kind: 'browse', status: 'running', percent: null, step: 4 }), 'step 4', 'browse with no plan: step N');
+
+  const fsx = require('fs'), pathx = require('path');
+  const ROOT = '/tmp/empire-workers-test-plan';
+  fsx.rmSync(ROOT, { recursive: true, force: true });
+  const writePlan = (dir, text) => { fsx.mkdirSync(dir, { recursive: true }); fsx.writeFileSync(pathx.join(dir, W.PLAN_FILE), text); };
+  const steps = [];
+  const go = () => new Promise((r) => steps.push(r));
+  const next = async () => { while (!steps.length) await sleep(5); steps.shift()(); await sleep(15); };
+  tgCalls.length = 0;
+  let mode = 'ok';
+  W._setDeps({
+    engine: {
+      workspace: async () => ({ readOnly: false, dir: '/tmp/x' }), ROOT: () => ROOT, run: async () => '',
+      spawnTurn: async ({ dir, onProgress, signal }) => {
+        onProgress('Reading AGENTS.md'); await go();
+        writePlan(dir, '1. [ ] Read the code\n2. [ ] Change it\n3. [ ] Run the tests\n'); onProgress('Writing the plan'); await go();
+        writePlan(dir, '1. [x] Read the code\n2. [ ] Change it\n3. [ ] Run the tests\n'); await go(); // read by the 5 s poll, no onProgress
+        writePlan(dir, '1. [x] Read the code\n2. [x] Change it\n3. [ ] Run the tests\n'); onProgress('Bash: node test.js');
+        if (mode === 'stop') { await new Promise((r) => signal.addEventListener('abort', r)); throw new Error('aborted'); }
+        await go();
+        if (mode === 'fail') throw new Error('tests failed');
+        writePlan(dir, '1. [x] Read the code\n2. [x] Change it\n3. [x] Run the tests\n');
+        return { text: 'done' };
+      },
+    },
+    browse: null, wake: async (t) => woke.push(t), saveNote: async () => {}, board, boardGapMs: GAP, boardRefreshMs: 60e3, planPollMs: 10,
+  });
+  const me = async (id) => (await W.forApp()).find((x) => x.id === id);
+  const a = await W.start({ kind: 'code', title: 'plan job', task: 'do it' }); await sleep(15);
+  let x = await me(a.id);
+  assert.strictEqual(x.percent, null, 'before a plan: no number'); assert.deepStrictEqual(x.plan, []);
+  await sleep(GAP * 2);
+  assert.match(tgCalls[tgCalls.length - 1].text, new RegExp(`#${a.id} plan job · \\d+ min\\n\\s+planning`), 'board says planning');
+  await next(); x = await me(a.id);
+  assert.strictEqual(x.percent, 0); assert.strictEqual(x.current, 'Read the code'); assert.strictEqual(x.plan.length, 3);
+  await next(); await sleep(30); x = await me(a.id);
+  assert.strictEqual(x.percent, 33, 'the poll picks up a tick between steps'); assert.strictEqual(x.current, 'Change it');
+  await next(); x = await me(a.id);
+  assert.strictEqual(x.percent, 67); assert.strictEqual(x.current, 'Run the tests');
+  assert.deepStrictEqual(x.plan.map((p) => p.done), [true, true, false], 'each step ticked or not for the tap view');
+  const saved1 = JSON.parse(settings.workers)[a.id];
+  assert.strictEqual(saved1.percent, 67, 'saved in app_settings.workers'); assert.strictEqual(saved1.current, 'Run the tests'); assert.strictEqual(saved1.plan.length, 3);
+  await sleep(GAP * 2);
+  assert.match(tgCalls[tgCalls.length - 1].text, /▓▓▓▓▓▓▓░░░ 67% · Run the tests\n\s+Bash: node test\.js/, 'text bar, percent and current step on the board');
+  await next(); await sleep(20); x = await me(a.id);
+  assert.strictEqual(x.status, 'done'); assert.strictEqual(x.percent, 100, '100 on success');
+  assert.ok(x.plan.every((p) => p.done), 'its last ticks read before the folder goes');
+  assert.ok(woke.some((t) => t.includes(`worker #${a.id}`) && /Its plan \(100%\): ✓ 1\. Read the code/.test(t)), 'J.A.R.V.I.S. sees the plan');
+  assert.match(await W.statusText(), new RegExp(`#${a.id} code "plan job" — done, 100%`));
+  await sleep(GAP * 2);
+  assert.match(tgCalls[tgCalls.length - 1].text, new RegExp(`✅ #${a.id} plan job · done · ▓▓▓▓▓▓▓▓▓▓ 100%`));
+
+  mode = 'fail';
+  const f = await W.start({ kind: 'code', title: 'fail job', task: 'do it' });
+  await next(); await next(); await sleep(30); await next(); await next(); await sleep(20);
+  x = await me(f.id);
+  assert.strictEqual(x.status, 'failed'); assert.strictEqual(x.percent, 67, 'a failed worker keeps its last percent');
+  await sleep(GAP * 2);
+  assert.match(tgCalls[tgCalls.length - 1].text, new RegExp(`❌ #${f.id} fail job · failed at 67%`));
+
+  mode = 'stop';
+  const st = await W.start({ kind: 'code', title: 'stop job', task: 'do it' });
+  await next(); await next(); await sleep(30); await next(); await sleep(20);
+  assert.match(await W.stop(st.id), /stopping/); await sleep(30);
+  x = await me(st.id);
+  assert.strictEqual(x.status, 'stopped'); assert.strictEqual(x.percent, 67, 'a stopped worker keeps its last percent');
+  await sleep(GAP * 2);
+  assert.match(tgCalls[tgCalls.length - 1].text, new RegExp(`⏹ #${st.id} stop job · stopped at 67%`));
+
+  // Browse: the brain's plan and the plan step it's on.
+  let bGo;
+  W._setDeps({
+    engine: null, wake: async () => {}, saveNote: async () => {}, board, boardGapMs: GAP, boardRefreshMs: 60e3,
+    browse: async (persona, name, task, { onStep, onPlan }) => {
+      onStep(1, 'opened canva'); await new Promise((r) => { bGo = r; });
+      onPlan(['Open Canva', 'Find the design', 'Read pages', 'Write it up'], 3); onStep(2, 'clicked [4] "Design"'); await new Promise((r) => { bGo = r; });
+      return { status: 'done', text: 'BROWSE — finished', result: 'ok' };
+    },
+  });
+  const b = await W.start({ kind: 'browse', title: 'canva', task: 'read it' }); await sleep(20);
+  x = await me(b.id); assert.strictEqual(x.percent, null); assert.strictEqual(W.progressLabel({ ...x, kind: 'browse' }), 'step 1', 'browse before a plan: step N');
+  bGo(); await sleep(20); x = await me(b.id);
+  assert.strictEqual(x.percent, 50, 'two of four plan steps behind it'); assert.strictEqual(x.current, 'Read pages');
+  assert.deepStrictEqual(x.plan.map((p) => p.done), [true, true, false, false]);
+  bGo(); await sleep(20); x = await me(b.id);
+  assert.strictEqual(x.percent, 100);
+  fsx.rmSync(ROOT, { recursive: true, force: true });
+
   console.log('workers: all checks passed');
 })().catch((e) => { console.error(e); process.exit(1); });

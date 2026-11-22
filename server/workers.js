@@ -83,6 +83,53 @@ function pump() {
 
 function update(w, patch) { Object.assign(w, patch, { updatedAt: Date.now() }); save(); boardKick(); }
 
+// ── Progress ─────────────────────────────────────────────────────────────────
+// Owner's ask, 2026-11-22: a real percentage, not a timer. A worker writes its own
+// plan (code: PLAN_FILE in its worktree, steps ticked as it finishes them; browse:
+// the browser brain's "plan" + "planStep"), and percent = steps done / steps,
+// held at 95 until the run really ends, 100 only on success. A failed or stopped
+// one keeps its last number. No plan yet → percent null ("planning").
+const PLAN_FILE = '.worker-plan.md';
+const MAX_PLAN = 20;
+
+// "1. [x] Read the code" / "- [ ] Run the tests" → [{ name, done }], or null.
+function parsePlan(text) {
+  const steps = [];
+  for (const l of String(text || '').split('\n')) {
+    const m = l.match(/^\s*(?:\d+[.)]|[-*])\s*\[([ xX✓✔]?)\]\s*(.+?)\s*$/);
+    if (m && steps.length < MAX_PLAN) steps.push({ name: m[2].replace(/^~~|~~$/g, '').slice(0, 80), done: m[1].trim() !== '' });
+  }
+  return steps.length ? steps : null;
+}
+
+function percentOf(plan, status) {
+  if (status === 'done') return 100;
+  if (!plan || !plan.length) return null;
+  return Math.min(95, Math.round((100 * plan.filter((s) => s.done).length) / plan.length));
+}
+
+// The patch for a new plan: percent, the step it's on now (first unticked).
+function planPatch(w, plan) {
+  if (!plan) return {};
+  const cur = plan.find((s) => !s.done);
+  return { plan, percent: percentOf(plan, w.status), current: cur ? cur.name : plan[plan.length - 1].name };
+}
+
+function readPlanFile(w, dir) {
+  let text;
+  try { text = fs.readFileSync(path.join(dir, PLAN_FILE), 'utf8'); } catch { return; }
+  const plan = parsePlan(text);
+  if (plan && JSON.stringify(plan) !== JSON.stringify(w.plan)) update(w, planPatch(w, plan));
+}
+
+const BAR = (p) => { const n = Math.max(0, Math.min(10, Math.round((p || 0) / 10))); return '▓'.repeat(n) + '░'.repeat(10 - n); };
+// "▓▓▓▓▓░░░░░ 50% · Run the tests", "planning", or "step 4" for a browse run with no plan.
+function progressLabel(w) {
+  if (w.percent != null) return `${BAR(w.percent)} ${w.percent}%${w.status === 'running' && w.current ? ` · ${w.current}` : ''}`;
+  if (w.kind === 'browse' && w.step) return `step ${w.step}`;
+  return 'planning';
+}
+
 async function launch(w) {
   const ctrl = new AbortController();
   ctrls.set(w.id, ctrl);
@@ -103,7 +150,7 @@ async function launch(w) {
   }
   release();
   ctrls.delete(w.id);
-  update(w, { status: out.status, result: String(out.result || '').slice(0, 20000), branch: out.branch || w.branch, endedAt: Date.now(), progress: out.status === 'done' ? 'Finished' : out.status === 'needs_you' ? 'Needs Mr. Burrus' : out.status === 'stopped' ? 'Stopped' : 'Failed' });
+  update(w, { status: out.status, result: String(out.result || '').slice(0, 20000), branch: out.branch || w.branch, endedAt: Date.now(), progress: out.status === 'done' ? 'Finished' : out.status === 'needs_you' ? 'Needs Mr. Burrus' : out.status === 'stopped' ? 'Stopped' : 'Failed', ...(out.status === 'done' ? { percent: 100, current: '' } : {}) });
   if (w.status !== 'stopped') report(w);
   pump();
 }
@@ -112,6 +159,8 @@ async function runBrowse(w) {
   const r = await d().browse(`worker-${w.id}`, `J.A.R.V.I.S.'s worker #${w.id}`, w.task, {
     ownerText: '',
     onStep: (n, line) => update(w, { step: n, progress: line.slice(0, 140) }),
+    // The brain's plan and the plan step it's on: the ones before it are done.
+    onPlan: (names, at) => update(w, planPatch(w, names.map((name, i) => ({ name, done: i < at - 1 })))),
   });
   const status = r.status === 'done' ? 'done' : r.status === 'ask' ? 'needs_you' : 'failed';
   let saved = '';
@@ -125,6 +174,7 @@ async function runBrowse(w) {
 const WORKER_BRIEF = (w, branch) => `[YOU ARE ONE OF J.A.R.V.I.S.'S WORKERS — #${w.id}: "${w.title}"]
 J.A.R.V.I.S. (the Empire OS engineer, running on Claude Code like you) handed you this one task so he can keep talking with Mr. Burrus. Do it fully and properly. If it is code: read the real code, change what's needed, run the tests that cover it, check your work. If it is research, a check or any other job: do it the same way, thoroughly, and report what you found with sources; you don't need to commit anything if nothing in the repo changes.
 You are in your own git worktree of the Empire OS repo on branch ${branch}, cut from main. The repo's AGENTS.md / CLAUDE.md rules apply. Commit your work on this branch and push THIS branch to origin. Never merge into main and never push main: Mr. Burrus says "push" and J.A.R.V.I.S. ships it. Don't redeploy. Other workers may be editing other branches at the same time; stay on yours.
+PROGRESS (Mr. Burrus watches it live as a percentage): before anything else, write your plan of 3 to 10 numbered steps to the file ${PLAN_FILE} at the root of your worktree, one per line, exactly like "1. [ ] Read the worker code" — short step names (under 60 characters) he can read on a phone. The moment you finish a step, change its [ ] to [x] in that file (one at a time as you go, never all at the end). If the plan changes, rewrite the file and keep the finished steps ticked. Don't commit it (it's gitignored).
 Your final message is a report for J.A.R.V.I.S., not for Mr. Burrus: what you did, the branch and commits, test results, anything unfinished or that needs a decision. Plain and short.`;
 
 async function runCode(w, signal) {
@@ -140,13 +190,18 @@ async function runCode(w, signal) {
     const exists = await E.run('git', ['rev-parse', '--verify', '--quiet', branch], { cwd: ws.dir }).then(() => true, () => false);
     await E.run('git', ['worktree', 'add', ...(exists ? [dir, branch] : ['-b', branch, dir, 'origin/main'])], { cwd: ws.dir, timeout: 300000 });
   }
+  // Its plan file is read on every step it reports and every 5 s between them.
+  const poll = setInterval(() => readPlanFile(w, dir), (deps && deps.planPollMs) || 5000);
+  if (poll.unref) poll.unref();
   try {
     const r = await E.spawnTurn({
       prompt: w.task, persona: '', dir, brief: WORKER_BRIEF(w, branch), ownSession: false, signal, timeoutMs: CODE_TIMEOUT_MS(),
-      onProgress: (line) => update(w, { step: (w.step || 0) + 1, progress: String(line).slice(0, 140) }),
+      onProgress: (line) => { readPlanFile(w, dir); update(w, { step: (w.step || 0) + 1, progress: String(line).slice(0, 140) }); },
     });
     return { status: 'done', result: r.text, branch };
   } finally {
+    clearInterval(poll);
+    readPlanFile(w, dir); // its last ticks, before the folder goes
     // The branch (and anything pushed) stays; the folder goes, to keep the disk clear.
     await E.run('git', ['worktree', 'remove', '--force', dir], { cwd: ws.dir }).catch(() => {});
   }
@@ -156,7 +211,7 @@ async function runCode(w, signal) {
 function report(w) {
   const mins = Math.max(1, Math.round(((w.endedAt || Date.now()) - (w.startedAt || w.createdAt)) / 60000));
   const head = { done: 'finished', needs_you: 'stopped and needs Mr. Burrus', failed: 'FAILED' }[w.status] || w.status;
-  const text = `[SENT ON YOUR OWN — your worker #${w.id} ("${w.title}", ${w.kind}${w.branch ? `, branch ${w.branch}` : ''}) ${head} after ${mins} min. Mr. Burrus did not send this. Check its work (for code: look at the branch, run its tests) before you tell him anything, then report to him in a few sentences. If it failed or stopped, say exactly why and what you're doing about it, or start a fresh worker if it's worth another try. If there is more of the same job queued for other workers, mention where the whole job stands. Its report:]\n${String(w.result || '(empty)').slice(0, 12000)}`;
+  const text = `[SENT ON YOUR OWN — your worker #${w.id} ("${w.title}", ${w.kind}${w.branch ? `, branch ${w.branch}` : ''}) ${head} after ${mins} min. Mr. Burrus did not send this. Check its work (for code: look at the branch, run its tests) before you tell him anything, then report to him in a few sentences. If it failed or stopped, say exactly why and what you're doing about it, or start a fresh worker if it's worth another try. If there is more of the same job queued for other workers, mention where the whole job stands. Its report:]\n${w.plan && w.plan.length ? `Its plan (${w.percent ?? 0}%): ${w.plan.map((p, i) => `${p.done ? '✓' : '○'} ${i + 1}. ${p.name}`).join(' · ')}\n` : ''}${String(w.result || '(empty)').slice(0, 12000)}`;
   Promise.resolve(d().wake(text)).catch((e) => console.error(`worker failed: couldn't hand #${w.id}'s result to J.A.R.V.I.S.: ${e.message}`));
 }
 
@@ -221,9 +276,11 @@ const BOARD_STATE = { done: 'done', failed: 'failed', needs_you: 'needs you', st
 function boardLine(w, now = Date.now()) {
   const mins = Math.max(0, Math.round(((w.endedAt || now) - (w.startedAt || w.createdAt)) / 60000));
   const title = String(w.title || '').slice(0, 60);
-  if (w.status === 'running') return `🔧 #${w.id} ${title} · ${mins} min · step ${w.step || 0}\n    ${String(w.progress || '').slice(0, 120)}`;
+  if (w.status === 'running') return `🔧 #${w.id} ${title} · ${mins} min\n    ${progressLabel(w).slice(0, 90)}\n    ${String(w.progress || '').slice(0, 120)}`;
   if (w.status === 'queued') return `⏳ #${w.id} ${title} · waiting`;
-  return `${BOARD_MARK[w.status] || '•'} #${w.id} ${title} · ${BOARD_STATE[w.status] || w.status} · ${mins} min`;
+  // An ended one keeps its last number: "failed at 40%", "stopped at 60%".
+  const at = w.percent != null ? (w.status === 'done' ? ` · ${BAR(100)} 100%` : ` at ${w.percent}%`) : '';
+  return `${BOARD_MARK[w.status] || '•'} #${w.id} ${title} · ${BOARD_STATE[w.status] || w.status}${at} · ${mins} min`;
 }
 function boardText(now = Date.now()) {
   const shown = Object.values(list)
@@ -293,7 +350,8 @@ async function boardTick() {
 
 function line(w) {
   const mins = Math.max(0, Math.round((Date.now() - (w.startedAt || w.createdAt)) / 60000));
-  return `#${w.id} ${w.kind} "${w.title}" — ${w.status}${w.status === 'running' ? `, ${mins} min, step ${w.step || 0}: ${w.progress}` : ''}${w.branch ? ` (branch ${w.branch})` : ''}`;
+  const now = w.percent != null ? `${w.percent}%${w.current ? ` (${w.current})` : ''}` : progressLabel(w);
+  return `#${w.id} ${w.kind} "${w.title}" — ${w.status}${w.status === 'running' ? `, ${mins} min, ${now}, step ${w.step || 0}: ${w.progress}` : w.percent != null ? `, ${w.percent}%` : ''}${w.branch ? ` (branch ${w.branch})` : ''}`;
 }
 
 async function statusText() {
@@ -310,7 +368,7 @@ async function forApp() {
   return Object.values(list)
     .filter((w) => ['running', 'queued'].includes(w.status) || (w.endedAt && now - w.endedAt < SHOW_DONE_MS))
     .sort((a, b) => a.createdAt - b.createdAt)
-    .map((w) => ({ id: w.id, kind: w.kind, title: w.title, status: w.status, step: w.step || 0, progress: w.progress || '', branch: w.branch || null, startedAt: w.startedAt || null, endedAt: w.endedAt || null }));
+    .map((w) => ({ id: w.id, kind: w.kind, title: w.title, status: w.status, step: w.step || 0, progress: w.progress || '', percent: w.percent ?? null, current: w.current || '', plan: w.plan || [], branch: w.branch || null, startedAt: w.startedAt || null, endedAt: w.endedAt || null }));
 }
 
 async function tag(name, arg) {
@@ -327,4 +385,4 @@ async function tag(name, arg) {
 const WORKER_TOOLS = ` - [WORKER_START: code|browse | short title | the full task, self-contained | Drive note title (browse only, optional)] — hand a task to a worker of your own so you stay free to talk to him. code = its own Claude Code run in its own worktree on a worker/ branch (commits and pushes that branch only, never main); browse = a browser task on its own browser, its result saved to that Drive note. 3 run at once, the rest wait in line; several workers can split one big job (e.g. Canva pages 1-8, 9-16…). Each one's progress shows live on his notification strip. When one finishes, fails or gets stuck you're woken with its report: check it, then tell him. Use them for EVERY task, whatever its length (his standing order, 2026-11-22), so you are always free to talk to him: code is for any general job (code, research, checks, writing); browse is for anything on a website. Only straight answers and seconds-long lookups stay with you.
  - [WORKER_STATUS] — every worker: running, waiting, done, with its current step. [WORKER_STOP: id] — stop one.`;
 
-module.exports = { start, stop, recover, statusText, forApp, tag, WORKER_TOOLS, enabled, _setDeps: (x) => { deps = x; list = null; board = undefined; boardLast = 0; }, _list: () => list, _boardText: () => boardText(), _tgBoardDeps: tgBoardDeps };
+module.exports = { start, stop, recover, statusText, forApp, tag, WORKER_TOOLS, enabled, _setDeps: (x) => { deps = x; list = null; board = undefined; boardLast = 0; }, _list: () => list, _boardText: () => boardText(), _tgBoardDeps: tgBoardDeps, parsePlan, percentOf, progressLabel, PLAN_FILE };

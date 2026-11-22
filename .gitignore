@@ -42,3 +42,6 @@ server/.env
 /android
 
 DEPLOY_BACKEND.md
+
+# J.A.R.V.I.S. worker plan (server/workers.js reads it for the progress bar)
+.worker-plan.md
