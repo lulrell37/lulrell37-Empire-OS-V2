@@ -159,12 +159,14 @@ function describeTool(b) {
   }
 }
 
-function spawnTurn({ prompt, persona, resume, onProgress, signal }) {
+// dir/brief/ownSession: a worker (server/workers.js) runs in its own worktree with
+// its own brief and never touches his resumed session.
+function spawnTurn({ prompt, persona, resume, onProgress, signal, dir = null, brief = null, ownSession = true, timeoutMs = null }) {
   return new Promise(async (resolve, reject) => {
     let ws;
-    try { ws = await workspace(); } catch (e) { return reject(new Error(`couldn't set up the workspace: ${e.message}`)); }
+    try { ws = dir ? { dir, readOnly: false } : await workspace(); } catch (e) { return reject(new Error(`couldn't set up the workspace: ${e.message}`)); }
     const briefFile = path.join(os.tmpdir(), `jarvis-brief-${process.pid}-${crypto.randomBytes(6).toString('hex')}.txt`);
-    fs.writeFileSync(briefFile, engineBrief(persona, ws), { mode: 0o600 });
+    fs.writeFileSync(briefFile, brief || engineBrief(persona, ws), { mode: 0o600 });
     const args = [
       '-p',
       '--model', MODEL(),
@@ -189,12 +191,13 @@ function spawnTurn({ prompt, persona, resume, onProgress, signal }) {
     };
     const onAbort = () => { child.kill('SIGTERM'); done(() => reject(Object.assign(new Error('cancelled'), { name: 'AbortError' }))); };
     if (signal) { if (signal.aborted) return onAbort(); signal.addEventListener('abort', onAbort); }
-    const timer = setTimeout(() => { child.kill('SIGTERM'); done(() => reject(Object.assign(new Error(`ran past ${Math.round(TIMEOUT_MS() / 60000)} minutes`), { partial: lastText, sessionId }))); }, TIMEOUT_MS());
+    const limit = timeoutMs || TIMEOUT_MS();
+    const timer = setTimeout(() => { child.kill('SIGTERM'); done(() => reject(Object.assign(new Error(`ran past ${Math.round(limit / 60000)} minutes`), { partial: lastText, sessionId }))); }, limit);
     const handle = (line) => {
       let ev; try { ev = JSON.parse(line); } catch { return; }
       if (ev.session_id && ev.session_id !== sessionId) {
         sessionId = ev.session_id;
-        saveSession(sessionId); // now, not at the end: a restart mid-turn can then resume this session
+        if (ownSession) saveSession(sessionId); // now, not at the end: a restart mid-turn can then resume this session
       }
       if (ev.type === 'assistant' && !ev.parent_tool_use_id && ev.message && Array.isArray(ev.message.content)) {
         for (const b of ev.message.content) {
@@ -337,4 +340,4 @@ function status() {
 }
 
 module.exports = {
-  loadSession, saveSession, enabled, turn, recover, startJob, jobStatus, cancelJob, detachJob, resetSession, status, engineBrief, describeTool };
+  spawnTurn, workspace, run, ROOT, loadSession, saveSession, enabled, turn, recover, startJob, jobStatus, cancelJob, detachJob, resetSession, status, engineBrief, describeTool };
