@@ -535,6 +535,8 @@ async function browserKeyTag(arg) {
   return `BROWSER_KEY: ✓ saved — the next [BROWSE] runs on the hosted browser (${url.replace(/apiKey=[^&]+/, 'apiKey=…')})`;
 }
 
+const CONSENT = /^(accept|allow|agree to|i agree|ok|got it)( all| all cookies| cookies| the cookies)?$|^accept all cookies$/i;
+
 // --- the tag ---------------------------------------------------------------------
 
 const NAMES = () => { try { return Object.fromEntries(require('./personas').ROSTER.map((p) => [p.id, p.name])); } catch { return {}; } };
@@ -544,7 +546,9 @@ async function browseTag(persona, arg, { ownerText = '' } = {}) {
   const { claudeText } = require('./llm');
   const name = NAMES()[persona] || persona;
   const brain = (sys, prompt) => claudeText(sys, prompt, { maxTokens: 700 });
-  let r = await runTask({ persona, personaName: name, task: String(arg || '').trim(), ownerText, brain });
+  // Cookie / consent banners are not acts in the world: let them through (Canva's
+  // banner ignores Reject all, 2026-11-22).
+  let r = await runTask({ persona, personaName: name, task: String(arg || '').trim(), ownerText, brain, allow: CONSENT });
   // A site emailed a code: it's in his Gmail, so fetch it and carry on without him
   // (owner, 2026-11-22: "it's supposed to be automatic").
   const logins = require('./siteLogins');

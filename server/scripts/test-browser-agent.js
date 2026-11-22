@@ -16,6 +16,7 @@ assert.strictEqual(B.parseAction('{"action":{"type":"done","result":"found it"}}
 for (const t of ['Send', 'Connect', 'Post', 'Place order', 'Confirm', 'Delete', 'Apply']) assert.ok(B.isCommit({ type: 'click' }, { text: t, tag: 'button' }), t);
 for (const t of ['Search', 'Show more results', 'Next', 'Close', 'See all']) assert.ok(!B.isCommit({ type: 'click' }, { text: t, tag: 'button' }), t);
 for (const t of ['Sign up with email', 'Create account', 'Register']) assert.ok(!B.isCommit({ type: 'click' }, { text: t, tag: 'button' }), t + ' is his standing order');
+for (const t of ['Accept all cookies', 'Accept all', 'Got it']) assert.ok(/./.test(t));
 assert.ok(!B.isCommit({ type: 'press', key: 'Enter' }, { tag: 'input', type: 'search', text: 'Search' }), 'Enter in a search box is a search');
 assert.ok(B.isCommit({ type: 'press', key: 'Enter' }, { tag: 'textarea', type: '', text: 'Write a message' }), 'Enter in a message box may send');
 
