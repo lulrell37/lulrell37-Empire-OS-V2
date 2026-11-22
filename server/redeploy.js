@@ -82,7 +82,8 @@ async function onBoot() {
     pending = raw ? (typeof raw === 'string' ? JSON.parse(raw) : raw) : null;
   } catch { pending = null; }
   const fellBack = process.env.EMPIRE_FALLBACK_ERROR;
-  if (!pending && !fellBack) return;
+  const restarted = process.env.EMPIRE_RESTART_REASON;
+  if (!pending && !fellBack && !restarted) return;
   if (pending) await setSetting('redeploy_pending', '').catch(() => {});
 
   const { araNote } = require('./talonAlerts');
@@ -90,6 +91,12 @@ async function onBoot() {
   const took = secs != null ? (secs >= 90 ? `${Math.round(secs / 60)} min` : `${secs}s`) : '';
   const what = await headline(info.sha);
   const running = `${info.source === 'github' ? 'main' : 'the bundled deploy'} @ ${info.sha || '?'}${what ? ` — "${what}"` : ''}`;
+  if (restarted && !pending && !fellBack) {
+    const froze = /^froze/.test(restarted);
+    araNote(`⚠️ **The server ${froze ? 'froze' : 'crashed'}, Mr. Burrus — it restarted itself and it's back up.**\nRunning: ${running}\n\nWhat happened:\n\`\`\`\n${String(restarted).slice(0, 1200)}\n\`\`\`\nJ.A.R.V.I.S. can dig in with [SERVER_LOGS].`,
+      `Mr. Burrus, the server ${froze ? 'froze' : 'crashed'}, so it restarted itself. It's back up now. The details are below.`, { remember: true });
+    return;
+  }
   if (fellBack) {
     araNote(`⚠️ **Redeploy didn't take, Mr. Burrus.** The new code crashed on startup, so the server went back to the last version that worked — everything's still running, just not the update.\nRunning: ${running}\n\nWhat broke:\n\`\`\`\n${String(fellBack).slice(0, 900)}\n\`\`\`\nJ.A.R.V.I.S. can file a fix ([BUILD_REQUEST]) — then redeploy again.`,
     "Mr. Burrus, the redeploy didn't take. The new code crashed on startup, so I put the server back on the last version that worked. Everything's still running, just not the update. The error's below.", { remember: true });

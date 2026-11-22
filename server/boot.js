@@ -190,6 +190,42 @@ function launch(code, extraEnv = {}) {
   return ready.then((ok) => ({ ok, exit, tail }));
 }
 
+// Once it's up, keep checking it answers. A child that stops answering /health
+// (event loop wedged, or the VM thrashing for memory) never exits, so without
+// this the server stayed dead until a manual redeploy. FREEZE_MISSES checks in
+// a row (~2 min) → kill it; the loop below restarts it, and A.R.A. says why.
+const WATCH_MS = Number(process.env.FREEZE_WATCH_MS || 30 * 1000);
+const FREEZE_MISSES = Number(process.env.FREEZE_MISSES || 4);
+let restartReason = '';
+
+function memLine(pid) {
+  let rss = '';
+  try { rss = (/VmRSS:\s*(\d+)/.exec(fs.readFileSync(`/proc/${pid}/status`, 'utf8')) || [])[1]; } catch { /* gone */ }
+  const mb = (b) => `${Math.round(b / 1048576)} MB`;
+  return `server memory ${rss ? mb(rss * 1024) : '?'}; machine ${mb(os.freemem())} free of ${mb(os.totalmem())}`;
+}
+
+function watch(run) {
+  if (process.env.FREEZE_WATCH === 'off') return;
+  let misses = 0;
+  let busy = false;
+  const proc = child;
+  const t = setInterval(async () => {
+    if (busy) return;
+    busy = true;
+    const ok = await healthy();
+    busy = false;
+    if (proc.exitCode != null || proc.signalCode) return clearInterval(t);
+    misses = ok ? 0 : misses + 1;
+    if (misses < FREEZE_MISSES) return;
+    clearInterval(t);
+    restartReason = `froze — stopped answering for ${Math.round((misses * WATCH_MS) / 60000)} min (${memLine(proc.pid)}). Last output:\n${run.tail.slice(-12).join('\n').slice(-1500)}`;
+    log(`server ${restartReason.split('\n')[0]} — killing it`);
+    proc.kill('SIGKILL');
+  }, WATCH_MS);
+  run.exit.then(() => clearInterval(t));
+}
+
 async function stop() {
   if (!child || child.exitCode != null) return;
   const gone = new Promise((r) => child.once('exit', r));
@@ -209,10 +245,16 @@ async function cycle() {
   }
   const tries = [want, lastGood, BUNDLE].filter((c, i, a) => c && a.findIndex((x) => x && x.dir === c.dir) === i);
   for (const code of tries) {
-    const run = await launch(code, failed ? { EMPIRE_FALLBACK_ERROR: failed } : {});
+    const env = { ...(failed ? { EMPIRE_FALLBACK_ERROR: failed } : {}), ...(restartReason ? { EMPIRE_RESTART_REASON: restartReason } : {}) };
+    const run = await launch(code, env);
     if (run.ok) {
       lastGood = code;
-      return run.exit;
+      restartReason = '';
+      watch(run);
+      return run.exit.then((c) => {
+        if (!restartReason && c !== RESTART_CODE && !shuttingDown) restartReason = `crashed (exit ${c}). Last output:\n${run.tail.slice(-12).join('\n').slice(-1500)}`;
+        return c;
+      });
     }
     await stop();
     const cause = crashReason(run.tail);

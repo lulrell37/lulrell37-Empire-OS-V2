@@ -79,6 +79,22 @@ app.use((err, req, res, next) => {
 // the process — every bot, cron and app call down until Replit restarted it.
 process.on('unhandledRejection', (e) => console.error('unhandled rejection', e));
 
+// Stall monitor: when the server bogs down (memory filling up, or something
+// hogging the event loop), say so in the log, so boot.js's freeze report (which
+// carries the last log lines) and [SERVER_LOGS] show which one it was.
+{
+  const v8 = require('v8');
+  let last = Date.now();
+  setInterval(() => {
+    const lag = Date.now() - last - 30000;
+    last = Date.now();
+    const h = v8.getHeapStatistics();
+    const heapPct = Math.round((h.used_heap_size / h.heap_size_limit) * 100);
+    const rss = Math.round(process.memoryUsage().rss / 1048576);
+    if (lag > 5000 || heapPct > 80) console.warn(`server stalled: event loop ${Math.round(lag / 1000)}s late, heap ${heapPct}% of limit, rss ${rss} MB`);
+  }, 30000).unref();
+}
+
 const PORT = process.env.PORT || 3000;
 db.init()
   .then(() => {

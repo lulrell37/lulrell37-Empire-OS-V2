@@ -82,7 +82,7 @@ function diagTag(name, arg) {
 }
 
 function diagJson() {
-  return { started, lines: lines.slice(-200), aiCalls, aiTotals, fallbackError: process.env.EMPIRE_FALLBACK_ERROR || null };
+  return { started, lines: lines.slice(-200), aiCalls, aiTotals, fallbackError: process.env.EMPIRE_FALLBACK_ERROR || null, restartReason: process.env.EMPIRE_RESTART_REASON || null };
 }
 
 // For the sentinel: warn/error lines and failed app AI calls newer than ts.

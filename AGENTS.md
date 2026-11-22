@@ -494,7 +494,7 @@ live or fell back (with the error), time taken, the commit running and the
 commit list since the last version. `.github/workflows/server-check.yml` (run by
 that dispatch) checks `/health` → `code.booted_at` ~6 min later and fails, which
 emails the owner, if the server never came back. It needs `PUBLIC_URL` (or
-`REPLIT_DOMAINS`) and a token with Contents write. `/health` now carries `code`
+`REPLIT_DOMAINS`) and a token with Contents write. **Freeze watchdog:** once the child is up, boot checks `/health` every 30 s; 4 misses in a row (~2 min, `FREEZE_MISSES`, `FREEZE_WATCH=off` to stop) and it kills and restarts it, since a wedged child never exits (2026-11-22: the server kept running its crons while every request and Telegram webhook timed out). The next child gets `EMPIRE_RESTART_REASON` (froze or crashed, memory, last output) and `onBoot()` has A.R.A. report it; `/diag` carries it too. Inside the child, `index.js` logs `server stalled: event loop Ns late, heap N%, rss N MB` whenever the loop runs 5 s+ late or the heap passes 80%, so the report's last lines say whether it was memory or a hog. `/health` now carries `code`
 (sha, source, supervised, booted_at, fell_back). `[BUILD_MERGE]`'s receipt says what the
 merge set off from the PR's files (`whatShips` in `server/buildAgent.js`, same
 rules as `build.yml`'s paths-ignore): app files → APK build; server-only → no
