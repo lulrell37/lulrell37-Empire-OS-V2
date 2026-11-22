@@ -16,6 +16,8 @@
 // is app_settings.workers, so a restart re-runs what it cut off, once, and says
 // so; nothing ends quietly. WORKERS=off stops it. Tags: [WORKER_START: code|browse
 // | title | task | note title], [WORKER_STATUS], [WORKER_STOP: id].
+// The same progress goes to Telegram as one live board message on J.A.R.V.I.S.'s
+// bot (see "Telegram board" below; WORKER_TG_BOARD=off stops it).
 // node server/scripts/test-workers.js.
 const fs = require('fs');
 const path = require('path');
@@ -38,6 +40,8 @@ function d() {
     browse: (persona, name, task, opts) => require('./browserAgent').browseRun(persona, name, task, opts),
     wake: (text) => require('./routes/telegram').jarvisOutOfBand(text, { quiet: /^\s*NOTHING\s*\.?\s*$/i }),
     saveNote: (title, body) => require('./google').saveDriveNote(title, body),
+    board: tgBoardDeps(),
+    boardGapMs: BOARD_GAP_MS,
   };
 }
 
@@ -67,6 +71,7 @@ async function start({ kind = 'code', title, task, note = '' }) {
   const id = nextId();
   list[id] = { id, kind, title: String(title || task).slice(0, 80), task: String(task), note: String(note || ''), status: 'queued', createdAt: Date.now(), step: 0, progress: 'Waiting for a free slot', attempts: 0 };
   await save();
+  boardKick();
   pump();
   return list[id];
 }
@@ -76,7 +81,7 @@ function pump() {
   while (running().length < MAX() && queued().length) launch(queued()[0]);
 }
 
-function update(w, patch) { Object.assign(w, patch, { updatedAt: Date.now() }); save(); }
+function update(w, patch) { Object.assign(w, patch, { updatedAt: Date.now() }); save(); boardKick(); }
 
 async function launch(w) {
   const ctrl = new AbortController();
@@ -176,7 +181,114 @@ async function recover() {
       report(w);
     } else update(w, { status: 'queued', progress: 'Restarting after a server restart' });
   }
+  boardKick(); // a board left open before the restart is picked up and finished
   pump();
+}
+
+// ── Telegram board ───────────────────────────────────────────────────────────
+// Owner's ask, 2026-11-22: the strip's worker chips, on Telegram. When a worker
+// starts and no board is live, J.A.R.V.I.S.'s bot sends him ONE silent message
+// listing every running and waiting worker; that message is then edited in place
+// as steps change (at most once every 10 s, never with unchanged text). Finished,
+// failed and stuck ones show as done / failed / needs you for 15 min, like the
+// app. When nothing is running or waiting it gets a last all-done edit and stops;
+// the next worker opens a new board. The message id is app_settings.workers_tg_board,
+// so a restart keeps editing the same message. Edits aren't logged anywhere; the
+// first send is one short line in his history. The wake-up reports are separate.
+const BOARD_KEY = 'workers_tg_board';
+const BOARD_GAP_MS = 10e3;
+const BOARD_REFRESH_MS = 60e3; // keeps the minutes current between steps
+const boardEnabled = () => String(process.env.WORKER_TG_BOARD || '').toLowerCase() !== 'off';
+
+function tgBoardDeps() {
+  const pick = () => {
+    const tg = require('./telegram');
+    const persona = tg.botFor('jarvis') && tg.botFor('jarvis').isConfigured() ? 'jarvis' : 'ara';
+    const bot = tg.botFor(persona);
+    if (!bot || !bot.isConfigured()) throw new Error('no Telegram bot configured');
+    return { tg, persona, bot };
+  };
+  return {
+    ready: () => { try { pick(); return true; } catch { return false; } }, // no bot (dev): no board, no noise
+    send: async (text) => { const { tg, bot } = pick(); const m = await bot.tg('sendMessage', { chat_id: tg.OWNER_ID, text, disable_notification: true }); return m.message_id; },
+    edit: async (id, text) => { const { tg, bot } = pick(); await bot.editMessageText(tg.OWNER_ID, id, text); },
+    log: async (text) => { const { tg, persona } = pick(); await tg.logOwn(persona, tg.OWNER_ID, text); },
+  };
+}
+
+const BOARD_MARK = { done: '✅', failed: '❌', needs_you: '✋', stopped: '⏹' };
+const BOARD_STATE = { done: 'done', failed: 'failed', needs_you: 'needs you', stopped: 'stopped' };
+function boardLine(w, now = Date.now()) {
+  const mins = Math.max(0, Math.round(((w.endedAt || now) - (w.startedAt || w.createdAt)) / 60000));
+  const title = String(w.title || '').slice(0, 60);
+  if (w.status === 'running') return `🔧 #${w.id} ${title} · ${mins} min · step ${w.step || 0}\n    ${String(w.progress || '').slice(0, 120)}`;
+  if (w.status === 'queued') return `⏳ #${w.id} ${title} · waiting`;
+  return `${BOARD_MARK[w.status] || '•'} #${w.id} ${title} · ${BOARD_STATE[w.status] || w.status} · ${mins} min`;
+}
+function boardText(now = Date.now()) {
+  const shown = Object.values(list)
+    .filter((w) => ['running', 'queued'].includes(w.status) || (w.endedAt && now - w.endedAt < SHOW_DONE_MS))
+    .sort((a, b) => a.createdAt - b.createdAt);
+  const r = running().length, q = queued().length;
+  const head = r || q ? `J.A.R.V.I.S.'s workers: ${r} running${q ? `, ${q} waiting` : ''}` : 'J.A.R.V.I.S.\'s workers: all done ✓';
+  const time = new Date(now).toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit' });
+  return `${head}\n\n${shown.map((w) => boardLine(w, now)).join('\n')}\n\n${r || q ? 'Updated' : 'Finished'} ${time} ET`.slice(0, 4000);
+}
+
+let board; // undefined = not read yet; null = no live board
+let boardLast = 0, boardTimer = null, boardBusy = false, boardAgain = false, boardRefresh = null;
+async function loadBoard() {
+  if (board !== undefined) return board;
+  try { board = JSON.parse(await getSetting(BOARD_KEY, 'null')) || null; } catch { board = null; }
+  if (board && !board.messageId) board = null;
+  return board;
+}
+const saveBoard = () => setSetting(BOARD_KEY, JSON.stringify(board || null));
+
+// Every state change kicks the board; edits wait out the 10 s gap.
+function boardKick() {
+  if (!boardEnabled() || !list || boardTimer) return;
+  const gap = (deps && deps.boardGapMs) || BOARD_GAP_MS;
+  boardTimer = setTimeout(() => { boardTimer = null; boardTick(); }, Math.max(0, boardLast + gap - Date.now()));
+  if (boardTimer.unref) boardTimer.unref();
+}
+
+async function boardTick() {
+  if (boardBusy) { boardAgain = true; return; }
+  boardBusy = true;
+  try {
+    await loadBoard();
+    const active = running().length + queued().length;
+    if (!board && !active) return;
+    const text = boardText();
+    if (board && text === board.text) return;
+    const B = d().board;
+    if (!B || (B.ready && !B.ready())) return;
+    boardLast = Date.now();
+    if (!board) {
+      const messageId = await B.send(text);
+      board = { messageId, text, openedAt: Date.now() };
+      await saveBoard();
+      const first = [...running(), ...queued()].map((w) => `#${w.id} "${w.title}"`).join(', ');
+      Promise.resolve(B.log(`[J.A.R.V.I.S.'s live worker board posted (${first}); it updates in place as they work]`)).catch(() => {});
+    } else {
+      try { await B.edit(board.messageId, text); } catch (e) {
+        // Deleted by him, or too old to edit: start a fresh board next time.
+        if (/not found|can't be edited|cannot be edited/i.test(e.message)) { board = null; await saveBoard(); boardAgain = true; return; }
+        throw e;
+      }
+      board.text = text;
+      if (!active) board = null; // the all-done edit: this board is finished
+      await saveBoard();
+    }
+  } catch (e) {
+    console.error(`workers failed: telegram board: ${e.message}`);
+  } finally {
+    boardBusy = false;
+    if (boardAgain) { boardAgain = false; boardKick(); }
+    clearTimeout(boardRefresh); boardRefresh = null;
+    if (board) { boardRefresh = setTimeout(boardKick, (deps && deps.boardRefreshMs) || BOARD_REFRESH_MS); if (boardRefresh.unref) boardRefresh.unref(); }
+  }
 }
 
 function line(w) {
@@ -215,4 +327,4 @@ async function tag(name, arg) {
 const WORKER_TOOLS = ` - [WORKER_START: code|browse | short title | the full task, self-contained | Drive note title (browse only, optional)] — hand a task to a worker of your own so you stay free to talk to him. code = its own Claude Code run in its own worktree on a worker/ branch (commits and pushes that branch only, never main); browse = a browser task on its own browser, its result saved to that Drive note. 3 run at once, the rest wait in line; several workers can split one big job (e.g. Canva pages 1-8, 9-16…). Each one's progress shows live on his notification strip. When one finishes, fails or gets stuck you're woken with its report: check it, then tell him. Use them for EVERY task, whatever its length (his standing order, 2026-11-22), so you are always free to talk to him: code is for any general job (code, research, checks, writing); browse is for anything on a website. Only straight answers and seconds-long lookups stay with you.
  - [WORKER_STATUS] — every worker: running, waiting, done, with its current step. [WORKER_STOP: id] — stop one.`;
 
-module.exports = { start, stop, recover, statusText, forApp, tag, WORKER_TOOLS, enabled, _setDeps: (x) => { deps = x; list = null; }, _list: () => list };
+module.exports = { start, stop, recover, statusText, forApp, tag, WORKER_TOOLS, enabled, _setDeps: (x) => { deps = x; list = null; board = undefined; boardLast = 0; }, _list: () => list, _boardText: () => boardText(), _tgBoardDeps: tgBoardDeps };

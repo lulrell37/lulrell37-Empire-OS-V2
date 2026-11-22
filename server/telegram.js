@@ -88,7 +88,8 @@ function chunk(text, max = 3900) {
 // Build the API surface for one bot token.
 // Retries for Telegram's blips (see tg() below): 3 tries, ~1s then ~2.5s apart.
 const TG_TRIES = 3;
-const SAFE_METHODS = new Set(['getFile', 'getMe', 'getWebhookInfo', 'sendChatAction', 'setWebhook', 'answerCallbackQuery']);
+// editMessageText is safe too: editing the same message twice lands the same text.
+const SAFE_METHODS = new Set(['getFile', 'getMe', 'getWebhookInfo', 'sendChatAction', 'setWebhook', 'answerCallbackQuery', 'editMessageText']);
 const retryDelay = (attempt) => [1000, 2500, 5000][attempt] || 5000;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -145,6 +146,17 @@ function makeBot(personaId, token) {
         if (!/parse|entit|tag/i.test(e.message)) throw e;
         await tg('sendMessage', { chat_id: chatId, text: part, ...rest });
       }
+    }
+  }
+
+  // Edit a message the bot sent, in place (J.A.R.V.I.S.'s live worker board).
+  // Telegram's "message is not modified" (same text) counts as done. Never logged.
+  async function editMessageText(chatId, messageId, text, opts = {}) {
+    try {
+      return await tg('editMessageText', { chat_id: chatId, message_id: messageId, text: String(text).slice(0, 4096), ...opts });
+    } catch (e) {
+      if (/message is not modified/i.test(e.message)) return true;
+      throw e;
     }
   }
 
@@ -224,7 +236,7 @@ function makeBot(personaId, token) {
   return {
     personaId, token, secret,
     isConfigured: () => !!(API && OWNER_ID),
-    tg, sendMessage, sendFile, sendVoice, sendChatAction, downloadFile, setWebhook,
+    tg, sendMessage, editMessageText, sendFile, sendVoice, sendChatAction, downloadFile, setWebhook,
     getMe: () => tg('getMe'),
     getWebhookInfo: () => tg('getWebhookInfo'),
   };
@@ -268,7 +280,7 @@ async function setWebhook(baseUrl) {
 }
 
 module.exports = {
-  ownLine, OWN_MARK, mem0Line,
+  ownLine, OWN_MARK, mem0Line, logOwn,
   OWNER_ID, isOwner,
   bots, botFor, configuredBots, isConfigured,
   notifyOwner, setWebhook,
