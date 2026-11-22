@@ -31,8 +31,8 @@ const zlib = require('zlib');
 const { spawn, execFileSync } = require('child_process');
 const WebSocket = require('ws');
 
-const MAX_STEPS = Number(process.env.BROWSE_MAX_STEPS || 25);
-const MAX_MS = Number(process.env.BROWSE_MAX_MIN || 6) * 60e3;
+const MAX_STEPS = Number(process.env.BROWSE_MAX_STEPS || 300);
+const MAX_MS = Number(process.env.BROWSE_MAX_MIN || 60) * 60e3; // owner, 2026-11-22: 6 min was too short for real work
 const IDLE_MS = 10 * 60e3;
 const MAX_BROWSERS = 3;
 const BIN_DIR = path.join(os.homedir(), '.empire-bin');
@@ -523,11 +523,19 @@ async function emailedCode() {
 async function browserKeyTag(arg) {
   const v = String(arg || '').trim();
   if (!v) return 'BROWSER_KEY: give the Steel API key or a wss:// URL';
-  const url = /^wss?:\/\//i.test(v) ? v : `wss://connect.steel.dev?apiKey=${encodeURIComponent(v)}`;
+  let url = v;
+  if (!/^wss?:\/\//i.test(v)) {
+    // An organization-wide Steel key needs a project (Steel answers 400 without one).
+    const r = await fetch('https://api.steel.dev/v1/projects', { headers: { 'steel-api-key': v } }).then((x) => x.json()).catch(() => ({}));
+    const p = (r.projects || []).find((x) => x.isDefault) || (r.projects || [])[0];
+    url = `wss://connect.steel.dev?apiKey=${encodeURIComponent(v)}${p ? `&projectId=${p.id}` : ''}`;
+  }
   await require('./syncStore').setSetting('browser_ws_url', url);
-  await close('jarvis').catch(() => {}); await close('ara').catch(() => {});
+  try { close('jarvis'); close('ara'); } catch {}
   return `BROWSER_KEY: ✓ saved — the next [BROWSE] runs on the hosted browser (${url.replace(/apiKey=[^&]+/, 'apiKey=…')})`;
 }
+
+const CONSENT = /^(accept|allow|agree to|i agree|ok|got it)( all| all cookies| cookies| the cookies)?$|^accept all cookies$/i;
 
 // --- the tag ---------------------------------------------------------------------
 
@@ -538,7 +546,9 @@ async function browseTag(persona, arg, { ownerText = '' } = {}) {
   const { claudeText } = require('./llm');
   const name = NAMES()[persona] || persona;
   const brain = (sys, prompt) => claudeText(sys, prompt, { maxTokens: 700 });
-  let r = await runTask({ persona, personaName: name, task: String(arg || '').trim(), ownerText, brain });
+  // Cookie / consent banners are not acts in the world: let them through (Canva's
+  // banner ignores Reject all, 2026-11-22).
+  let r = await runTask({ persona, personaName: name, task: String(arg || '').trim(), ownerText, brain, allow: CONSENT });
   // A site emailed a code: it's in his Gmail, so fetch it and carry on without him
   // (owner, 2026-11-22: "it's supposed to be automatic").
   const logins = require('./siteLogins');

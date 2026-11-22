@@ -20,7 +20,7 @@ export async function startTranscribe({mediaUrl,persona}){
 // [BROWSE: task] — J.A.R.V.I.S.'s and A.R.A.'s browser runs on the server
 // (server/browserAgent.js). Starts the job, then polls until it ends (minutes).
 // Returns the result text for the persona's second pass.
-export async function runBrowse({persona,task,ownerText,signal,maxMs=8*60e3}){
+export async function runBrowse({persona,task,ownerText,signal,maxMs=65*60e3}){
   const be=await loadBackend();
   if(!be)throw new Error('the browser runs on the Empire server, and no server is linked (Settings › Backend)');
   const h={Authorization:'Bearer '+be.token,'Content-Type':'application/json'};
@@ -34,7 +34,7 @@ export async function runBrowse({persona,task,ownerText,signal,maxMs=8*60e3}){
     const p=await fetch(be.url+'/browse/'+j.id,{headers:h,signal}).then(x=>x.json()).catch(()=>null);
     if(p&&p.status&&p.status!=='running')return p.text;
   }
-  return 'BROWSE: still running after 8 minutes — the result will not come back into this chat; ask again in a moment.';
+  return 'BROWSE: still running after an hour — the result will not come back into this chat; ask again in a moment.';
 }
 
 export async function startClipScan({mediaUrl,focus}){
