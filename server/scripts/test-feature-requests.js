@@ -23,6 +23,7 @@ Module._load = function (req, parent, ...rest) {
   return load.call(this, req, parent, ...rest);
 };
 process.env.EMPIRE_SUPERVISED = '1';
+process.env.FEATURE_REQ_PER_DAY = '20';
 const F = require('../featureRequests');
 
 (async () => {
@@ -69,6 +70,37 @@ const F = require('../featureRequests');
   assert.strictEqual(outOfBand[1].id, 'selene');
   assert.match(outOfBand[1].text, /couldn't build it/);
   assert.match(outOfBand[1].text, /Graph token/);
+
+  // A stopped build still comes back to him.
+  await F.request('scribe', 'read my Google Docs comments', { asked: 'what did they comment' });
+  await F.finish({ id: '24', title: 'Give S.C.R.I.B.E.: comments', status: 'stopped', branch: 'worker/24', result: 'stopped on request' });
+  assert.strictEqual(outOfBand.length, 3);
+  assert.match(outOfBand[2].text, /stopped before it finished/);
+
+  // The new code fell back at boot → she says it isn't live, not that it is.
+  files = ['server/personaRuntime.js'];
+  await F.request('sage', 'live stock quotes', { asked: 'what is NVDA at' });
+  await F.finish({ id: '25', title: 'Give S.A.G.E.: quotes', status: 'done', branch: 'worker/25', pushed: 'pushed `worker/25` (1 commit(s) ahead of main)', result: 'DONE\nx\nAUTOFIX_TITLE: Quotes' });
+  process.env.EMPIRE_FALLBACK_ERROR = 'main @ abc crashed on startup';
+  await F.followUps();
+  delete process.env.EMPIRE_FALLBACK_ERROR;
+  assert.match(outOfBand[3].text, /NOT live yet/);
+  assert.match(outOfBand[3].text, /what is NVDA at/);
+
+  // A follow-up that fails to send is retried, and only marked answered once it went out.
+  const rt = require('../routes/telegram');
+  let fails = 2;
+  const real = rt.personaOutOfBand;
+  rt.personaOutOfBand = async (id, text) => { if (fails-- > 0) throw new Error('telegram 502'); outOfBand.push({ id, text }); return true; };
+  await F.request('haven', 'see my sleep data', { asked: 'how did I sleep' });
+  await F.finish({ id: '26', title: 'Give H.A.V.E.N.: sleep', status: 'done', branch: 'worker/26', pushed: 'pushed `worker/26` (1 commit(s) ahead of main)', result: 'DONE\nx\nAUTOFIX_TITLE: Sleep' });
+  await F.followUps({ waits: [10, 10] });
+  rt.personaOutOfBand = real;
+  assert.strictEqual(outOfBand[outOfBand.length - 1].id, 'haven', 'went out on the third try');
+  assert.strictEqual(JSON.parse(settings.feature_requests).find((r) => r.worker === '26').state, 'answered');
+
+  // The daily limit holds.
+  assert.strictEqual(F.refuse(Array.from({ length: 20 }, (_, i) => ({ at: Date.now(), persona: 'p' + i, need: 'thing ' + i })), { persona: 'x', need: 'new ask' })?.includes('today'), true);
 
   // Guarded paths
   assert.ok(F.GUARDED.test('server/talonAutoTrade.js') && F.GUARDED.test('.github/workflows/x.yml') && !F.GUARDED.test('server/personaRuntime.js'));

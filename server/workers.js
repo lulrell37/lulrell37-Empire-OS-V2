@@ -209,7 +209,7 @@ async function runCode(w, signal) {
 // The result goes straight to Mr. Burrus on J.A.R.V.I.S.'s bot (and so into
 // J.A.R.V.I.S.'s chat history): no engine turn, so he's never tied up by it.
 function report(w) {
-  if (w.status === 'stopped') return;
+  if (w.status === 'stopped' && w.purpose !== 'feature') return; // a stopped build request still comes back to him
   Promise.resolve(d().onDone && d().onDone(w)).then((handled) => {
     if (handled) return;
     return defaultReport(w);

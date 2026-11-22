@@ -102,6 +102,10 @@ async function finish(w) {
   const done = (state, extra = {}) => { Object.assign(entry, { state, ...extra }); return save(list); };
   const { title, body } = af.parseReply(w.result);
   const comeBack = (note) => (entry.persona ? followUp(entry, note) : af.send(`🛠 ${w.title}\n\n${note}`));
+  if (w.status === 'stopped') {
+    await done('stopped');
+    return comeBack('The build was stopped before it finished, so you still don\'t have it').then(() => true);
+  }
   if (w.status !== 'done' || !/pushed/.test(w.pushed || '') || !title) {
     await done('not built');
     return comeBack(`J.A.R.V.I.S.'s worker couldn't build it${w.status !== 'done' ? ` (${w.status})` : ''}. Its report: ${body.slice(0, 1200)}${w.issueUrl ? ` (${w.issueUrl})` : ''}`).then(() => true);
@@ -141,21 +145,37 @@ async function finish(w) {
   return true;
 }
 
-// The persona comes back to him with the answer he asked for.
-function followUp(entry, note = '') {
-  const ask = `[SENT ON YOUR OWN — Mr. Burrus did not send this. Earlier he asked you: "${entry.asked}". You didn't have what you needed ("${entry.need}"), so J.A.R.V.I.S. built it${note ? `. ${note}` : ' and it is live now: you have it in front of you this turn'}. Come back to him now: open with a few words that you're following up on what he asked, then answer it properly${note && !/live now/.test(note) ? ' as far as you can, and say what is still missing' : ''}.]`;
-  return require('./routes/telegram').personaOutOfBand(entry.persona, ask).catch((e) => console.error(`feature requests failed: follow-up: ${e.message}`));
+// The persona comes back to him with the answer he asked for. Resolves true once
+// it went out; tries again after 2 and 10 min if it didn't.
+async function followUp(entry, note = '', waits = [2 * 60e3, 10 * 60e3]) {
+  for (let i = 0; ; i++) {
+    const ok = await sendFollowUp(entry, note);
+    if (ok) return true;
+    if (i >= waits.length) { console.error(`feature requests failed: couldn't come back to him about "${entry.need}" (${entry.persona})`); return false; }
+    await new Promise((r) => setTimeout(r, waits[i]));
+  }
+}
+function sendFollowUp(entry, note = '') {
+  const ask = `[SENT ON YOUR OWN — Mr. Burrus did not send this. Earlier he asked you: "${entry.asked}". You didn't have what you needed ("${entry.need}"), so you asked J.A.R.V.I.S. to build it. Where it stands: ${note ? `${note}.` : 'built and live now — you have it in front of you this turn.'} Come back to him now: open with a few words that you're following up on what he asked, then answer it properly${note && !/live now/.test(note) ? ' as far as you can, and say what is still missing' : ''}.]`;
+  return require('./routes/telegram').personaOutOfBand(entry.persona, ask).then((ok) => ok !== false).catch((e) => { console.error(`feature requests failed: follow-up: ${e.message}`); return false; });
 }
 
 // At boot: requests whose merge this restart put live get their answer now.
-async function followUps() {
+async function followUps(opts = {}) {
   if (!enabled()) return;
   const list = await load();
   const due = list.filter((r) => r.state === 'merged, going live' && r.merged_at && Date.now() - r.merged_at < 3 * 3600e3);
+  // The new code crashed on startup and the server went back to the old one: it isn't live.
+  const fellBack = process.env.EMPIRE_FALLBACK_ERROR;
   for (const r of due) {
-    r.state = 'answered';
+    r.state = 'answering';
     await save(list);
-    await followUp(r, r.app ? 'It is live on the server now; the app part arrives with the next APK' : '');
+    const note = fellBack
+      ? `It was built and merged (PR #${r.pr}), but the new code crashed on startup, so the server went back to the old version and it is NOT live yet; the auto-fix is on it. Don't answer from it`
+      : (r.app ? 'It is live on the server now; the app part arrives with the next APK' : '');
+    const ok = await followUp(r, note, opts.waits);
+    r.state = ok ? (fellBack ? 'merged, not live' : 'answered') : 'follow-up failed';
+    await save(list);
   }
 }
 
