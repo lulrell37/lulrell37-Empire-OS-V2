@@ -523,7 +523,13 @@ async function emailedCode() {
 async function browserKeyTag(arg) {
   const v = String(arg || '').trim();
   if (!v) return 'BROWSER_KEY: give the Steel API key or a wss:// URL';
-  const url = /^wss?:\/\//i.test(v) ? v : `wss://connect.steel.dev?apiKey=${encodeURIComponent(v)}`;
+  let url = v;
+  if (!/^wss?:\/\//i.test(v)) {
+    // An organization-wide Steel key needs a project (Steel answers 400 without one).
+    const r = await fetch('https://api.steel.dev/v1/projects', { headers: { 'steel-api-key': v } }).then((x) => x.json()).catch(() => ({}));
+    const p = (r.projects || []).find((x) => x.isDefault) || (r.projects || [])[0];
+    url = `wss://connect.steel.dev?apiKey=${encodeURIComponent(v)}${p ? `&projectId=${p.id}` : ''}`;
+  }
   await require('./syncStore').setSetting('browser_ws_url', url);
   try { close('jarvis'); close('ara'); } catch {}
   return `BROWSER_KEY: ✓ saved — the next [BROWSE] runs on the hosted browser (${url.replace(/apiKey=[^&]+/, 'apiKey=…')})`;
