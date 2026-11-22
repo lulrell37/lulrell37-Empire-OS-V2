@@ -164,7 +164,8 @@ async function sendTurnResult(personaId, bot, chatId, { text: reply, spoken, foo
 // wrote; his tags still run here), or one a server restart cut off (no `reply`:
 // the engine resumes it). It goes out on his bot (A.R.A.'s if his isn't set up)
 // like any other reply, so the work is never lost. Returns false with no bot.
-async function jarvisOutOfBand(text, { reply, notice, resumes = 0 } = {}) {
+// quiet: a reply matching it isn't sent (a wake-up with nothing to do).
+async function jarvisOutOfBand(text, { reply, notice, resumes = 0, quiet = null } = {}) {
   const personaId = tg.botFor('jarvis') && tg.botFor('jarvis').isConfigured() ? 'jarvis' : 'ara';
   const bot = tg.botFor(personaId);
   if (!bot || !bot.isConfigured() || !tg.OWNER_ID) return false;
@@ -178,6 +179,7 @@ async function jarvisOutOfBand(text, { reply, notice, resumes = 0 } = {}) {
   if (!String(text || '').trim() && reply == null) return true; // just the notice
   if (personaId !== 'jarvis') { if (reply) await deliver(`J.A.R.V.I.S.:\n${reply}`); return true; }
   const result = await runPersonaTurn('jarvis', text, deliver, { reply, resumes });
+  if (quiet && quiet.test(String(result.text || ''))) return true;
   await sendTurnResult('jarvis', bot, chatId, result, text, deliver);
   return true;
 }
