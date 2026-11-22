@@ -41,4 +41,26 @@ assert.ok(hot[0].score > 90 && /most replayed/.test(hot[0].why) && /3 comments/.
 assert.ok(hot[1].score < hot[0].score);
 assert.deepStrictEqual(S.hotspots({}), []);
 
-console.log('clip signals: all checks passed');
+// A stream over the limit: the most-replayed stretch, else the start.
+(() => {
+  const H = 3 * 3600, total = 6.5 * 3600;
+  const hm = Array.from({ length: 100 }, (_, i) => ({ start_time: i * total / 100, end_time: (i + 1) * total / 100, value: i >= 60 && i < 85 ? 1 : 0.1 }));
+  const w = S.bestWindow(hm, total, H);
+  assert.strictEqual(w.end - w.start, H);
+  assert.ok(w.start <= 0.6 * total && w.end >= 0.85 * total - 1, 'window covers the replayed stretch');
+  assert.ok(w.end <= total);
+  assert.deepStrictEqual(S.bestWindow([], total, H), { start: 0, end: H });
+  assert.deepStrictEqual(S.bestWindow(hm, 3600, H), { start: 0, end: 3600 });
+})();
+
+// Chat replay is read line by line and capped, never whole.
+(async () => {
+  const fs = require('fs'), os = require('os'), path = require('path');
+  const f = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'chat-')), 'c.json');
+  const line = (ms, text) => JSON.stringify({ replayChatItemAction: { videoOffsetTimeMsec: String(ms), actions: [{ addChatItemAction: { item: { liveChatTextMessageRenderer: { message: { runs: [{ text }] } } } } }] } });
+  fs.writeFileSync(f, [line(1000, 'LMAO'), line(2000, 'hi'), 'not json', line(20000, 'W')].join('\n'));
+  const b = await S.readChatFile(f);
+  assert.deepStrictEqual(b.map((x) => [x.t, x.n]), [[0, 2], [15, 1]]);
+  assert.strictEqual(b.capped, false);
+  console.log('clip signals: all checks passed');
+})().catch((e) => { console.error(e); process.exit(1); });

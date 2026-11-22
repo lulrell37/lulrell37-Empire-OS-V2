@@ -19,9 +19,10 @@ const CHAT_BUCKET = 15;
 const LOUD_BUCKET = 2;
 const MAX_HOT = 15;
 
-function runBin(bin, args, { timeout = 120e3, stdout = true } = {}) {
+function runBin(bin, args, { timeout = 120e3, stdout = true, onProc = null } = {}) {
   return new Promise((resolve, reject) => {
     const p = spawn(bin, args);
+    if (onProc) onProc(p);
     let out = '', err = '';
     const t = setTimeout(() => { p.kill('SIGKILL'); reject(new Error(`timed out after ${Math.round(timeout / 1000)}s`)); }, timeout);
     if (stdout) p.stdout.on('data', (c) => { out += c; });
@@ -84,20 +85,43 @@ const REACT = /\b(lmf?ao+|lo+l+|ha(ha)+|omg+|no wa+y+|bro+|w+|clip (it|that)|wtf
 // Live chat replay lines -> [{t, n, react}] per 15 s.
 function chatBuckets(lines) {
   const b = new Map();
-  for (const line of lines) {
-    let j; try { j = JSON.parse(line); } catch { continue; }
+  for (const line of lines) addChatLine(b, line);
+  return [...b.values()].sort((a, c) => a.t - c.t);
+}
+function addChatLine(b, line) {
+  {
+    let j; try { j = JSON.parse(line); } catch { return; }
     const a = j.replayChatItemAction;
     const ms = Number(a?.videoOffsetTimeMsec);
-    if (!Number.isFinite(ms)) continue;
+    if (!Number.isFinite(ms)) return;
     const item = a.actions?.[0]?.addChatItemAction?.item?.liveChatTextMessageRenderer;
-    if (!item) continue;
+    if (!item) return;
     const text = (item.message?.runs || []).map((r) => r.text || r.emoji?.shortcuts?.[0] || r.emoji?.emojiId || '').join('');
     const k = Math.floor(ms / 1000 / CHAT_BUCKET) * CHAT_BUCKET;
     const cur = b.get(k) || { t: k, n: 0, react: 0 };
     cur.n++; cur.react += (text.match(REACT) || []).length;
     b.set(k, cur);
   }
-  return [...b.values()].sort((a, c) => a.t - c.t);
+}
+
+// A chat replay file -> buckets, read line by line (a long stream's chat runs to
+// hundreds of MB: reading it whole and parsing it in one go froze the server,
+// 2026-11-22). Stops at CHAT_MAX_BYTES and says so.
+const CHAT_MAX_BYTES = Number(process.env.CLIP_CHAT_MAX_MB || 150) * 1048576;
+async function readChatFile(file) {
+  const b = new Map();
+  let bytes = 0, capped = false;
+  const stream = fs.createReadStream(file, { encoding: 'utf8' });
+  const rl = require('readline').createInterface({ input: stream, crlfDelay: Infinity });
+  for await (const line of rl) {
+    bytes += line.length + 1;
+    if (bytes > CHAT_MAX_BYTES) { capped = true; break; }
+    addChatLine(b, line);
+  }
+  rl.close(); stream.destroy();
+  const out = [...b.values()].sort((a, c) => a.t - c.t);
+  out.capped = capped;
+  return out;
 }
 
 // Buckets [{t, v}] in time order -> spikes [{t, ratio}] where v is 2.5x+ the
@@ -127,29 +151,34 @@ async function youtubeMeta(ytdlpBin, url, extraArgs = []) {
 // A long stream's chat can take minutes to page through, so it runs alongside the
 // download and transcription; if it's still going at the timeout, whatever part
 // came in is used (and said so).
-async function liveChat(ytdlpBin, url, dir, extraArgs = [], timeout = 600e3) {
+async function liveChat(ytdlpBin, url, dir, extraArgs = [], timeout = 600e3, ctl = {}) {
   const cdir = path.join(dir, 'chat');
   fs.mkdirSync(cdir, { recursive: true });
   let partial = false;
   try {
     await runBin(ytdlpBin, [...extraArgs, '--no-playlist', '--no-warnings', '--skip-download', '--write-subs', '--sub-langs', 'live_chat',
-      '-o', path.join(cdir, 'chat.%(ext)s'), url], { timeout, stdout: false });
+      '-o', path.join(cdir, 'chat.%(ext)s'), url], { timeout, stdout: false, onProc: (p) => { ctl.proc = p; } });
   } catch (e) {
+    if (ctl.stopped) throw new Error('scan ended');
     if (!/timed out/.test(e.message)) throw e;
     partial = true;
   }
+  if (ctl.stopped) throw new Error('scan ended');
   const f = fs.readdirSync(cdir).find((x) => /live_chat\.json(\.part)?$/.test(x));
   if (!f) { if (partial) throw new Error('timed out before any chat came in'); return null; }
-  const b = chatBuckets(fs.readFileSync(path.join(cdir, f), 'utf8').split('\n'));
-  b.partial = partial;
+  const b = await readChatFile(path.join(cdir, f));
+  b.partial = partial || b.capped;
   return b;
 }
 
 // Start the chat read early (call right after the metadata); gather() awaits it.
 function startChat({ ytdlpBin, url, dir, ytdlpArgs = [], meta }) {
   if (!meta || !(meta.was_live || meta.live_status === 'was_live')) return null;
-  const pr = liveChat(ytdlpBin, url, dir, ytdlpArgs);
+  const ctl = {};
+  const pr = liveChat(ytdlpBin, url, dir, ytdlpArgs, 600e3, ctl);
   pr.catch(() => {});
+  // The scan is over (done or failed): kill the chat download, don't let it run on.
+  pr.stop = () => { ctl.stopped = true; if (ctl.proc && ctl.proc.exitCode == null) ctl.proc.kill('SIGKILL'); };
   return pr;
 }
 
@@ -188,6 +217,23 @@ function loudSpikes(series) {
   return out.sort((a, b) => b.db - a.db);
 }
 
+// A stream longer than the scan's limit: the `len`-second stretch viewers replayed
+// most (yt-dlp heatmap, summed by overlap, 60 s steps), or the start when there's
+// no graph. -> { start, end }
+function bestWindow(heatmap, total, len) {
+  if (!(total > len)) return { start: 0, end: total };
+  const h = (heatmap || []).filter((x) => Number.isFinite(x.value) && Number.isFinite(x.start_time) && Number.isFinite(x.end_time));
+  let best = { start: 0, end: len }, top = -1;
+  if (!h.length) return best;
+  for (let a = 0; a + len <= total + 59; a += 60) {
+    const st = Math.min(a, total - len), en = st + len;
+    let sum = 0;
+    for (const x of h) sum += x.value * Math.max(0, Math.min(en, x.end_time) - Math.max(st, x.start_time));
+    if (sum > top) { top = sum; best = { start: st, end: en }; }
+  }
+  return best;
+}
+
 // --- merging ---------------------------------------------------------------
 
 // Every source's hits -> up to MAX_HOT windows, each with a 0-100 strength and
@@ -215,13 +261,15 @@ function hotspots({ replayed = [], comments = [], chat = [], loud = [] }) {
 
 // The signals for one video. `kind` is the clip scan's link kind; `src` the
 // downloaded file (for audio). Returns { hot, used: [...], notes: [...] }.
-async function gather({ kind, url, src, dir, ytdlpBin, ytdlpArgs = [], total, meta, chat = undefined }) {
+async function gather({ kind, url, src, dir, ytdlpBin, ytdlpArgs = [], total, meta, chat = undefined, offset = 0, full = total }) {
   const used = [], notes = [];
   const sig = {};
+  // A windowed scan (bestWindow): the video's own timestamps, moved into the window.
+  const inWin = (arr) => (arr || []).map((x) => ({ ...x, t: x.t - offset })).filter((x) => x.t >= 0 && x.t <= total);
   if (kind === 'youtube' && meta) {
-    sig.replayed = heatPeaks(meta.heatmap);
+    sig.replayed = inWin(heatPeaks(meta.heatmap));
     if (sig.replayed.length) used.push('most-replayed graph'); else notes.push('no most-replayed graph (too few views yet)');
-    sig.comments = commentHits(meta.comments, total);
+    sig.comments = inWin(commentHits(meta.comments, full));
     if (sig.comments.length) used.push(`timestamped comments (${sig.comments.reduce((a, c) => a + c.n, 0)})`);
     const chatP = chat !== undefined ? chat : startChat({ ytdlpBin, url, dir, ytdlpArgs, meta });
     if (chatP) {
@@ -230,7 +278,7 @@ async function gather({ kind, url, src, dir, ytdlpBin, ytdlpArgs = [], total, me
         if (!b || !b.length) notes.push('no chat replay saved on that stream');
         else {
           const s = spikes(b.map((x) => ({ t: x.t, v: x.n + 2 * x.react })), { floor: 3 });
-          sig.chat = s.map((x) => ({ ...x, react: (b.find((y) => y.t === x.t) || {}).react || 0 }));
+          sig.chat = inWin(s.map((x) => ({ ...x, react: (b.find((y) => y.t === x.t) || {}).react || 0 })));
           used.push(`chat replay (${b.reduce((a, x) => a + x.n, 0)} messages${b.partial ? `, first ${Math.round(b[b.length - 1].t / 60)} min only` : ''})`);
         }
       } catch (e) { notes.push(`chat replay unavailable (${e.message})`); }
@@ -243,4 +291,4 @@ async function gather({ kind, url, src, dir, ytdlpBin, ytdlpArgs = [], total, me
   return { hot: hotspots(sig), used, notes };
 }
 
-module.exports = { gather, startChat, youtubeMeta, hotspots, commentTimestamps, commentHits, heatPeaks, chatBuckets, spikes, loudSpikes, loudness };
+module.exports = { bestWindow, readChatFile, gather, startChat, youtubeMeta, hotspots, commentTimestamps, commentHits, heatPeaks, chatBuckets, spikes, loudSpikes, loudness };

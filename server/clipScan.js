@@ -190,16 +190,21 @@ async function downloadYouTube(url, dir) {
 // YouTube, the light way: the audio alone (a small fraction of the video) for the
 // transcript and the loudness signal, then only the picked stretches as video.
 // A multi-hour stream used to come down whole for a few minutes of clips.
-async function downloadYouTubeAudio(url, dir) {
+// Over MAX_SEC (a 6-hour stream): only the MAX_SEC stretch viewers replayed most
+// (signals.bestWindow; the start without a graph) comes down, and the scan runs on
+// that. -> { file, name, offset, full } — offset = where the window starts.
+async function downloadYouTubeAudio(url, dir, heatmap = null) {
   let meta;
   try { meta = (await ytdlp(['--skip-download', '--print', '%(duration)s\n%(title)s', url])).split('\n'); } catch (e) { throw e; }
   const secs = Number(meta[0]);
   const name = meta.slice(1).join(' ').trim() || 'YouTube video';
-  if (Number.isFinite(secs) && secs > MAX_SEC) throw new Error(`that video is ${mmss(secs)} — the limit is ${mmss(MAX_SEC)}`);
-  await ytdlp(['-f', 'ba[ext=m4a]/ba/b', '--max-filesize', String(Math.floor(MAX_BYTES)), '-o', path.join(dir, 'audio-src.%(ext)s'), url]);
+  const win = Number.isFinite(secs) && secs > MAX_SEC ? signals.bestWindow(heatmap, secs, MAX_SEC) : null;
+  await ytdlp(['-f', 'ba[ext=m4a]/ba/b', '--max-filesize', String(Math.floor(MAX_BYTES)),
+    ...(win ? ['--download-sections', `*${win.start.toFixed(0)}-${win.end.toFixed(0)}`] : []),
+    '-o', path.join(dir, 'audio-src.%(ext)s'), url]);
   const file = fs.readdirSync(dir).find((f) => /^audio-src\.(?!part|ytdl)/.test(f) && !f.endsWith('.part'));
   if (!file) throw new Error("the video's audio couldn't be downloaded");
-  return { file: path.join(dir, file), name };
+  return { file: path.join(dir, file), name, offset: win ? win.start : 0, full: Number.isFinite(secs) ? secs : null };
 }
 const SECTION_PAD = 3;
 // One stretch of a YouTube video, cut at exactly start-pad (keyframes forced at
@@ -320,6 +325,7 @@ async function clipScan(url, focus = '', { onProgress = () => {} } = {}) {
   if (!kind) throw new Error('needs a Google Drive link or a YouTube URL (youtube.com/watch, youtu.be, youtube.com/shorts)');
   running = true;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clipscan-'));
+  let chatP = null;
   try {
     let src = path.join(dir, 'source');
     let name;
@@ -331,17 +337,19 @@ async function clipScan(url, focus = '', { onProgress = () => {} } = {}) {
       meta = await signals.youtubeMeta(await ytdlpBin(), String(url).trim(), cookieArgs(url))
         .catch((e) => { sigNotes.push(`no YouTube metadata (${e.message})`); return null; });
     }
-    const chatP = meta ? signals.startChat({ ytdlpBin: await ytdlpBin(), url: String(url).trim(), dir, ytdlpArgs: cookieArgs(url), meta }) : null;
+    chatP = meta ? signals.startChat({ ytdlpBin: await ytdlpBin(), url: String(url).trim(), dir, ytdlpArgs: cookieArgs(url), meta }) : null;
     // YouTube: audio only now, video only for the picked stretches (below).
     // SECTIONS=off goes back to downloading the whole video.
     const sections = kind === 'youtube' && String(process.env.CLIP_SECTIONS || '').toLowerCase() !== 'off';
     onProgress(sections ? 'downloading the audio' : 'downloading');
-    if (sections) ({ file: src, name } = await downloadYouTubeAudio(String(url).trim(), dir));
+    let offset = 0, full = null;
+    if (sections) ({ file: src, name, offset, full } = await downloadYouTubeAudio(String(url).trim(), dir, meta && meta.heatmap));
     else if (kind === 'youtube') ({ file: src, name } = await downloadYouTube(String(url).trim(), dir));
     else name = await google.driveDownloadTo(driveId(url), src, MAX_BYTES);
     const total = await duration(src);
     if (!total) throw new Error(`couldn't read that file as ${sections ? 'audio' : 'a video'}`);
-    if (total > MAX_SEC) throw new Error(`that video is ${mmss(total)} — the limit is ${mmss(MAX_SEC)}`);
+    if (total > MAX_SEC + 60) throw new Error(`that video is ${mmss(total)} — the limit is ${mmss(MAX_SEC)}`);
+    if (offset || (full && full > MAX_SEC)) sigNotes.push(`the video is ${mmss(full)}, over the ${mmss(MAX_SEC)} limit, so only ${mmss(offset)}–${mmss(offset + total)} was scanned${meta && meta.heatmap && meta.heatmap.length ? ', the stretch viewers replayed most' : ', from the start (no most-replayed graph yet)'}`);
 
     onProgress('transcribing');
     const audioDir = path.join(dir, 'audio');
@@ -350,7 +358,7 @@ async function clipScan(url, focus = '', { onProgress = () => {} } = {}) {
     if (!segments.length) throw new Error('no speech found in that video');
 
     onProgress('reading viewer signals');
-    const sig = await signals.gather({ kind, url: String(url).trim(), src, dir, ytdlpBin: await ytdlpBin(), ytdlpArgs: cookieArgs(url), total, meta, chat: chatP })
+    const sig = await signals.gather({ kind, url: String(url).trim(), src, dir, ytdlpBin: await ytdlpBin(), ytdlpArgs: cookieArgs(url), total, meta, chat: chatP, offset, full: full || total })
       .catch((e) => ({ hot: [], used: [], notes: [`signals failed (${e.message})`] }));
     sigNotes.push(...sig.notes);
 
@@ -364,7 +372,7 @@ async function clipScan(url, focus = '', { onProgress = () => {} } = {}) {
     const media = [];
     for (let i = 0; i < picks.length; i++) {
       const p = picks[i];
-      const range = `${mmss(p.start)}–${mmss(p.end)}`;
+      const range = `${mmss(p.start + offset)}–${mmss(p.end + offset)}`;
       onProgress(`cutting ${i + 1}/${picks.length}`);
       const out = path.join(dir, `clip${i + 1}.mp4`);
       try {
@@ -373,7 +381,7 @@ async function clipScan(url, focus = '', { onProgress = () => {} } = {}) {
         let clipSrc = src, cs = p.start, ce = p.end, clipSize = srcSize;
         if (sections) {
           onProgress(`downloading clip ${i + 1}/${picks.length}`);
-          const sec = await downloadSection(String(url).trim(), p.start, p.end, dir, `section${i + 1}`);
+          const sec = await downloadSection(String(url).trim(), p.start + offset, p.end + offset, dir, `section${i + 1}`);
           clipSrc = sec.file; cs = sec.offset; ce = sec.offset + (p.end - p.start);
           clipSize = await layout.videoSize(clipSrc);
         }
@@ -398,6 +406,7 @@ async function clipScan(url, focus = '', { onProgress = () => {} } = {}) {
     return { text: `${head}\n${lines.join('\n')}\nEach can still go through [EDIT_CLIP: <its link> | brief] for captions, music or S.E.L.E.N.E.'s dress-up.`, media };
   } finally {
     running = false;
+    if (chatP && chatP.stop) chatP.stop();
     fs.rmSync(dir, { recursive: true, force: true });
   }
 }
