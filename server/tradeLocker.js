@@ -17,8 +17,8 @@ const POSITION_COLS = ['id', 'tradableInstrumentId', 'routeId', 'side', 'qty', '
 const RES_MS = { '1m': 60e3, '5m': 300e3, '15m': 900e3, '30m': 1800e3, '1H': 3600e3, '4H': 14400e3, '1D': 86400e3, '1W': 604800e3 };
 
 const MAX_QTY = 0.02; // hard lot cap — enforced on every order
-const ENTRY_COPIES = 2; // every trade T.A.L.O.N. takes goes in this many times…
-const COPIES_BY_SYMBOL = { XAUUSD: 1 }; // …except gold, which goes in once
+const ENTRY_COPIES = 1; // every trade T.A.L.O.N. takes goes in once (owner, 2026-11-22: was 2 on Bitcoin)
+const COPIES_BY_SYMBOL = {}; // per-market override, if one is ever wanted again
 const entryCopies = (sym) => COPIES_BY_SYMBOL[String(sym).toUpperCase()] ?? ENTRY_COPIES;
 
 // The main stop rule's minimum, applied to every order except quick scalps and

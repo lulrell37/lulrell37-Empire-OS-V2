@@ -236,7 +236,7 @@ async function newsTradeHandoff(impacts) {
     if (g.skip) { console.log(`newswire->talon: ${imp.symbol} skipped — ${g.skip}`); continue; }
     if (g.widened) console.log(`newswire->talon: ${imp.symbol} ${g.note}`);
     lv = { ...lv, stopLoss: g.stopLoss, takeProfit: await sharedTarget({ symbol: imp.symbol, side: imp.side, entry: price, takeProfit: g.takeProfit }) };
-    // Every news trade goes in entryCopies() times (once on gold, twice on Bitcoin); one alert covers them all.
+    // Every news trade goes in entryCopies() times (once, every market, since 2026-11-22); one alert covers them all.
     const why = `news — ${imp.thesis}`.slice(0, 180);
     const setupId = `${imp.symbol}-news-${Date.now()}`;
     let r = null, copies = 0;

@@ -162,7 +162,7 @@ async function tick({ force = false } = {}) {
         if (lv.widened) console.log(`talon-autotrade: ${sym} ${lv.note}`);
         if (lv.swingNote) console.log(`talon-autotrade: ${sym} ${lv.swingNote}`);
         Object.assign(lv, await sharedTargets({ symbol: sym, side: dec.side, entry: price, takeProfit: lv.takeProfit, swingTakeProfit: lv.swingTakeProfit }));
-        // The setup goes in entryCopies(sym) times — once on gold, twice on Bitcoin (fewer if that would top MAX_PAIRS). Each copy is a scalp (to the
+        // The setup goes in entryCopies(sym) times — once on every market since 2026-11-22 (fewer if that would top MAX_PAIRS). Each copy is a scalp (to the
         // 15m target) and, when there's a valid 4H target, a swing (same stop)
         // linked to it by its own pairId — the journal moves that swing's stop
         // to break-even once its scalp pays. setupId ties every copy together
