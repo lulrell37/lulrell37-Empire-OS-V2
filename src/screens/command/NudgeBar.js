@@ -87,12 +87,19 @@ export default function NudgeBar({active,activityOnly=false}){
     frac:typeof a.frac==='number'?a.frac:null,onPress:typeof a.onPress==='function'?a.onPress:null,
   }));
   const WSTATE={running:'',queued:'waiting · ',done:'✓ done · ',needs_you:'needs you · ',failed:'✗ failed · ',stopped:'stopped · '};
+  // Percent is real (server/workers.js): plan steps ticked / steps, 95 max until it
+  // ends, 100 only on success; a failed or stopped one keeps its last number.
   const workerChips=workers.map(w=>{
     const mins=w.startedAt?Math.max(0,Math.round(((w.endedAt||Date.now())-w.startedAt)/60000)):0;
+    const pct=typeof w.percent==='number'?w.percent:null;
+    const plan=Array.isArray(w.plan)?w.plan:[];
     const tag=w.slot?`${w.slot}/3`:'waiting';
-    const text=`Worker ${tag} ${w.title.slice(0,26)} · ${WSTATE[w.status]??''}${w.status==='running'?`${mins}m · step ${w.step} · ${w.progress.slice(0,42)}`:w.status==='queued'?'':`${mins}m`}`;
-    const detail=`Worker ${w.slot?`${w.slot} of 3`:'(waiting for a free slot)'} (${w.kind})\n${w.title}\n\nStatus: ${w.status}\nStep ${w.step}: ${w.progress}${w.branch?`\nBranch: ${w.branch}`:''}${w.startedAt?`\nStarted ${new Date(w.startedAt).toLocaleTimeString()}`:''}`;
-    return{key:'worker:'+w.id,persona:'jarvis',text,severity:{done:'info',failed:'error',needs_you:'warn',stopped:'info'}[w.status]||'activity',activity:w.status==='running'||w.status==='queued',issue:!(w.status==='running'||w.status==='queued'),noX:true,detail,frac:null,onPress:()=>Alert.alert('J.A.R.V.I.S. worker',detail)};
+    const now=pct!=null?`${pct}% · ${(w.current||w.progress||'').slice(0,40)}`:w.kind==='browse'&&w.step?`step ${w.step} · ${(w.progress||'').slice(0,40)}`:'planning';
+    const ended=pct!=null?(w.status==='done'?'100% · ':`at ${pct}% · `):'';
+    const text=`Worker ${tag} ${w.title.slice(0,26)} · ${WSTATE[w.status]??''}${w.status==='running'?`${mins}m · ${now}`:w.status==='queued'?'':`${ended}${mins}m`}`;
+    const planText=plan.length?`\n\nPlan${pct!=null?` · ${pct}%`:''}:\n${plan.map((p,i)=>`${p.done?'✓':'○'} ${i+1}. ${p.name}`).join('\n')}`:w.status==='running'?'\n\nPlanning: no plan yet.':'';
+    const detail=`Worker ${w.slot?`${w.slot} of 3`:'(waiting for a free slot)'} (${w.kind})\n${w.title}\n\nStatus: ${w.status}${pct!=null?` · ${pct}%`:''}${w.current&&w.status==='running'?`\nNow: ${w.current}`:''}\nLast action: ${w.progress}${planText}${w.branch?`\n\nBranch: ${w.branch}`:''}${w.startedAt?`\nStarted ${new Date(w.startedAt).toLocaleTimeString()}`:''}`;
+    return{key:'worker:'+w.id,persona:'jarvis',text,severity:{done:'info',failed:'error',needs_you:'warn',stopped:'info'}[w.status]||'activity',activity:w.status==='running'||w.status==='queued',issue:!(w.status==='running'||w.status==='queued'),noX:true,worker:true,detail,frac:pct!=null?pct/100:null,onPress:()=>Alert.alert('J.A.R.V.I.S. worker',detail)};
   });
   const issueChips=Object.entries(firmIssues).map(([key,v])=>({
     key:'firm:'+key,rawKey:key,text:v.text,detail:v.detail,severity:v.severity||'error',issue:true,
@@ -126,7 +133,7 @@ export default function NudgeBar({active,activityOnly=false}){
   if(!shown.length)return null;
 
   const onChipPress=(n)=>{
-    if(n.activity){n.onPress&&n.onPress();return;}
+    if(n.activity||n.worker){n.onPress&&n.onPress();return;}
     if(n.issue&&n.detail&&n.severity!=='info'){Alert.alert('Details',n.detail);return;}
     dismissChip(n);
   };
@@ -153,11 +160,12 @@ export default function NudgeBar({active,activityOnly=false}){
     const tone=TONE[n.severity]||(n.issue?TONE.error:TONE.warn);
     const showDot=n.issue||n.severity==='error'||n.severity==='info';
     return(
-      <View key={prefix+n.key} style={[s.chip,{borderColor:tone.border+'55'}]}>
+      <View key={prefix+n.key} style={[s.chip,{borderColor:tone.border+'55'},n.frac!=null&&{overflow:'hidden'}]}>
         <TouchableOpacity style={s.chipMain} activeOpacity={0.7} onPress={()=>onChipPress(n)}>
           {showDot&&<Text style={[s.dot,{color:tone.fg}]}>{n.severity==='error'?'!':n.severity==='info'?'…':'▲'}</Text>}
           <Text style={[s.chipT,{color:tone.fg}]}>{n.text}</Text>
         </TouchableOpacity>
+        {n.frac!=null&&<View style={[s.actProg,{width:`${Math.round(Math.max(0,Math.min(1,n.frac))*100)}%`,backgroundColor:tone.fg}]}/>}
         <TouchableOpacity onPress={()=>dismissChip(n)} hitSlop={{top:8,bottom:8,left:6,right:8}}>
           <Text style={[s.chipX,{color:tone.x}]}>×</Text>
         </TouchableOpacity>

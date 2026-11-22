@@ -432,12 +432,16 @@ function parseAction(raw) {
   if (!ok[t]) return { error: `unknown action "${a.type}" in ${String(m[0]).slice(0, 160)}` };
   for (const k of ok[t]) if (a[k] == null || a[k] === '') return { error: `"${t}" needs "${k}"` };
   if (t === 'goto' && !/^https?:\/\//i.test(String(a.url))) return { error: 'goto needs a full http(s) URL' };
-  return { type: t, ...a, why: String(j.thought || a.why || '').slice(0, 300) };
+  // A worker's run also states a plan and which step of it this is (planned runs only).
+  const rawPlan = Array.isArray(j.plan) ? j.plan : Array.isArray(a.plan) ? a.plan : null;
+  const plan = rawPlan ? rawPlan.map((x) => String(x && typeof x === 'object' ? x.name || x.step || '' : x).trim().slice(0, 80)).filter(Boolean).slice(0, 20) : null;
+  const ps = Number(j.planStep ?? a.planStep);
+  return { type: t, ...a, plan: plan && plan.length ? plan : null, planStep: Number.isFinite(ps) && ps >= 1 ? Math.floor(ps) : null, why: String(j.thought || a.why || '').slice(0, 300) };
 }
 
 // --- the loop --------------------------------------------------------------------
 
-const AGENT_SYSTEM = (personaName) => `You are ${personaName}'s hands on a real web browser — your own computer in the cloud, a desktop Chrome with your own saved logins. You complete Mr. Burrus's task by driving it one step at a time, like a careful person would.
+const AGENT_SYSTEM = (personaName, planned = false) => `You are ${personaName}'s hands on a real web browser — your own computer in the cloud, a desktop Chrome with your own saved logins. You complete Mr. Burrus's task by driving it one step at a time, like a careful person would.
 
 Every turn you get the task, the steps you've taken so far, and the page as it is now: its URL and title, every clickable or typeable element numbered [n], and the visible text. Reply with ONLY one JSON object:
 {"thought":"one line: what you see and why this step","action":{"type":"goto","url":"https://..."}}
@@ -452,7 +456,9 @@ RULES
 - Never type a password, card number or code he didn't give you in this task. Don't try to get around a CAPTCHA, 2FA or a block — "ask" him.
 - Prefer going straight to a URL when you know it (a search results URL, a profile URL). Use an element only by its [n] from the CURRENT page.
 - If the same thing fails twice, try another way; if there's no other way, "done" and say what stopped you.
-- Be quick: ${MAX_STEPS} steps at most.`;
+- Be quick: ${MAX_STEPS} steps at most.${planned ? `
+
+PLAN (Mr. Burrus watches your progress as a percentage): on your FIRST reply add "plan": 3 to 10 short step names (under 60 characters each) for the whole task, e.g. "plan":["Open Canva","Find the design","Read pages 1-8","Write up the text"]. On EVERY reply add "planStep": the number (from 1) of the plan step this action works on, so the steps before it count as done. Send "plan" again only if the plan has to change.` : ''}`;
 
 function pageText(s) {
   return `URL: ${s.url}\nTITLE: ${s.title}\nSCROLL: ${s.scroll} of ${s.height}px\nELEMENTS:\n${s.elements.join('\n') || '(none)'}\n\nVISIBLE TEXT${s.more ? ' (first part)' : ''}:\n${s.text || '(empty)'}`;
@@ -473,11 +479,31 @@ async function doAction(b, a, last, secrets = {}) {
   }
 }
 
+// onPlan(names, planStep): a worker's progress bar. The brain states its plan on its
+// first reply and the plan step each action is for; the plan is shown back to it
+// every turn. onPlan fires only when the plan or the step changes.
+function planTracker(onPlan, startPlan = null, startStep = 0) {
+  let plan = onPlan ? startPlan : null, at = plan ? startStep : 0;
+  return {
+    note(a) {
+      if (!onPlan) return;
+      const fresh = a.plan && JSON.stringify(a.plan) !== JSON.stringify(plan);
+      if (fresh) plan = a.plan;
+      if (!plan) return;
+      const next = Math.max(1, a.planStep ? Math.min(a.planStep, plan.length) : at);
+      if (!fresh && next === at) return;
+      at = next;
+      try { onPlan(plan, at); } catch {}
+    },
+    prompt: () => (plan ? `\n\nYOUR PLAN (you're on step ${at || 1}):\n${plan.map((x, i) => `${i + 1}. ${x}`).join('\n')}` : ''),
+  };
+}
+
 // One task. `brain(system, prompt)` returns text (claudeText in production).
 // Returns { status: 'done'|'ask'|'stopped', text, url, steps, shot }.
 // allow: clicks that would normally stop to ask (consent buttons on a sign-in
 // he already authorized) and go through instead.
-async function runTask({ persona, personaName = persona, task, ownerText = '', brain, secrets = {}, allow = null, onStep = null }) {
+async function runTask({ persona, personaName = persona, task, ownerText = '', brain, secrets = {}, allow = null, onStep = null, onPlan = null, plan: startPlan = null, planStep: startStep = 0 }) {
   if (!enabled()) throw new Error('the browser is switched off (BROWSE=off)');
   const b = await browserFor(persona);
   if (b.busy) throw new Error(`${personaName} is already using the browser — one task at a time`);
@@ -490,15 +516,17 @@ async function runTask({ persona, personaName = persona, task, ownerText = '', b
   const pending = b.pending;
   b.pending = null;
   const approvedText = pending && approves(ownerText) ? pending.action : null;
+  const plan = planTracker(onPlan, startPlan, startStep);
   try {
     let fails = 0;
     for (let step = 1; step <= MAX_STEPS; step++) {
       if (Date.now() - started > MAX_MS) return finish(b, 'stopped', `ran out of time after ${step - 1} steps`, log);
       const page = await snapshot(b).catch(() => ({ url: 'about:blank', title: '', elements: [], text: '', scroll: 0, height: 0 }));
       const history = log.length ? log.map((l, i) => `${i + 1}. ${l}`).join('\n') : '(none yet — start)';
-      const prompt = `TASK: ${task}${pending ? `\n\nEARLIER IN THIS TASK you stopped to ask him: "${pending.question}". His reply: "${String(ownerText).slice(0, 500)}". ${approvedText ? `He APPROVED that action — you may do exactly that, nothing more.` : `That is NOT an approval to act — do not take that action; continue only with what doesn't need it, or ask again.`}` : ''}\n\nSTEPS SO FAR:\n${history}\n\nTHE PAGE NOW (step ${step} of ${MAX_STEPS}):\n${pageText(page)}`;
-      const raw = await brain(AGENT_SYSTEM(personaName), prompt);
+      const prompt = `TASK: ${task}${plan.prompt()}${pending ? `\n\nEARLIER IN THIS TASK you stopped to ask him: "${pending.question}". His reply: "${String(ownerText).slice(0, 500)}". ${approvedText ? `He APPROVED that action — you may do exactly that, nothing more.` : `That is NOT an approval to act — do not take that action; continue only with what doesn't need it, or ask again.`}` : ''}\n\nSTEPS SO FAR:\n${history}\n\nTHE PAGE NOW (step ${step} of ${MAX_STEPS}):\n${pageText(page)}`;
+      const raw = await brain(AGENT_SYSTEM(personaName, !!onPlan), prompt);
       const a = parseAction(raw);
+      if (!a.error) plan.note(a);
       if (a.error) { if (++fails >= 3) return finish(b, 'stopped', `the brain kept giving unusable steps (${a.error})`, log); log.push(`(unusable reply: ${a.error})`); continue; }
       if (a.type === 'done') return finish(b, 'done', String(a.result), log);
       if (a.type === 'ask') { b.pending = { question: String(a.question), action: String(a.question) }; return finish(b, 'ask', String(a.question), log); }
@@ -581,19 +609,22 @@ async function browseTag(persona, arg, { ownerText = '' } = {}) {
 
 // One browser task, consent banners and emailed codes handled. Also what a worker
 // (server/workers.js) runs, on its own browser profile.
-async function browseRun(persona, name, arg, { ownerText = '', onStep = null, secrets = {} } = {}) {
+async function browseRun(persona, name, arg, { ownerText = '', onStep = null, onPlan = null, secrets = {} } = {}) {
+  // A worker's plan carries over into the emailed-code run below.
+  let last = { plan: null, at: 0 };
+  const plans = onPlan && ((names, at) => { last = { plan: names, at }; onPlan(names, at); });
   const { claudeText } = require('./llm');
   const brain = (sys, prompt) => claudeText(sys, prompt, { maxTokens: 700 });
   // Cookie / consent banners are not acts in the world: let them through (Canva's
   // banner ignores Reject all, 2026-11-22).
-  let r = await runTask({ persona, personaName: name, task: String(arg || '').trim(), ownerText, brain, secrets, allow: CONSENT, onStep });
+  let r = await runTask({ persona, personaName: name, task: String(arg || '').trim(), ownerText, brain, secrets, allow: CONSENT, onStep, onPlan: plans });
   // A site emailed a code: it's in his Gmail, so fetch it and carry on without him
   // (owner, 2026-11-22: "it's supposed to be automatic").
   const logins = require('./siteLogins');
   if (r.status !== 'done' && logins.wantsEmailCode(r.text)) {
     const code = await emailedCode().catch(() => null);
     if (code) {
-      const r2 = await runTask({ persona, personaName: name, ownerText: 'yes', brain, secrets: { CODE: code }, allow: CONSENT, onStep,
+      const r2 = await runTask({ persona, personaName: name, ownerText: 'yes', brain, secrets: { CODE: code }, allow: CONSENT, onStep, onPlan: plans, plan: last.plan, planStep: last.at,
         task: `You are partway through this task and the page asked for the code that was emailed. Type {{CODE}} into the code box and continue. The task: ${String(arg || '').trim()}` });
       r2.steps = [...r.steps, '(fetched the emailed code from his Gmail)', ...r2.steps];
       r = r2;
@@ -611,4 +642,4 @@ const BROWSE_TOOLS = ` - [BROWSE: the task, in full] — your own computer: a re
  - [BROWSER_KEY: Steel API key or wss:// URL] — switch your browser to a hosted one (Steel) that gets past Cloudflare checks; saved on the server, no Replit secret needed.`;
 
 module.exports = {
-  readJar, saveJar, loadJar, browseRun, browserKeyTag, ensureSqlite, BROWSE_PERSONAS, runTask, browseTag, BROWSE_TOOLS, close, browserFor, snapshot, click, type, press, screenshot, unzip, chromePath, parseAction, isCommit, approves, enabled };
+  readJar, saveJar, loadJar, planTracker, AGENT_SYSTEM, browseRun, browserKeyTag, ensureSqlite, BROWSE_PERSONAS, runTask, browseTag, BROWSE_TOOLS, close, browserFor, snapshot, click, type, press, screenshot, unzip, chromePath, parseAction, isCommit, approves, enabled };

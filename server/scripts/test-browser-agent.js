@@ -26,6 +26,20 @@ assert.ok(!B.approves('what is it about to send?'));
 
 // J.A.R.V.I.S. and A.R.A. only.
 assert.deepStrictEqual([...B.BROWSE_PERSONAS].sort(), ['ara', 'jarvis']);
+// A worker's plan: stated on the first reply, the plan step on every reply.
+const pa = B.parseAction('{"thought":"x","plan":["Open Canva","Read pages"," "],"planStep":1,"action":{"type":"goto","url":"https://canva.com"}}');
+assert.deepStrictEqual(pa.plan, ['Open Canva', 'Read pages']); assert.strictEqual(pa.planStep, 1); assert.strictEqual(pa.type, 'goto');
+assert.strictEqual(B.parseAction('{"action":"scroll","planStep":"2"}').planStep, 2, 'flat form keeps planStep');
+assert.strictEqual(B.parseAction('{"action":"scroll"}').plan, null);
+assert.ok(/"planStep"/.test(B.AGENT_SYSTEM('J', true)) && !/planStep/.test(B.AGENT_SYSTEM('J')), 'only a worker\'s run is asked for a plan');
+const seen = []; const pt = B.planTracker((n, at) => seen.push([n.length, at]));
+assert.strictEqual(pt.prompt(), '');
+pt.note({ type: 'goto' }); assert.strictEqual(seen.length, 0, 'no plan, nothing to report');
+pt.note({ plan: ['a', 'b', 'c', 'd'] }); pt.note({ planStep: 1 }); pt.note({ planStep: 3 }); pt.note({ planStep: 9 });
+assert.deepStrictEqual(seen, [[4, 1], [4, 3], [4, 4]], 'fires on change only, step clamped to the plan');
+assert.match(pt.prompt(), /YOUR PLAN \(you're on step 4\):\n1\. a/);
+const off = B.planTracker(null); off.note({ plan: ['a'], planStep: 1 }); assert.strictEqual(off.prompt(), '', 'a plain [BROWSE] carries no plan');
+const carried = []; B.planTracker((n, at) => carried.push(at), ['a', 'b'], 2).note({ planStep: 2 }); assert.deepStrictEqual(carried, [], 'carried plan + step: no repeat');
 (async () => {
   await assert.rejects(B.browseTag('talon', 'look up gold'), /J\.A\.R\.V\.I\.S\..*A\.R\.A\./);
   console.log('browser agent: all checks passed');

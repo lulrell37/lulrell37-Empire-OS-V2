@@ -2,14 +2,19 @@
 // running (whatever WORKERS_MAX says), code workers on GitHub runners (issue +
 // dispatch + report comment), one browse at a time on the server, every result
 // straight to Mr. Burrus, ids that only count up, restarts pick code workers back
-// up without re-running them. All stubbed.
+// up without re-running them; the live Telegram board (one silent message, edited
+// in place, throttled) and the real percent from each worker's plan. All stubbed.
 process.env.WORKERS_MAX = '11'; // must still be 3
 process.env.WORKER_POLL_MS = '10';
+process.env.TELEGRAM_BOT_TOKEN_JARVIS = 'test-token';
+process.env.TELEGRAM_OWNER_ID = '1';
 const Module = require('module');
 const assert = require('assert');
 const settings = {};
+const dbRows = [];
 const load = Module._load;
 Module._load = function (req, parent, ...rest) {
+  if (req === './db') return { query: async (q, v) => { dbRows.push(v); } };
   if (req === './syncStore') return { getSetting: async (k, f) => (k in settings ? settings[k] : f), setSetting: async (k, v) => { settings[k] = String(v); } };
   return load.call(this, req, parent, ...rest);
 };
@@ -183,6 +188,155 @@ function fakeGitHub() {
   await W.tag('WORKER_START', 'browse | long one | a long task');
   await sleep(20);
   assert.match(await W.tag('WORKER_STOP', '1'), /stopping/);
+
+  // ── Live Telegram board + real percent from each worker's plan ──
+  // Code workers run on GitHub, so their plan arrives as a <!-- worker-plan --> issue comment.
+  const GAP = 40;
+  const tgCalls = [], boardLogs = [];
+  let editFail = null;
+  const board = {
+    ready: () => true,
+    send: async (text) => { tgCalls.push({ op: 'send', text, at: Date.now() }); return 500 + tgCalls.filter((c) => c.op === 'send').length; },
+    edit: async (id, text) => { if (editFail) throw new Error(editFail); tgCalls.push({ op: 'edit', id, text, at: Date.now() }); },
+    log: async (t) => boardLogs.push(t),
+  };
+  const boardSaved = () => JSON.parse(settings.workers_tg_board || 'null');
+  const baseDeps = (g, extra = {}) => ({ gh: g.call, repo: () => ({ owner: 'o', repo: 'r' }), slot: async () => () => {}, browse: null, tell: async (t) => told.push(t), saveNote: async () => {}, onDone: () => null, board, boardGapMs: GAP, boardRefreshMs: 60e3, ...extra });
+  const me = async (id) => (await W.forApp()).find((x) => x.id === id);
+  const setPlan = (g, worker, text) => { const c = g.dispatched.find((x) => x.worker === String(worker)); const cs = g.issues[c.issue].comments; const i = cs.findIndex((k) => /worker-plan/.test(k.body)); const body = `<!-- worker-plan -->\n${text}`; if (i >= 0) cs[i].body = body; else cs.push({ body }); };
+  const P = (d, n) => Array.from({ length: n }, (_, i) => ({ name: 's' + i, done: i < d }));
+
+  assert.deepStrictEqual(W.parsePlan('Plan:\n1. [x] Read the code\n2) [ ] Change it\n- [X] Tick\n3. not a step'), [{ name: 'Read the code', done: true }, { name: 'Change it', done: false }, { name: 'Tick', done: true }]);
+  assert.strictEqual(W.parsePlan('no plan here'), null);
+  assert.strictEqual(W.percentOf(null, 'running'), null, 'no plan, no number');
+  assert.strictEqual(W.percentOf(P(1, 4), 'running'), 25);
+  assert.strictEqual(W.percentOf(P(4, 4), 'running'), 95, 'every step ticked still caps at 95 until it ends');
+  assert.strictEqual(W.percentOf(P(1, 4), 'done'), 100, '100 only on success');
+  assert.strictEqual(W.progressLabel({ kind: 'code', status: 'running', percent: 50, current: 'Run the tests' }), '▓▓▓▓▓░░░░░ 50% · Run the tests');
+  assert.strictEqual(W.progressLabel({ kind: 'code', status: 'running', percent: null }), 'planning');
+  assert.strictEqual(W.progressLabel({ kind: 'browse', status: 'running', percent: null, step: 4 }), 'step 4', 'browse with no plan: step N');
+
+  gh = fakeGitHub(); settings.workers = '{}'; delete settings.workers_tg_board;
+  W._setDeps(baseDeps(gh));
+  const a = await W.start({ kind: 'code', title: 'plan job', task: 'do it' }); await sleep(40);
+  let x = await me(a.id);
+  assert.strictEqual(x.percent, null, 'before a plan: no number'); assert.deepStrictEqual(x.plan, []);
+  await sleep(GAP * 2);
+  assert.strictEqual(tgCalls.filter((c) => c.op === 'send').length, 1, 'one board message');
+  assert.match(tgCalls[tgCalls.length - 1].text, /1 running/);
+  assert.match(tgCalls[tgCalls.length - 1].text, /🔧 Worker 1\/3 plan job · \d+ min\n\s+planning\n\s+Working on/, 'slot, title, minutes, planning, action — no running id');
+  assert.doesNotMatch(tgCalls[tgCalls.length - 1].text, /#\d/, 'the board names slots, not ids');
+  assert.strictEqual(boardSaved().messageId, 501, 'board id saved for restarts');
+  assert.strictEqual(boardLogs.length, 1); assert.ok(boardLogs[0].length < 200, 'first send logged once, as one short line');
+  setPlan(gh, a.id, '1. [ ] Read the code\n2. [ ] Change it\n3. [ ] Run the tests\n'); await sleep(40); x = await me(a.id);
+  assert.strictEqual(x.percent, 0); assert.strictEqual(x.current, 'Read the code'); assert.strictEqual(x.plan.length, 3);
+  setPlan(gh, a.id, '1. [x] Read the code\n2. [x] Change it\n3. [ ] Run the tests\n'); await sleep(40); x = await me(a.id);
+  assert.strictEqual(x.percent, 67); assert.strictEqual(x.current, 'Run the tests');
+  assert.deepStrictEqual(x.plan.map((p) => p.done), [true, true, false], 'each step ticked or not for the tap view');
+  const saved1 = JSON.parse(settings.workers)[a.id];
+  assert.strictEqual(saved1.percent, 67, 'saved in app_settings.workers'); assert.strictEqual(saved1.current, 'Run the tests'); assert.strictEqual(saved1.plan.length, 3);
+  assert.match(await W.statusText(), /67%/);
+  await sleep(GAP * 2);
+  assert.match(tgCalls[tgCalls.length - 1].text, /▓▓▓▓▓▓▓░░░ 67% · Run the tests/, 'text bar, percent and current step on the board');
+  setPlan(gh, a.id, '1. [x] Read the code\n2. [x] Change it\n3. [x] Run the tests\n'); await sleep(40); x = await me(a.id);
+  assert.strictEqual(x.percent, 95, 'all ticked is still 95 until it ends');
+  gh.finish(a.id); await sleep(60); x = await me(a.id);
+  assert.strictEqual(x.status, 'done'); assert.strictEqual(x.percent, 100, '100 on success');
+  await sleep(GAP * 3);
+  const last = tgCalls[tgCalls.length - 1];
+  assert.strictEqual(last.op, 'edit'); assert.strictEqual(last.id, 501, 'edited in place');
+  assert.match(last.text, /all done ✓/, 'final all-done edit'); assert.match(last.text, /✅ Worker 1\/3 plan job · done · ▓▓▓▓▓▓▓▓▓▓ 100%/, 'finished ones stay listed');
+  assert.strictEqual(boardSaved(), null, 'board closed once nothing is left');
+  assert.strictEqual(tgCalls.filter((c) => c.op === 'send').length, 1, 'still the same one message');
+  for (let i = 1; i < tgCalls.length; i++) {
+    assert.ok(tgCalls[i].at - tgCalls[i - 1].at >= GAP - 5, 'edits throttled');
+    assert.notStrictEqual(tgCalls[i].text, tgCalls[i - 1].text, 'no edit with unchanged text');
+  }
+  assert.strictEqual(boardLogs.length, 1, 'edits never logged');
+  const nCalls = tgCalls.length;
+  await sleep(GAP * 3);
+  assert.strictEqual(tgCalls.length, nCalls, 'a closed board stops updating');
+
+  // failed and stopped keep their last percent
+  tgCalls.length = 0;
+  const f = await W.start({ kind: 'code', title: 'fail job', task: 'do it' }); await sleep(40);
+  setPlan(gh, f.id, '1. [x] Read\n2. [ ] Change\n3. [ ] Test\n4. [ ] Ship\n'); await sleep(40);
+  gh.finish(f.id, 'failed', 'FAILED\ntests would not run'); await sleep(60);
+  x = await me(f.id);
+  assert.strictEqual(x.status, 'failed'); assert.strictEqual(x.percent, 25, 'a failed worker keeps its last percent');
+  await sleep(GAP * 2);
+  assert.match(tgCalls[tgCalls.length - 1].text, /❌ Worker 1\/3 fail job · failed at 25%/);
+  const st = await W.start({ kind: 'code', title: 'stop job', task: 'do it' }); await sleep(40);
+  setPlan(gh, st.id, '1. [x] Read\n2. [x] Change\n3. [ ] Test\n'); await sleep(40);
+  assert.match(await W.stop(String((await me(st.id)).slot)), /stopping/); await sleep(60);
+  x = await me(st.id);
+  assert.strictEqual(x.status, 'stopped'); assert.strictEqual(x.percent, 67, 'a stopped worker keeps its last percent');
+  await sleep(GAP * 2);
+  assert.match(tgCalls[tgCalls.length - 1].text, /⏹ Worker \d\/3 stop job · stopped at 67%/);
+
+  // Browse: the brain's plan and the plan step it's on.
+  let bGo;
+  W._setDeps(baseDeps(gh, { browse: async (persona, name, task, { onStep, onPlan }) => {
+    onStep(1, 'opened canva'); await new Promise((r) => { bGo = r; });
+    onPlan(['Open Canva', 'Find the design', 'Read pages', 'Write it up'], 3); onStep(2, 'clicked [4] "Design"'); await new Promise((r) => { bGo = r; });
+    return { status: 'done', text: 'BROWSE — finished', result: 'ok' };
+  } }));
+  const b = await W.start({ kind: 'browse', title: 'canva', task: 'read it' }); await sleep(30);
+  x = await me(b.id); assert.strictEqual(x.percent, null); assert.strictEqual(W.progressLabel({ ...x, kind: 'browse' }), 'step 1', 'browse before a plan: step N');
+  bGo(); await sleep(30); x = await me(b.id);
+  assert.strictEqual(x.percent, 50, 'two of four plan steps behind it'); assert.strictEqual(x.current, 'Read pages');
+  assert.deepStrictEqual(x.plan.map((p) => p.done), [true, true, false, false]);
+  bGo(); await sleep(40); x = await me(b.id);
+  assert.strictEqual(x.percent, 100);
+
+  // A restart: the board in app_settings.workers_tg_board keeps being edited, never re-sent.
+  gh = fakeGitHub(); tgCalls.length = 0;
+  const cut = { 1: { id: '1', kind: 'code', title: 'cut off', task: 't', status: 'running', slot: 1, attempts: 2, createdAt: Date.now() - 6e4, startedAt: Date.now() - 6e4, step: 3, progress: 'x', percent: 40, plan: P(2, 5) } };
+  settings.workers = JSON.stringify(cut);
+  settings.workers_tg_board = JSON.stringify({ messageId: 77, text: 'board from before the restart' });
+  W._setDeps(baseDeps(gh));
+  await W.recover(); await sleep(GAP * 4);
+  assert.strictEqual(tgCalls.filter((c) => c.op === 'send').length, 0, 'a restart keeps the same board');
+  assert.ok(tgCalls.length && tgCalls.every((c) => c.id === 77), 'and edits message 77');
+  assert.match(tgCalls[tgCalls.length - 1].text, /all done/); assert.match(tgCalls[tgCalls.length - 1].text, /❌ Worker 1\/3 cut off · failed at 40%/);
+  assert.strictEqual(boardSaved(), null);
+
+  // The next worker opens a new board; a failed edit is logged for the sentinel.
+  tgCalls.length = 0; settings.workers = '{}';
+  const errs = []; const realErr = console.error; console.error = (...a2) => errs.push(a2.join(' '));
+  W._setDeps(baseDeps(gh));
+  const n1 = await W.start({ kind: 'code', title: 'new job', task: 'do it' }); await sleep(GAP * 2);
+  assert.strictEqual(tgCalls.filter((c) => c.op === 'send').length, 1, 'new board for the next worker');
+  editFail = 'telegram editMessageText: Bad Gateway'; setPlan(gh, n1.id, '1. [x] a\n2. [ ] b\n'); await sleep(GAP * 3);
+  assert.ok(errs.some((e) => /^workers failed: telegram board/.test(e)), 'failure logged for the sentinel');
+  editFail = null; gh.finish(n1.id); await sleep(GAP * 5);
+  console.error = realErr;
+  assert.match(tgCalls[tgCalls.length - 1].text, /all done/, 'recovers after a failed edit');
+
+  // WORKER_TG_BOARD=off: no board at all.
+  process.env.WORKER_TG_BOARD = 'off'; tgCalls.length = 0;
+  await W.start({ kind: 'code', title: 'quiet job', task: 'do it' }); await sleep(GAP * 3);
+  assert.strictEqual(tgCalls.length, 0, 'kill switch');
+  delete process.env.WORKER_TG_BOARD;
+
+  // The real Telegram side: silent send, edit in place, "not modified" is fine, nothing in tg_messages but the one line.
+  const sent = [];
+  global.fetch = async (url, o) => {
+    const method = String(url).split('/').pop(); const body = JSON.parse(o.body); sent.push({ method, body });
+    if (method === 'editMessageText' && body.text === 'same') return { status: 400, json: async () => ({ ok: false, description: 'Bad Request: message is not modified: specified new message content and reply markup are exactly the same' }) };
+    return { status: 200, json: async () => ({ ok: true, result: { message_id: 9 } }) };
+  };
+  const real = W._tgBoardDeps();
+  dbRows.length = 0;
+  assert.strictEqual(real.ready(), true);
+  assert.strictEqual(await real.send('board'), 9);
+  assert.deepStrictEqual(sent[0], { method: 'sendMessage', body: { chat_id: '1', text: 'board', disable_notification: true } }, 'silent, on J.A.R.V.I.S.\'s bot');
+  await real.edit(9, 'new text');
+  assert.deepStrictEqual(sent[1], { method: 'editMessageText', body: { chat_id: '1', message_id: 9, text: 'new text' } });
+  await real.edit(9, 'same'); // must not throw
+  assert.strictEqual(dbRows.length, 0, 'sends and edits not logged');
+  await real.log('[board posted]');
+  assert.strictEqual(dbRows.length, 1); assert.strictEqual(dbRows[0][0], 'jarvis');
 
   console.log('workers: all checks passed');
   process.exit(0);

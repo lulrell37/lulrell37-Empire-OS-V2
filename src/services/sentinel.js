@@ -15,7 +15,8 @@ export async function fetchSentinel(){
 }
 
 // J.A.R.V.I.S.'s workers (server/workers.js, GET /workers): each one's live step,
-// plus the ones that finished in the last 15 minutes. The top strip shows them.
+// percent (null = still planning), current plan step and plan [{name, done}], plus
+// the ones that finished in the last 15 minutes. The top strip shows them.
 export async function fetchWorkers(){
   const be=await loadBackend();
   if(!be)return[];

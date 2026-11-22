@@ -23,9 +23,10 @@
 // State: app_settings.workers (+ workers_seq); a restart picks code workers back
 // up where they are (the runner keeps going) and re-runs a cut-off browse once.
 // WORKERS=off stops it. Tags: [WORKER_START: code|browse | title | task | note
-// title], [WORKER_STATUS], [WORKER_STOP: id]. node server/scripts/test-workers.js.
-const fs = require('fs');
-const path = require('path');
+// title], [WORKER_STATUS], [WORKER_STOP: id].
+// The same progress goes to Telegram as one live board message on J.A.R.V.I.S.'s
+// bot ("Telegram board" below; WORKER_TG_BOARD=off stops it); each worker's plan
+// gives a real percent ("Progress" below). node server/scripts/test-workers.js.
 const { getSetting, setSetting } = require('./syncStore');
 
 const KEY = 'workers';
@@ -59,6 +60,8 @@ function d() {
     },
     onDone: (w) => (w.purpose === 'autofix' ? require('./autoFix').finish(w) : w.purpose === 'feature' ? require('./featureRequests').finish(w) : null),
     saveNote: (title, body) => require('./google').saveDriveNote(title, body),
+    board: tgBoardDeps(),
+    boardGapMs: BOARD_GAP_MS,
   };
 }
 
@@ -94,6 +97,7 @@ async function start({ kind = 'code', title, task, note = '', purpose = '' }) {
   const id = await nextId();
   list[id] = { id, kind, purpose, title: String(title || task).slice(0, 80), task: String(task), note: String(note || ''), status: 'queued', createdAt: Date.now(), step: 0, progress: 'Waiting for a free slot', attempts: 0 };
   await save();
+  boardKick();
   pump();
   return list[id];
 }
@@ -111,7 +115,57 @@ function pump() {
   }
 }
 
-function update(w, patch) { Object.assign(w, patch, { updatedAt: Date.now() }); save(); }
+function update(w, patch) { Object.assign(w, patch, { updatedAt: Date.now() }); save(); boardKick(); }
+
+// ── Progress ─────────────────────────────────────────────────────────────────
+// Owner's ask, 2026-11-22: a real percentage, not a timer. A worker writes its own
+// plan (code: PLAN_FILE on its runner, mirrored into an issue comment, steps ticked as it finishes them; browse:
+// the browser brain's "plan" + "planStep"), and percent = steps done / steps,
+// held at 95 until the run really ends, 100 only on success. A failed or stopped
+// one keeps its last number. No plan yet → percent null ("planning").
+const PLAN_FILE = '.worker-plan.md';
+const MAX_PLAN = 20;
+
+// "1. [x] Read the code" / "- [ ] Run the tests" → [{ name, done }], or null.
+function parsePlan(text) {
+  const steps = [];
+  for (const l of String(text || '').split('\n')) {
+    const m = l.match(/^\s*(?:\d+[.)]|[-*])\s*\[([ xX✓✔]?)\]\s*(.+?)\s*$/);
+    if (m && steps.length < MAX_PLAN) steps.push({ name: m[2].replace(/^~~|~~$/g, '').slice(0, 80), done: m[1].trim() !== '' });
+  }
+  return steps.length ? steps : null;
+}
+
+function percentOf(plan, status) {
+  if (status === 'done') return 100;
+  if (!plan || !plan.length) return null;
+  return Math.min(95, Math.round((100 * plan.filter((s) => s.done).length) / plan.length));
+}
+
+// The patch for a new plan: percent, the step it's on now (first unticked).
+function planPatch(w, plan) {
+  if (!plan) return {};
+  const cur = plan.find((s) => !s.done);
+  return { plan, percent: percentOf(plan, w.status), current: cur ? cur.name : plan[plan.length - 1].name };
+}
+
+// A code worker runs on a GitHub runner, so its plan reaches the server as an issue
+// comment marked <!-- worker-plan --> (worker.yml mirrors PLAN_FILE into it every
+// 15 s); the newest one wins. Read in the same poll as the result comment.
+function readPlanComment(w, comments) {
+  const c = [...(comments || [])].reverse().find((x) => /<!-- worker-plan/.test((x && x.body) || ''));
+  if (!c) return;
+  const plan = parsePlan(String(c.body).replace(/<!--[^>]*-->/g, ''));
+  if (plan && JSON.stringify(plan) !== JSON.stringify(w.plan)) update(w, planPatch(w, plan));
+}
+
+const BAR = (p) => { const n = Math.max(0, Math.min(10, Math.round((p || 0) / 10))); return '▓'.repeat(n) + '░'.repeat(10 - n); };
+// "▓▓▓▓▓░░░░░ 50% · Run the tests", "planning", or "step 4" for a browse run with no plan.
+function progressLabel(w) {
+  if (w.percent != null) return `${BAR(w.percent)} ${w.percent}%${w.status === 'running' && w.current ? ` · ${w.current}` : ''}`;
+  if (w.kind === 'browse' && w.step) return `step ${w.step}`;
+  return 'planning';
+}
 
 async function launch(w) {
   const ctrl = new AbortController();
@@ -136,14 +190,16 @@ async function launch(w) {
   }
   release();
   ctrls.delete(w.id);
-  update(w, { status: out.status, result: String(out.result || '').slice(0, 20000), branch: out.branch || w.branch, pushed: out.pushed || '', endedAt: Date.now(), progress: out.status === 'done' ? 'Finished' : out.status === 'needs_you' ? 'Needs Mr. Burrus' : out.status === 'stopped' ? 'Stopped' : 'Failed' });
+  update(w, { status: out.status, result: String(out.result || '').slice(0, 20000), branch: out.branch || w.branch, pushed: out.pushed || '', endedAt: Date.now(), progress: out.status === 'done' ? 'Finished' : out.status === 'needs_you' ? 'Needs Mr. Burrus' : out.status === 'stopped' ? 'Stopped' : 'Failed', ...(out.status === 'done' ? { percent: 100, current: '' } : {}) });
   report(w);
   pump();
 }
 
 async function runBrowse(w) {
   const onStep = (n, line) => update(w, { step: n, progress: line.slice(0, 140) });
-  let r = await d().browse(`worker-${w.id}`, `J.A.R.V.I.S.'s worker`, w.task, { ownerText: '', onStep });
+  // The brain's plan and the plan step it's on: the ones before it are done.
+  const onPlan = (names, at) => update(w, planPatch(w, names.map((name, i) => ({ name, done: i < at - 1 }))));
+  let r = await d().browse(`worker-${w.id}`, `J.A.R.V.I.S.'s worker`, w.task, { ownerText: '', onStep, onPlan });
   // Stopped for information (a sign-in, an account email, a code…): A.R.A. looks
   // in his email and notes first, and it carries on with what she finds. He hears
   // about it only if she can't find it (owner, 2026-11-22).
@@ -152,7 +208,7 @@ async function runBrowse(w) {
     const got = await d().find(r.text, { task: w.task, site: r.url || '' }).catch(() => null);
     if (!got) break;
     const shown = got.secret ? '{{INFO}} (type exactly that; it is filled in for you)' : `"${got.value}" (also available as {{INFO}})`;
-    r = await d().browse(`worker-${w.id}`, `J.A.R.V.I.S.'s worker`, `${w.task}\n\n[A.R.A. FOUND WHAT YOU STOPPED FOR — ${got.what}: ${shown}. Carry on with the task from where the browser is.]`, { ownerText: '', onStep, secrets: { INFO: got.value } });
+    r = await d().browse(`worker-${w.id}`, `J.A.R.V.I.S.'s worker`, `${w.task}\n\n[A.R.A. FOUND WHAT YOU STOPPED FOR — ${got.what}: ${shown}. Carry on with the task from where the browser is.]`, { ownerText: '', onStep, onPlan, secrets: { INFO: got.value } });
   }
   const status = r.status === 'done' ? 'done' : r.status === 'ask' ? 'needs_you' : 'failed';
   let saved = '';
@@ -191,6 +247,7 @@ async function runCode(w, signal) {
     }
     const comments = await d().gh(`${base}/issues/${w.issue}/comments?per_page=100`).catch(() => null);
     const done = (comments || []).find((c) => /<!-- worker-result/.test(c.body || ''));
+    readPlanComment(w, comments); // its plan, mirrored into an issue comment by the job
     if (done) {
       const body = String(done.body);
       const ok = /status=done/.test(body);
@@ -268,12 +325,123 @@ async function recover() {
       report(w);
     } else update(w, { status: 'queued', progress: 'Restarting after a server restart' });
   }
+  boardKick(); // a board left open before the restart is picked up and finished
   pump();
+}
+
+// ── Telegram board ───────────────────────────────────────────────────────────
+// Owner's ask, 2026-11-22: the strip's worker chips, on Telegram. When a worker
+// starts and no board is live, J.A.R.V.I.S.'s bot sends him ONE silent message
+// listing every running and waiting worker; that message is then edited in place
+// as steps change (at most once every 10 s, never with unchanged text). Finished,
+// failed and stuck ones show as done / failed / needs you for 15 min, like the
+// app. When nothing is running or waiting it gets a last all-done edit and stops;
+// the next worker opens a new board. The message id is app_settings.workers_tg_board,
+// so a restart keeps editing the same message. Edits aren't logged anywhere; the
+// first send is one short line in his history. The wake-up reports are separate.
+const BOARD_KEY = 'workers_tg_board';
+const BOARD_GAP_MS = 10e3;
+const BOARD_REFRESH_MS = 60e3; // keeps the minutes current between steps
+const boardEnabled = () => String(process.env.WORKER_TG_BOARD || '').toLowerCase() !== 'off';
+
+function tgBoardDeps() {
+  const pick = () => {
+    const tg = require('./telegram');
+    const persona = tg.botFor('jarvis') && tg.botFor('jarvis').isConfigured() ? 'jarvis' : 'ara';
+    const bot = tg.botFor(persona);
+    if (!bot || !bot.isConfigured()) throw new Error('no Telegram bot configured');
+    return { tg, persona, bot };
+  };
+  return {
+    ready: () => { try { pick(); return true; } catch { return false; } }, // no bot (dev): no board, no noise
+    send: async (text) => { const { tg, bot } = pick(); const m = await bot.tg('sendMessage', { chat_id: tg.OWNER_ID, text, disable_notification: true }); return m.message_id; },
+    edit: async (id, text) => { const { tg, bot } = pick(); await bot.editMessageText(tg.OWNER_ID, id, text); },
+    log: async (text) => { const { tg, persona } = pick(); await tg.logOwn(persona, tg.OWNER_ID, text); },
+  };
+}
+
+const BOARD_MARK = { done: '✅', failed: '❌', needs_you: '✋', stopped: '⏹' };
+const BOARD_STATE = { done: 'done', failed: 'failed', needs_you: 'needs you', stopped: 'stopped' };
+function boardLine(w, now = Date.now()) {
+  const mins = Math.max(0, Math.round(((w.endedAt || now) - (w.startedAt || w.createdAt)) / 60000));
+  const title = String(w.title || '').slice(0, 60);
+  const who = w.slot ? `Worker ${w.slot}/3` : 'Worker';
+  if (w.status === 'running') return `🔧 ${who} ${title} · ${mins} min\n    ${progressLabel(w).slice(0, 90)}\n    ${String(w.progress || '').slice(0, 120)}`;
+  if (w.status === 'queued') return `⏳ Waiting: ${title}`;
+  // An ended one keeps its last number: "failed at 40%", "stopped at 60%".
+  const at = w.percent != null ? (w.status === 'done' ? ` · ${BAR(100)} 100%` : ` at ${w.percent}%`) : '';
+  return `${BOARD_MARK[w.status] || '•'} ${who} ${title} · ${BOARD_STATE[w.status] || w.status}${at} · ${mins} min`;
+}
+function boardText(now = Date.now()) {
+  const shown = Object.values(list)
+    .filter((w) => ['running', 'queued'].includes(w.status) || (w.endedAt && now - w.endedAt < SHOW_DONE_MS))
+    .sort((a, b) => a.createdAt - b.createdAt);
+  const r = running().length, q = queued().length;
+  const head = r || q ? `J.A.R.V.I.S.'s workers: ${r} running${q ? `, ${q} waiting` : ''}` : 'J.A.R.V.I.S.\'s workers: all done ✓';
+  const time = new Date(now).toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit' });
+  return `${head}\n\n${shown.map((w) => boardLine(w, now)).join('\n')}\n\n${r || q ? 'Updated' : 'Finished'} ${time} ET`.slice(0, 4000);
+}
+
+let board; // undefined = not read yet; null = no live board
+let boardLast = 0, boardTimer = null, boardBusy = false, boardAgain = false, boardRefresh = null;
+async function loadBoard() {
+  if (board !== undefined) return board;
+  try { board = JSON.parse(await getSetting(BOARD_KEY, 'null')) || null; } catch { board = null; }
+  if (board && !board.messageId) board = null;
+  return board;
+}
+const saveBoard = () => setSetting(BOARD_KEY, JSON.stringify(board || null));
+
+// Every state change kicks the board; edits wait out the 10 s gap.
+function boardKick() {
+  if (!boardEnabled() || !list || boardTimer) return;
+  const gap = (deps && deps.boardGapMs) || BOARD_GAP_MS;
+  boardTimer = setTimeout(() => { boardTimer = null; boardTick(); }, Math.max(0, boardLast + gap - Date.now()));
+  if (boardTimer.unref) boardTimer.unref();
+}
+
+async function boardTick() {
+  if (boardBusy) { boardAgain = true; return; }
+  boardBusy = true;
+  try {
+    await loadBoard();
+    const active = running().length + queued().length;
+    if (!board && !active) return;
+    const text = boardText();
+    if (board && text === board.text) return;
+    const B = d().board;
+    if (!B || (B.ready && !B.ready())) return;
+    boardLast = Date.now();
+    if (!board) {
+      const messageId = await B.send(text);
+      board = { messageId, text, openedAt: Date.now() };
+      await saveBoard();
+      const first = [...running(), ...queued()].map((w) => `${w.slot ? `worker ${w.slot}` : 'a waiting worker'} "${w.title}"`).join(', ');
+      Promise.resolve(B.log(`[J.A.R.V.I.S.'s live worker board posted (${first}); it updates in place as they work]`)).catch(() => {});
+    } else {
+      try { await B.edit(board.messageId, text); } catch (e) {
+        // Deleted by him, or too old to edit: start a fresh board next time.
+        if (/not found|can't be edited|cannot be edited/i.test(e.message)) { board = null; await saveBoard(); boardAgain = true; return; }
+        throw e;
+      }
+      board.text = text;
+      if (!active) board = null; // the all-done edit: this board is finished
+      await saveBoard();
+    }
+  } catch (e) {
+    console.error(`workers failed: telegram board: ${e.message}`);
+  } finally {
+    boardBusy = false;
+    if (boardAgain) { boardAgain = false; boardKick(); }
+    clearTimeout(boardRefresh); boardRefresh = null;
+    if (board) { boardRefresh = setTimeout(boardKick, (deps && deps.boardRefreshMs) || BOARD_REFRESH_MS); if (boardRefresh.unref) boardRefresh.unref(); }
+  }
 }
 
 function line(w) {
   const mins = Math.max(0, Math.round((Date.now() - (w.startedAt || w.createdAt)) / 60000));
-  return `${w.slot && w.status === 'running' ? `Worker ${w.slot} of 3` : w.status === 'queued' ? 'Waiting' : 'Done'} (id ${w.id}) ${w.kind} "${w.title}" — ${w.status}${w.status === 'running' ? `, ${mins} min: ${w.progress}` : ''}${w.branch ? ` (branch ${w.branch})` : ''}${w.issueUrl ? ` ${w.issueUrl}` : ''}`;
+  const now = w.percent != null ? `${w.percent}%${w.current ? ` (${w.current})` : ''}` : progressLabel(w);
+  return `${w.slot && w.status === 'running' ? `Worker ${w.slot} of 3` : w.status === 'queued' ? 'Waiting' : 'Done'} (id ${w.id}) ${w.kind} "${w.title}" — ${w.status}${w.status === 'running' ? `, ${mins} min, ${now}: ${w.progress}` : w.percent != null ? `, ${w.percent}%` : ''}${w.branch ? ` (branch ${w.branch})` : ''}${w.issueUrl ? ` ${w.issueUrl}` : ''}`;
 }
 
 async function statusText() {
@@ -290,7 +458,7 @@ async function forApp() {
   return Object.values(list)
     .filter((w) => ['running', 'queued'].includes(w.status) || (w.endedAt && now - w.endedAt < SHOW_DONE_MS))
     .sort((a, b) => a.createdAt - b.createdAt)
-    .map((w) => ({ id: w.id, kind: w.kind, title: w.title, status: w.status, step: w.step || 0, progress: w.progress || '', branch: w.branch || null, startedAt: w.startedAt || null, endedAt: w.endedAt || null, url: w.runUrl || w.issueUrl || null, slot: w.status === 'running' ? w.slot || null : null }));
+    .map((w) => ({ id: w.id, kind: w.kind, title: w.title, status: w.status, step: w.step || 0, progress: w.progress || '', percent: w.percent ?? null, current: w.current || '', plan: w.plan || [], branch: w.branch || null, startedAt: w.startedAt || null, endedAt: w.endedAt || null, url: w.runUrl || w.issueUrl || null, slot: w.status === 'running' ? w.slot || null : null }));
 }
 
 async function tag(name, arg) {
@@ -308,4 +476,4 @@ async function tag(name, arg) {
 const WORKER_TOOLS = ` - [WORKER_START: code|browse | short title | the full task, self-contained | Drive note title (browse only, optional)] — hand a task to a worker of your own so you stay free to talk to him. code = its own Claude Code on its own GitHub runner (not the server), on a worker/ branch cut from main: it commits, the job pushes that branch only, never main; good for any general job (code, research, checks, writing). browse = a browser task on the server, its result saved to that Drive note; one browse at a time. Every browser shares the same saved logins, so a site you or A.R.A. are signed in to works for a worker too. A file in his Google Drive is read with your Drive tags ([READ_NOTE], [SEARCH_DRIVE], [READ_FILE_ID]), not a browse worker. HARD CAP: 3 workers running at once, total; the rest wait in line. Call them by their slot, "worker 1, 2 or 3", never by a running count; [WORKER_STOP: 2] stops the one in slot 2. A browse worker stuck on information (a sign-in, an account email, a code) gets it from A.R.A., who searches his email and notes, and carries on; only what nobody can supply comes to him, from you. Each one's progress shows live on his notification strip, and its report goes straight to him on your bot when it ends (you'll see it in this chat), so you don't need to relay it; if he asks, read [WORKER_STATUS]. A code worker's work ships when he says push: merge its branch into main then. Use them for EVERY task, whatever its length (his standing order, 2026-11-22), so you are always free to talk to him. Only straight answers and seconds-long lookups stay with you.
  - [WORKER_STATUS] — every worker: running, waiting, done, with its current step and GitHub link. [WORKER_STOP: id] — stop one (a GitHub run is cancelled).`;
 
-module.exports = { start, stop, recover, statusText, forApp, tag, WORKER_TOOLS, enabled, _setDeps: (x) => { deps = x; list = null; }, _list: () => list };
+module.exports = { start, stop, recover, statusText, forApp, tag, WORKER_TOOLS, enabled, _setDeps: (x) => { deps = x; list = null; board = undefined; boardLast = 0; }, _list: () => list, _boardText: () => boardText(), _tgBoardDeps: tgBoardDeps, parsePlan, percentOf, progressLabel, readPlanComment, PLAN_FILE };
