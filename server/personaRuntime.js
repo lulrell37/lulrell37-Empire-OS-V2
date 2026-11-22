@@ -661,6 +661,10 @@ async function runInjections(text, persona = 'ara', { convo = '', depth = 0, sin
         try { return `${name}: ${await require('./rawEdit').tag(name, arg)}`; }
         catch (e) { return `${name} failed: ${e.message}`; }
       }
+      if (name === 'BROWSER_KEY' && arg && persona === 'jarvis') {
+        try { return await require('./browserAgent').browserKeyTag(arg); }
+        catch (e) { return `BROWSER_KEY failed: ${e.message}`; }
+      }
       if (name === 'SITE_LOGIN' && arg && persona === 'jarvis') {
         try { return await require('./siteLogins').tag(arg); }
         catch (e) { return `SITE_LOGIN failed: ${e.message}`; }
