@@ -31,8 +31,8 @@ const zlib = require('zlib');
 const { spawn, execFileSync } = require('child_process');
 const WebSocket = require('ws');
 
-const MAX_STEPS = Number(process.env.BROWSE_MAX_STEPS || 25);
-const MAX_MS = Number(process.env.BROWSE_MAX_MIN || 6) * 60e3;
+const MAX_STEPS = Number(process.env.BROWSE_MAX_STEPS || 300);
+const MAX_MS = Number(process.env.BROWSE_MAX_MIN || 60) * 60e3; // owner, 2026-11-22: 6 min was too short for real work
 const IDLE_MS = 10 * 60e3;
 const MAX_BROWSERS = 3;
 const BIN_DIR = path.join(os.homedir(), '.empire-bin');
