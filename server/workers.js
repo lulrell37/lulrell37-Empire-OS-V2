@@ -53,7 +53,7 @@ function d() {
       if (!bot || !bot.isConfigured() || !tg.OWNER_ID) throw new Error('no Telegram bot to send it on');
       await bot.sendMessage(tg.OWNER_ID, id === 'jarvis' ? text : `J.A.R.V.I.S.:\n${text}`);
     },
-    onDone: (w) => (w.purpose === 'autofix' ? require('./autoFix').finish(w) : null),
+    onDone: (w) => (w.purpose === 'autofix' ? require('./autoFix').finish(w) : w.purpose === 'feature' ? require('./featureRequests').finish(w) : null),
     saveNote: (title, body) => require('./google').saveDriveNote(title, body),
   };
 }
@@ -212,13 +212,18 @@ function report(w) {
   if (w.status === 'stopped') return;
   Promise.resolve(d().onDone && d().onDone(w)).then((handled) => {
     if (handled) return;
+    return defaultReport(w);
+  }).catch((e) => console.error(`worker failed: couldn't report #${w.id}: ${e.message}`));
+}
+function defaultReport(w) {
+  {
     const mins = Math.max(1, Math.round(((w.endedAt || Date.now()) - (w.startedAt || w.createdAt)) / 60000));
     const icon = { done: '✅', needs_you: '✋', failed: '❌' }[w.status] || '•';
     const head = { done: 'finished', needs_you: 'stopped — it needs you', failed: 'FAILED' }[w.status] || w.status;
     const links = [w.pushed ? `Branch: ${w.pushed}` : (w.branch && w.kind === 'code' ? `Branch: ${w.branch} (nothing pushed)` : ''), w.issueUrl ? `Full report: ${w.issueUrl}` : ''].filter(Boolean).join('\n');
     const text = `${icon} Worker #${w.id} ${head} — "${w.title}" (${w.kind}, ${mins} min)\n\n${String(w.result || '(no report)').slice(0, 3000)}${links ? `\n\n${links}` : ''}${w.kind === 'code' && w.status === 'done' && w.pushed && /pushed/.test(w.pushed) ? '\n\nSay "push" to J.A.R.V.I.S. to ship it.' : ''}`;
     return d().tell(text);
-  }).catch((e) => console.error(`worker failed: couldn't report #${w.id}: ${e.message}`));
+  }
 }
 
 async function stop(id) {

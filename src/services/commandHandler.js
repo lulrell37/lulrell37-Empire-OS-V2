@@ -16,6 +16,7 @@ import{openApp,openWebpage}from './appLauncher';
 import useEmpireStore from '../store/useEmpireStore';
 import{scheduleSync}from './sync';
 import{confirmRedeploy}from './redeploy';
+import{requestFeature}from './clipScan';
 import{allMatches}from '../matchAllFix'; // never the built-in matchAll (it crashed on the phone)
 const HUD_PANELS=['briefing','businesses','tasks','routine','batman','daily'];
 const PANEL_ALIASES=[['brief','briefing'],['business','businesses'],['revenue','businesses'],['empire','businesses'],['task','tasks'],['routine','routine'],['morning','routine'],['batman','batman'],['protocol','batman'],['training','batman'],['daily','daily'],['word','daily'],['verse','daily'],['fact','daily']];
@@ -358,6 +359,15 @@ export async function handleCommands(response,personaId,callbacks={}){
     const mediaUrl=m[1].trim();
     if(mediaUrl)callbacks.onTranscribe?.({mediaUrl});
   }
+  // --- A persona missing a tool in its own lane asks J.A.R.V.I.S. to build it
+  // (server/featureRequests.js). Only on his own message. The answer comes back
+  // to him on Telegram once it's live (server-side writes can't land in this chat).
+  for(const m of allMatches(response,/\[NEED_FEATURE:\s*([\s\S]+?)\]/gi)){
+    if(!callbacks.ownerText)continue;
+    requestFeature({persona:personaId,need:m[1].trim(),asked:callbacks.ownerText})
+      .then(r=>callbacks.onNotes?.([`🛠 ${String(r.text||'').startsWith('NEED_FEATURE: ✓')?'J.A.R.V.I.S. is building it; the answer comes to you on Telegram when it\'s live':String(r.text||'').replace(/^NEED_FEATURE:\s*/,'').split('. Tell him')[0]}`]))
+      .catch(e=>callbacks.onNotes?.([`⚠️ Couldn't ask J.A.R.V.I.S. to build it: ${e.message}`]));
+  }
   // --- Video watching (any persona) — focus is optional ---
   for(const m of allMatches(response,/\[WATCH_VIDEO:\s*(\S+)(?:\s*\|\s*([\s\S]+?))?\]/gi)){
     const mediaUrl=m[1].trim();const focus=(m[2]||'').trim();
@@ -474,6 +484,7 @@ export function stripCommands(text){
     .replace(/\[CLIP_SCAN:[^\]]*\]/gi,'')
     .replace(/\[WATCH_VIDEO:[^\]]*\]/gi,'')
     .replace(/\[TRANSCRIBE:[^\]]*\]/gi,'')
+    .replace(/\[NEED_FEATURE:[^\]]*\]/gi,'')
     .replace(/\[BROWSE:[^\]]*\]/gi,'')
     .replace(/\[SHOW_CHART:[^\]]*\]/gi,'').replace(/\[TRADE_CHART(?::[^\]]*)?\]/gi,'').replace(/\[SHOW_NOTE:[^\]]*\]/gi,'')
     .replace(/\[SHOW_NOTES\]/gi,'').replace(/\[SHOW_TASKS\]/gi,'')

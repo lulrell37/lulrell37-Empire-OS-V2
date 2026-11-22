@@ -34,6 +34,8 @@ app.get('/diag', auth, (req, res) => res.json(require('./serverLog').diagJson())
 // The app's [REDEPLOY], after his tap on its confirm dialog (Telegram's is a Confirm card).
 app.post('/redeploy', auth, (req, res) => require('./redeploy').requestRedeploy('app').then((text) => res.json({ text })).catch((e) => res.status(500).json({ error: e.message })));
 // What's broken right now (server/sentinel.js) — the app's top strip reads it.
+app.get('/weather/live', auth, (req, res) => require('./morningBrief').weatherLive(req.query.place).then((text) => res.json({ text })).catch((e) => res.status(502).json({ error: e.message })));
+app.post('/features/request', auth, express.json(), (req, res) => require('./featureRequests').request(String(req.body.persona || 'ara'), String(req.body.need || ''), { asked: String(req.body.asked || ''), from: 'app' }).then((text) => res.json({ text })).catch((e) => res.status(500).json({ error: e.message })));
 app.get('/workers', auth, (req, res) => require('./workers').forApp().then((items) => res.json({ items })).catch((e) => res.status(500).json({ error: e.message })));
 app.get('/sentinel', auth, (req, res) => require('./sentinel').status().then((items) => res.json({ items })).catch((e) => res.status(500).json({ error: e.message })));
 
@@ -106,6 +108,8 @@ db.init()
     // A J.A.R.V.I.S. turn the restart cut off: he says so on Telegram and picks it back up.
     setTimeout(() => require('./jarvisEngine').recover().catch((e) => console.error('jarvis recover failed:', e.message)), 25000);
     setTimeout(() => require('./workers').recover().catch((e) => console.error('workers failed: recover:', e.message)), 30000);
+    // A build a persona asked J.A.R.V.I.S. for just went live: she comes back to him with the answer.
+    setTimeout(() => require('./featureRequests').followUps().catch((e) => console.error('feature requests failed:', e.message)), 40000);
     startNudgeCron();
     startReminderCron();
     startDailyBriefingCron();

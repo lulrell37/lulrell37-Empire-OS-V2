@@ -17,6 +17,28 @@ export async function startTranscribe({mediaUrl,persona}){
   return j;
 }
 
+// [NEED_FEATURE: what | why] — ask J.A.R.V.I.S. to build a missing ability (server/featureRequests.js).
+export async function requestFeature({persona,need,asked}){
+  const be=await loadBackend();
+  if(!be)throw new Error('build requests run on the Empire server, and no server is linked (Settings › Backend)');
+  const res=await fetch(be.url+'/features/request',{method:'POST',
+    headers:{Authorization:'Bearer '+be.token,'Content-Type':'application/json'},
+    body:JSON.stringify({persona,need,asked})});
+  const j=await res.json().catch(()=>({}));
+  if(!res.ok)throw new Error(j.error||`server ${res.status}`);
+  return j;
+}
+
+// Live forecast for A.R.A.'s prompt (server/morningBrief.js weatherLive). '' when unreachable.
+export async function liveWeather(){
+  const be=await loadBackend();
+  if(!be)return '';
+  const res=await fetch(be.url+'/weather/live',{headers:{Authorization:'Bearer '+be.token}});
+  const j=await res.json().catch(()=>({}));
+  if(!res.ok)throw new Error(j.error||`server ${res.status}`);
+  return j.text||'';
+}
+
 // [BROWSE: task] — J.A.R.V.I.S.'s and A.R.A.'s browser runs on the server
 // (server/browserAgent.js). Starts the job, then polls until it ends (minutes).
 // Returns the result text for the persona's second pass.

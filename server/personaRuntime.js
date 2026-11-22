@@ -661,6 +661,16 @@ async function runInjections(text, persona = 'ara', { convo = '', depth = 0, sin
         try { return `${name}: ${await require('./rawEdit').tag(name, arg)}`; }
         catch (e) { return `${name} failed: ${e.message}`; }
       }
+      if (name === 'NEED_FEATURE' && arg) {
+        // A persona missing a tool in its own lane asks J.A.R.V.I.S. to build it (server/featureRequests.js).
+        try {
+          const out = await require('./featureRequests').request(persona, arg, { asked: depth ? '' : asked });
+          // "J.A.R.V.I.S. is building it" is true now: don't let the hand-off check send him a second one.
+          if (sink && /✓|not filed again/.test(out)) (sink.relayed || (sink.relayed = new Set())).add('jarvis');
+          return out;
+        }
+        catch (e) { console.error(`feature requests failed: ${e.message}`); return `NEED_FEATURE failed: ${e.message} — tell him plainly you can't do it yet.`; }
+      }
       if (['WORKER_START', 'WORKER_STATUS', 'WORKER_STOP'].includes(name) && persona === 'jarvis') {
         try { return await require('./workers').tag(name, arg); }
         catch (e) { console.error(`workers failed: ${name}: ${e.message}`); return `${name} failed: ${e.message}`; }
@@ -1202,6 +1212,18 @@ async function calendarBlock() {
 }
 const calendarFresh = () => { calCache.at = 0; };
 
+// A.R.A. always has the live weather in front of her too (owner, 2026-11-22: she
+// was answering weather questions without it, same as the calendar was).
+let wxCache = { at: 0, text: '' };
+const WX_RULE = 'Any question about the weather — now, later today, tonight, tomorrow, the weekend, rain, a jacket, an umbrella — is answered from THIS forecast, quoting its numbers and times. Never guess or answer from memory. For somewhere else, emit [WEATHER: city, ST].';
+async function weatherBlock() {
+  if (Date.now() - wxCache.at > 15 * 60000) {
+    try { wxCache = { at: Date.now(), text: await require('./morningBrief').weatherLive() }; }
+    catch (e) { return `[THE WEATHER couldn't be read this turn (${e.message}). For any weather question, emit [WEATHER] before answering.]`; }
+  }
+  return `[${wxCache.text}\n${WX_RULE}]`;
+}
+
 // --- history ---------------------------------------------------------
 
 async function loadHistory(persona = 'ara') {
@@ -1263,6 +1285,7 @@ async function runPersonaTurn(personaId, userText, deliver, { reply: given, resu
   // A.R.A. always has his calendar in front of her (owner's call, 2026-11-21: "what
   // time is the party?" was answered from chat memory because she never looked).
   if (persona === 'ara' && gs && gs.ok) sys = `${sys}\n\n${await calendarBlock()}`;
+  if (persona === 'ara') sys = `${sys}\n\n${await weatherBlock()}`;
   const history = await loadHistory(persona);
   const messages = [...history, { role: 'user', content: `[${momentET()}] ${group ? `${require('./groupChat').GROUP_FRAME}\n\n` : ''}${userText}` }];
   const convo = convoLines(history, userText, persona);
@@ -1387,4 +1410,5 @@ async function runPersonaTurn(personaId, userText, deliver, { reply: given, resu
 const runAraTurn = (userText, deliver) => runPersonaTurn('ara', userText, deliver);
 
 module.exports = {
+  weatherBlock,
   recallDays, runPersonaTurn, runAraTurn, gatherContext, contextBlock, applyEffects, runInjections };

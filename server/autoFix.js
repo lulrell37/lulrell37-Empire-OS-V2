@@ -90,6 +90,7 @@ async function mergeFix(prNumber) {
   const serverSide = !files.length || files.some((f) => /^server\//.test(f.filename));
   const app = files.some((f) => !/^server\/|\.md$|^docs\//.test(f.filename));
   let text = `Auto-fix PR #${prNumber} merged into main.${app ? ' It touches the app too, so the APK build starts.' : ''}`;
+  await require('./featureRequests').onTapMerged(prNumber, { willRedeploy: serverSide && process.env.EMPIRE_SUPERVISED === '1' }).catch(() => {});
   if (serverSide) text += ` ${await require('./redeploy').requestRedeploy('jarvis')}`;
   return text;
 }
@@ -117,9 +118,9 @@ async function run(kind, reason) {
 }
 
 // The auto-fix worker reported (workers.report → onDone). Returns true: handled here.
-async function finish(w) {
+async function finish(w, kindLabel = '') {
   const { title, body } = parseReply(w.result);
-  const head = `🛠 **Auto-fix — the server ${String(w.title).replace(/^Auto-fix: server /, '')}** (worker #${w.id})`;
+  const head = kindLabel ? `🛠 **${kindLabel} — ${w.title}** (worker #${w.id})` : `🛠 **Auto-fix — the server ${String(w.title).replace(/^Auto-fix: server /, '')}** (worker #${w.id})`;
   const report = `${head}\n\n${body.slice(0, 3000)}${w.issueUrl ? `\n\nFull report: ${w.issueUrl}` : ''}`;
   if (w.status !== 'done') { await send(`${report}\n\n⚠️ The worker didn't finish (${w.status}).`); return true; }
   if (!/pushed/.test(w.pushed || '') || !title) { await send(`${report}\n\nNo code change, so there's nothing to merge.`); return true; }
@@ -137,8 +138,8 @@ async function finish(w) {
   }
   const { query } = require('./db');
   const cid = require('crypto').randomBytes(6).toString('hex');
-  const label = `Merge auto-fix PR #${pr.number} and redeploy`;
-  const detail = `${title}\n${pr.url}\nSquash-merges it into main; server changes go live on a redeploy (the server restarts, about 2 min).`;
+  const label = `Merge ${kindLabel ? 'build' : 'auto-fix'} PR #${pr.number} and ship it`;
+  const detail = `${title}\n${pr.url}\nSquash-merges it into main. Server changes go live on a redeploy (the server restarts, about 2 min); app changes start the APK build.`;
   await query('INSERT INTO tg_pending (id, persona, kind, label, detail, payload, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7)',
     [cid, 'jarvis', 'autofix_merge', label, detail, JSON.stringify({ pr: pr.number }), Date.now()]);
   await send(`${report}\n\nPR #${pr.number}: ${pr.url}`, { id: cid, label, detail });
@@ -158,4 +159,4 @@ async function afterRestart(kind, reason) {
 // Will a restart get looked at? (So A.R.A.'s report doesn't promise a fix that won't come.)
 const willTry = () => enabled() && !!process.env.GITHUB_TOKEN && require('./workers').enabled();
 
-module.exports = { afterRestart, willTry, finish, mergeFix, signature, shouldRun, parseReply, prompt };
+module.exports = { afterRestart, willTry, finish, openPR, send, mergeFix, signature, shouldRun, parseReply, prompt };

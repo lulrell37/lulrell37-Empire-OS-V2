@@ -327,3 +327,22 @@ r.get('/info', auth, async (req, res) => {
 
 module.exports = r;
 module.exports.jarvisOutOfBand = jarvisOutOfBand;
+
+// Any persona's turn that didn't start from his message (a build he was waiting
+// on went live, server/featureRequests.js): it runs like a normal turn and goes
+// out on that persona's bot (A.R.A.'s if it has none), voice and all.
+async function personaOutOfBand(personaId, text) {
+  const id = tg.botFor(personaId) && tg.botFor(personaId).isConfigured() ? personaId : 'ara';
+  const bot = tg.botFor(id);
+  if (!bot || !bot.isConfigured() || !tg.OWNER_ID) return false;
+  const chatId = tg.OWNER_ID;
+  const deliver = (t, o) => bot.sendMessage(chatId, t, o).catch((e) => console.error(`tg ${id} send:`, e.message));
+  deliver.voiced = async (t) => {
+    const muted = await sendSpoken(id, bot, chatId, String(t).slice(0, 1500), text);
+    return deliver(muted ? `${t}\n\n${muted}` : t);
+  };
+  const result = await runPersonaTurn(personaId, text, deliver);
+  await sendTurnResult(personaId, bot, chatId, result, text, deliver);
+  return true;
+}
+module.exports.personaOutOfBand = personaOutOfBand;

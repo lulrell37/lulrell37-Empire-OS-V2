@@ -143,6 +143,42 @@ async function weatherSection(where) {
   return `🌦 WEATHER — ${g.label}\nHigh ${hi}° / Low ${lo}°${rainMax != null ? ` · rain up to ${rainMax}%` : ''}${sun}\n${lines.join('\n')}`;
 }
 
+// The live forecast A.R.A. has in front of her every turn (weatherBlock in
+// personaRuntime.js; GET /weather/live for the app): right now, the next 24 hours
+// by the hour, and the next 6 days — so "is it raining?", "do I need a jacket
+// tonight?" and "will it rain Saturday?" are all answered from real data.
+async function weatherLive(where) {
+  const place = String(where || (await getSetting('weather_place')) || DEFAULT_PLACE).trim() || DEFAULT_PLACE;
+  const g = await geocode(place);
+  const d = JSON.parse(await fetchText(
+    `https://api.open-meteo.com/v1/forecast?latitude=${g.lat}&longitude=${g.lon}`
+    + '&current=temperature_2m,apparent_temperature,weather_code,precipitation,wind_speed_10m,relative_humidity_2m'
+    + '&hourly=temperature_2m,apparent_temperature,weather_code,precipitation_probability,wind_speed_10m'
+    + '&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,sunrise,sunset'
+    + `&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch&timezone=${encodeURIComponent(TZ)}&forecast_days=7`,
+  ));
+  const desc = (code) => (WMO[code] || ['—', '🌡️']);
+  const c = d.current || {};
+  const [cd, ci] = desc(c.weather_code);
+  const now = `NOW (${String(c.time || '').slice(11, 16)} ET): ${ci} ${Math.round(c.temperature_2m)}°F, feels ${Math.round(c.apparent_temperature)}°, ${cd}${c.precipitation ? `, ${c.precipitation} in falling` : ''}, wind ${Math.round(c.wind_speed_10m)} mph, humidity ${c.relative_humidity_2m}%`;
+  const h = d.hourly || {};
+  const start = Math.max(0, (h.time || []).findIndex((t) => t >= String(c.time || '').slice(0, 13)));
+  const hours = [];
+  for (let i = start; i < Math.min(start + 24, (h.time || []).length); i++) {
+    const t = h.time[i];
+    const label = new Date(`${t}:00Z`).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', timeZone: 'UTC' });
+    const rain = h.precipitation_probability[i];
+    hours.push(`${label}: ${Math.round(h.temperature_2m[i])}° ${desc(h.weather_code[i])[0]}${rain ? `, ${rain}% rain` : ''}, ${Math.round(h.wind_speed_10m[i])} mph`);
+  }
+  const day = d.daily || {};
+  const days = (day.time || []).map((t, i) => {
+    const label = new Date(`${t}T12:00:00Z`).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric', timeZone: 'UTC' });
+    const rain = day.precipitation_probability_max[i];
+    return `${label}: ${desc(day.weather_code[i])[0]}, high ${Math.round(day.temperature_2m_max[i])}° / low ${Math.round(day.temperature_2m_min[i])}°${rain != null ? `, rain chance up to ${rain}%` : ''}`;
+  });
+  return `WEATHER — ${g.label} (his home${where ? ` — asked for ${where}` : ''}), live from Open-Meteo\n${now}\nNEXT 24 HOURS:\n${hours.join('\n')}\nNEXT 7 DAYS:\n${days.join('\n')}`;
+}
+
 // --- Google: today's calendar + unread mail ---
 const stripIds = (s) => String(s).replace(/\s*\[id:[^\]]*\]/g, '');
 
@@ -450,4 +486,4 @@ async function catchUp() {
   return runMorningBrief();
 }
 
-module.exports = { runMorningBrief, runWordReminder, catchUp, buildBrief, weatherSection, trendingSection, goldWatchSection };
+module.exports = { runMorningBrief, runWordReminder, catchUp, buildBrief, weatherSection, weatherLive, trendingSection, goldWatchSection };

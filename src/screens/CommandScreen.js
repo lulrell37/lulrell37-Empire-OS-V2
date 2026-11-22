@@ -1760,7 +1760,7 @@ export default function CommandScreen({navigation,route}){
         // Said it's handing this to someone ("relaying the fix to Atlas now") with no
         // [RELAY_TO] behind it: ask once for the tag, so the hand-off really goes out.
         if(!scanTags(response).some(t=>t.name==='RELAY_TO')&&!myAbort.signal.aborted){
-          const owed=promisedHandoffs(stripCommands(response)||'',handoffNames(),pid);
+          const owed=promisedHandoffs(stripCommands(response)||'',handoffNames(),pid).filter(id=>!(id==='jarvis'&&/\[NEED_FEATURE:/i.test(response)));
           if(owed.length){
             try{
               const fix=await callPersona(pid,[...hist,{role:'assistant',content:response},{role:'user',content:`[Your reply says you're handing this to ${owed.map(id=>getPersona(id)?.name||id).join(', ')}, but you emitted no [RELAY_TO], so nothing reached them. Emit [RELAY_TO: id | the complete instruction, with every number and detail they need] for each one now, and nothing else.]`}],myAbort.signal,null,{skipSave:true,maxTokens:800});
@@ -2015,6 +2015,7 @@ export default function CommandScreen({navigation,route}){
         }
         {
           const sent=new Set(relayTags.map(r=>r[1].trim().toLowerCase()));
+          if(/\[NEED_FEATURE:/i.test(response||''))sent.add('jarvis'); // "J.A.R.V.I.S. is building it" — the request went to him
           const owed=promisedHandoffs(display,handoffNames(),pid).filter(id=>!sent.has(id));
           if(owed.length)pushSystemMsg(`— ⚠️ nothing was actually sent to ${owed.map(id=>getPersona(id)?.name||id).join(' or ')} this turn, although ${p.name} says so — ask again —`);
         }
