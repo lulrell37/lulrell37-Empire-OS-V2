@@ -604,7 +604,18 @@ const NAMES = () => { try { return Object.fromEntries(require('./personas').ROST
 
 async function browseTag(persona, arg, { ownerText = '' } = {}) {
   if (!BROWSE_PERSONAS.has(persona)) throw new Error('the browser is J.A.R.V.I.S.\'s and A.R.A.\'s only — hand it to one of them');
-  return browseRun(persona, NAMES()[persona] || persona, arg, { ownerText });
+  // A direct [BROWSE] gets a live progress chip (jobProgress); a worker's browse
+  // goes through browseRun itself and is tracked as a worker, not twice.
+  const jobs = require('./jobProgress');
+  const task = String(arg || '').trim();
+  return jobs.run(persona, `Browse: ${task.slice(0, 50)}`, [], (job) => browseRun(persona, NAMES()[persona] || persona, arg, {
+    ownerText,
+    onStep: (n, line) => job.note(`step ${n}: ${line}`),
+    onPlan: (names, at) => job.plan(names, Math.max(0, at - 1)),
+  }).then((r) => {
+    if (r.status === 'stopped') throw new Error(String(r.result || 'the browser stopped').slice(0, 200));
+    return r;
+  }));
 }
 
 // One browser task, consent banners and emailed codes handled. Also what a worker

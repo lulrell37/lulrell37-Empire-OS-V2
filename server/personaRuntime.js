@@ -642,7 +642,7 @@ async function runInjections(text, persona = 'ara', { convo = '', depth = 0, sin
       if (name === 'OPEN_THREADS') return `OPEN THREADS (his Drive note "Open Threads"):\n${await require('./openThreads').readTag()}`;
       if (name === 'TRANSCRIBE' && arg) {
         try {
-          const out = await require('./transcribe').transcribeTag(arg);
+          const out = await require('./transcribe').transcribeTag(arg, persona);
           const m = /Saved to his Drive as "([^"]+)"/.exec(out);
           if (m && sink) sink.notes.push(`transcript note saved: ${m[1]}`);
           return out;
@@ -1184,17 +1184,24 @@ async function runDeepResearch(topic, deliver, persona = 'ara') {
 - Structure: a 2-4 sentence executive summary; findings grouped by theme with the specific numbers, dates, names and quotes; then a short "what this means / what to do".
 - Cite sources inline by outlet. End with a numbered Sources list. No preamble.`;
   const say = deliver.voiced || deliver;
+  // Live progress (server/jobProgress.js): the research call is one long step.
+  const jobs = require('./jobProgress');
+  const jid = jobs.start(persona, `Deep research: ${String(topic).slice(0, 50)}`, ['Search the web and write the brief', 'Save the note']);
   try {
+    jobs.step(jid, 'Search the web and write the brief');
     const brief = await claudeText(DR_SYSTEM, `Research this thoroughly:\n\n${String(topic).slice(0, 4000)}`, {
       maxTokens: 16000,
       tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 12 }],
     });
+    jobs.step(jid, 'Save the note');
     const title = `Research — ${String(topic).slice(0, 60)}`;
     try { await saveDriveNote(title, brief); } catch {
       await upsertSyncRow('notes', newId(), { title, content: brief, persona, created_at: Date.now(), updated_at: Date.now() });
     }
+    jobs.done(jid, title);
     await say(`Deep research done — "${topic}". Saved as a Note.\n\n${brief.slice(0, 3500)}`);
   } catch (e) {
+    jobs.fail(jid, e);
     await deliver(`Deep research on "${topic}" failed: ${e.message}`);
   }
 }

@@ -93,13 +93,15 @@ export default function NudgeBar({active,activityOnly=false}){
     const mins=w.startedAt?Math.max(0,Math.round(((w.endedAt||Date.now())-w.startedAt)/60000)):0;
     const pct=typeof w.percent==='number'?w.percent:null;
     const plan=Array.isArray(w.plan)?w.plan:[];
-    const tag=w.slot?`${w.slot}/3`:'waiting';
+    const isJob=w.kind==='job';
+    const who=isJob?(w.personaName||w.persona||'Job'):'Worker';
+    const tag=isJob?'':w.slot?`${w.slot}/3 `:'waiting ';
     const now=pct!=null?`${pct}% · ${(w.current||w.progress||'').slice(0,40)}`:w.kind==='browse'&&w.step?`step ${w.step} · ${(w.progress||'').slice(0,40)}`:'planning';
     const ended=pct!=null?(w.status==='done'?'100% · ':`at ${pct}% · `):'';
-    const text=`Worker ${tag} ${w.title.slice(0,26)} · ${WSTATE[w.status]??''}${w.status==='running'?`${mins}m · ${now}`:w.status==='queued'?'':`${ended}${mins}m`}`;
+    const text=`${who} ${tag}${w.title.slice(0,26)} · ${WSTATE[w.status]??''}${w.status==='running'?`${mins}m · ${now}`:w.status==='queued'?'':`${ended}${mins}m`}`;
     const planText=plan.length?`\n\nPlan${pct!=null?` · ${pct}%`:''}:\n${plan.map((p,i)=>`${p.done?'✓':'○'} ${i+1}. ${p.name}`).join('\n')}`:w.status==='running'?'\n\nPlanning: no plan yet.':'';
-    const detail=`Worker ${w.slot?`${w.slot} of 3`:'(waiting for a free slot)'} (${w.kind})\n${w.title}\n\nStatus: ${w.status}${pct!=null?` · ${pct}%`:''}${w.current&&w.status==='running'?`\nNow: ${w.current}`:''}\nLast action: ${w.progress}${planText}${w.branch?`\n\nBranch: ${w.branch}`:''}${w.startedAt?`\nStarted ${new Date(w.startedAt).toLocaleTimeString()}`:''}`;
-    return{key:'worker:'+w.id,persona:'jarvis',text,severity:{done:'info',failed:'error',needs_you:'warn',stopped:'info'}[w.status]||'activity',activity:w.status==='running'||w.status==='queued',issue:!(w.status==='running'||w.status==='queued'),noX:true,worker:true,detail,frac:pct!=null?pct/100:null,onPress:()=>Alert.alert('J.A.R.V.I.S. worker',detail)};
+    const detail=`${isJob?`${who} job`:`Worker ${w.slot?`${w.slot} of 3`:'(waiting for a free slot)'} (${w.kind})`}\n${w.title}\n\nStatus: ${w.status}${pct!=null?` · ${pct}%`:''}${w.current&&w.status==='running'?`\nNow: ${w.current}`:''}\nLast action: ${w.progress}${planText}${w.branch?`\n\nBranch: ${w.branch}`:''}${w.startedAt?`\nStarted ${new Date(w.startedAt).toLocaleTimeString()}`:''}`;
+    return{key:'worker:'+w.id,persona:isJob?w.persona:'jarvis',text,severity:{done:'info',failed:'error',needs_you:'warn',stopped:'info'}[w.status]||'activity',activity:w.status==='running'||w.status==='queued',issue:!(w.status==='running'||w.status==='queued'),noX:true,worker:true,detail,frac:pct!=null?pct/100:null,onPress:()=>Alert.alert(isJob?`${who} job`:'J.A.R.V.I.S. worker',detail)};
   });
   const issueChips=Object.entries(firmIssues).map(([key,v])=>({
     key:'firm:'+key,rawKey:key,text:v.text,detail:v.detail,severity:v.severity||'error',issue:true,

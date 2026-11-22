@@ -80,10 +80,24 @@ async function emailCode(site) {
 }
 
 // Sign in through the browser, then write the cookies out. -> { ok, text }
+// Live progress (server/jobProgress.js): one tracked job per sign-in.
 async function signIn(site) {
   const s = SITES[site];
   if (!s) throw new Error('youtube or instagram');
   if (!hasAccount(site)) return { ok: false, text: `no ${s.name} account on the server yet (${s.user} and ${s.pass} in Replit's secrets)` };
+  const jobs = require('./jobProgress');
+  const jid = jobs.start('jarvis', `Sign in to ${s.name}`, ['Sign in in the browser', 'Get the emailed code', 'Save the cookies']);
+  try {
+    const r = await signInInner(site, jid);
+    if (r.ok) jobs.done(jid, r.text); else jobs.fail(jid, r.text);
+    return r;
+  } catch (e) { jobs.fail(jid, e); throw e; }
+}
+
+async function signInInner(site, jid) {
+  const s = SITES[site];
+  const jobs = require('./jobProgress');
+  jobs.step(jid, 'Sign in in the browser');
   const browser = require('./browserAgent');
   const { claudeText } = require('./llm');
   const r = await browser.runTask({
@@ -93,6 +107,7 @@ async function signIn(site) {
   });
   // An emailed code: A.R.A.'s inbox has it, so fetch it and finish without him.
   if (r.status !== 'done' && wantsEmailCode(r.text)) {
+    jobs.step(jid, 'Get the emailed code');
     const code = await emailCode(site);
     if (code) {
       await require('./groupChat').post('ara', `→ J.A.R.V.I.S.: the ${s.name} code just came into his email, here it is.`).catch(() => {});
@@ -105,6 +120,7 @@ async function signIn(site) {
       if (r2.status !== 'done') return { ok: false, text: r2.text, shot: r2.shot };
     } else return { ok: false, text: `${r.text} (A.R.A. didn't find the code in his email within 90 seconds)`, shot: r.shot };
   } else if (r.status !== 'done') return { ok: false, text: r.text, shot: r.shot };
+  jobs.step(jid, 'Save the cookies');
   const n = await exportCookies(site);
   return n ? { ok: true, text: `signed in to ${s.name}; ${n} cookies saved for the downloads` } : { ok: false, text: `the browser said it signed in to ${s.name}, but no ${s.name} cookies came out of it`, shot: r.shot };
 }

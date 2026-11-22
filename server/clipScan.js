@@ -357,7 +357,7 @@ function cutVertical(src, start, end, dest) {
 // Run the whole scan. Returns { text, media }: `text` is the ranked list for
 // the persona/owner, `media` are [SEND_VIDEO] items for Telegram (clips under
 // the upload cap; bigger ones are Drive links only).
-async function clipScan(url, focus = '', { onProgress = () => {} } = {}) {
+async function clipScan(url, focus = '', { onProgress = () => {}, title = '' } = {}) {
   if (!enabled()) throw new Error('clip scan is switched off (CLIP_SCAN=off)');
   if (running) throw new Error('a clip scan is already running — one at a time; wait for it to finish');
   const kind = linkKind(url);
@@ -365,6 +365,9 @@ async function clipScan(url, focus = '', { onProgress = () => {} } = {}) {
   running = true;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clipscan-'));
   let chatP = null;
+  // Live progress (server/jobProgress.js): auto clips pass their own title.
+  const jobs = require('./jobProgress');
+  const jid = jobs.start('rogue', title || `Clip scan: ${String(url).replace(/^https?:\/\/(www\.)?/, '').slice(0, 45)}`, ['Download audio', 'Transcribe', 'Pick moments', 'Download sections', 'Render each clip', 'Upload']);
   try {
     let src = path.join(dir, 'source');
     let name;
@@ -381,6 +384,7 @@ async function clipScan(url, focus = '', { onProgress = () => {} } = {}) {
     // SECTIONS=off goes back to downloading the whole video.
     const sections = kind === 'youtube' && String(process.env.CLIP_SECTIONS || '').toLowerCase() !== 'off';
     onProgress(sections ? 'downloading the audio' : 'downloading');
+    jobs.step(jid, 'Download audio');
     let offset = 0, full = null;
     if (sections) ({ file: src, name, offset, full } = await downloadYouTubeAudio(String(url).trim(), dir, meta && meta.heatmap));
     else if (kind === 'youtube') ({ file: src, name } = await downloadYouTube(String(url).trim(), dir));
@@ -391,6 +395,7 @@ async function clipScan(url, focus = '', { onProgress = () => {} } = {}) {
     if (offset || (full && full > MAX_SEC)) sigNotes.push(`the video is ${mmss(full)}, over the ${mmss(MAX_SEC)} limit, so only ${mmss(offset)}–${mmss(offset + total)} was scanned${meta && meta.heatmap && meta.heatmap.length ? ', the stretch viewers replayed most' : ', from the start (no most-replayed graph yet)'}`);
 
     onProgress('transcribing');
+    jobs.step(jid, 'Transcribe');
     const audioDir = path.join(dir, 'audio');
     fs.mkdirSync(audioDir);
     const segments = await transcribeVideo(src, audioDir, { prompt: '' });
@@ -402,9 +407,12 @@ async function clipScan(url, focus = '', { onProgress = () => {} } = {}) {
     sigNotes.push(...sig.notes);
 
     onProgress('picking');
+    jobs.step(jid, 'Pick moments');
     const picks = await pickMoments(segments, String(focus || '').trim(), total, sig.hot);
     if (!picks.length) throw new Error('no moment in it was strong enough to cut' + (focus ? ` for "${focus}"` : ''));
 
+    // One download / render / upload step per clip, so the percent moves clip by clip.
+    jobs.plan(jid, ['Download audio', 'Transcribe', 'Pick moments', ...picks.flatMap((_, i) => [...(sections ? [`Download section ${i + 1}`] : []), `Render clip ${i + 1}`, `Upload clip ${i + 1}`]), 'Finish'], 3);
     const base = String(name).replace(/\.[^.]+$/, '').slice(0, 60);
     const srcSize = sections ? null : await layout.videoSize(src);
     const lines = [];
@@ -420,10 +428,12 @@ async function clipScan(url, focus = '', { onProgress = () => {} } = {}) {
         let clipSrc = src, cs = p.start, ce = p.end, clipSize = srcSize;
         if (sections) {
           onProgress(`downloading clip ${i + 1}/${picks.length}`);
+          jobs.step(jid, `Download section ${i + 1}`);
           const sec = await downloadSection(String(url).trim(), p.start + offset, p.end + offset, dir, `section${i + 1}`);
           clipSrc = sec.file; cs = sec.offset; ce = sec.offset + (p.end - p.start);
           clipSize = await layout.videoSize(clipSrc);
         }
+        jobs.step(jid, `Render clip ${i + 1}`);
         try {
           const r = await layout.renderClip({ src: clipSrc, start: cs, end: ce, dest: out, dir, pick: p, size: clipSize,
             context: segments.filter((s) => s.end > p.start - 20 && s.start < p.end).map((s) => s.text.trim()).join(' ') });
@@ -434,6 +444,7 @@ async function clipScan(url, focus = '', { onProgress = () => {} } = {}) {
         }
         if (sections) fs.rmSync(clipSrc, { force: true });
         const size = fs.statSync(out).size;
+        jobs.step(jid, `Upload clip ${i + 1}`);
         const up = await google.driveUploadFile(out, `Clip ${i + 1} — ${p.title || base} (${range}).mp4`);
         lines.push(`${i + 1}. ${range} (${Math.round(p.end - p.start)}s) — ${p.title ? `${p.title}: ` : ''}${p.reason}${p.hook ? `\n   Hook: "${p.hook}"` : ''}\n   ${look}\n   ${up.link}`);
         if (size <= TG_VIDEO_MAX) media.push({ name: 'SEND_VIDEO', buffer: fs.readFileSync(out), filename: `clip${i + 1}.mp4`, caption: `${i + 1}. ${p.hook || range} — ${p.reason}`.slice(0, 1000) });
@@ -442,7 +453,12 @@ async function clipScan(url, focus = '', { onProgress = () => {} } = {}) {
       }
     }
     const head = `CLIP SCAN — "${base}" (${mmss(total)}), ${picks.length} moment${picks.length === 1 ? '' : 's'}${focus ? ` for "${focus}"` : ''}, best first. Picked from ${sig.used.length ? `${sig.used.join(', ')} + the transcript` : 'the transcript alone'}${sigNotes.length ? ` (${sigNotes.join('; ')})` : ''}. Each is a finished 9:16 clip (layout to the shot, word-by-word captions, hook on top), uploaded to his Drive:`;
-    return { text: `${head}\n${lines.join('\n')}\nEach can still go through [EDIT_CLIP: <its link> | brief] for captions, music or S.E.L.E.N.E.'s dress-up.`, media };
+    const out = { text: `${head}\n${lines.join('\n')}\nEach can still go through [EDIT_CLIP: <its link> | brief] for captions, music or S.E.L.E.N.E.'s dress-up.`, media };
+    jobs.done(jid, `${picks.length} moment(s)`);
+    return out;
+  } catch (e) {
+    jobs.fail(jid, e);
+    throw e;
   } finally {
     running = false;
     if (chatP && chatP.stop) chatP.stop();

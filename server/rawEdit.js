@@ -162,10 +162,13 @@ function renderPrefs(s) {
 }
 
 // [STYLE_LEARN: handle or reel links] — watch up to 5 of his past edits.
-async function learnStyle(arg) {
+const learnStyle = (arg) => jobs.run('rogue', `Style learn: ${String(arg || '').slice(0, 45)}`, ['List his edits', 'Watch each edit', 'Build the profile'], (job) => learnStyleInner(arg, job));
+
+async function learnStyleInner(arg, job = NOJOB) {
   const clip = require('./clipScan');
   const { transcribeWords } = require('./llm');
   const { lookAtImages } = require('./vision');
+  job.step('List his edits');
   const links = String(arg || '').match(/https?:\/\/\S+/g) || [];
   let urls = links;
   if (!urls.length) {
@@ -179,7 +182,10 @@ async function learnStyle(arg) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rogue-style-'));
   const seen = [];
   try {
-    for (const [i, u] of urls.slice(0, 5).entries()) {
+    const watch = urls.slice(0, 5);
+    job.plan(['List his edits', ...watch.map((_, i) => `Watch edit ${i + 1}`), 'Build the profile'], 1);
+    for (const [i, u] of watch.entries()) {
+      job.step(`Watch edit ${i + 1}`);
       try {
         const d = path.join(dir, String(i)); fs.mkdirSync(d);
         const { file } = await clip.downloadYouTube(u, d);
@@ -201,6 +207,7 @@ async function learnStyle(arg) {
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   const ok = seen.filter((x) => !x.error);
   if (!ok.length) throw new Error(`couldn't watch any of them (${seen.map((x) => x.error).join('; ').slice(0, 300)})`);
+  job.step('Build the profile');
   const { claudeText } = require('./llm');
   const raw = await claudeText('You build an editing style profile for a short-form video editor from notes on several of his own finished videos. Return JSON only: {"summary": "8-12 short lines describing his style, concrete enough to edit by: pacing, captions, framing, zooms, titles, grade, length", "prefs": {"captions": true|false, "caption_position": "lower"|"middle", "hook": true|false, "zooms": true|false, "titles": true|false}}. Only what the notes show; where they disagree, go with the majority.',
     ok.map((x, i) => `VIDEO ${i + 1} (${x.secs}s, ${x.wps} words/sec, average pause ${x.pause}s):\n${x.look}`).join('\n\n'), { maxTokens: 900 });
@@ -241,7 +248,13 @@ ${styleText(prof)}${notes ? `\nHis notes for this video: ${notes}` : ''}${songs.
   return claudeText(sys, ls.map((l) => `${l.id} [${l.start.toFixed(1)}-${l.end.toFixed(1)}] ${l.text}`).join('\n').slice(0, 60000), { maxTokens: 1500 });
 }
 
-async function editOne(link, notes = '') {
+// Live progress (server/jobProgress.js): each edit / style learn is one tracked job.
+const jobs = require('./jobProgress');
+const NOJOB = { step() {}, note() {} };
+const EDIT_STEPS = ['Download footage', 'Transcribe', 'Plan the cut', 'Render', 'Upload'];
+const editOne = (link, notes = '') => jobs.run('rogue', `Raw edit: ${String(link).replace(/^https?:\/\/(www\.)?/, '').slice(0, 45)}`, EDIT_STEPS, (job) => editOneInner(link, notes, job));
+
+async function editOneInner(link, notes = '', job = NOJOB) {
   const clip = require('./clipScan');
   const layout = require('./clipLayout');
   const google = require('./google');
@@ -249,6 +262,7 @@ async function editOne(link, notes = '') {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rogue-edit-'));
   try {
     let src = path.join(dir, 'raw'), name;
+    job.step('Download footage');
     const id = clip.driveId(link);
     if (id) name = await google.driveDownloadTo(id, src, clip.MAX_BYTES);
     else if (clip.isYouTube(link) || clip.isSocialVideo(link)) ({ file: src, name } = await clip.downloadYouTube(link, dir));
@@ -256,10 +270,12 @@ async function editOne(link, notes = '') {
     const total = await clip.duration(src);
     if (!total) throw new Error("couldn't read that file as a video");
     if (total > MAX_MIN * 60) throw new Error(`that's ${clip.mmss(total)} of footage; the limit is ${MAX_MIN} minutes a video`);
+    job.step('Transcribe');
     const a = path.join(dir, 'a.mp3');
     await run(['-hide_banner', '-loglevel', 'error', '-y', '-i', src, '-vn', '-ac', '1', '-ar', '16000', '-b:a', '48k', a]);
     const words = await transcribeWords(fs.readFileSync(a), 'raw.mp3');
     if (!words.length) throw new Error('no speech found in it');
+    job.step('Plan the cut');
     const ls = lines(words);
     const [prof, music] = await Promise.all([style(), musicFiles()]);
     const pl = parsePlan(await plan(ls, prof, notes, music.files).catch(() => ''), ls.length);
@@ -282,6 +298,7 @@ async function editOne(link, notes = '') {
     if (pl.music && music.files.length) song = music.files.find((f) => f.name === pl.music) || music.files.find((f) => f.name.toLowerCase().includes(pl.music.toLowerCase()));
     let songFile = null;
     if (song) { songFile = path.join(dir, 'song'); await google.driveDownloadTo(song.id, songFile, 50e6).catch(() => { songFile = null; }); }
+    job.step('Render');
     const out = path.join(dir, 'edit.mp4');
     const v = `${videoChain(segs, size)},${subs}[v]`;
     const aud = `${audioChain(segs)}[voice]`;
@@ -295,6 +312,7 @@ async function editOne(link, notes = '') {
       await run(['-hide_banner', '-loglevel', 'error', '-y', '-i', src, '-filter_complex', `${videoChain(segs.map((s) => ({ ...s, zoom: false })), size)}[v];${aud}`, '-map', '[v]', '-map', '[voice]', ...enc, out]);
     }
     const base = (pl.title || String(name).replace(/\.[^.]+$/, '')).slice(0, 60);
+    job.step('Upload');
     const up = await google.driveUploadFile(out, `Edit — ${base}.mp4`);
     const cutLines = ls.length - pl.keep.length;
     const summary = [
