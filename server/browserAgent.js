@@ -581,12 +581,12 @@ async function browseTag(persona, arg, { ownerText = '' } = {}) {
 
 // One browser task, consent banners and emailed codes handled. Also what a worker
 // (server/workers.js) runs, on its own browser profile.
-async function browseRun(persona, name, arg, { ownerText = '', onStep = null } = {}) {
+async function browseRun(persona, name, arg, { ownerText = '', onStep = null, secrets = {} } = {}) {
   const { claudeText } = require('./llm');
   const brain = (sys, prompt) => claudeText(sys, prompt, { maxTokens: 700 });
   // Cookie / consent banners are not acts in the world: let them through (Canva's
   // banner ignores Reject all, 2026-11-22).
-  let r = await runTask({ persona, personaName: name, task: String(arg || '').trim(), ownerText, brain, allow: CONSENT, onStep });
+  let r = await runTask({ persona, personaName: name, task: String(arg || '').trim(), ownerText, brain, secrets, allow: CONSENT, onStep });
   // A site emailed a code: it's in his Gmail, so fetch it and carry on without him
   // (owner, 2026-11-22: "it's supposed to be automatic").
   const logins = require('./siteLogins');

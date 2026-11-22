@@ -150,17 +150,33 @@ function fakeGitHub() {
   assert.ok(told.some((t) => /FAILED/.test(t) && /never started its run/.test(t)), 'a run GitHub never started is reported');
 
   assert.match(await W.tag('WORKER_STOP', '99'), /no worker 99/);
-  // A worker that needs him (a sign-in) is reported from A.R.A., not J.A.R.V.I.S.
+  // Stopped for a sign-in: A.R.A. finds it in his email/notes and the worker carries on.
   settings.workers = '{}';
-  const fromAra = [];
-  const rel = [];
-  W._setDeps({ gh: gh.call, repo: () => ({ owner: 'o', repo: 'r' }), slot: async () => () => {}, tell: async (t) => told.push(t), tellAra: async (t, spoken) => fromAra.push({ t, spoken }), saveNote: async () => {}, onDone: () => null,
-    browse: async () => { await new Promise((r) => rel.push(r)); return { status: 'ask', text: 'BROWSE — paused, needs Mr. Burrus\nGoogle Drive is asking me to sign in.', result: '' }; } });
-  await W.tag('WORKER_START', 'browse | Drive pages | read the pages');
-  await sleep(20); rel.shift()(); await sleep(40);
-  assert.strictEqual(fromAra.length, 1, 'needs-you goes through A.R.A.');
-  assert.match(fromAra[0].t, /✋ Worker 1 of 3 stopped — it needs you/);
-  assert.match(fromAra[0].spoken, /sign in/);
+  const calls = [], asked = [];
+  const askThenDone = async (persona, name, task, o) => {
+    calls.push({ task, secrets: o.secrets });
+    if (calls.length === 1) return { status: 'ask', text: 'BROWSE — paused, needs Mr. Burrus\nCanva is asking me to sign in — which email is the account under?', result: '', url: 'https://canva.com/login' };
+    return { status: 'done', text: 'BROWSE — finished', result: 'Read all 16 pages.' };
+  };
+  W._setDeps({ gh: gh.call, repo: () => ({ owner: 'o', repo: 'r' }), slot: async () => () => {}, tell: async (t) => told.push(t), saveNote: async () => {}, onDone: () => null,
+    browse: askThenDone, find: async (q, o) => { asked.push({ q, o }); return { what: 'the Canva account email', value: 'him@example.com', secret: false }; } });
+  const before = told.length;
+  await W.tag('WORKER_START', 'browse | Canva pages | read the pages');
+  await sleep(60);
+  assert.strictEqual(asked.length, 1, 'A.R.A. was asked first');
+  assert.match(calls[1].task, /A\.R\.A\. FOUND WHAT YOU STOPPED FOR — the Canva account email/);
+  assert.strictEqual(calls[1].secrets.INFO, 'him@example.com');
+  assert.match(told[before], /✅ Worker 1 of 3 finished/, 'he only hears the result');
+  // A.R.A. can't find it → J.A.R.V.I.S. (not A.R.A.) tells him it needs him.
+  settings.workers = '{}';
+  W._setDeps({ gh: gh.call, repo: () => ({ owner: 'o', repo: 'r' }), slot: async () => () => {}, tell: async (t) => told.push(t), saveNote: async () => {}, onDone: () => null,
+    browse: async () => ({ status: 'ask', text: 'BROWSE — paused\nGoogle wants a code texted to his phone (verification).', result: '' }), find: async () => null });
+  await W.tag('WORKER_START', 'browse | Drive | open drive');
+  await sleep(60);
+  assert.match(told[told.length - 1], /✋ Worker 1 of 3 stopped — it needs you/);
+  // His OK to act is never fetched from email: that one goes straight to him.
+  assert.strictEqual(require('../araFinds').asksForInfo('Should I send the email to the client? Approve?'), false);
+  assert.strictEqual(require('../araFinds').asksForInfo('It needs the verification code emailed to him'), true);
   // [WORKER_STOP: 1] stops the worker in slot 1
   W._setDeps({ gh: gh.call, repo: () => ({ owner: 'o', repo: 'r' }), slot: async () => () => {}, tell: async (t) => told.push(t), saveNote: async () => {}, onDone: () => null,
     browse: async () => new Promise(() => {}) });

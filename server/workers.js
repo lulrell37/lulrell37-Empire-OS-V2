@@ -15,7 +15,8 @@
 // "3 and 3 only"); the rest wait in line. He sees each by its slot ("Worker 2 of
 // 3"), never the internal id, which only counts up (a "#16" read as 16 running).
 // Browse workers share every browser's logins (browserAgent's shared cookie jar);
-// one that needs him (a sign-in, a code) is reported from A.R.A.'s bot. Every result goes straight to Mr.
+// one stuck on information gets it from A.R.A. (his email and notes, araFinds.js)
+// first; only what nobody can supply reaches him, from J.A.R.V.I.S. (it's his work). Every result goes straight to Mr.
 // Burrus on J.A.R.V.I.S.'s bot (logged in his chat history, so J.A.R.V.I.S. knows
 // it) — no engine turn, so J.A.R.V.I.S. is never busy checking a worker when he
 // wants to talk. The issue holds the task and the full report: the proof it ran.
@@ -48,7 +49,7 @@ function d() {
     repo: () => require('./buildAgent').REPO,
     slot: (o) => require('./claudeSub').cliSlot({ pool: 'heavy', ...o }),
     browse: (persona, name, task, opts) => require('./browserAgent').browseRun(persona, name, task, opts),
-    tellAra: (text, spoken) => require('./talonAlerts').sendFromAra(text, spoken),
+    find: (q, o) => require('./araFinds').findForJob(q, o),
     tell: async (text) => {
       const tg = require('./telegram');
       const id = tg.botFor('jarvis') && tg.botFor('jarvis').isConfigured() ? 'jarvis' : 'ara';
@@ -141,10 +142,18 @@ async function launch(w) {
 }
 
 async function runBrowse(w) {
-  const r = await d().browse(`worker-${w.id}`, `J.A.R.V.I.S.'s worker #${w.id}`, w.task, {
-    ownerText: '',
-    onStep: (n, line) => update(w, { step: n, progress: line.slice(0, 140) }),
-  });
+  const onStep = (n, line) => update(w, { step: n, progress: line.slice(0, 140) });
+  let r = await d().browse(`worker-${w.id}`, `J.A.R.V.I.S.'s worker`, w.task, { ownerText: '', onStep });
+  // Stopped for information (a sign-in, an account email, a code…): A.R.A. looks
+  // in his email and notes first, and it carries on with what she finds. He hears
+  // about it only if she can't find it (owner, 2026-11-22).
+  for (let tries = 0; r.status === 'ask' && tries < 2 && d().find && require('./araFinds').asksForInfo(r.text); tries++) {
+    update(w, { progress: 'Getting what it needs from A.R.A. (his email and notes)' });
+    const got = await d().find(r.text, { task: w.task, site: r.url || '' }).catch(() => null);
+    if (!got) break;
+    const shown = got.secret ? '{{INFO}} (type exactly that; it is filled in for you)' : `"${got.value}" (also available as {{INFO}})`;
+    r = await d().browse(`worker-${w.id}`, `J.A.R.V.I.S.'s worker`, `${w.task}\n\n[A.R.A. FOUND WHAT YOU STOPPED FOR — ${got.what}: ${shown}. Carry on with the task from where the browser is.]`, { ownerText: '', onStep, secrets: { INFO: got.value } });
+  }
   const status = r.status === 'done' ? 'done' : r.status === 'ask' ? 'needs_you' : 'failed';
   let saved = '';
   if (w.note && r.result && status === 'done') {
@@ -231,8 +240,6 @@ function defaultReport(w) {
     const head = { done: 'finished', needs_you: 'stopped — it needs you', failed: 'FAILED' }[w.status] || w.status;
     const links = [w.pushed ? `Branch: ${w.pushed}` : (w.branch && w.kind === 'code' ? `Branch: ${w.branch} (nothing pushed)` : ''), w.issueUrl ? `Full report: ${w.issueUrl}` : ''].filter(Boolean).join('\n');
     const text = `${icon} Worker ${w.slot || '?'} of 3 ${head} — "${w.title}" (${w.kind}, ${mins} min)\n\n${String(w.result || '(no report)').slice(0, 3000)}${links ? `\n\n${links}` : ''}${w.kind === 'code' && w.status === 'done' && w.pushed && /pushed/.test(w.pushed) ? '\n\nSay "push" to J.A.R.V.I.S. to ship it.' : ''}`;
-    // Something only he can give (a sign-in, a code, an approval) comes to him from A.R.A. (his rule).
-    if (w.status === 'needs_you' && d().tellAra) return d().tellAra(text, `Mr. Burrus, one of Jarvis's workers needs you: ${String(w.result || '').split('\n').find((l) => l.trim() && !/^BROWSE/.test(l)) || w.title}`);
     return d().tell(text);
   }
 }
@@ -298,7 +305,7 @@ async function tag(name, arg) {
   return `WORKER_START: ✓ ${on ? `worker ${on.slot} of 3` : 'a worker'} (${w.kind}) "${w.title}" ${on ? 'is working on it now' : `is in line (all 3 slots busy)`}${w.kind === 'code' ? ', on its own GitHub runner' : ''}. Its progress shows on his notification strip; its report goes straight to him on your bot when it's done (you'll see it in this chat).`;
 }
 
-const WORKER_TOOLS = ` - [WORKER_START: code|browse | short title | the full task, self-contained | Drive note title (browse only, optional)] — hand a task to a worker of your own so you stay free to talk to him. code = its own Claude Code on its own GitHub runner (not the server), on a worker/ branch cut from main: it commits, the job pushes that branch only, never main; good for any general job (code, research, checks, writing). browse = a browser task on the server, its result saved to that Drive note; one browse at a time. Every browser shares the same saved logins, so a site you or A.R.A. are signed in to works for a worker too. A file in his Google Drive is read with your Drive tags ([READ_NOTE], [SEARCH_DRIVE], [READ_FILE_ID]), not a browse worker. HARD CAP: 3 workers running at once, total; the rest wait in line. Call them by their slot, "worker 1, 2 or 3", never by a running count; [WORKER_STOP: 2] stops the one in slot 2. A worker that needs something only he can give (a sign-in, a code) is reported to him by A.R.A. Each one's progress shows live on his notification strip, and its report goes straight to him on your bot when it ends (you'll see it in this chat), so you don't need to relay it; if he asks, read [WORKER_STATUS]. A code worker's work ships when he says push: merge its branch into main then. Use them for EVERY task, whatever its length (his standing order, 2026-11-22), so you are always free to talk to him. Only straight answers and seconds-long lookups stay with you.
+const WORKER_TOOLS = ` - [WORKER_START: code|browse | short title | the full task, self-contained | Drive note title (browse only, optional)] — hand a task to a worker of your own so you stay free to talk to him. code = its own Claude Code on its own GitHub runner (not the server), on a worker/ branch cut from main: it commits, the job pushes that branch only, never main; good for any general job (code, research, checks, writing). browse = a browser task on the server, its result saved to that Drive note; one browse at a time. Every browser shares the same saved logins, so a site you or A.R.A. are signed in to works for a worker too. A file in his Google Drive is read with your Drive tags ([READ_NOTE], [SEARCH_DRIVE], [READ_FILE_ID]), not a browse worker. HARD CAP: 3 workers running at once, total; the rest wait in line. Call them by their slot, "worker 1, 2 or 3", never by a running count; [WORKER_STOP: 2] stops the one in slot 2. A browse worker stuck on information (a sign-in, an account email, a code) gets it from A.R.A., who searches his email and notes, and carries on; only what nobody can supply comes to him, from you. Each one's progress shows live on his notification strip, and its report goes straight to him on your bot when it ends (you'll see it in this chat), so you don't need to relay it; if he asks, read [WORKER_STATUS]. A code worker's work ships when he says push: merge its branch into main then. Use them for EVERY task, whatever its length (his standing order, 2026-11-22), so you are always free to talk to him. Only straight answers and seconds-long lookups stay with you.
  - [WORKER_STATUS] — every worker: running, waiting, done, with its current step and GitHub link. [WORKER_STOP: id] — stop one (a GitHub run is cancelled).`;
 
 module.exports = { start, stop, recover, statusText, forApp, tag, WORKER_TOOLS, enabled, _setDeps: (x) => { deps = x; list = null; }, _list: () => list };

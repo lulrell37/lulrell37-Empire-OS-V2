@@ -20,6 +20,8 @@ const NOTE = 'How Mr. Burrus Works';
 // His standing orders that must never drop out, whatever the model returns:
 const PINNED = [
   '- [all] Nothing we build may shut down, stop or break quietly: if anything is failing or about to, A.R.A. tells him automatically, without being asked (2026-11-22)',
+  '- [all] Anything a job needs that his email or notes hold (a code, a link, an account email, a login) comes from A.R.A. first; a persona comes to him only when it absolutely has to (2026-11-22)',
+  '- [all] J.A.R.V.I.S.\'s workers are him: everything about them, their questions included, comes from J.A.R.V.I.S.\'s bot, so it reads as him doing all the work (this replaces routing worker sign-in questions through A.R.A.) (2026-11-22)',
 ];
 // These see every line: A.R.A. runs the team and J.A.R.V.I.S. builds for all of it.
 // Mirrored in src/services/aiService.js (profileFor).
