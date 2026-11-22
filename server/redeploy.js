@@ -93,14 +93,18 @@ async function onBoot() {
   const running = `${info.source === 'github' ? 'main' : 'the bundled deploy'} @ ${info.sha || '?'}${what ? ` — "${what}"` : ''}`;
   if (restarted && !pending && !fellBack) {
     const froze = /^froze/.test(restarted);
-    araNote(`⚠️ **The server ${froze ? 'froze' : 'crashed'}, Mr. Burrus — it restarted itself and it's back up.**\nRunning: ${running}\n\nWhat happened:\n\`\`\`\n${String(restarted).slice(0, 1200)}\n\`\`\`\nJ.A.R.V.I.S. can dig in with [SERVER_LOGS].`,
-      `Mr. Burrus, the server ${froze ? 'froze' : 'crashed'}, so it restarted itself. It's back up now. The details are below.`, { remember: true });
+    araNote(`⚠️ **The server ${froze ? 'froze' : 'crashed'}, Mr. Burrus — it restarted itself and it's back up.**\nRunning: ${running}\n\nWhat happened:\n\`\`\`\n${String(restarted).slice(0, 1200)}\n\`\`\`\n${require('./autoFix').willTry() ? 'J.A.R.V.I.S. is looking into it now and will send you the fix to approve.' : 'J.A.R.V.I.S. can dig in with [SERVER_LOGS].'}`,
+      `Mr. Burrus, the server ${froze ? 'froze' : 'crashed'}, so it restarted itself. It's back up now.${require('./autoFix').willTry() ? ' Jarvis is finding out why.' : ' The details are below.'}`, { remember: true });
+    require('./autoFix').afterRestart(froze ? 'froze' : 'crashed', restarted).catch((e) => console.error('auto-fix failed:', e.message));
     return;
   }
   if (fellBack) {
-    wakeJarvis(pending, `the redeploy did NOT take: the new code crashed on startup and the server fell back to ${running}. The error: ${String(fellBack).slice(0, 600)}`);
-    araNote(`⚠️ **Redeploy didn't take, Mr. Burrus.** The new code crashed on startup, so the server went back to the last version that worked — everything's still running, just not the update.\nRunning: ${running}\n\nWhat broke:\n\`\`\`\n${String(fellBack).slice(0, 900)}\n\`\`\`\nJ.A.R.V.I.S. can file a fix ([BUILD_REQUEST]) — then redeploy again.`,
-    "Mr. Burrus, the redeploy didn't take. The new code crashed on startup, so I put the server back on the last version that worked. Everything's still running, just not the update. The error's below.", { remember: true });
+    // A redeploy he asked for: wakeJarvis already has him look at why — no second auto-fix run.
+    const woke = wakeJarvis(pending, `the redeploy did NOT take: the new code crashed on startup and the server fell back to ${running}. The error: ${String(fellBack).slice(0, 600)}`);
+    const fixing = !woke && require('./autoFix').willTry();
+    araNote(`⚠️ **Redeploy didn't take, Mr. Burrus.** The new code crashed on startup, so the server went back to the last version that worked — everything's still running, just not the update.\nRunning: ${running}\n\nWhat broke:\n\`\`\`\n${String(fellBack).slice(0, 900)}\n\`\`\`\n${woke || fixing ? 'J.A.R.V.I.S. is looking into it now.' : 'J.A.R.V.I.S. can file a fix ([BUILD_REQUEST]) — then redeploy again.'}`,
+    `Mr. Burrus, the redeploy didn't take. The new code crashed on startup, so I put the server back on the last version that worked. Everything's still running, just not the update.${woke || fixing ? ' Jarvis is on the fix.' : " The error's below."}`, { remember: true });
+    if (fixing) require('./autoFix').afterRestart('fellback', fellBack).catch((e) => console.error('auto-fix failed:', e.message));
     return;
   }
   const changes = await changesSince(pending.from_sha, info.sha);

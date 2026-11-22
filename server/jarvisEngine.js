@@ -191,10 +191,10 @@ function spawnTurn({ prompt, persona, resume, onProgress, signal, dir = null, br
       try { fs.unlinkSync(briefFile); } catch {}
       fn();
     };
-    const onAbort = () => { child.kill('SIGTERM'); done(() => reject(Object.assign(new Error('cancelled'), { name: 'AbortError' }))); };
+    const onAbort = () => { require('./claudeSub').killHard(child); done(() => reject(Object.assign(new Error('cancelled'), { name: 'AbortError' }))); };
     if (signal) { if (signal.aborted) return onAbort(); signal.addEventListener('abort', onAbort); }
     const limit = timeoutMs || TIMEOUT_MS();
-    const timer = setTimeout(() => { child.kill('SIGTERM'); done(() => reject(Object.assign(new Error(`ran past ${Math.round(limit / 60000)} minutes`), { partial: lastText, sessionId }))); }, limit);
+    const timer = setTimeout(() => { require('./claudeSub').killHard(child); done(() => reject(Object.assign(new Error(`ran past ${Math.round(limit / 60000)} minutes`), { partial: lastText, sessionId }))); }, limit);
     const handle = (line) => {
       let ev; try { ev = JSON.parse(line); } catch { return; }
       if (ev.session_id && ev.session_id !== sessionId) {
@@ -241,7 +241,11 @@ async function turn(prompt, { persona = '', onProgress, signal, source = 'telegr
   const id = crypto.randomUUID();
   const go = async () => {
     logTurn({ id, text: String(ownerText || prompt).slice(0, 6000), source, startedAt: Date.now(), resumes });
+    let release = () => {};
     try {
+      // He counts toward the server's cap on Claude CLI processes (claudeSub.cliSlot),
+      // so his engine and the personas' CLI calls can't run the machine out of RAM.
+      release = await require('./claudeSub').cliSlot({ pool: 'heavy', waitMs: 10 * 60000, signal });
       const resume = loadSession();
       // A new session hasn't seen the chat: give it the last few messages first.
       const fresh = recent ? `[NEW SESSION — your last messages with him, oldest first, so a follow-up like "push" or "do it" still lands. Check the repo (branches, git log) for what they refer to:\n${recent}\n]\n\n${prompt}` : prompt;
@@ -257,6 +261,7 @@ async function turn(prompt, { persona = '', onProgress, signal, source = 'telegr
       console.log(`jarvis engine: done in ${out.turns || '?'} turns${out.costUsd != null ? `, $${Number(out.costUsd).toFixed(3)}` : ''}`);
       return out.text;
     } finally {
+      release();
       unlogTurn(id); // finished, failed or cancelled: it has been answered either way
       busy--;
     }

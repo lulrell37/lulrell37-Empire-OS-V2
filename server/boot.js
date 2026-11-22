@@ -173,7 +173,15 @@ function launch(code, extraEnv = {}) {
     cwd: code.dir,
     env: { ...process.env, ...extraEnv, EMPIRE_SUPERVISED: '1', EMPIRE_CODE_SHA: code.sha, EMPIRE_CODE_SOURCE: code.source },
     stdio: ['ignore', 'pipe', 'pipe'],
+    // Its own process group, so killing it takes everything it started. Before
+    // this, a frozen child was SIGKILLed but its `claude` CLIs, J.A.R.V.I.S.'s
+    // engine, ffmpeg/yt-dlp and Chrome lived on as orphans (~400 MB each), and
+    // the fresh server started on a machine still out of RAM — the personas
+    // timed out after every "it restarted itself" (2026-11-22).
+    detached: true,
   });
+  const started = child;
+  child.once('exit', () => killTree(started, 'SIGKILL')); // orphans it left behind
   child.stdout.on('data', (b) => { process.stdout.write(b); keep(b); });
   child.stderr.on('data', (b) => { process.stderr.write(b); keep(b); });
   const exit = new Promise((r) => child.once('exit', (c, sig) => r(c ?? (sig ? 1 : 0))));
@@ -198,11 +206,36 @@ const WATCH_MS = Number(process.env.FREEZE_WATCH_MS || 30 * 1000);
 const FREEZE_MISSES = Number(process.env.FREEZE_MISSES || 4);
 let restartReason = '';
 
+// Signal the child and everything in its process group.
+function killTree(proc, sig) {
+  if (!proc || !proc.pid) return;
+  try { process.kill(-proc.pid, sig); } catch { try { proc.kill(sig); } catch { /* gone */ } }
+}
+
 function memLine(pid) {
   let rss = '';
   try { rss = (/VmRSS:\s*(\d+)/.exec(fs.readFileSync(`/proc/${pid}/status`, 'utf8')) || [])[1]; } catch { /* gone */ }
   const mb = (b) => `${Math.round(b / 1048576)} MB`;
   return `server memory ${rss ? mb(rss * 1024) : '?'}; machine ${mb(os.freemem())} free of ${mb(os.totalmem())}`;
+}
+
+// The biggest processes on the machine, so a freeze report says what filled the
+// RAM (2026-11-22's said only "114 MB free" — the hog was outside the server).
+function topProcs(n = 6) {
+  const rows = [];
+  let pids = [];
+  try { pids = fs.readdirSync('/proc').filter((d) => /^\d+$/.test(d)); } catch { return ''; }
+  for (const pid of pids) {
+    try {
+      const st = fs.readFileSync(`/proc/${pid}/status`, 'utf8');
+      const kb = Number((/VmRSS:\s*(\d+)/.exec(st) || [])[1] || 0);
+      if (!kb) continue;
+      const cmd = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').filter(Boolean)
+        .map((a) => a.replace(/^.*\//, '')).join(' ').replace(/sk-ant-\S+|gh[pousr]_\S+/g, '…').slice(0, 70);
+      rows.push({ kb, line: `${Math.round(kb / 1024)} MB  ${cmd || (/Name:\s*(\S+)/.exec(st) || [])[1]}` });
+    } catch { /* gone */ }
+  }
+  return rows.sort((a, b) => b.kb - a.kb).slice(0, n).map((r) => r.line).join('\n');
 }
 
 function watch(run) {
@@ -219,9 +252,10 @@ function watch(run) {
     misses = ok ? 0 : misses + 1;
     if (misses < FREEZE_MISSES) return;
     clearInterval(t);
-    restartReason = `froze — stopped answering for ${Math.round((misses * WATCH_MS) / 60000)} min (${memLine(proc.pid)}). Last output:\n${run.tail.slice(-12).join('\n').slice(-1500)}`;
+    const procs = topProcs();
+    restartReason = `froze — stopped answering for ${Math.round((misses * WATCH_MS) / 60000)} min (${memLine(proc.pid)}).${procs ? `\nBiggest processes:\n${procs}` : ''}\nLast output:\n${run.tail.slice(-12).join('\n').slice(-1500)}`;
     log(`server ${restartReason.split('\n')[0]} — killing it`);
-    proc.kill('SIGKILL');
+    killTree(proc, 'SIGKILL');
   }, WATCH_MS);
   run.exit.then(() => clearInterval(t));
 }
@@ -229,8 +263,9 @@ function watch(run) {
 async function stop() {
   if (!child || child.exitCode != null) return;
   const gone = new Promise((r) => child.once('exit', r));
-  child.kill('SIGTERM');
-  const t = setTimeout(() => child.kill('SIGKILL'), 10000);
+  const proc = child;
+  killTree(proc, 'SIGTERM');
+  const t = setTimeout(() => killTree(proc, 'SIGKILL'), 10000);
   await gone;
   clearTimeout(t);
 }

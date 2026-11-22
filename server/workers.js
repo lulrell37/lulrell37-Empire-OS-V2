@@ -83,12 +83,20 @@ async function launch(w) {
   ctrls.set(w.id, ctrl);
   update(w, { status: 'running', startedAt: Date.now(), attempts: (w.attempts || 0) + 1, progress: 'Starting' });
   let out;
+  let release = () => {};
   try {
+    // A worker is a whole Claude Code run or a Chrome (~400 MB each): it waits
+    // for a heavy slot and free memory (claudeSub.cliSlot) so workers can't
+    // freeze the 2 GB server the way 2026-11-22's did.
+    update(w, { progress: 'Waiting for room on the server' });
+    release = await require('./claudeSub').cliSlot({ pool: 'heavy', signal: ctrl.signal });
+    update(w, { progress: 'Starting' });
     out = w.kind === 'browse' ? await runBrowse(w) : await runCode(w, ctrl.signal);
   } catch (e) {
     out = { status: ctrl.signal.aborted ? 'stopped' : 'failed', result: e.message };
     if (!ctrl.signal.aborted) console.error(`worker failed: #${w.id} ${w.title}: ${e.message}`);
   }
+  release();
   ctrls.delete(w.id);
   update(w, { status: out.status, result: String(out.result || '').slice(0, 20000), branch: out.branch || w.branch, endedAt: Date.now(), progress: out.status === 'done' ? 'Finished' : out.status === 'needs_you' ? 'Needs Mr. Burrus' : out.status === 'stopped' ? 'Stopped' : 'Failed' });
   if (w.status !== 'stopped') report(w);

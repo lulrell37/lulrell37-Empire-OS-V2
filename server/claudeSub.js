@@ -130,12 +130,69 @@ function toCliPrompt(system, messages) {
   return { system: sys, prompt };
 }
 
+// Each `claude` CLI is its own ~200-400 MB process (and a worker's Chrome about
+// as much). With no cap, a few persona turns + loops + J.A.R.V.I.S.'s engine at
+// once ran the 2 GB machine out of RAM (2026-11-22: 114 MB free, event loop 10 s
+// late, froze). Two pools:
+//   cli   — the personas' one-shot calls: CLAUDE_CLI_MAX (2) at once; one that
+//           can't start in CLAUDE_CLI_WAIT_S (90 s) fails, so the caller uses
+//           the metered API instead of the server thrashing.
+//   heavy — J.A.R.V.I.S.'s engine and his workers (code or browser), long runs:
+//           CLAUDE_HEAVY_MAX (2) at once, extras wait their turn.
+// Nothing new starts in either while the machine has under
+// CLAUDE_CLI_MIN_FREE_MB (350) available.
+const POOLS = {
+  cli: { max: () => Number(process.env.CLAUDE_CLI_MAX) || 2, running: 0, waiters: [] },
+  heavy: { max: () => Number(process.env.CLAUDE_HEAVY_MAX) || 2, running: 0, waiters: [] },
+};
+const MIN_FREE = () => (Number(process.env.CLAUDE_CLI_MIN_FREE_MB) || 350) * 1048576;
+const WAIT_MS = () => (Number(process.env.CLAUDE_CLI_WAIT_S) || 90) * 1000;
+function freeMem() {
+  try { const m = /MemAvailable:\s*(\d+)/.exec(fs.readFileSync('/proc/meminfo', 'utf8')); if (m) return Number(m[1]) * 1024; } catch { /* not linux */ }
+  return os.freemem();
+}
+let pumpTimer = null;
+function pump() {
+  for (const p of Object.values(POOLS)) {
+    // One start per pass: the memory a new process takes shows up only after it starts.
+    if (p.waiters.length && p.running < p.max() && freeMem() >= MIN_FREE()) { p.running++; p.waiters.shift().go(); }
+  }
+  if (!pumpTimer && Object.values(POOLS).some((p) => p.waiters.length)) pumpTimer = setTimeout(() => { pumpTimer = null; pump(); }, 2000);
+}
+// Resolves to a release() once a slot is free; rejects after the wait, or on `signal`.
+function cliSlot({ pool = 'cli', waitMs, signal } = {}) {
+  const p = POOLS[pool] || POOLS.cli;
+  const wait = waitMs || (pool === 'heavy' ? 6 * 3600000 : WAIT_MS());
+  return new Promise((resolve, reject) => {
+    let released = false;
+    const release = () => { if (released) return; released = true; p.running--; pump(); };
+    const drop = (err) => { clearTimeout(w.t); const i = p.waiters.indexOf(w); if (i >= 0) { p.waiters.splice(i, 1); reject(err); } };
+    const onAbort = () => drop(Object.assign(new Error('cancelled while waiting'), { name: 'AbortError' }));
+    const w = { go: () => { clearTimeout(w.t); if (signal) signal.removeEventListener('abort', onAbort); resolve(release); } };
+    w.t = setTimeout(() => drop(new Error(`claude cli: server busy (${p.running} running, ${Math.round(freeMem() / 1048576)} MB free) — not starting another`)), wait);
+    if (signal) { if (signal.aborted) return reject(Object.assign(new Error('cancelled'), { name: 'AbortError' })); signal.addEventListener('abort', onAbort); }
+    p.waiters.push(w);
+    pump();
+  });
+}
+const cliLoad = () => ({ ...Object.fromEntries(Object.entries(POOLS).map(([k, p]) => [k, { running: p.running, waiting: p.waiters.length }])), freeMb: Math.round(freeMem() / 1048576) });
+// SIGTERM, then SIGKILL: a timed-out CLI left running kept its memory.
+function killHard(child) {
+  try { child.kill('SIGTERM'); } catch {}
+  setTimeout(() => { if (child.exitCode == null && !child.signalCode) { try { child.kill('SIGKILL'); } catch {} } }, 5000).unref();
+}
+
 const LIMIT_RE = /usage limit|hit your limit|rate.?limit|limit reached|out of (?:extra )?usage/i;
 
 // One completion on the subscription. `onText(delta)` streams text as it comes.
 // Resolves to the full reply text; rejects on any failure. `search` gives the
 // model the WebSearch tool (standing in for the API's web_search tool).
-function claudeSubRun(system, messages, { model = 'claude-sonnet-5', search = false, onText, signal, timeoutMs } = {}) {
+async function claudeSubRun(system, messages, opts = {}) {
+  const release = await cliSlot();
+  try { return await runCli(system, messages, opts); } finally { release(); }
+}
+
+function runCli(system, messages, { model = 'claude-sonnet-5', search = false, onText, signal, timeoutMs } = {}) {
   return new Promise((resolve, reject) => {
     const p = toCliPrompt(system, messages);
     if (!p) return reject(new Error('claude cli: request has non-text content'));
@@ -192,12 +249,12 @@ function claudeSubRun(system, messages, { model = 'claude-sonnet-5', search = fa
       if (signal) signal.removeEventListener('abort', onAbort);
       fn();
     };
-    const onAbort = () => { child.kill('SIGTERM'); finish(() => reject(Object.assign(new Error('aborted'), { name: 'AbortError' }))); };
+    const onAbort = () => { killHard(child); finish(() => reject(Object.assign(new Error('aborted'), { name: 'AbortError' }))); };
     if (signal) {
       if (signal.aborted) return onAbort();
       signal.addEventListener('abort', onAbort);
     }
-    const timer = setTimeout(() => { child.kill('SIGTERM'); finish(() => reject(new Error('claude cli: timed out'))); }, timeoutMs || (search ? 240000 : 150000));
+    const timer = setTimeout(() => { killHard(child); finish(() => reject(new Error('claude cli: timed out'))); }, timeoutMs || (search ? 240000 : 150000));
 
     const handle = (line) => {
       let ev;
@@ -215,7 +272,7 @@ function claudeSubRun(system, messages, { model = 'claude-sonnet-5', search = fa
       } else if (ev.type === 'system' && ev.subtype === 'api_retry' && ev.error_status === 401) {
         // Don't sit through the CLI's ten retries of a rejected login.
         authRejected = true;
-        child.kill('SIGTERM');
+        killHard(child);
       } else if (ev.type === 'rate_limit_event') {
         const info = ev.rate_limit_info || {};
         if (info.status === 'rejected') { rejected = true; markLimited(info.resetsAt ? info.resetsAt * 1000 : 0); }
@@ -248,4 +305,4 @@ function claudeSubRun(system, messages, { model = 'claude-sonnet-5', search = fa
   });
 }
 
-module.exports = { claudeSubRun, subscriptionAvailable, subscriptionEnabled: enabled, subscriptionStatus: status, toCliPrompt };
+module.exports = { claudeSubRun, cliSlot, killHard, cliLoad, subscriptionAvailable, subscriptionEnabled: enabled, subscriptionStatus: status, toCliPrompt };

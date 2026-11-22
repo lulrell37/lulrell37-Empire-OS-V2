@@ -615,6 +615,8 @@ async function runPending(id) {
       text = `Filed as #${r.issueNumber} — Claude Code is on it (${r.url}). I'll tell you when it has a question or a PR.`;
     } else if (row.kind === 'build_merge') {
       text = await builds.mergeBuild(pl.n);
+    } else if (row.kind === 'autofix_merge') {
+      text = await require('./autoFix').mergeFix(pl.pr);
     } else if (row.kind === 'redeploy') {
       text = await require('./redeploy').requestRedeploy(row.persona);
     } else if (String(row.kind).startsWith('talon_')) {
