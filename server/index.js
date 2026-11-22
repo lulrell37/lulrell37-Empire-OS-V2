@@ -31,6 +31,10 @@ app.get('/health', (req, res) => {
 // AI proxy: no body parser — the request body is streamed straight through.
 app.use('/ai', auth, require('./routes/ai'));
 app.get('/diag', auth, (req, res) => res.json(require('./serverLog').diagJson()));
+// The app's [REDEPLOY], after his tap on its confirm dialog (Telegram's is a Confirm card).
+app.post('/redeploy', auth, (req, res) => require('./redeploy').requestRedeploy('app').then((text) => res.json({ text })).catch((e) => res.status(500).json({ error: e.message })));
+// What's broken right now (server/sentinel.js) — the app's top strip reads it.
+app.get('/sentinel', auth, (req, res) => require('./sentinel').status().then((items) => res.json({ items })).catch((e) => res.status(500).json({ error: e.message })));
 
 // JSON APIs.
 const json = express.json({ limit: '25mb' });
@@ -42,6 +46,7 @@ app.use('/council', auth, json, require('./routes/council'));
 app.use('/stephanie', auth, json, require('./routes/stephanie'));
 app.use('/jarvis', auth, json, require('./routes/jarvis'));
 app.use('/clips', auth, json, require('./routes/clips'));
+app.use('/browse', auth, json, require('./routes/browse'));
 // Is Mem0 (persona memory) actually answering from the server — a live probe,
 // plus how many memories each persona has there.
 app.get('/mem0/status', auth, async (req, res) => {
@@ -61,6 +66,8 @@ app.get('/mem0/status', auth, async (req, res) => {
 // Telegram bots — one headless front door per persona. Each webhook is guarded
 // by its own persona-namespaced secret path + header + owner-id check (no bearer).
 app.use('/telegram', express.json({ limit: '1mb' }), require('./routes/telegram'));
+// The website desk's pages (server/siteDesk.js): public, since the business owners open them.
+app.use('/sites', require('./routes/sites'));
 
 app.use((req, res) => res.status(404).json({ error: 'not found' }));
 app.use((err, req, res, next) => {
@@ -90,8 +97,15 @@ db.init()
     startTalonAutoTradeCron();
     startBuildPollCron();
     startNewsWireCron();
+    startAutoClipCron();
+    startSiteDeskCron();
+    startOpenThreadsCron();
+    startOwnerProfileCron();
+    startDayNudgeCron();
+    startMoneyWatchCron();
     startScoutOutreachCron();
     startAutoAtlasCron();
+    startSentinelCron();
     startAtlasInvestCron();
     startSeleneTrendsCron();
     startMondayScriptsCron();
@@ -106,6 +120,56 @@ db.init()
 // The scheduled nudge sender. Ticks every 30 minutes; each nudge's own time
 // window + push_log keep it to one send per occurrence. Set NUDGES=off to
 // disable (e.g. for a second instance or local dev).
+// R.O.G.U.E.'s auto clips: watched channels' new uploads, every 20 min.
+function startAutoClipCron() {
+  if (String(process.env.AUTO_CLIP || '').toLowerCase() === 'off') return console.log('auto clip cron disabled (AUTO_CLIP=off)');
+  const autoClip = require('./autoClip');
+  cron.schedule('*/20 * * * *', () => autoClip.tick().catch((e) => console.error('auto clip failed:', e.message)));
+  console.log('auto clip cron scheduled (every 20m)');
+}
+
+// The website desk: S.C.O.U.T. finds businesses, J.A.R.V.I.S. builds their sites, S.C.O.U.T. emails them.
+function startSiteDeskCron() {
+  if (String(process.env.SITE_DESK || '').toLowerCase() === 'off') return console.log('site desk cron disabled (SITE_DESK=off)');
+  const desk = require('./siteDesk');
+  cron.schedule('10,40 * * * *', () => desk.tick().then((r) => r && !r.skipped && console.log('site desk:', JSON.stringify(r))).catch((e) => console.error('site desk failed:', e.message)));
+  console.log('site desk cron scheduled (every 30m, 9 AM-6 PM ET)');
+}
+
+// Open threads: topics he started and set aside, kept in the Drive note "Open Threads".
+function startOpenThreadsCron() {
+  if (String(process.env.OPEN_THREADS || '').toLowerCase() === 'off') return console.log('open threads cron disabled (OPEN_THREADS=off)');
+  const ot = require('./openThreads');
+  cron.schedule('15 */3 * * *', () => ot.tick().catch((e) => console.error('open threads failed:', e.message)));
+  console.log('open threads cron scheduled (every 3h)');
+}
+
+// How Mr. Burrus works: preferences and corrections learned for every persona.
+function startOwnerProfileCron() {
+  if (String(process.env.OWNER_PROFILE || '').toLowerCase() === 'off') return console.log('owner profile cron disabled (OWNER_PROFILE=off)');
+  const op = require('./ownerProfile');
+  cron.schedule('45 */6 * * *', () => op.tick().catch((e) => console.error('owner profile failed:', e.message)));
+  console.log('owner profile cron scheduled (every 6h)');
+}
+
+// Thinking ahead during the day: A.R.A. nudges only when something needs him.
+function startDayNudgeCron() {
+  if (String(process.env.DAY_NUDGE || '').toLowerCase() === 'off') return console.log('day nudge cron disabled (DAY_NUDGE=off)');
+  const dn = require('./dayNudge');
+  cron.schedule('0 11,15,19 * * *', () => dn.tick().catch((e) => console.error('day nudge failed:', e.message)), { timezone: 'America/New_York' });
+  console.log('day nudge cron scheduled (11 AM, 3 PM, 7 PM ET)');
+}
+
+// A.T.L.A.S.'s money watch: money in/out logged from his email every 2h.
+function startMoneyWatchCron() {
+  if (String(process.env.MONEY_WATCH || '').toLowerCase() === 'off') return console.log('money watch cron disabled (MONEY_WATCH=off)');
+  const mw = require('./moneyWatch');
+  cron.schedule('30 */2 * * *', () => mw.tick().catch((e) => console.error('money watch failed:', e.message)));
+  cron.schedule('45 21 * * *', () => mw.dailyReport().catch((e) => console.error('money watch failed:', e.message)), { timezone: 'America/New_York' });
+  cron.schedule('50 21 * * *', () => mw.monthReport().catch((e) => console.error('money watch failed:', e.message)), { timezone: 'America/New_York' });
+  console.log('money watch cron scheduled (every 2h, day report 9:45 PM ET)');
+}
+
 function startNudgeCron() {
   if (process.env.NUDGES === 'off') return console.log('nudge cron disabled (NUDGES=off)');
   cron.schedule('*/30 * * * *', () => {
@@ -221,6 +285,8 @@ function startTalonAutoTradeCron() {
   if (process.env.TALON_AUTOTRADE === 'off') return console.log('T.A.L.O.N. auto-trade cron disabled (TALON_AUTOTRADE=off)');
   if (!talonAutoTrade.cronEnabled()) return console.log('T.A.L.O.N. auto-trade cron off (no Claude subscription, ANTHROPIC_API_KEY or XAI_API_KEY)');
   talonAutoTrade.enableOnce().catch((e) => console.error('talon switch-on failed:', e.message));
+  // T.A.L.O.N.'s Nasdaq desk: 1m triggers, every minute 9:30-4 ET weekdays (server/talonNasdaq.js).
+  if (process.env.TALON_NASDAQ !== 'off') cron.schedule('5 * 9-15 * * 1-5', () => require('./talonNasdaq').tick().catch((e) => console.error('talon nasdaq failed:', e.message)), { timezone: 'America/New_York' });
   cron.schedule('20 */5 * * * *', () => talonAutoTrade.tick().catch((e) => console.error('talon auto-trade cron failed:', e.message)));
   console.log('T.A.L.O.N. auto-trade cron scheduled (every 5m, scans on each auto_trade_interval_min candle close)');
   // Nightly trading recap from A.R.A. on Telegram. TRADE_RECAP=off to stop.
@@ -311,6 +377,14 @@ function startMondayScriptsCron() {
   if (process.env.MONDAY_SCRIPTS === 'off') return console.log('S.C.R.I.B.E. Monday scripts cron disabled (MONDAY_SCRIPTS=off)');
   cron.schedule('0 8,10,12,14 * * 1', () => require('./scribeMonday').runMondayScripts().then((r) => console.log('monday scripts:', JSON.stringify(r))).catch((e) => console.error('monday scripts failed:', e.message)), { timezone: 'America/New_York' });
   console.log('S.C.R.I.B.E. Monday scripts cron scheduled (08:00 ET Mondays, retries to 14:00)');
+}
+
+// The sentinel — anything that breaks or switches off tells him (server/sentinel.js).
+function startSentinelCron() {
+  if (process.env.SENTINEL === 'off') return console.log('sentinel disabled (SENTINEL=off)');
+  cron.schedule('*/10 * * * *', () => require('./sentinel').tick().catch((e) => console.error('sentinel tick error:', e.message)));
+  setTimeout(() => require('./sentinel').tick().catch((e) => console.error('sentinel tick error:', e.message)), 90000);
+  console.log('sentinel scheduled (every 10m)');
 }
 
 function startAutoAtlasCron() {

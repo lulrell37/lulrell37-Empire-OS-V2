@@ -143,7 +143,7 @@ export async function startAraLive(opts={}){
         session:{
           voice:'ara',
           instructions,
-          turn_detection:{type:'server_vad',threshold:0.6,silence_duration_ms:650,prefix_padding_ms:300},
+          turn_detection:{type:'server_vad',threshold:0.6,silence_duration_ms:1500,prefix_padding_ms:300},
           tools:TOOLS,
           audio:{
             input:{format:{type:'audio/pcm',rate:SAMPLE_RATE}},

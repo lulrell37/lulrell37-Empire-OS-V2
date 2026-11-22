@@ -16,7 +16,7 @@ const nameOf = (sym) => NAMES[sym] ? `${NAMES[sym]} (${sym})` : sym;
 const money = (n) => (n == null ? '—' : `${n < 0 ? '-' : '+'}$${Math.abs(Number(n)).toFixed(2)}`);
 const px = (n) => (n == null || n === '' ? '—' : String(n));
 
-async function sendFromAra(text, spoken = text) {
+async function sendFromAra(text, spoken = text, opts = {}) {
   const telegram = require('./telegram');
   const ara = telegram.botFor('ara');
   if (!ara || !ara.isConfigured()) return false;
@@ -24,17 +24,15 @@ async function sendFromAra(text, spoken = text) {
   const { ogg } = await require('./personaVoice').voiceNote('ara', String(spoken).replace(/\*\*/g, ''), { relay: true })
     .catch((e) => { console.error('trade alert voice failed:', e.message); return { ogg: null }; });
   if (ogg) await ara.sendVoice(telegram.OWNER_ID, ogg).catch((e) => console.error('trade alert sendVoice failed:', e.message));
-  await ara.sendMessage(telegram.OWNER_ID, text);
-  await query('INSERT INTO tg_messages (persona, role, content, ts) VALUES ($1, $2, $3, $4)', ['ara', 'assistant', text, Date.now()])
-    .catch((e) => console.error('trade alert history save failed:', e.message));
+  await ara.sendMessage(telegram.OWNER_ID, text, opts);
   return true;
 }
 
 // Flags every alert on a live account, so a real-money trade never reads like a demo one.
 const acct = () => (require('./tradeLocker').tlStatus().env === 'live' ? ' · 🔴 LIVE' : '');
 
-function notify(text, spoken) {
-  sendFromAra(text, spoken || text).catch((e) => console.error('trade alert failed:', e.message));
+function notify(text, spoken, opts) {
+  sendFromAra(text, spoken || text, opts).catch((e) => console.error('trade alert failed:', e.message));
 }
 
 function tradeOpened({ symbol, side, qty, entry, stopLoss, takeProfit, rationale, setup, swingTarget, copies = 1, limitFilled = false }) {
@@ -117,7 +115,7 @@ async function runDailyRecap() {
     lines.push('', '**Still open**');
     for (const t of open) lines.push(`• ${String(t.side).toUpperCase()} ${nameOf(t.symbol)} @ ${px(t.entry_fill ?? t.entry_ref)} · SL ${px(t.stop_loss)} TP ${px(t.take_profit)} · now ${money(t.last_unrealized)}`);
   }
-  const sent = await sendFromAra(lines.join('\n'));
+  const sent = await sendFromAra(lines.join('\n'), undefined, { remember: true });
   return { sent, opened: opened.length, closed: closed.length, open: open.length };
 }
 

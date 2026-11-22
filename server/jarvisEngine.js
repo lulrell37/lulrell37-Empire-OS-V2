@@ -37,7 +37,15 @@ const MODEL = () => process.env.JARVIS_ENGINE_MODEL || 'claude-opus-5-5';
 const PERMISSION = () => process.env.JARVIS_PERMISSION_MODE || 'auto';
 const ROOT = () => process.env.JARVIS_WORKDIR || path.join(os.homedir(), 'jarvis-workspace');
 const TIMEOUT_MS = () => (Number(process.env.JARVIS_ENGINE_TIMEOUT_MIN) || 30) * 60000;
-const SESSION_IDLE_MS = 3 * 24 * 3600 * 1000; // a fresh session after 3 quiet days
+// A fresh session after an hour with no turns (JARVIS_SESSION_GAP_MIN; owner's
+// call, 2026-11-21): the prompt cache is cold by then anyway, so resuming would
+// re-read the whole day's transcript at full price. The new session starts with
+// the last few messages of the chat (`recent`), so a follow-up still lands.
+const SESSION_IDLE_MS = () => (Number(process.env.JARVIS_SESSION_GAP_MIN) || 60) * 60000;
+// …and a fresh session every night (owner's call, 2026-11-20): every turn resends
+// the whole conversation, so a day-long session got heavy on his Max limit. What
+// matters carries over anyway (Mem0, the owner profile, open threads, notes).
+const dayET = (ms = Date.now()) => new Date(ms).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
 const READ_ONLY_TOOLS = 'Read,Grep,Glob,WebSearch,WebFetch';
 
 function enabled() {
@@ -91,15 +99,20 @@ async function workspace() {
 
 // One ongoing conversation, resumed every turn.
 const sessionFile = () => path.join(ROOT(), 'session.json');
-function loadSession() {
+function loadSession(now = Date.now()) {
   try {
     const s = JSON.parse(fs.readFileSync(sessionFile(), 'utf8'));
-    if (s.id && Date.now() - (s.at || 0) < SESSION_IDLE_MS) return s.id;
+    if (s.id && now - (s.at || 0) < SESSION_IDLE_MS() && (s.day || dayET(s.at || 0)) === dayET(now)) return s.id;
   } catch { /* none yet */ }
   return null;
 }
 function saveSession(id) {
-  try { fs.mkdirSync(ROOT(), { recursive: true }); fs.writeFileSync(sessionFile(), JSON.stringify({ id, at: Date.now() })); } catch {}
+  try {
+    let day = dayET();
+    try { const old = JSON.parse(fs.readFileSync(sessionFile(), 'utf8')); if (old.id === id && old.day) day = old.day; } catch {}
+    fs.mkdirSync(ROOT(), { recursive: true });
+    fs.writeFileSync(sessionFile(), JSON.stringify({ id, at: Date.now(), day }));
+  } catch {}
 }
 function resetSession() { try { fs.unlinkSync(sessionFile()); } catch {} }
 
@@ -219,19 +232,21 @@ function unlogTurn(id) { const t = readTurns(); if (t[id]) { delete t[id]; write
 // `source` says where he asked; `resumes` counts restarts already survived.
 let chain = Promise.resolve();
 let busy = 0;
-async function turn(prompt, { persona = '', onProgress, signal, source = 'telegram', ownerText, resumes = 0 } = {}) {
+async function turn(prompt, { persona = '', onProgress, signal, source = 'telegram', ownerText, resumes = 0, recent = '' } = {}) {
   const id = crypto.randomUUID();
   const go = async () => {
     logTurn({ id, text: String(ownerText || prompt).slice(0, 6000), source, startedAt: Date.now(), resumes });
     try {
       const resume = loadSession();
+      // A new session hasn't seen the chat: give it the last few messages first.
+      const fresh = recent ? `[NEW SESSION — your last messages with him, oldest first, so a follow-up like "push" or "do it" still lands. Check the repo (branches, git log) for what they refer to:\n${recent}\n]\n\n${prompt}` : prompt;
       let out;
       try {
-        out = await spawnTurn({ prompt, persona, resume, onProgress, signal });
+        out = await spawnTurn({ prompt: resume ? prompt : fresh, persona, resume, onProgress, signal });
       } catch (e) {
         if (!e.resumeFailed) throw e;
         resetSession(); // the saved session is gone (new machine, cleared home) — start a new one
-        out = await spawnTurn({ prompt, persona, resume: null, onProgress, signal });
+        out = await spawnTurn({ prompt: fresh, persona, resume: null, onProgress, signal });
       }
       if (out.sessionId) saveSession(out.sessionId);
       console.log(`jarvis engine: done in ${out.turns || '?'} turns${out.costUsd != null ? `, $${Number(out.costUsd).toFixed(3)}` : ''}`);
@@ -321,4 +336,5 @@ function status() {
   return { enabled: enabled(), model: MODEL(), permissionMode: PERMISSION(), workdir: ROOT(), readOnly: !process.env.GITHUB_TOKEN, session: loadSession(), running: [...jobs.values()].filter((j) => j.status === 'running').length };
 }
 
-module.exports = { enabled, turn, recover, startJob, jobStatus, cancelJob, detachJob, resetSession, status, engineBrief, describeTool };
+module.exports = {
+  loadSession, saveSession, enabled, turn, recover, startJob, jobStatus, cancelJob, detachJob, resetSession, status, engineBrief, describeTool };

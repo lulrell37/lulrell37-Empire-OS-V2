@@ -22,6 +22,17 @@ function parseJsonBlock(raw) {
 // only, by these rules — the "Winning Strategy" note and the app's custom
 // persona prompt are never read into his decisions.
 const SYMBOLS = ['XAUUSD', 'BTCUSD'];
+
+// Targets come in a little: every take profit he sets (scalp, swing, quick scalp)
+// is placed TP_PULL_IN of the way back toward the entry from the level he chose,
+// so price doesn't have to tag the level itself. The minimum-R checks are made on
+// the level he chose, so this takes no trade away. Owner's call, 2026-11-19.
+const TP_PULL_IN = Math.min(0.5, Math.max(0, Number(process.env.TALON_TP_PULL_IN ?? 0.1) || 0));
+function pullInTarget(entry, tp, frac = TP_PULL_IN) {
+  const px = Number(entry), t = Number(tp);
+  if (!isFinite(px) || !isFinite(t) || !frac) return tp;
+  return +(t - (t - px) * frac).toFixed(2);
+}
 const STRATEGY = `GOLD + BITCOIN PLAYBOOK. You trade exactly two markets: XAUUSD (gold) and BTCUSD (Bitcoin). Nothing else, ever.
 
 1. DIRECTION, TOP DOWN. Read every timeframe every time: the 1D for the bigger picture, the 4H for the overall trend, the 1H and 15m for where price is going right now. You can buy or sell in any of them. No timeframe forbids a direction: what decides a trade is whether the ENTRY makes sense (rules 2-3) and the EXIT makes sense (rules 4-5). The timeframes tell you what kind of trade it is. With the 4H: the full setup. Against the 4H: a counter-trend trade — it needs a sharp trigger at a real level (a sweep that's holding, or a 15m CHoCH your way, at a 4H or 1D level), goes in as a scalp only with no swing (code enforces this), and its target stops short of the next level the 4H trend would defend. A market with no clear level to enter at or nothing to aim at is "none". A setup that runs straight into a major daily level inside its targets needs that level respected (target short of it).
@@ -86,7 +97,7 @@ Reply with ONLY a JSON object, no prose, no code fence:
 // 1R beside a 3R swing, or 2R alone) the trade is skipped rather than taken
 // on a worse ratio. Returns the levels to send,
 // or { skip } with the reason.
-function guardStop({ symbol, side, entry, stopLoss, takeProfit, swingTakeProfit, snap }) {
+function guardStop({ symbol, side, entry, stopLoss, takeProfit, swingTakeProfit, snap, pullIn = true }) {
   const sl = Number(stopLoss), tp = Number(takeProfit), px = Number(entry);
   if (!isFinite(sl) || !isFinite(tp) || !isFinite(px) || !px) return { skip: 'missing entry/stop/target' };
   const dir = side === 'buy' ? 1 : -1;
@@ -118,7 +129,8 @@ function guardStop({ symbol, side, entry, stopLoss, takeProfit, swingTakeProfit,
   // Scalp (15m target) needs 1R beside a swing; alone it has to pay 2R.
   const minR = swing != null ? 1 : 2;
   if (Math.abs(tp - px) < minR * dist) return { skip: `stop needs ${dist.toFixed(2)} of room (1H ATR ${atr.toFixed(2)}) and scalp target ${tp} pays under ${minR}R${swing == null ? ' with no valid swing' : ''}` };
-  return { stopLoss: stop, takeProfit: tp, swingTakeProfit: swing, widened, swingNote,
+  const pull = pullIn ? TP_PULL_IN : 0;
+  return { stopLoss: stop, takeProfit: pullInTarget(px, tp, pull), swingTakeProfit: swing == null ? null : pullInTarget(px, swing, pull), widened, swingNote,
     note: widened ? `stop widened ${sl} → ${stop} (min ${minDist.toFixed(2)} from entry${zone && Math.abs(stop - +zone.stop.toFixed(2)) < 1e-9 ? `, past the ${zone.level} at ${zone.boundary}` : ''})` : '' };
 }
 
@@ -168,4 +180,4 @@ function entryLocation({ side, entry, snap }) {
   return { skip: `entry ${+px.toFixed(2)} isn't at 1H value — nearest is the ${where(best)}, ${gap(best).toFixed(2)} away (allowed ${tol.toFixed(2)} = ${LOCATION_ATR}× 1H ATR); that's a chase, not a pullback` };
 }
 
-module.exports = { SYMBOLS, STRATEGY, autoTradeDecision, newsTradeLevels, guardStop, entryLocation, tradeContext, LOCATION_ATR };
+module.exports = { SYMBOLS, STRATEGY, TP_PULL_IN, pullInTarget, autoTradeDecision, newsTradeLevels, guardStop, entryLocation, tradeContext, LOCATION_ATR };

@@ -11,7 +11,7 @@
 const { webResearch, chatAs } = require('./llm');
 const { getSetting, setSetting, upsertSyncRow, syncedRow, syncedRows, saveMemory, todayET } = require('./syncStore');
 const { tlStatus, tlConnect, tlSnapshot, tlFormatSnapshot, tlPlaceOrder, MAX_QTY, entryCopies } = require('./tradeLocker');
-const { recordTradeOpen, TRADER_ID } = require('./tradeJournal');
+const { recordTradeOpen, sharedTarget, TRADER_ID } = require('./tradeJournal');
 const { newsTradeLevels, guardStop, SYMBOLS } = require('./talonBrain');
 const { orderRejected, tradeOpened, araNote } = require('./talonAlerts');
 const { pushAlert } = require('./pushSender');
@@ -235,7 +235,7 @@ async function newsTradeHandoff(impacts) {
     const g = guardStop({ symbol: imp.symbol, side: imp.side, entry: price, stopLoss: lv.stopLoss, takeProfit: lv.takeProfit, snap });
     if (g.skip) { console.log(`newswire->talon: ${imp.symbol} skipped — ${g.skip}`); continue; }
     if (g.widened) console.log(`newswire->talon: ${imp.symbol} ${g.note}`);
-    lv = { ...lv, stopLoss: g.stopLoss, takeProfit: g.takeProfit };
+    lv = { ...lv, stopLoss: g.stopLoss, takeProfit: await sharedTarget({ symbol: imp.symbol, side: imp.side, entry: price, takeProfit: g.takeProfit }) };
     // Every news trade goes in entryCopies() times (once on gold, twice on Bitcoin); one alert covers them all.
     const why = `news — ${imp.thesis}`.slice(0, 180);
     const setupId = `${imp.symbol}-news-${Date.now()}`;

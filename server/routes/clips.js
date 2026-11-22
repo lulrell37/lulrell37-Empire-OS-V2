@@ -13,4 +13,14 @@ r.post('/scan', (req, res) => {
   res.status(202).json({ ok: true });
 });
 
+// [TRANSCRIBE: link] from the app: POST /clips/transcribe { url, persona } — runs in
+// the background; the transcript lands on Telegram and in a Drive note.
+r.post('/transcribe', (req, res) => {
+  const { url, persona = 'ara' } = req.body || {};
+  const t = require('../transcribe');
+  if (!t.sourceOf(url)) return res.status(400).json({ error: 'needs a YouTube, Instagram, TikTok or Google Drive link to one video' });
+  t.transcribeInBackground(String(url).trim(), String(persona || 'ara'));
+  res.status(202).json({ ok: true });
+});
+
 module.exports = r;

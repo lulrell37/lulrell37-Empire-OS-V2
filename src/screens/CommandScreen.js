@@ -8,7 +8,7 @@ import*as DocumentPicker from 'expo-document-picker';
 import*as VideoThumbnails from 'expo-video-thumbnails';
 import{Camera}from 'expo-camera';
 import*as FileSystem from 'expo-file-system';
-import{PERSONA_LIST,getPersona,resolveSpecialist,relayAllowed}from '../personas/personas';
+import{PERSONA_LIST,getPersona,resolveSpecialist,relayAllowed,promisedHandoffs,handoffNames}from '../personas/personas';
 import{callPersona,textToSpeech,transcribeAudio,queryMemory,webSearch,getLastTtsFailReason,araSpokenScript}from '../services/aiService';
 import{startAraLive,stopAraLive}from '../services/realtimeVoice';
 import{reportError}from '../../ErrorBanner';
@@ -19,9 +19,10 @@ import{autoAtlasBusy}from '../services/autoAtlas';
 import{handleCommands,stripCommands}from '../services/commandHandler';
 import{cuedFor,ARA_VOICE}from '../services/voiceCues';
 import{reportIssue,clearIssueKey,notify}from '../services/report';
+import{logCrash}from '../services/crashLog';
 import{googleReadInjections,googleWriteCommands}from '../services/googleCommands';
 import{courseInjections}from '../services/stephanieCourse';
-import{startClipScan}from '../services/clipScan';
+import{startClipScan,startTranscribe,runBrowse}from '../services/clipScan';
 import{scanTags}from '../services/noteCommands';
 import{allMatches}from '../matchAllFix';
 import{cancelJarvisTurn}from '../services/jarvisEngine';
@@ -42,7 +43,7 @@ import{tlChartModel,tlSnapshot,tlFormatSnapshot,tlPlaceOrder,tlClosePosition,tlM
 import{recordTradeOpen,reconcileOpenTrades,traderJournalBlock,setStrategy,setTradeReview,TRADER_ID}from '../services/tradeJournal';
 import{loadKeys,loadGitHubToken}from '../services/keyStore';
 import useEmpireStore from '../store/useEmpireStore';
-import{useIsFocused,useFocusEffect}from '@react-navigation/native';
+import{useIsFocused,useFocusEffect,CommonActions}from '@react-navigation/native';
 import OfficeScene from './command/OfficeScene';
 import Canvas from './command/Canvas';
 import ActivityPane from './command/ActivityPane';
@@ -56,11 +57,11 @@ import{extractUrls,fetchLinkContext,linkContextToBlock}from '../services/mediaCo
 import{prepareImage}from '../services/imagePrep';
 
 const TEAM_PHOTO=require('../../assets/teamphoto.png');
-const HANDS_FREE_SILENCE_MS=1200;      // quiet for this long AFTER a normal utterance -> stop
-const HANDS_FREE_SILENCE_SLOW_MS=2200; // longer grace when barely anything has been said yet (slow starter)
+const HANDS_FREE_SILENCE_MS=2500;      // quiet for this long AFTER a normal utterance -> stop (room to breathe mid-thought)
+const HANDS_FREE_SILENCE_SLOW_MS=3500; // longer grace when barely anything has been said yet (slow starter)
 const HANDS_FREE_SPOKE_ENOUGH_MS=1500; // spoke at least this long -> use the snappy endpoint
 const HANDS_FREE_VOICE_DB=-47;      // metering above this counts as "talking"
-const HANDS_FREE_MAX_MS=30000;      // hard cap on one hands-free take
+const HANDS_FREE_MAX_MS=90000;      // hard cap on one hands-free take
 const HANDS_FREE_NOMETER_MS=8000;   // devices that don't report metering -> fixed take
 const HANDS_FREE_NOVOICE_MS=7000;   // mic open this long with no voice at all -> give up, discard the take
 const MANUAL_MAX_MS=120000;         // manual SPEAK take: 2-min safety backstop only (user taps STOP REC)
@@ -208,10 +209,14 @@ export default function CommandScreen({navigation,route}){
   // once per distinct cause instead of repeating it on every single reply.
   const voiceWarnRef=useRef(null);
   function warnVoiceFallback(){
-    const reason=getLastTtsFailReason();
-    if(!reason||voiceWarnRef.current===reason)return;
+    const reason=getLastTtsFailReason()||'ElevenLabs returned no audio (no error given)';
+    if(voiceWarnRef.current===reason)return;
     voiceWarnRef.current=reason;
     reportError('Voice fell back to the device voice — '+reason);
+    // Also in Settings → DIAGNOSTICS (timestamped) and the top strip, so it
+    // can't be missed if the red overlay is hidden or tapped away.
+    try{logCrash('voice','Voice fell back to the device voice — '+reason);}catch{}
+    try{reportIssue('voice','Voice fell back to the phone voice',new Error(reason),{severity:'error',ttlMs:30*60000});}catch{}
   }
   const voiceControlRef=useRef(null); // {pause(),resume()} for whatever is currently speaking — set by speakWithReveal, null when nothing is
   // --- streamed sentence-chunked TTS (ElevenLabs personas, voice on) ---
@@ -287,7 +292,7 @@ export default function CommandScreen({navigation,route}){
   // Runs whenever this screen is focused regardless of view, so the chips are
   // there in chat too.
   useEffect(()=>{
-    if(!isFocused){setBgJobs(j=>j.length?[]:j);return;}
+    if(!isFocused&&!loading){setBgJobs(j=>j.length?[]:j);return;}
     let alive=true;
     const pull=async()=>{
       try{
@@ -320,7 +325,7 @@ export default function CommandScreen({navigation,route}){
     pull();
     const iv=setInterval(pull,5000);
     return()=>{alive=false;clearInterval(iv);};
-  },[isFocused]);
+  },[isFocused,loading]);
   // Poll the backend for a running council meeting while this screen is focused:
   // fast (5s) once one is live so the banner + speaking-orb glow track it turn
   // by turn, slow (every ~4th tick = 20s) the rest of the time.
@@ -569,8 +574,8 @@ export default function CommandScreen({navigation,route}){
     if(talking){
       clearSilenceTimer();
     }else if(!silenceTimerRef.current){
-      // Adaptive endpoint: end the take ~1.2s after a normal utterance so the
-      // reply comes back fast, but hold longer when almost nothing has been
+      // Adaptive endpoint: end the take ~2.5s after a normal utterance (room for a
+      // breath mid-thought), and hold longer when almost nothing has been
       // said yet so a slow start isn't chopped mid-thought.
       const spokeMs=voicedCountRef.current*250;
       const graceMs=spokeMs<HANDS_FREE_SPOKE_ENOUGH_MS?HANDS_FREE_SILENCE_SLOW_MS:HANDS_FREE_SILENCE_MS;
@@ -769,6 +774,8 @@ export default function CommandScreen({navigation,route}){
         Speech.speak(text.substring(0,500),{language:'en-US',rate:speechRate(0.95),onDone:()=>maybeAutoListen(),onStopped:()=>maybeAutoListen()});
       }
     }catch(err){
+      try{voiceWarnRef.current=null;}catch{}
+      warnVoiceFallback();
       Speech.speak(text.substring(0,500),{language:'en-US',rate:speechRate(0.95),onDone:()=>maybeAutoListen(),onStopped:()=>maybeAutoListen()});
     }
   }
@@ -1086,6 +1093,7 @@ export default function CommandScreen({navigation,route}){
     // Every segment failed to synthesize (e.g. ElevenLabs down) — rather than
     // leave the reply silent, read it once with the native voice.
     if(ttsPlayedCountRef.current===0&&!ttsCancelRef.current&&!abortRef.current?.signal.aborted){
+      warnVoiceFallback(); // this fallback used to be silent: say why
       try{await new Promise(res=>{Speech.speak(display.slice(0,700),{language:'en-US',rate:speechRate(0.95),onDone:res,onStopped:res});setTimeout(res,Math.min(60000,display.length*70+4000));});}catch{}
     }
     streamSpeakActiveRef.current=false;
@@ -1464,7 +1472,15 @@ export default function CommandScreen({navigation,route}){
     setHandsFree(false);handsFreeRef.current=false;clearSilenceTimer();
     if(recordingRef.current)stopRecording();
     stopAudio();
-    navigation.navigate('Map');
+    if(!loading){navigation.navigate('Map');return;}
+    // A reply is still coming: put the map on top instead of popping this
+    // screen, so the turn keeps running (and lands in the chat) while he's away.
+    // The stack becomes [...others, Command, Map] with Command's route key kept,
+    // so this screen stays mounted; the map's banner shows who's working.
+    navigation.dispatch(state=>{
+      const routes=state.routes.filter(r=>r.name!=='Map');
+      return CommonActions.reset({...state,routes:[...routes,{name:'Map',key:'Map-'+Date.now()}],index:routes.length});
+    });
   }
 
   // Header back button: on the visualization, step back one level (face-to-face
@@ -1720,6 +1736,18 @@ export default function CommandScreen({navigation,route}){
           const cr=await courseInjections(response,pid,text);
           if(cr.length){toolLabel='◇ updating the course…';injections.push(...cr);}
         }catch(e){/* never let the course break the turn */}
+        // [BROWSE: task] — J.A.R.V.I.S.'s and A.R.A.'s browser, on the server; the
+        // result comes back into this turn like a read (same as on Telegram).
+        if(pid==='jarvis'||pid==='ara'){
+          for(const m of allMatches(response,/\[BROWSE:\s*([^\]]+)\]/gi)){
+            const task=m[1].trim();if(!task)continue;
+            toolLabel='◇ using the browser…';
+            pushSystemMsg('— BROWSER · working — a screenshot of where it ends up goes to Telegram —');
+            try{injections.push(await runBrowse({persona:pid,task,ownerText:text}));}
+            catch(e){injections.push(`BROWSE failed: ${e.message}`);}
+            break; // one per turn
+          }
+        }
         // [RELAY_TO: id | message] — actually ask that persona and wait for their
         // real answer before this persona answers Mr. Burrus. One-shot, no
         // history. Their own command tags DO run (notes, tasks, calendar, … —
@@ -1729,6 +1757,18 @@ export default function CommandScreen({navigation,route}){
         // reported it done. Balanced-bracket scan so a relay carrying a note
         // with [ ] in it isn't cut short.
         inFlight.step='relays';
+        // Said it's handing this to someone ("relaying the fix to Atlas now") with no
+        // [RELAY_TO] behind it: ask once for the tag, so the hand-off really goes out.
+        if(!scanTags(response).some(t=>t.name==='RELAY_TO')&&!myAbort.signal.aborted){
+          const owed=promisedHandoffs(stripCommands(response)||'',handoffNames(),pid);
+          if(owed.length){
+            try{
+              const fix=await callPersona(pid,[...hist,{role:'assistant',content:response},{role:'user',content:`[Your reply says you're handing this to ${owed.map(id=>getPersona(id)?.name||id).join(', ')}, but you emitted no [RELAY_TO], so nothing reached them. Emit [RELAY_TO: id | the complete instruction, with every number and detail they need] for each one now, and nothing else.]`}],myAbort.signal,null,{skipSave:true,maxTokens:800});
+              const tags=scanTags(fix||'').filter(t=>t.name==='RELAY_TO').map(t=>`[RELAY_TO: ${t.arg}]`);
+              if(tags.length)response=`${response}\n${tags.join('\n')}`;
+            }catch(e){if(e.name==='AbortError')throw e;}
+          }
+        }
         const relayTags=scanTags(response).filter(t=>t.name==='RELAY_TO'&&t.arg.includes('|'))
           .map(t=>{const i=t.arg.indexOf('|');return[null,t.arg.slice(0,i),t.arg.slice(i+1)];});
         if(relayTags.length&&!myAbort.signal.aborted){
@@ -1842,6 +1882,12 @@ export default function CommandScreen({navigation,route}){
               await startClipScan({mediaUrl,focus});
               pushSystemMsg('— CLIP SCAN · started — R.O.G.U.E. is transcribing and picking moments; the ranked clips land on Telegram in a few minutes —');
             }catch(e){pushSystemMsg(`— CLIP SCAN · couldn't start: ${e.message} —`);}
+          },
+          onTranscribe:async({mediaUrl})=>{
+            try{
+              await startTranscribe({mediaUrl,persona:pid});
+              pushSystemMsg('— TRANSCRIBE · started — the transcript lands on Telegram and in your Drive, usually within a minute or two —');
+            }catch(e){pushSystemMsg(`— TRANSCRIBE · couldn't start: ${e.message} —`);}
           },
           onWatchVideo:async({mediaUrl,focus})=>{
             try{
@@ -1966,6 +2012,11 @@ export default function CommandScreen({navigation,route}){
           const hist3=[...hist,{role:'assistant',content:response||'(no reply)'},{role:'user',content:`[Your last reply had no words for Mr. Burrus${response?' — only command tags':''}. He asked: "${text}". Answer him now in plain words, using what's in your context.]`}];
           try{response=await callPersona(pid,hist3,myAbort.signal,null,{skipSave:true,...voiceModelOpts(p)});}catch(e){if(e.name==='AbortError')throw e;}
           display=(stripCommands(response||'')||'').trim()||`(${p.name} came back empty — try asking again.)`;
+        }
+        {
+          const sent=new Set(relayTags.map(r=>r[1].trim().toLowerCase()));
+          const owed=promisedHandoffs(display,handoffNames(),pid).filter(id=>!sent.has(id));
+          if(owed.length)pushSystemMsg(`— ⚠️ nothing was actually sent to ${owed.map(id=>getPersona(id)?.name||id).join(' or ')} this turn, although ${p.name} says so — ask again —`);
         }
         if(display){replies.push({name:p.name,text:display});lastSpokenRef.current=display;}
         // A tag that fails must not cost the reply its voice: it used to throw out
@@ -2491,12 +2542,32 @@ export default function CommandScreen({navigation,route}){
   const cp=getPersona(activePersona);
   const displayMessages=mode==='direct'?messages:groupMessages;
 
+  // A reply that finished while he was on another screen: a "replied" chip on
+  // the map's banner until he comes back to the chat.
+  const[repliedAway,setRepliedAway]=useState(null);
+  const wasLoadingRef=useRef(false);
+  useEffect(()=>{
+    if(wasLoadingRef.current&&!loading&&!isFocusedRef.current)setRepliedAway({persona:mode==='direct'?activePersona:customPersonas[0]});
+    wasLoadingRef.current=loading;
+  },[loading]);// eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(()=>{if(isFocused)setRepliedAway(null);},[isFocused]);
+  function openRepliedChat(){
+    setRepliedAway(null);setView('text');
+    navigation.navigate('Command');
+  }
+
   // One list of everything a persona is doing right now — background queue work,
   // auto-agent cycles, relays, deep research, a live council. It drives the
   // banner chips (via the store) and the gold "working" aura on the galaxy orbs,
   // so what's happening is never a guess.
   const activityItems=useMemo(()=>{
     const out=[...bgJobs];
+    // The reply in flight, whenever he isn't looking at that chat (office
+    // overview, or another screen while it finishes in the background).
+    const replyWho=mode==='direct'?activePersona:customPersonas[0];
+    const inChat=isFocused&&(view==='text'||orbLevel==='desk');
+    if(loading&&replyWho&&!inChat)out.push({key:'reply',persona:replyWho,label:mode==='direct'?'working on your message':'group is talking'});
+    if(repliedAway&&!loading)out.push({key:'replied',persona:repliedAway.persona,label:'replied · tap to open',onPress:openRepliedChat});
     agentBusy.forEach(id=>out.push({key:'agent:'+id,persona:id,label:AGENT_LABEL[id]||'running a cycle'}));
     relayBusy.forEach(id=>out.push({key:'relay:'+id,persona:id,label:'pulled in on a relay'}));
     if(deepResearch&&deepResearch.status==='running'&&deepResearch.persona){
@@ -2509,7 +2580,7 @@ export default function CommandScreen({navigation,route}){
     // de-dupe by key (same persona can't stack two identical rows)
     const seen=new Set();
     return out.filter(a=>a&&a.persona&&!seen.has(a.key)&&seen.add(a.key));
-  },[bgJobs,agentBusy,relayBusy,deepResearch,councilLive]);// eslint-disable-line react-hooks/exhaustive-deps
+  },[bgJobs,agentBusy,relayBusy,deepResearch,councilLive,loading,mode,activePersona,customPersonas,isFocused,view,orbLevel,repliedAway]);// eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(()=>{setActivity(activityItems);},[activityItems,setActivity]);
   useEffect(()=>()=>setActivity([]),[setActivity]); // clear on unmount (leaving for the map)
@@ -2578,6 +2649,13 @@ export default function CommandScreen({navigation,route}){
                 </TouchableOpacity>
               ))}
             </View>
+          )}
+          {!chromeVisible&&(
+            // The office has no multi-select of its own, so this is the way
+            // into a group chat: the team picker below, then LAUNCH.
+            <TouchableOpacity style={s.groupPill} onPress={()=>{setSelectedCustom([]);setShowCustomPicker(true);}} hitSlop={{top:8,bottom:8,left:8,right:8}}>
+              <Text style={s.groupPillT}>⧉ GROUP</Text>
+            </TouchableOpacity>
           )}
           <View style={s.onlinePill}><View style={s.onlineDot}/><Text style={s.onlineText}>ONLINE</Text></View>
         </View>
@@ -2803,7 +2881,7 @@ export default function CommandScreen({navigation,route}){
             );})}
           </ScrollView>
           <View style={{flexDirection:'row',gap:10,marginTop:16}}>
-            <TouchableOpacity style={[s.modalBtn,{backgroundColor:'#E8C98A'}]} onPress={()=>{if(selectedCustom.length>=2){setCustomPersonas(selectedCustom);setMode('custom');setShowCustomPicker(false);}}}>
+            <TouchableOpacity style={[s.modalBtn,{backgroundColor:'#E8C98A'}]} onPress={()=>{if(selectedCustom.length>=2){launchGroupFromOrb(selectedCustom);setShowCustomPicker(false);}}}>
               <Text style={[s.modalBtnT,{color:'#000'}]}>LAUNCH</Text>
             </TouchableOpacity>
             <TouchableOpacity style={[s.modalBtn,{backgroundColor:'#111',borderWidth:1,borderColor:'#333'}]} onPress={()=>setShowCustomPicker(false)}>
@@ -2841,6 +2919,8 @@ const s=StyleSheet.create({
   empireOSmap:{fontFamily:'monospace',fontSize:9,fontWeight:'700',color:'#6b5a30',letterSpacing:2},
   onlinePill:{flexDirection:'row',alignItems:'center',gap:5,borderWidth:1,borderColor:'#4CAF5055',borderRadius:12,paddingHorizontal:8,paddingVertical:3},
   headerRight:{flexDirection:'row',alignItems:'center',gap:8},
+  groupPill:{borderWidth:1,borderColor:'#E8C98A66',borderRadius:12,paddingHorizontal:9,paddingVertical:3},
+  groupPillT:{fontFamily:'monospace',fontSize:8,color:'#E8C98A',letterSpacing:2},
   viewToggle:{flexDirection:'row',gap:4},
   viewTab:{width:26,height:22,borderRadius:5,borderWidth:1,borderColor:'#222',alignItems:'center',justifyContent:'center'},
   viewTabT:{fontFamily:'monospace',fontSize:11,color:'#444'},

@@ -45,6 +45,8 @@ function speakNames(text) {
   for (const [dotted, caps, word] of NAME_RES) {
     s = s.replace(dotted, (m, at, all) => word + (m.endsWith('.') && /^(\s*$|\s*\n|\s+[A-Z])/.test(all.slice(at + m.length)) ? '.' : '')).replace(caps, word);
   }
+  // Said the way he says them (owner, 2026-11-20): his name TA-rell, hers AR-ra.
+  s = s.replace(/\bTarell\b/g, 'Tah-rell').replace(/\bAra\b/g, 'Ar-rah');
   return s.replace(/\s*→\s*/g, ' to ');
 }
 

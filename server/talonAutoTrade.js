@@ -7,7 +7,7 @@
 const { getSetting, setSetting, saveMemory } = require('./syncStore');
 const { tlStatus, tlConnect, tlFollowAccount, tlActiveEnv, tlSnapshot, tlFormatSnapshot, tlPlaceOrder, tlModifyPosition, tlPositions, tlInstrumentsById, tlQuote, MAX_QTY, entryCopies } = require('./tradeLocker');
 const { autoTradeDecision, guardStop, entryLocation, tradeContext, SYMBOLS } = require('./talonBrain');
-const { reconcileOpenTrades, formatTradeRecord, recordTradeOpen, allTrades, TRADER_ID } = require('./tradeJournal');
+const { reconcileOpenTrades, formatTradeRecord, recordTradeOpen, allTrades, sharedTargets, TRADER_ID } = require('./tradeJournal');
 const { orderRejected, araNote, tradeOpened, addedOn } = require('./talonAlerts');
 const { pushAlert } = require('./pushSender');
 const { watchTick, systemFault, systemOk } = require('./talonWatch');
@@ -161,6 +161,7 @@ async function tick({ force = false } = {}) {
         if (lv.skip) { console.log(`talon-autotrade: skipped ${sym} ${dec.side} — ${lv.skip}`); decisions.push(`${sym}: skipped — ${lv.skip}`); continue; }
         if (lv.widened) console.log(`talon-autotrade: ${sym} ${lv.note}`);
         if (lv.swingNote) console.log(`talon-autotrade: ${sym} ${lv.swingNote}`);
+        Object.assign(lv, await sharedTargets({ symbol: sym, side: dec.side, entry: price, takeProfit: lv.takeProfit, swingTakeProfit: lv.swingTakeProfit }));
         // The setup goes in entryCopies(sym) times — once on gold, twice on Bitcoin (fewer if that would top MAX_PAIRS). Each copy is a scalp (to the
         // 15m target) and, when there's a valid 4H target, a swing (same stop)
         // linked to it by its own pairId — the journal moves that swing's stop

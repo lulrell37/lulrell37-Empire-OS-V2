@@ -15,6 +15,7 @@ import{scheduleReminder}from './reminders';
 import{openApp,openWebpage}from './appLauncher';
 import useEmpireStore from '../store/useEmpireStore';
 import{scheduleSync}from './sync';
+import{confirmRedeploy}from './redeploy';
 import{allMatches}from '../matchAllFix'; // never the built-in matchAll (it crashed on the phone)
 const HUD_PANELS=['briefing','businesses','tasks','routine','batman','daily'];
 const PANEL_ALIASES=[['brief','briefing'],['business','businesses'],['revenue','businesses'],['empire','businesses'],['task','tasks'],['routine','routine'],['morning','routine'],['batman','batman'],['protocol','batman'],['training','batman'],['daily','daily'],['word','daily'],['verse','daily'],['fact','daily']];
@@ -76,6 +77,7 @@ export async function handleCommands(response,personaId,callbacks={}){
     const title=m[1]?.trim();if(!title)continue;
     const id=await addTask(title,m[2]?.trim()||'',m[3]?.trim()||null);
     callbacks.onTaskAdded?.({id,title});
+    gtask.taskCreate({title,notes:m[2]?.trim()||'',due:m[3]?.trim()||null}).catch(()=>{}); // Google Tasks too
   }
   // [CREATE_TASK: title | notes | due-date] — distinct from [ADD_TASK]; mirrors
   // to Google Tasks as well as the app's own synced task list.
@@ -257,6 +259,8 @@ export async function handleCommands(response,personaId,callbacks={}){
   for(const m of allMatches(response,/\[BUILD_MERGE:\s*#?(\d+)\]/gi)){
     callbacks.onBuildMerge?.({issueNumber:parseInt(m[1],10)});
   }
+  // [REDEPLOY]: J.A.R.V.I.S. / A.R.A. only, and only after his tap (same as Telegram's Confirm card).
+  if(/\[REDEPLOY\]/i.test(response)&&['jarvis','ara'].includes(personaId))confirmRedeploy();
   for(const m of allMatches(response,/\[BUILD_CANCEL:\s*#?(\d+)\]/gi)){
     callbacks.onBuildCancel?.({issueNumber:parseInt(m[1],10)});
   }
@@ -348,6 +352,11 @@ export async function handleCommands(response,personaId,callbacks={}){
   for(const m of allMatches(response,/\[CLIP_SCAN:\s*(\S+)(?:\s*\|\s*([\s\S]+?))?\]/gi)){
     const mediaUrl=m[1].trim();const focus=(m[2]||'').trim();
     if(mediaUrl)callbacks.onClipScan?.({mediaUrl,focus});
+  }
+  // --- Transcript of a video link (any persona) — runs on the server ---
+  for(const m of allMatches(response,/\[TRANSCRIBE:\s*(\S+?)\s*\]/gi)){
+    const mediaUrl=m[1].trim();
+    if(mediaUrl)callbacks.onTranscribe?.({mediaUrl});
   }
   // --- Video watching (any persona) — focus is optional ---
   for(const m of allMatches(response,/\[WATCH_VIDEO:\s*(\S+)(?:\s*\|\s*([\s\S]+?))?\]/gi)){
@@ -464,12 +473,14 @@ export function stripCommands(text){
     .replace(/\[EDIT_CLIP:[^\]]*\]/gi,'')
     .replace(/\[CLIP_SCAN:[^\]]*\]/gi,'')
     .replace(/\[WATCH_VIDEO:[^\]]*\]/gi,'')
+    .replace(/\[TRANSCRIBE:[^\]]*\]/gi,'')
+    .replace(/\[BROWSE:[^\]]*\]/gi,'')
     .replace(/\[SHOW_CHART:[^\]]*\]/gi,'').replace(/\[TRADE_CHART(?::[^\]]*)?\]/gi,'').replace(/\[SHOW_NOTE:[^\]]*\]/gi,'')
     .replace(/\[SHOW_NOTES\]/gi,'').replace(/\[SHOW_TASKS\]/gi,'')
     .replace(/\[SHOW_ANALYTICS\]/gi,'').replace(/\[OPEN_ANALYTICS\]/gi,'')
     .replace(/\[SHOW_NEWS\]/gi,'').replace(/\[NEWS_BRIEF\]/gi,'')
     .replace(/\[BUILD_REQUEST:[^\]]*\]/gi,'').replace(/\[BUILD_REPLY:[^\]]*\]/gi,'')
-    .replace(/\[BUILD_MERGE:[^\]]*\]/gi,'').replace(/\[BUILD_CANCEL:[^\]]*\]/gi,'').replace(/\[BUILD_STATUS\]/gi,'')
+    .replace(/\[BUILD_MERGE:[^\]]*\]/gi,'').replace(/\[BUILD_CANCEL:[^\]]*\]/gi,'').replace(/\[BUILD_STATUS\]/gi,'').replace(/\[REDEPLOY\]/gi,'')
     .replace(/\[SEND_SMS:[^\]]*\]/gi,'')
     .replace(/\[CREATE_EVENT:[^\]]*\]/gi,'').replace(/\[DELETE_EVENT:[^\]]*\]/gi,'')
     .replace(/\[LIST_NOTES(?::[^\]]*)?\]/gi,'').replace(/\[SEARCH_DRIVE:[^\]]*\]/gi,'')

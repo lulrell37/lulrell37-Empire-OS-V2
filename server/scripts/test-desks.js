@@ -134,6 +134,13 @@ assert(validatePick(raw({ horizon: 'long', exitBy: date(900) }), snap({ atr: 4 }
   const app = require('fs').readFileSync(require('path').join(__dirname, '../../src/personas/personas.js'), 'utf8');
   assert.ok(app.includes(WOKE_METHOD), 'app copy of WOKE_METHOD drifted');
   assert.ok(/role:'Truth Analyst',api:'grok'/.test(app));
+  // KEEP MOVING is in every persona's prompt, word for word in both copies.
+  const { INITIATIVE } = require('../personas');
+  const keep = INITIATIVE.slice(INITIATIVE.indexOf(' KEEP MOVING'), INITIATIVE.indexOf(' WHO OWNS WHAT'));
+  assert.ok(keep.length > 200, 'KEEP MOVING missing from INITIATIVE');
+  assert.ok(app.includes(keep), 'app copy of KEEP MOVING drifted');
+  const rt = require('fs').readFileSync(require('path').join(__dirname, '../personaRuntime.js'), 'utf8');
+  assert.ok(/MAX_RELAY_DEPTH = 3/.test(rt) && /chain\.includes\(id\)/.test(rt) && /depth === 0 && !relayAllowed/.test(rt), 'hand-offs inside a job must go through');
 }
 
 // W.O.K.E.'s spoken line.

@@ -134,7 +134,6 @@ async function deliver(text, spoken) {
   const { ogg } = await require('./personaVoice').voiceNote('selene', String(spoken).replace(/\*\*/g, '')).catch(() => ({ ogg: null }));
   if (ogg) await own.sendVoice(telegram.OWNER_ID, ogg).catch((e) => console.error('selene voice failed:', e.message));
   await own.sendMessage(telegram.OWNER_ID, text);
-  await query('INSERT INTO tg_messages (persona, role, content, ts) VALUES ($1, $2, $3, $4)', ['selene', 'assistant', text, Date.now()]).catch(() => {});
   return true;
 }
 

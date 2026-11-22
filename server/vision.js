@@ -162,4 +162,4 @@ async function describeVideo(video, mime = 'video/mp4', caption = '') {
   return transcript ? `${desc}\n\nSpoken in the clip: "${transcript}"` : desc;
 }
 
-module.exports = { describePhotos, describeVideo };
+module.exports = { describePhotos, describeVideo, lookAtImages };

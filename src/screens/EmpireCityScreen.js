@@ -43,6 +43,7 @@ import{Gesture,GestureDetector}from 'react-native-gesture-handler';
 import{getHudState}from '../services/database';
 import useEmpireStore from '../store/useEmpireStore';
 import Boundary from './hud/Boundary';
+import NudgeBar from './command/NudgeBar';
 import{colors,FONTS}from '../theme';
 import{makeHoloUniforms,createHoloMaterial,disposeObject}from './command/holoMaterial';
 
@@ -1025,6 +1026,12 @@ function EmpireCity({navigation}){
         <Text style={s.title} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>THE EMPIRE</Text>
       </SafeAreaView>
 
+      {/* who's working right now (a reply still running in the chat, builds,
+          clips…), the same chips as the chat's banner; empty = nothing shown */}
+      <SafeAreaView style={s.activity} edges={['top']} pointerEvents="box-none">
+        <NudgeBar active activityOnly/>
+      </SafeAreaView>
+
       {/* nav hint */}
       <SafeAreaView style={s.hint} edges={['bottom']} pointerEvents="none">
         <Text style={s.hintText}>DRAG TO MOVE · TWO FINGERS TO ROTATE · PINCH TO ENTER A DISTRICT · ZOOM ALL THE WAY OUT FOR THE GALAXY</Text>
@@ -1067,6 +1074,7 @@ const s=StyleSheet.create({
 
   telemetry:{position:'absolute',top:0,left:0,right:0,alignItems:'center',paddingTop:8,paddingHorizontal:20},
   title:{fontFamily:FONTS.displaySemi,fontSize:26,color:colors.gold,letterSpacing:5,textAlign:'center'},
+  activity:{position:'absolute',top:0,left:0,right:0,paddingTop:46},
 
   hint:{position:'absolute',bottom:0,left:0,right:0,alignItems:'center',paddingBottom:12},
   hintText:{fontFamily:FONTS.mono,fontSize:7,color:'#4A4436',letterSpacing:2},

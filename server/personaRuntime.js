@@ -275,7 +275,7 @@ ${pinned.map((r) => `  • ${String(r.content).replace(/^PINNED:\s*/, '').replac
 
 // How to read the thread — without this she'd ask "do you mean what we were
 // just talking about, or something from earlier?" on any short follow-up.
-const CONTINUITY = `[CONTINUITY: the messages before his latest one are your real, ongoing conversation with him — you remember all of it. Read his newest message as the next line of that conversation: "it", "that", "do it", "what about…", a one-word answer or a bare follow-up refers to the most recent exchange unless he clearly says otherwise. Don't ask which conversation he means, and don't say his message is vague — make the obvious read and act on it. Only ask a clarifying question when two readings would lead to genuinely different actions, and then name both specifically.]`;
+const CONTINUITY = `[CONTINUITY: the messages before his latest one are your real, ongoing conversation with him — you remember all of it. Read his newest message as the next line of that conversation: "it", "that", "do it", "what about…", a one-word answer or a bare follow-up refers to the most recent exchange unless he clearly says otherwise. Messages marked [SENT ON YOUR OWN …] are ones you (or a desk through you) sent him unprompted: an alert, a clip result, a brief, an error. When one of those is the newest thing in the chat, his next message ("what happened?", "why?", "fix it") is about it. Don't ask which conversation he means, and don't say his message is vague — make the obvious read and act on it. Only ask a clarifying question when two readings would lead to genuinely different actions, and then name both specifically.]`;
 
 // Mr. Burrus is the boss: personas may disagree, question and warn, but never
 // refuse. Every persona, every path (his own chat, a relay, a delegation).
@@ -358,7 +358,7 @@ ${SHARED_OPS}
  - T.A.L.O.N. trades gold and Bitcoin ON HIS OWN, from the server, app open or not — he places, manages and closes his own orders on whichever account he's on whenever auto-trade is ON. Never tell Mr. Burrus T.A.L.O.N. can't place trades himself; he does. The TRADING line in LIVE CONTEXT says whether he's running and what his last scan did.
  - [TALON_RUN] — make him scan gold and Bitcoin right now instead of waiting for his next cycle. He decides and, if the setup is there, places the trade himself; you get back what he decided (or why he couldn't) before you answer. Use it when Mr. Burrus says "have T.A.L.O.N. trade", "is he trading?", "run a scan" and the like.
  - T.A.L.O.N.'S ACCOUNT — [TRADE_ACCOUNT: demo] takes him off live yourself, at once and with no Confirm; [TRADE_ACCOUNT: live] puts him on real money and waits for Mr. Burrus's Confirm tap. Emit the tag rather than relaying this, and report its receipt word for word, including any positions left open on live. It hasn't happened unless the tag ran.
- - ORDERS FOR T.A.L.O.N. — enter a trade, close one or all, move a stop (or to break-even), move a target: pass it to him with [RELAY_TO: talon | the exact order with every number Mr. Burrus gave]. He executes it (on the live account Mr. Burrus gets a Confirm button), and you report his receipts. [TRADE_POSITIONS] shows you the open positions yourself; [TRADE_STATS: XAUUSD | 30] breaks his closed trades down (by kind, side, session, daily trend, exit) so you can see where a market loses; [QUICK_LOG] shows his 5m quick-scalp desk (what it's seeing, every time it fired and why it did or didn't trade). [TRADE_CHART: XAUUSD or BTCUSD | 1H] sends him T.A.L.O.N.'s marked-up chart (5m, 15m, 1H, 4H or 1D); to explain what's on it, relay to T.A.L.O.N.
+ - ORDERS FOR T.A.L.O.N. — enter a trade, close one or all, move a stop (or to break-even), move a target: pass it to him with [RELAY_TO: talon | the exact order with every number Mr. Burrus gave]. He executes it (on the live account Mr. Burrus gets a Confirm button), and you report his receipts. [TRADE_POSITIONS] shows you the open positions yourself; [TRADE_STATS: XAUUSD | 30] breaks his closed trades down (by kind, side, session, daily trend, exit) so you can see where a market loses; [QUICK_LOG] shows his 5m quick-scalp desk (what it's seeing, every time it fired and why it did or didn't trade); [NASDAQ_DESK] shows his Nasdaq 100 desk (1m VWAP / 50 EMA / opening-range triggers, same account as gold and Bitcoin). [TRADE_CHART: XAUUSD or BTCUSD | 1H] sends him T.A.L.O.N.'s marked-up chart (5m, 15m, 1H, 4H or 1D); to explain what's on it, relay to T.A.L.O.N.
  - [TALON_UPDATE] — ask him for a market update right now: his read on gold and Bitcoin, where he predicts each goes next, and how our open positions look. Use it when Mr. Burrus asks "how's the market", "how are our trades", "what's T.A.L.O.N. think" and the like. He also sends you one on his own a few times a day — those show up in this chat as "T.A.L.O.N. → A.R.A.".
  - If auto-trade is OFF or something's broken (no TradeLocker login, an error), say exactly what the TRADING line says and how to fix it.
 
@@ -398,7 +398,7 @@ PERSONA_EXTRA_TOOLS.woke = ` - [WOKE_READ: story or claim] — your full read, s
  - [X_STORIES] — find what's taking off on X right now and give those stories your full read, sent to him through A.R.A. It also runs on its own at 8 AM, noon, 4 PM and 8 PM ET.
  - [X_SEARCH: what to look for] — search X yourself: what's being said, by whom, a claim's spread, a handle's posts. Read only, you can't post. A post is a lead to check, never proof: reach and repetition don't make it true, and you only call coordination when you can show it. Each search costs money per post fetched, so use it when X actually matters to the question.`;
 
-PERSONA_EXTRA_TOOLS.atlas = ` YOUR STOCK DESK — you pick investments off W.I.R.E.'s news, short term and long term, and A.R.A. tells him: what to buy, the entry, the target, the stop, the date to be out by. It runs itself four times each weekday and when W.I.R.E. files a brief. T.A.L.O.N. owns the gold and Bitcoin desk; stocks are yours. You can't place orders; he buys through his own broker. Your record is paper. Never promise a return.
+PERSONA_EXTRA_TOOLS.atlas = require('./moneyWatch').MONEY_TOOLS + '\n' + ` YOUR STOCK DESK — you pick investments off W.I.R.E.'s news, short term and long term, and A.R.A. tells him: what to buy, the entry, the target, the stop, the date to be out by. It runs itself four times each weekday and when W.I.R.E. files a brief. T.A.L.O.N. owns the gold and Bitcoin desk; stocks are yours. You can't place orders; he buys through his own broker. Your record is paper. Never promise a return.
  - [STOCK_PICKS] — every open call with its live price, plus your record. Read it before talking about a call.
  - [STOCK_DESK] — run the desk now. Use it when he asks what to buy or get into. It sends him the result through A.R.A.; a pass is an honest answer. Never name a price, a buy or a stop from memory.`;
 
@@ -410,7 +410,11 @@ PERSONA_EXTRA_TOOLS.selene = ` YOUR INSTAGRAM WATCH — runs itself Mondays and 
 
 PERSONA_EXTRA_TOOLS.stephanie = require('./stephanieCourse').COURSE_TOOLS;
 
-PERSONA_EXTRA_TOOLS.rogue = require('./clipScan').CLIP_TOOLS;
+PERSONA_EXTRA_TOOLS.rogue = require('./clipScan').CLIP_TOOLS + '\n' + require('./autoClip').AUTO_CLIP_TOOLS + '\n' + require('./rawEdit').RAW_EDIT_TOOLS;
+PERSONA_EXTRA_TOOLS.jarvis += '\n' + require('./autoClip').AUTO_CLIP_TOOLS + '\n' + require('./rawEdit').RAW_EDIT_TOOLS + '\n' + require('./siteLogins').LOGIN_TOOLS;
+PERSONA_EXTRA_TOOLS.jarvis += '\n' + require('./browserAgent').BROWSE_TOOLS;
+PERSONA_EXTRA_TOOLS.jarvis += '\n' + require('./siteDesk').SITE_TOOLS;
+PERSONA_EXTRA_TOOLS.scout = (PERSONA_EXTRA_TOOLS.scout ? PERSONA_EXTRA_TOOLS.scout + '\n' : '') + require('./siteDesk').SITE_TOOLS;
 
 PERSONA_EXTRA_TOOLS.scribe = ` - [MONDAY_SCRIPTS] — write this week's 7 video scripts now, and file them; A.R.A. tells him they came in. They go out on their own Mondays at 8 AM ET; only use this when he asks for them again or early.`;
 
@@ -420,6 +424,7 @@ PERSONA_EXTRA_TOOLS.talon = ` ${TRADING_KNOWLEDGE}
  - [TALON_UPDATE] — your market update right now: your read, prediction and how the open positions look.
  - [TRADE_SCAN: XAUUSD, BTCUSD] — a live market snapshot plus your trade record.
  - [QUICK_LOG] — your 5m quick-scalp desk: what the last check saw on each market and every time the filter fired with what happened (taken, passed and why, skipped). Use it whenever he asks about quick scalps.
+ - [NASDAQ_DESK] — your Nasdaq 100 desk (his order, 2026-11-20; runs on whichever account you are on, live included when live trading is armed): 1-minute triggers from the day-trading bots in the reel he sent — a close across VWAP, across the 50 EMA, or out of the first 15 minutes' range; above = buy, below = sell. Stop past the trigger, sized to lose $50 at most, 2R target, one position at a time, flat by 3:58 PM ET, done for the day at +$200 or after 3 losses. Runs itself every minute 9:30-4 ET while auto-trade is on, no AI calls. This shows today's tally and every trigger with what happened.
  - [TRADE_STATS: XAUUSD | 30] — where the money goes on a market (XAUUSD, BTCUSD or ALL; days back, default 30): your closed trades by kind (paired / lone / quick / add-on / re-entry / news / manual), side, session, with or against the 1D at entry, how they exited, per setup, and the worst 5. Run it before you answer anything about why a market is losing or what to change; quote its numbers, don't guess.
  ON MR. BURRUS'S ORDERS — he's the boss of the desk; when he (or A.R.A. for him) tells you to do one of these, do it, even if your playbook wouldn't (say so in a line if you disagree):
  - [TRADE_POSITIONS] — every open position with its id, stop, target and P/L. Read it first when he refers to "the gold trade", "the swing", "everything".
@@ -439,6 +444,8 @@ function genericTools(personaId) {
  - [RELAY_TO: persona-id | a complete, specific question] — ONLY when he asks you to bring that persona in. Synchronous: you get their real answer back this turn. Ask a full question; never guess their answer.
  - [MEMORY_QUERY: precise question] — search your own history with Mr. Burrus when he points back to something not in view.
  ${GOOGLE_TOOLS_OTHERS}${extra}
+${require('./transcribe').TRANSCRIBE_TOOLS}
+${require('./openThreads').OPEN_THREADS_TOOLS}
 ${MEDIA_TOOLS}
 
 Write tags run after your reply and Mr. Burrus gets a receipt for each — never claim something happened that a tag didn't do.
@@ -486,7 +493,7 @@ function systemPrompt(ctx, gs, custom, mem) {
     CONTINUITY,
     mem,
     memoryLine(),
-    ARA_TOOLS,
+    ARA_TOOLS + '\n' + require('./browserAgent').BROWSE_TOOLS + '\n' + require('./openThreads').OPEN_THREADS_TOOLS + '\n' + require('./moneyWatch').MONEY_TOOLS + '\n' + require('./siteDesk').SITE_TOOLS,
     googleLine(gs),
     `[THE EMPIRE — you run the team. When Mr. Burrus tells you to DO something that's another persona's job, send it to whoever owns it with [RELAY_TO: id | the full instruction, every detail he gave] — he never has to name them. WHO OWNS WHAT: ${ARA_ROUTE}. Everyday things you have your own tags for (notes, tasks, calendar, email, reminders, expenses, the HUD, research, images) you just do yourself. A question or an opinion you answer yourself, unless he names someone or it needs their live tools (where his trades stand → T.A.L.O.N.; how something in the app's code works → J.A.R.V.I.S.). Several jobs for several people → several RELAY_TO tags in the same reply. Report what they actually did from their receipts. This overrides any hand-off instruction elsewhere in your prompt.\n${rosterLines()}\n]`,
     faithBlock('ara'),
@@ -509,6 +516,7 @@ function personaSystemPrompt(personaId, ctx, gs, custom, mem) {
     custom ? `${custom}\n\n${TG_FRAME}` : `${personaTgIdentity(personaId)}\n\nYou are talking to Mr. Burrus over Telegram (text), away from the Empire OS app — keep replies tight and mobile-readable. Reply directly to what he just said; no status-briefing preamble. There is a live context block below — read from it, don't invent numbers.`,
     custom ? genderLine(personaId) : '', // the built-in identity already carries it
     OBEY,
+    require('./personas').INITIATIVE,
     emotionFor(personaId),
     CONTINUITY,
     mem,
@@ -589,7 +597,11 @@ function stripTags(text) {
 // relay (one hop further is allowed — A.T.L.A.S. → T.A.L.O.N. — not a chain).
 // `sink` ({ notes, warnings, confirms, deliver }) collects what a relayed
 // persona's own write tags actually did, so the turn's receipt shows it.
-async function runInjections(text, persona = 'ara', { convo = '', depth = 0, sink = null, asked = '' } = {}) {
+// KEEP MOVING (owner's rule, 2026-11-21): inside a job, any persona can hand the
+// next step to whoever can do it, up to MAX_RELAY_DEPTH hand-offs deep; `chain`
+// is everyone already on it, so a job never bounces back and forth.
+const MAX_RELAY_DEPTH = 3;
+async function runInjections(text, persona = 'ara', { convo = '', depth = 0, sink = null, asked = '', chain = [] } = {}) {
   // Run in parallel — "weather, my calendar and my email" is three lookups, and
   // one at a time (a web search alone is 10-20s) made combined asks crawl.
   const one = async ({ name, arg }) => {
@@ -617,6 +629,41 @@ async function runInjections(text, persona = 'ara', { convo = '', depth = 0, sin
       if (name === 'WOKE_READ' && ['ara', 'woke'].includes(persona)) {
         const r = await require('./wokeRead').readNow(arg);
         return r.text ? `W.O.K.E.'S READ (A.R.A. has already sent him this, so don't repeat it, one line at most):\n${r.text}` : `W.O.K.E.: ${r.skipped || 'no result'}`;
+      }
+      if (name === 'BROWSE' && arg && ['jarvis', 'ara'].includes(persona)) {
+        try {
+          const r = await require('./browserAgent').browseTag(persona, arg, { ownerText: asked });
+          if (sink && sink.media) sink.media.push(...r.media);
+          return r.text;
+        } catch (e) { console.error('browse failed:', e.message); return `BROWSE failed: ${e.message}`; }
+      }
+      if (name === 'SUBSCRIPTIONS' && ['atlas', 'ara'].includes(persona)) return `SUBSCRIPTIONS (from his email):\n${await require('./moneyWatch').subscriptionsTag()}`;
+      if (name === 'MONEY_IN_OUT' && ['atlas', 'ara'].includes(persona)) return `MONEY IN / OUT:\n${await require('./moneyWatch').monthText()}`;
+      if (name === 'OPEN_THREADS') return `OPEN THREADS (his Drive note "Open Threads"):\n${await require('./openThreads').readTag()}`;
+      if (name === 'TRANSCRIBE' && arg) {
+        try {
+          const out = await require('./transcribe').transcribeTag(arg);
+          const m = /Saved to his Drive as "([^"]+)"/.exec(out);
+          if (m && sink) sink.notes.push(`transcript note saved: ${m[1]}`);
+          return out;
+        }
+        catch (e) { return `TRANSCRIBE failed: ${e.message}`; }
+      }
+      if (['AUTO_CLIP', 'AUTO_CLIP_OFF', 'AUTO_CLIP_LIST'].includes(name) && ['rogue', 'ara', 'jarvis'].includes(persona) && (arg || name === 'AUTO_CLIP_LIST')) {
+        try { return `${name}: ${await require('./autoClip').tag(name, arg)}`; }
+        catch (e) { return `${name} failed: ${e.message}`; }
+      }
+      if (require('./siteDesk').SITE_TAGS.has(name) && ['jarvis', 'ara', 'scout'].includes(persona)) {
+        try { return `${name}${arg ? ` "${arg}"` : ''} (the website desk): ${await require('./siteDesk').tag(name, arg, asked)}`; }
+        catch (e) { return `${name} failed: ${e.message}`; }
+      }
+      if (['RAW_EDIT', 'STYLE_LEARN', 'STYLE_NOTE'].includes(name) && arg && ['rogue', 'jarvis', 'ara'].includes(persona)) {
+        try { return `${name}: ${await require('./rawEdit').tag(name, arg)}`; }
+        catch (e) { return `${name} failed: ${e.message}`; }
+      }
+      if (name === 'SITE_LOGIN' && arg && persona === 'jarvis') {
+        try { return await require('./siteLogins').tag(arg); }
+        catch (e) { return `SITE_LOGIN failed: ${e.message}`; }
       }
       if (name === 'CLIP_SCAN' && arg && persona === 'rogue') {
         const [link, ...f] = arg.split('|');
@@ -646,6 +693,7 @@ async function runInjections(text, persona = 'ara', { convo = '', depth = 0, sin
         const [symArg, daysArg] = String(arg || '').split('|').map((x) => x.trim());
         return `TRADE STATS (from his journal, arithmetic only):\n${await require('./tradeJournal').tradeStats({ symbol: symArg || 'XAUUSD', days: Number(daysArg) || 30 })}`;
       }
+      if (name === 'NASDAQ_DESK' && ['ara', 'talon'].includes(persona)) return `NASDAQ DESK:\n${await require('./talonNasdaq').statusText()}`;
       if (name === 'QUICK_LOG' && ['ara', 'talon'].includes(persona)) return `QUICK-SCALP DESK:\n${await require('./talonQuick').quickLogText()}`;
       if (name === 'TRADE_POSITIONS' && ['ara', 'talon'].includes(persona)) return `OPEN POSITIONS:\n${await require('./talonCommands').positionsText()}`;
       if (name === 'TALON_RUN' && ['ara', 'talon'].includes(persona)) return `T.A.L.O.N. SCAN (run just now):\n${talonRunLine(await require('./talonAutoTrade').tick({ force: true }))}`;
@@ -655,10 +703,17 @@ async function runInjections(text, persona = 'ara', { convo = '', depth = 0, sin
         const id = resolvePersonaId(ref);
         if (!id || !msg) return `RELAY_TO "${arg}": couldn't route that.`;
         if (id === persona) return `RELAY_TO "${ref}": that's you — just answer him directly.`;
-        if (depth > 1) return `RELAY_TO "${ref}": not from inside a relay — answer with what you have.`;
-        // Mr. Burrus didn't ask for them — answer it yourself.
-        if (!relayAllowed(asked, id, persona)) return `RELAY_TO "${ref}": not sent — Mr. Burrus didn't ask you to bring ${ROSTER[id].name} in. Answer it yourself from your own knowledge; don't mention the hand-off.`;
-        return `YOU ASKED ${ROSTER[id].name}: "${msg}"\n${ROSTER[id].name} REPLIED (their words — their "I" is ${ROSTER[id].name}; tell Mr. Burrus what ${ROSTER[id].name} said/did, not as yours; don't paste or read out their reply, put it in your own words, what matters first):\n${await relayToPersona(id, msg, { from: persona, convo, depth: depth + 1, sink, asked })}`;
+        if (depth >= MAX_RELAY_DEPTH) return `RELAY_TO "${ref}": this job is already ${depth} hand-offs deep — finish it with what you have and say what's still open.`;
+        if (chain.includes(id)) return `RELAY_TO "${ref}": ${ROSTER[id].name} is already on this job (they handed it to you) — finish your part and give it back in your answer.`;
+        // Top level: questions and opinions stay in your lane unless he asked. Inside a job (depth 1+), the next step goes to whoever can do it.
+        if (depth === 0 && !relayAllowed(asked, id, persona)) return `RELAY_TO "${ref}": not sent — Mr. Burrus didn't ask you to bring ${ROSTER[id].name} in. Answer it yourself from your own knowledge; don't mention the hand-off.`;
+        // Shown in the Empire group chat as it happens (nothing when no group is set).
+        const gc = require('./groupChat');
+        await gc.relayAsked(persona, id, msg);
+        const answer = await relayToPersona(id, msg, { from: persona, convo, depth: depth + 1, sink, asked, chain: [...chain, persona] });
+        if (sink) (sink.relayed || (sink.relayed = new Set())).add(id);
+        await gc.relayAnswered(id, answer, { from: persona, message: msg });
+        return `YOU ASKED ${ROSTER[id].name}: "${msg}"\n${ROSTER[id].name} REPLIED (their words — their "I" is ${ROSTER[id].name}; tell Mr. Burrus what ${ROSTER[id].name} said/did, not as yours; don't paste or read out their reply, put it in your own words, what matters first):\n${answer}`;
       }
       return '';
     } catch (e) {
@@ -673,7 +728,15 @@ async function runInjections(text, persona = 'ara', { convo = '', depth = 0, sin
     seen.add(k);
     return true;
   });
-  return (await Promise.all(tags.map(one))).filter(Boolean).join('\n\n');
+  if (!(sink && sink.group)) return (await Promise.all(tags.map(one))).filter(Boolean).join('\n\n');
+  // In the group chat the hand-offs go one at a time, each hearing the ones before.
+  const out = await Promise.all(tags.filter((t) => t.name !== 'RELAY_TO').map(one));
+  for (const t of tags.filter((x) => x.name === 'RELAY_TO')) {
+    const r = await one(t);
+    out.push(r);
+    if (r) convo = `${convo}\n${String(r).replace(/\s+/g, ' ').slice(0, 1500)}`;
+  }
+  return out.filter(Boolean).join('\n\n');
 }
 
 const { COURSE_TAGS, courseTag } = require('./stephanieCourse');
@@ -761,7 +824,10 @@ async function applyEffects(text, deliver, persona = 'ara', { full = false, owne
             title, notes: taskNote || '', due_date: dd,
             priority: 'normal', completed: 0, created_at: now, updated_at: now,
           });
-          notes.push(`task added: ${title}${dd ? ` (due ${dd})` : ''}`);
+          // Mirrored to Google Tasks too (owner, 2026-11-20: tasks he gave A.R.A. never reached it).
+          const gt = await require('./google').gTaskCreate({ title, notes: taskNote, due: dd }).then(() => '').catch((e) => e.message);
+          if (gt) warnings.push(`task added to the app, but the Google Tasks copy failed — ${gt.slice(0, 160)}`);
+          notes.push(`task added: ${title}${dd ? ` (due ${dd})` : ''}${gt ? '' : ' (app + Google Tasks)'}`);
         }
       } else if (name === 'COMPLETE_TASK' && arg) {
         const rows = await query("SELECT sync_id, data FROM sync_rows WHERE table_name = 'tasks' AND deleted = false");
@@ -876,7 +942,7 @@ ${SHARED_OPS}
 // relay like "ask Atlas about gold" carries what was actually being discussed),
 // and one round of its own lookups before it answers — without that, a reply
 // that was just "[TRADE_SCAN: XAUUSD]" came back as the whole answer.
-async function relayToPersona(id, message, { from = 'ara', convo = '', depth = 1, sink = null, asked = '' } = {}) {
+async function relayToPersona(id, message, { from = 'ara', convo = '', depth = 1, sink = null, asked = '', chain = [] } = {}) {
   const p = ROSTER[id];
   const [ctx, gs] = await Promise.all([
     gatherContext().catch(() => null),
@@ -884,9 +950,11 @@ async function relayToPersona(id, message, { from = 'ara', convo = '', depth = 1
   ]);
   const sys = [
     await relaySystem(id, from),
+    await require('./ownerProfile').profileBlock().catch(() => ''),
     OBEY,
+    require('./personas').INITIATIVE,
     emotionFor(id),
-    id === 'ara' ? ARA_TOOLS : genericTools(id),
+    id === 'ara' ? ARA_TOOLS + '\n' + require('./browserAgent').BROWSE_TOOLS : genericTools(id),
     id === 'jarvis' ? await empireOsBrief() : '',
     id === 'talon' ? RELAY_TOOLS.replace(HAND_TRADES, TALON_HAND_TRADES) : RELAY_TOOLS,
     googleLine(gs),
@@ -899,7 +967,7 @@ async function relayToPersona(id, message, { from = 'ara', convo = '', depth = 1
   // Room for a long note or several in one go.
   let reply = await chatAs(p.api, p.model, sys, messages, { maxTokens: 2500, fallback: id !== 'ara' });
   const replies = [reply];
-  const inj = await runInjections(reply, id, { convo, depth, sink, asked });
+  const inj = await runInjections(reply, id, { convo, depth, sink, asked, chain });
   if (inj) {
     messages.push({ role: 'assistant', content: reply });
     messages.push({ role: 'user', content: `[tool results — now answer using these. Don't repeat the read tags; write tags you already emitted will run — emit only ones you still need.]\n\n${inj}` });
@@ -991,6 +1059,63 @@ function recallRows(rows, question) {
   return [...picked.keys()].sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
 }
 
+// Days a recall question names, as YYYY-MM-DD (ET): "2026-11-17", "November 17",
+// "Nov 17th, 2026", "yesterday", "today". A month and day with no year is the
+// latest one not in the future.
+function recallDays(question, now = Date.now()) {
+  const q = String(question || '').toLowerCase();
+  const out = new Set(q.match(/\b\d{4}-\d{2}-\d{2}\b/g) || []);
+  const etDay = (ms) => new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(ms));
+  const today = etDay(now);
+  const re = new RegExp(`\\b(${MONTHS.map((m) => `${m.slice(0, 3)}(?:${m.slice(3)})?`).join('|')})\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?\\b(?:,?\\s+(\\d{4}))?`, 'g');
+  for (const m of q.matchAll(re)) {
+    const mon = MONTHS.findIndex((x) => x.startsWith(m[1].slice(0, 3))) + 1;
+    const dd = Number(m[2]);
+    if (!mon || dd < 1 || dd > 31) continue;
+    let y = Number(m[3]) || Number(today.slice(0, 4));
+    let iso = `${y}-${String(mon).padStart(2, '0')}-${String(dd).padStart(2, '0')}`;
+    if (!m[3] && iso > today) iso = `${y - 1}${iso.slice(4)}`;
+    out.add(iso);
+  }
+  if (/\byesterday\b/.test(q)) out.add(etDay(now - 864e5));
+  if (/\btoday\b|\bthis morning\b|\btonight\b/.test(q)) out.add(today);
+  return [...out].sort().slice(-3);
+}
+
+// The full conversation on those days, word for word: his Telegram chat with this
+// persona (tg_messages) and the app exchanges synced into persona_memory. Mem0
+// keeps only short facts, so this is what makes "what did we talk about on the
+// 17th" answerable in full.
+async function dayTranscript(persona, days, appRows) {
+  if (!days.length) return '';
+  const etDay = (ms) => new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(ms));
+  const lo = Date.parse(`${days[0]}T00:00:00Z`) - 864e5, hi = Date.parse(`${days[days.length - 1]}T00:00:00Z`) + 2 * 864e5;
+  const { rows } = await query('SELECT role, content, ts FROM tg_messages WHERE persona = $1 AND ts >= $2 AND ts < $3 ORDER BY ts ASC', [persona, lo, hi]).catch(() => ({ rows: [] }));
+  const who = (ROSTER[persona] && ROSTER[persona].name) || persona;
+  const items = [
+    ...rows.filter((r) => days.includes(etDay(Number(r.ts)))).map((r) => ({ at: Number(r.ts), text: `(Telegram) ${r.role === 'user' ? 'Mr. Burrus' : who}: ${r.content}` })),
+    ...appRows.filter((r) => days.includes(r.created_at ? etDay(Number(r.created_at)) : r.date)).map((r) => ({ at: Number(r.created_at) || 0, text: `(App) ${r.content}` })),
+  ].sort((a, b) => a.at - b.at);
+  if (!items.length) return `FULL CONVERSATION ON ${days.join(', ')}: nothing in his Telegram chat with you or the synced app exchanges on that day.`;
+  let body = items.map((i) => `[${i.at ? shortMomentET(i.at) : ''}] ${String(i.text).slice(0, 4000)}`).join('\n\n');
+  if (body.length > 50000) body = `${body.slice(0, 25000)}\n\n…(middle of the day cut for length)…\n\n${body.slice(-25000)}`;
+  return `FULL CONVERSATION ON ${days.join(', ')}, word for word, oldest first (${items.length} messages):\n${body}`;
+}
+
+// His Telegram messages with this persona that contain the question's key words,
+// any date (Mem0 may have only a line on it, or nothing).
+async function tgMatches(persona, question) {
+  const words = [...new Set(String(question || '').toLowerCase().match(/[a-z0-9]{4,}/g) || [])].filter((w) => !RECALL_STOP.has(w) && !MONTHS.includes(w)).slice(0, 6);
+  if (!words.length) return '';
+  const { rows } = await query(
+    `SELECT role, content, ts FROM tg_messages WHERE persona = $1 AND (${words.map((_, i) => `content ILIKE ${i + 2}`).join(' OR ')}) ORDER BY ts DESC LIMIT 40`,
+    [persona, ...words.map((w) => `%${w}%`)],
+  ).catch(() => ({ rows: [] }));
+  if (!rows.length) return '';
+  const who = (ROSTER[persona] && ROSTER[persona].name) || persona;
+  return `TELEGRAM MESSAGES MATCHING THE QUESTION (newest first, full text):\n${rows.map((r) => `[${shortMomentET(Number(r.ts))}] ${r.role === 'user' ? 'Mr. Burrus' : who}: ${String(r.content).slice(0, 2500)}`).join('\n\n')}`;
+}
+
 async function memoryQuery(question, persona = 'ara') {
   const all = (await syncedRows('persona_memory').catch(() => []))
     .filter((r) => r.persona === persona)
@@ -998,23 +1123,26 @@ async function memoryQuery(question, persona = 'ara') {
   // Mem0 is the memory: its semantic matches first, then its WHOLE dated
   // history for this persona so date questions ("in August", "when did I")
   // can be answered. The synced raw exchanges only fill in behind it.
-  const [hits, everything] = await Promise.all([
+  const days = recallDays(question);
+  const [hits, everything, day, tgHits] = await Promise.all([
     mem0Search(persona, question, { topK: 60, threshold: 0.01 }),
     mem0All(persona),
+    dayTranscript(persona, days, all),
+    days.length ? '' : tgMatches(persona, question),
   ]);
   const rows = recallRows(all, question).slice(0, everything.length ? 40 : 200);
-  if (!rows.length && !hits.length && !everything.length) return 'No stored memories yet.';
+  if (!rows.length && !hits.length && !everything.length && !day && !tgHits) return 'No stored memories yet.';
   const m0 = hits.map((h) => `- ${mem0Line(h)}`).join('\n');
   const span = (xs) => (xs.length ? `${mem0Line(xs[xs.length - 1]).slice(1, 11)} → ${mem0Line(xs[0]).slice(1, 11)}` : 'none');
   const history = everything.map((h) => `- ${mem0Line(h)}`).join('\n');
-  const corpus = ((m0 ? `MEM0 — BEST MATCHES FOR THE QUESTION (dated):\n${m0}\n\n` : '')
+  const corpus = ((day ? `${day}\n\n` : '') + (tgHits ? `${tgHits.slice(0, 30000)}\n\n` : '') + (m0 ? `MEM0 — BEST MATCHES FOR THE QUESTION (dated):\n${m0}\n\n` : '')
     + (history ? `MEM0 — EVERYTHING YOU KNOW, newest first (${everything.length} memories, ${span(everything)}):\n${history.slice(0, 60000)}\n\n` : '')
-    + (rows.length ? `RAW EXCHANGES (synced from the app):\n` + rows.map((r) => `[${r.created_at ? shortMomentET(Number(r.created_at)) : r.date || ''}${r.category ? ' · ' + r.category : ''}]\n${r.content}`).join('\n\n') : '')).slice(0, 90000);
+    + (rows.length ? `RAW EXCHANGES (synced from the app):\n` + rows.map((r) => `[${r.created_at ? shortMomentET(Number(r.created_at)) : r.date || ''}${r.category ? ' · ' + r.category : ''}]\n${r.content}`).join('\n\n') : '')).slice(0, 140000);
   const who = (ROSTER[persona] && ROSTER[persona].name) || persona;
   return claudeText(
-    `You are the private memory index for ${who}, one of Mr. Burrus's personas. Below are stored exchanges, newest first. Answer the recall question using ONLY what's here. Be specific — quote dates and details. If it's not covered, say so in one sentence. No preamble.\n\n=== MEMORIES ===\n${corpus}\n=== END ===`,
+    `You are the private memory index for ${who}, one of Mr. Burrus's personas. Below are stored exchanges, newest first. Answer the recall question using ONLY what's here. When there is a FULL CONVERSATION section, that is the real record of the day: go through it in order and give every topic, decision, request and open item, with times and specifics (numbers, names, what was agreed, what was left undone), not a summary of the gist. Mem0's lines are short extracted facts; use them to fill in. Be specific — quote dates and details. If it's not covered, say so in one sentence. No preamble.\n\n=== MEMORIES ===\n${corpus}\n=== END ===`,
     question,
-    { maxTokens: 600 },
+    { maxTokens: days.length ? 1500 : 800 },
   );
 }
 
@@ -1052,6 +1180,19 @@ async function runDeepResearch(topic, deliver, persona = 'ara') {
     await deliver(`Deep research on "${topic}" failed: ${e.message}`);
   }
 }
+
+// His calendar, live, for A.R.A.'s prompt: today plus the next 14 days, cached a
+// minute so a burst of messages is one Google call. Fresh after any calendar write.
+let calCache = { at: 0, text: '' };
+const CAL_RULE = 'Questions about when, what time, where or whether something is happening (a party, a meeting, an appointment, "what do I have today", "am I free Friday") are answered from THIS list first, never from the chat or memory: name the event and its time exactly as listed. Not on it? Say it isn\'t on his calendar for the next two weeks, then check tasks, dates and reminders, or [READ_CALENDAR: YYYY-MM-DD | 30] further out.';
+async function calendarBlock() {
+  if (Date.now() - calCache.at > 60000) {
+    try { calCache = { at: Date.now(), text: await require('./google').calendarList({ startISO: todayET(), days: 15 }) }; }
+    catch (e) { return `[HIS CALENDAR: couldn't be read this turn (${e.message}). For any when/what-time question, emit [READ_CALENDAR] before answering.]`; }
+  }
+  return `[HIS GOOGLE CALENDAR — live, read this turn, ${momentET()}:\n${calCache.text}\n${CAL_RULE}]`;
+}
+const calendarFresh = () => { calCache.at = 0; };
 
 // --- history ---------------------------------------------------------
 
@@ -1091,7 +1232,7 @@ async function saveMessage(persona, role, content) {
 // { text, effects }. `reply`: J.A.R.V.I.S.'s engine already wrote the first answer
 // (an app job finished after the app stopped listening) — use it instead of
 // asking again; its tags and any lookup rounds still run.
-async function runPersonaTurn(personaId, userText, deliver, { reply: given, resumes = 0 } = {}) {
+async function runPersonaTurn(personaId, userText, deliver, { reply: given, resumes = 0, group = false } = {}) {
   userText = require('./llm').fixNames(userText); // "Aura" is always A.R.A.
   const persona = ROSTER[personaId] ? personaId : 'ara';
   const p = ROSTER[persona];
@@ -1106,14 +1247,18 @@ async function runPersonaTurn(personaId, userText, deliver, { reply: given, resu
   // repo itself, so the code brief is only for the plain-model fallback.
   const engine = persona === 'jarvis' && require('./jarvisEngine').enabled() ? require('./jarvisEngine') : null;
   if (persona === 'jarvis' && !engine) sys = `${sys}\n\n${await empireOsBrief()}`;
+  { const prof = await require('./ownerProfile').profileBlock().catch(() => ''); if (prof) sys = `${sys}\n\n${prof}`; }
   if (persona === 'stephanie') {
     const course = await require('./stephanieCourse').statusText().catch((e) => `(couldn't read it: ${e.message})`);
     sys = `${sys}\n\n[YOUR COURSE — live from Drive this turn:\n${course}\n]`;
   }
+  // A.R.A. always has his calendar in front of her (owner's call, 2026-11-21: "what
+  // time is the party?" was answered from chat memory because she never looked).
+  if (persona === 'ara' && gs && gs.ok) sys = `${sys}\n\n${await calendarBlock()}`;
   const history = await loadHistory(persona);
-  const messages = [...history, { role: 'user', content: `[${momentET()}] ${userText}` }];
+  const messages = [...history, { role: 'user', content: `[${momentET()}] ${group ? `${require('./groupChat').GROUP_FRAME}\n\n` : ''}${userText}` }];
   const convo = convoLines(history, userText, persona);
-  const sink = { notes: [], warnings: [], confirms: [], media: [], deliver };
+  const sink = { notes: [], warnings: [], confirms: [], media: [], deliver, group };
 
   // 4000: a long note lives inside the reply's tag — at 1200 it was cut off
   // mid-note, the tag never closed, and nothing was saved.
@@ -1124,7 +1269,7 @@ async function runPersonaTurn(personaId, userText, deliver, { reply: given, resu
   const brain = async (msgs) => {
     if (given != null) { const out = String(given); given = null; engineUsed = !!engine; return out; }
     if (engine && !engineNote) {
-      try { const out = await engine.turn(String(msgs[msgs.length - 1].content), { persona: sys, source: 'telegram', ownerText: userText, resumes }); engineUsed = true; return out; }
+      try { const out = await engine.turn(String(msgs[msgs.length - 1].content), { persona: sys, source: 'telegram', ownerText: userText, resumes, recent: convoLines(history.slice(-12), '', persona).split('\n').slice(0, -1).join('\n') }); engineUsed = true; return out; }
       catch (e) { engineNote = `⚠️ Claude Code (his engine) failed, so this answer is from the plain chat model: ${e.message.slice(0, 200)}`; console.error('jarvis engine:', e.message); }
     }
     return chatAs(p.api, p.model, sys, msgs, { maxTokens: 4000, fallback: persona !== 'ara' });
@@ -1146,6 +1291,27 @@ async function runPersonaTurn(personaId, userText, deliver, { reply: given, resu
     replies.push(reply);
   }
 
+  // Said it was handing something to another persona ("relaying the fix to Atlas
+  // now") but no [RELAY_TO] went through: saying it isn't doing it. One more round
+  // to actually send it, then the reply is rewritten from what really happened.
+  const { promisedHandoffs, handoffNames } = require('./personas');
+  const unsent = () => promisedHandoffs(stripCues(stripTags(reply)), handoffNames(), persona).filter((id) => !(sink.relayed && sink.relayed.has(id)));
+  let owed = unsent();
+  if (owed.length) {
+    const who = owed.map((id) => `${ROSTER[id].name} (${id})`).join(', ');
+    messages.push({ role: 'assistant', content: reply });
+    messages.push({ role: 'user', content: `[Your reply tells Mr. Burrus you're handing this to ${who}, but no [RELAY_TO] went out this turn, so nothing reached them. Saying it isn't doing it. Do it now: emit [RELAY_TO: id | the complete instruction or question, with every number and detail they need] for each one, and nothing else. If you can do it yourself with your own tags instead, emit those.]` });
+    const fix = await brain(messages);
+    replies.push(fix);
+    const inj = await runInjections(fix, persona, { convo, sink, asked: userText });
+    if (inj) looked.push(inj);
+    messages.push({ role: 'assistant', content: fix });
+    messages.push({ role: 'user', content: `[tool results — these receipts are what really happened:]\n\n${inj || '(nothing ran)'}\n\n[Now give Mr. Burrus your reply again, reporting what actually happened: what you sent, to whom, and what they said or did. Don't say you're about to hand anything off — it's either done above or it isn't.]` });
+    reply = await brain(messages);
+    replies.push(reply);
+    owed = unsent();
+  }
+
   // Side-effect tags fire once, from anywhere across the rounds (deduped).
   const fx = await applyEffects(replies.join('\n'), deliver, persona, { ownerText: userText })
     .catch((e) => ({ notes: [], warnings: [`actions failed: ${e.message}`], confirms: [] }));
@@ -1153,6 +1319,7 @@ async function runPersonaTurn(personaId, userText, deliver, { reply: given, resu
   fx.warnings.push(...sink.warnings);
   fx.confirms.push(...sink.confirms);
   const all = replies.join('\n');
+  if (findTags(all).some((t) => /EVENT$/.test(t.name))) calendarFresh();
   for (const t of openTags(all)) {
     fx.warnings.push(`${t} was cut off before it closed — what ran may be incomplete; ask again for the rest`);
   }
@@ -1180,6 +1347,7 @@ async function runPersonaTurn(personaId, userText, deliver, { reply: given, resu
   if (!calRan && /\b(added|put|set|scheduled|booked|moved|updated|blocked)\b[^.\n]{0,50}\b(calendar|schedule)\b|\b(calendar|schedule)\b[^.\n]{0,30}\b(added|updated|set)\b/i.test(clean)) {
     fx.warnings.push('nothing actually went on your Google Calendar this turn (no calendar tag ran) — tell me again and I\'ll add it');
   }
+  if (owed.length) fx.warnings.push(`nothing was actually sent to ${owed.map((id) => ROSTER[id].name).join(' or ')} this turn, although the reply says so — tell me again and I'll send it`);
   if (!clean) spoken = clean = fx.notes.length ? `Done — ${fx.notes.join('; ')}.` : media.length ? 'Here you go.' : 'On it.';
   spoken = forSpeech(spoken);
   // A receipt under the reply for every write — the reply is written before the
@@ -1210,4 +1378,5 @@ async function runPersonaTurn(personaId, userText, deliver, { reply: given, resu
 // Back-compat: A.R.A.'s turn.
 const runAraTurn = (userText, deliver) => runPersonaTurn('ara', userText, deliver);
 
-module.exports = { runPersonaTurn, runAraTurn, gatherContext, contextBlock, applyEffects, runInjections };
+module.exports = {
+  recallDays, runPersonaTurn, runAraTurn, gatherContext, contextBlock, applyEffects, runInjections };
