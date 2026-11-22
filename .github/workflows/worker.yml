@@ -52,12 +52,33 @@ jobs:
             echo 'prompt<<WORKER_TASK_EOF'
             echo "[YOU ARE J.A.R.V.I.S.'S WORKER #$WORKER, on your own GitHub runner. You are on branch $BRANCH of the Empire OS repo, cut from main. The repo's AGENTS.md / CLAUDE.md rules apply.]"
             echo "Do the task below fully. Code: read the real code, change what's needed, run the tests that cover it (node server/scripts/test-*.js), check your work, and COMMIT on this branch (don't push, don't merge, never touch main: the job pushes the branch and Mr. Burrus ships it). Research, checks, writing: do it thoroughly and report with sources; commit only if something in the repo changes."
+            echo "PROGRESS (Mr. Burrus watches it live as a percentage): before anything else, write your plan of 3 to 10 numbered steps to the file .worker-plan.md at the root of the repo, one per line, exactly like \"1. [ ] Read the worker code\" — short step names (under 60 characters) he can read on a phone. The moment you finish a step, change its [ ] to [x] in that file (one at a time as you go, never all at the end). If the plan changes, rewrite the file and keep the finished steps ticked. Don't commit it (it is gitignored)."
             echo "Your final message is your report to Mr. Burrus (he reads it on Telegram): first line DONE, PARTLY DONE or FAILED; then what you did, the proof (test output, sources), anything unfinished or that needs his decision. Short and plain."
             echo
             echo "TASK:"
             gh issue view "$ISSUE" --repo "$GITHUB_REPOSITORY" --json body -q .body
             echo 'WORKER_TASK_EOF'
           } >> "$GITHUB_OUTPUT"
+      - name: Mirror the plan to the issue
+        # Background: every 15 s, copy .worker-plan.md into ONE issue comment marked
+        # <!-- worker-plan --> (edited in place), which the server reads for the percent.
+        run: |
+          nohup bash -c '
+            cid=""
+            last=""
+            while true; do
+              if [ -s .worker-plan.md ] && [ "$(cat .worker-plan.md)" != "$last" ]; then
+                last="$(cat .worker-plan.md)"
+                { echo "<!-- worker-plan -->"; cat .worker-plan.md; } > /tmp/plan-comment.md
+                if [ -z "$cid" ]; then
+                  cid=$(gh api "repos/$GITHUB_REPOSITORY/issues/$ISSUE/comments" -F body=@/tmp/plan-comment.md -q .id 2>/dev/null)
+                else
+                  gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$cid" -F body=@/tmp/plan-comment.md >/dev/null 2>&1
+                fi
+              fi
+              sleep 15
+            done
+          ' >/dev/null 2>&1 &
       - id: claude
         uses: anthropics/claude-code-action@v1
         with:
