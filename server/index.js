@@ -398,7 +398,7 @@ function startMondayScriptsCron() {
 // The sentinel — anything that breaks or switches off tells him (server/sentinel.js).
 function startSentinelCron() {
   if (process.env.SENTINEL === 'off') return console.log('sentinel disabled (SENTINEL=off)');
-  cron.schedule('*/10 * * * *', () => require('./sentinel').tick().catch((e) => console.error('sentinel tick error:', e.message)));
+  cron.schedule('*/10 * * * *', () => require('./sentinel').safeTick());
   setTimeout(() => require('./sentinel').tick().catch((e) => console.error('sentinel tick error:', e.message)), 90000);
   console.log('sentinel scheduled (every 10m)');
 }

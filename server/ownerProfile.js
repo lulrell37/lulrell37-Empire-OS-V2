@@ -14,10 +14,13 @@ const { claudeText } = require('./llm');
 
 const KEY = 'owner_profile';
 const NOTE = 'How Mr. Burrus Works';
-// No rotation: a line leaves only when the model names it under REMOVED:
-// (contradicted, finished, rewritten), so a full profile never pushes a standing
-// order out (owner's call, 2026-11-22). MAX_ITEMS is only a runaway guard.
-const MAX_ITEMS = 200;
+// No rotation and no cap: a line leaves only when the model names it under
+// REMOVED: (contradicted, finished, rewritten), so nothing is ever pushed out
+// (owner's call, 2026-11-22). Past 150 lines the sentinel tells him to tidy it.
+// His standing orders that must never drop out, whatever the model returns:
+const PINNED = [
+  '- [all] Nothing we build may shut down, stop or break quietly: if anything is failing or about to, A.R.A. tells him automatically, without being asked (2026-11-22)',
+];
 // These see every line: A.R.A. runs the team and J.A.R.V.I.S. builds for all of it.
 // Mirrored in src/services/aiService.js (profileFor).
 const SEES_ALL = new Set(['ara', 'jarvis']);
@@ -53,9 +56,10 @@ function normalize(raw, prev = '') {
   const removed = new Set(lines.filter((l) => /^REMOVED:/i.test(l)).map((l) => body(l.replace(/^REMOVED:\s*/i, ''))));
   const out = []; const seen = new Set();
   const add = (l) => { const c = cleanLine(l); const b = c && body(c); if (b && !seen.has(b) && !removed.has(b)) { seen.add(b); out.push(c); } };
+  PINNED.forEach((l) => { const b = body(l); if (!seen.has(b)) { seen.add(b); out.push(l); } });
   lines.filter((l) => /^-\s+\S/.test(l)).forEach(add);
   String(prev || '').split('\n').map((l) => l.trim()).filter((l) => /^-\s+\S/.test(l)).forEach(add);
-  return out.slice(0, MAX_ITEMS).join('\n');
+  return out.join('\n');
 }
 
 // The lines persona `id` gets: the [all] ones and its own (every line for SEES_ALL).
@@ -95,8 +99,8 @@ async function tick({ force = false } = {}) {
 
 // The block persona `id`'s prompt carries.
 async function profileBlock(id) {
-  const p = linesFor(await current().catch(() => ''), id);
+  const p = linesFor(normalize('', await current().catch(() => '')), id);
   return p ? `[HOW MR. BURRUS WORKS — learned from his conversations with the whole team; follow it without being told again. If he contradicts a line, he wins and the profile updates:\n${p}\n]` : '';
 }
 
-module.exports = { tick, profileBlock, normalize, linesFor, cleanLine, current, NOTE, KEY, enabled, SEES_ALL };
+module.exports = { PINNED, tick, profileBlock, normalize, linesFor, cleanLine, current, NOTE, KEY, enabled, SEES_ALL };
