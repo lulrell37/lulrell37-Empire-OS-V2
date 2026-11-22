@@ -371,7 +371,9 @@ async function screenshot(b) {
 // --- the guard rails (pure) --------------------------------------------------------
 
 // A click or Enter that acts in the world rather than reading or moving around.
-const COMMIT = /\b(send|post|publish|share|submit|apply|buy|purchase|pay|checkout|check out|place order|order now|book|reserve|schedule|connect|follow|invite|delete|remove|cancel (?:my|subscription|order|account)|unsubscribe|confirm|accept|agree|sign up|register|create account|transfer|withdraw|donate|subscribe|upgrade|message|reply|comment|like)\b/i;
+// Signing up for an account is not on it: his standing order (2026-11-20) is that a
+// persona makes the account and the password itself and tells him where they are.
+const COMMIT = /\b(send|post|publish|share|submit|apply|buy|purchase|pay|checkout|check out|place order|order now|book|reserve|schedule|connect|follow|invite|delete|remove|cancel (?:my|subscription|order|account)|unsubscribe|confirm|accept|agree|transfer|withdraw|donate|subscribe|upgrade|message|reply|comment|like)\b/i;
 function isCommit(action, target) {
   if (action.type === 'press' && /^enter$/i.test(action.key || '') && target && /input|textbox|textarea|contenteditable/i.test(`${target.tag} ${target.type}`)) {
     // Enter in a search box is a search; anywhere else it may submit.
@@ -499,6 +501,21 @@ async function finish(b, status, text, log) {
   return { status, text, url, steps: log, shot };
 }
 
+// The newest verification code in his Gmail from the last 15 minutes, any sender.
+async function emailedCode() {
+  const g = require('./google');
+  const { codeIn } = require('./siteLogins');
+  for (let i = 0; i < 6; i++) {
+    const list = await g.gmailList({ q: 'newer_than:15m (code OR verification OR verify OR "sign in" OR confirm)', max: 3 }).catch(() => '');
+    for (const id of [...String(list).matchAll(/\[id:([\w-]+)\]/g)].map((m) => m[1])) {
+      const c = codeIn((await g.gmailRead(id).catch(() => '')).split('\n').slice(4).join('\n'));
+      if (c) return c;
+    }
+    await new Promise((res) => setTimeout(res, 15000));
+  }
+  return null;
+}
+
 // --- the tag ---------------------------------------------------------------------
 
 const NAMES = () => { try { return Object.fromEntries(require('./personas').ROSTER.map((p) => [p.id, p.name])); } catch { return {}; } };
@@ -507,8 +524,20 @@ async function browseTag(persona, arg, { ownerText = '' } = {}) {
   if (!BROWSE_PERSONAS.has(persona)) throw new Error('the browser is J.A.R.V.I.S.\'s and A.R.A.\'s only — hand it to one of them');
   const { claudeText } = require('./llm');
   const name = NAMES()[persona] || persona;
-  const r = await runTask({ persona, personaName: name, task: String(arg || '').trim(), ownerText,
-    brain: (sys, prompt) => claudeText(sys, prompt, { maxTokens: 700 }) });
+  const brain = (sys, prompt) => claudeText(sys, prompt, { maxTokens: 700 });
+  let r = await runTask({ persona, personaName: name, task: String(arg || '').trim(), ownerText, brain });
+  // A site emailed a code: it's in his Gmail, so fetch it and carry on without him
+  // (owner, 2026-11-22: "it's supposed to be automatic").
+  const logins = require('./siteLogins');
+  if (r.status !== 'done' && logins.wantsEmailCode(r.text)) {
+    const code = await emailedCode().catch(() => null);
+    if (code) {
+      const r2 = await runTask({ persona, personaName: name, ownerText: 'yes', brain, secrets: { CODE: code },
+        task: `You are partway through this task and the page asked for the code that was emailed. Type {{CODE}} into the code box and continue. The task: ${String(arg || '').trim()}` });
+      r2.steps = [...r.steps, '(fetched the emailed code from his Gmail)', ...r2.steps];
+      r = r2;
+    } else r.text += ' (no code turned up in his Gmail within 90 seconds)';
+  }
   const head = { done: 'BROWSE — finished', ask: 'BROWSE — paused, needs Mr. Burrus', stopped: 'BROWSE — stopped' }[r.status];
   const text = `${head} (${r.steps.length} step${r.steps.length === 1 ? '' : 's'}, last page ${r.url || 'none'}):\n${r.text}\n\nSTEPS:\n${r.steps.map((s, i) => `${i + 1}. ${s}`).join('\n') || '(none)'}` +
     (r.status === 'ask' ? `\n\n(Put this question to him in plain words. When he answers, run [BROWSE: the same task] again — the browser is still on that page, and his reply is what approves or stops it.)` : '') +
@@ -517,6 +546,6 @@ async function browseTag(persona, arg, { ownerText = '' } = {}) {
   return { text, media, status: r.status };
 }
 
-const BROWSE_TOOLS = ` - [BROWSE: the task, in full] — your own computer: a real Chrome in the cloud that you drive like a person (open sites, search, read, click, fill in forms), with your own saved logins. For anything with no direct tool: looking someone up on LinkedIn, checking a supplier's prices, reading a site, filling a form. The result comes back to you this turn and he gets a screenshot. It stops and asks before anything that acts in the world (sending, posting, connecting, buying, booking, deleting): put that question to him, and when he answers run [BROWSE] again with the same task — his reply is what approves it. A minute or several. One per turn. Report only what it found.`;
+const BROWSE_TOOLS = ` - [BROWSE: the task, in full] — your own computer: a real Chrome in the cloud that you drive like a person (open sites, search, read, click, fill in forms), with your own saved logins. For anything with no direct tool: looking someone up on LinkedIn, checking a supplier's prices, reading a site, filling a form. The result comes back to you this turn and he gets a screenshot. Sign-ups go through on their own (make the password yourself and save it with [SAVE_NOTE]), and a code a site emails is fetched from his Gmail automatically. It stops and asks only before anything else that acts in the world (sending, posting, connecting, buying, booking, deleting): put that question to him, and when he answers run [BROWSE] again with the same task — his reply is what approves it. A minute or several. One per turn. Report only what it found.`;
 
 module.exports = { ensureSqlite, BROWSE_PERSONAS, runTask, browseTag, BROWSE_TOOLS, close, browserFor, snapshot, click, type, press, screenshot, unzip, chromePath, parseAction, isCommit, approves, enabled };
