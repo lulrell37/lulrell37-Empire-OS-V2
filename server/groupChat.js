@@ -32,6 +32,62 @@ async function setGroup(chat) {
 }
 const isGroupChat = (chat) => !!chat && (chat.type === 'group' || chat.type === 'supergroup');
 
+// ---- Voice: every line in the group also goes out as a voice note --------------
+// In the persona's OWN voice (ROSTER[id].voiceId), from the same bot that posts the
+// text. Never A.R.A.'s voice or her Grok script pass for someone else's words: a
+// non-A.R.A. line goes straight to ElevenLabs with speakNames applied (A.R.A.'s own
+// lines use her normal script pass, as everywhere else).
+// Personas with a voiceId today: ara, jarvis, selene, stephanie, haven, aisha. Everyone
+// else (scribe, hook, sage, wire, woke, rogue, scout, nova, pulse, atlas, talon,
+// abraham, batman, andrew, ...) uses the ONE generic default below until a voiceId is
+// added to their ROSTER entry; the default stops applying to them automatically.
+// GROUP_DEFAULT_VOICE overrides it; the fallback is ElevenLabs' stock "Adam".
+const DEFAULT_VOICE_ID = 'pNInz6obpgDQGcFmaJgB';
+const VOICE_MAX_CHARS = 600;
+const voiceFor = (personaId) => (ROSTER[personaId] && ROSTER[personaId].voiceId) || process.env.GROUP_DEFAULT_VOICE || DEFAULT_VOICE_ID;
+
+// A line over ~600 characters is voiced as its first sentences plus the sentences
+// with numbers (no AI call); the full text stays as the message.
+function voiceText(text) {
+  const body = String(text || '').replace(/[*#`_]+/g, '').replace(/\s+/g, ' ').trim();
+  if (body.length <= VOICE_MAX_CHARS) return body;
+  const sentences = body.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [body];
+  let out = '';
+  let i = 0;
+  for (; i < sentences.length && out.length + sentences[i].length <= 360; i++) out += sentences[i];
+  if (!out) out = body.slice(0, 360);
+  for (const s of sentences.slice(i)) {
+    if (!/\d/.test(s) || out.length + s.length > VOICE_MAX_CHARS - 40) continue;
+    out += s;
+  }
+  return `${out.trim()} The rest is in the message.`;
+}
+
+async function elevenOut() {
+  try { return (await require('./sentinel').status()).some((x) => x.key === 'elevenlabs' && /out of characters/.test(x.msg || '')); } catch { return false; }
+}
+
+// Never throws. Voice notes go out in order after the text, off the caller's path.
+let voiceChain = Promise.resolve();
+async function voice(personaId, text, sender, chatId) {
+  if (/^(off|0|false)$/i.test(process.env.GROUP_VOICE || '')) return false;
+  try {
+    const say = voiceText(text);
+    if (!say) return false;
+    const { voiceNote } = require('./personaVoice');
+    const own = ROSTER[personaId] && ROSTER[personaId].voiceId;
+    const r = await voiceNote(personaId, say, { scripted: personaId !== 'ara', voiceId: own ? undefined : voiceFor(personaId), noEleven: await elevenOut() });
+    if (!r || !r.ogg) throw new Error(r && r.error ? r.error : 'no audio');
+    await sender.sendVoice(chatId, r.ogg);
+    return true;
+  } catch (e) {
+    console.error('group chat failed: voice', e.message);
+    return false;
+  }
+}
+const queueVoice = (...a) => { voiceChain = voiceChain.then(() => voice(...a)).catch(() => {}); };
+const voiceIdle = () => voiceChain;
+
 // One line in the group from `personaId`: its own bot when it has one (and that
 // bot is in the group), else A.R.A.'s with the name on the line.
 async function post(personaId, text) {
@@ -43,13 +99,13 @@ async function post(personaId, text) {
   const own = telegram.botFor(personaId);
   const body = t.length > 3800 ? `${t.slice(0, 3800)}…` : t;
   if (own && own.isConfigured()) {
-    try { await own.sendMessage(g.chatId, body, { log: false }); return true; } catch (e) {
+    try { await own.sendMessage(g.chatId, body, { log: false }); queueVoice(personaId, t, own, g.chatId); return true; } catch (e) {
       if (personaId === 'ara') { console.error('group chat post failed:', e.message); return false; }
     }
   }
   const ara = telegram.botFor('ara');
   if (!ara || !ara.isConfigured()) return false;
-  try { await ara.sendMessage(g.chatId, `${name}:\n${body}`, { log: false }); return true; } catch (e) { console.error('group chat post failed:', e.message); return false; }
+  try { await ara.sendMessage(g.chatId, `${name}:\n${body}`, { log: false }); queueVoice(personaId, t, ara, g.chatId); return true; } catch (e) { console.error('group chat post failed:', e.message); return false; }
 }
 
 // A hand-off, shown in the group: the ask, then the answer.
@@ -84,4 +140,4 @@ const GROUP_FRAME = `[THE EMPIRE GROUP CHAT — he wrote this in the Telegram gr
  - He names no one → answer it yourself, and bring in whoever should weigh in.
 Don't repeat what they said; they've already said it in the group.]`;
 
-module.exports = { groupLine, group, setGroup, isGroupChat, post, relayAsked, relayAnswered, GROUP_FRAME };
+module.exports = { groupLine, group, setGroup, isGroupChat, post, voice, voiceText, voiceFor, voiceIdle, DEFAULT_VOICE_ID, relayAsked, relayAnswered, GROUP_FRAME };

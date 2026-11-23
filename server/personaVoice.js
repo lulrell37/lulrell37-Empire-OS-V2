@@ -138,13 +138,15 @@ async function openaiOgg(personaId, text) {
   return toOgg(Buffer.concat(parts));
 }
 
-async function primaryOgg(personaId, text, userText) {
+async function primaryOgg(personaId, text, userText, { voiceId, noEleven } = {}) {
+  if (noEleven) throw new Error('ElevenLabs skipped (out of credits)');
   if (!process.env.ELEVENLABS_API_KEY) throw new Error('ELEVENLABS_API_KEY not set');
-  if (!personaVoiceId(personaId)) throw new Error('no ElevenLabs voice id for this persona');
+  const vid = voiceId || personaVoiceId(personaId);
+  if (!vid) throw new Error('no ElevenLabs voice id for this persona');
   let last;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const ogg = await elevenLabsOgg(personaVoiceId(personaId), text, { flat: isFlat(personaId), personaId });
+      const ogg = await elevenLabsOgg(vid, text, { flat: isFlat(personaId), personaId });
       if (ogg) return ogg;
       throw new Error('elevenlabs returned no audio');
     } catch (e) { last = e; }
@@ -257,7 +259,9 @@ async function araScript(text, userText, { relay = false } = {}) {
 // every engine failed; `error` says why the persona's own voice didn't work.
 // `scripted`: the text is already A.R.A.'s spoken script (the morning brief).
 // `relay`: it reached her from the desks, so a persona named up top owns it.
-async function voiceNote(personaId, replyText, { userText = '', scripted = false, relay = false } = {}) {
+async function voiceNote(personaId, replyText, { userText = '', scripted = false, relay = false, voiceId, noEleven = false } = {}) {
+  // voiceId: use this ElevenLabs voice instead of the persona's own (group chat default).
+  // noEleven: skip ElevenLabs (out of credits) and go straight to the backup voice.
   let text = speakNames(String(replyText || '').trim()); // "J.A.R.V.I.S." is said "Jarvis"
   if (!text) return { ogg: null };
   if (personaId === 'ara') {
@@ -270,7 +274,7 @@ async function voiceNote(personaId, replyText, { userText = '', scripted = false
   }
   let error;
   try {
-    const ogg = await primaryOgg(personaId, text, userText);
+    const ogg = await primaryOgg(personaId, text, userText, { voiceId, noEleven });
     if (ogg) return { ogg };
   } catch (e) {
     error = e.message;
