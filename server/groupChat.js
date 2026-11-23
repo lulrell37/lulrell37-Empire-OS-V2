@@ -38,9 +38,7 @@ const isGroupChat = (chat) => !!chat && (chat.type === 'group' || chat.type === 
 // non-A.R.A. line goes straight to ElevenLabs with speakNames applied (A.R.A.'s own
 // lines use her normal script pass, as everywhere else).
 // Personas with a voiceId today: ara, jarvis, selene, stephanie, haven, aisha. Everyone
-// else (scribe, hook, sage, wire, woke, rogue, scout, nova, pulse, atlas, talon,
-// abraham, batman, andrew, ...) uses the ONE generic default below until a voiceId is
-// added to their ROSTER entry; the default stops applying to them automatically.
+// the rest have their own ids, kept equal to the app roster by test-group-chat.js.
 // GROUP_DEFAULT_VOICE overrides it; the fallback is ElevenLabs' stock "Adam".
 const DEFAULT_VOICE_ID = 'pNInz6obpgDQGcFmaJgB';
 const VOICE_MAX_CHARS = 600;

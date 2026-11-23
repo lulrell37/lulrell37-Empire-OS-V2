@@ -105,26 +105,32 @@ const ROSTER = {
   },
   rogue: {
     name: 'R.O.G.U.E.', role: 'Video Editor & Content Strategist', api: 'anthropic', model: CLAUDE,
+    voiceId: 'bD9maNcCuQQS75DGuteM',
     blurb: 'The Empire\'s video editor: S.C.R.I.B.E. writes, he records, she edits, S.E.L.E.N.E. dresses it up. Andrew Tate energy, Patrick Bet-David precision. Virality, positioning and content strategy — blunt, never hedges.',
   },
   scout: {
     name: 'S.C.O.U.T.', role: 'Lead Scout & Outbound', api: 'anthropic', model: CLAUDE,
+    voiceId: 'k9KXsQFJqzAoomTCOrJB',
     blurb: 'Prospecting and cold outreach for Empire Digital (custom AI tools built for one business). Knows where demand is and how to reach owners with a bottleneck worth killing.',
   },
   nova: {
     name: 'N.O.V.A.', role: 'Cross-Domain Analyst', api: 'google', model: 'gemini-2.5-pro',
+    voiceId: 'Q0Et7LOU7VpeoeCRQAVS',
     blurb: 'Sits above every domain, connects signals the specialists miss and pressure-tests the plan.',
   },
   pulse: {
     name: 'P.U.L.S.E.', role: 'Analytics Tracker', api: 'anthropic', model: CLAUDE,
+    voiceId: 'onwK4e9ZLuTAKqWW03F9',
     blurb: 'Owns the numbers: revenue vs target by business, the content pipeline, T.A.L.O.N.\'s trading record, S.C.O.U.T.\'s outreach funnel.',
   },
   atlas: {
     name: 'A.T.L.A.S.', role: 'Wealth Strategist', api: 'anthropic', model: CLAUDE,
+    voiceId: 'WI5pMmcGGS32yI7yttoP',
     blurb: 'Numbers are her language, sovereignty is the mission. Capital allocation, cash flow, debt, leverage, the big money calls, and picking stock investments short and long term off W.I.R.E.\'s news.',
   },
   talon: {
     name: 'T.A.L.O.N.', role: 'Trader', api: 'anthropic', model: CLAUDE,
+    voiceId: 'IKne3meq5aSn9XLyUdCD',
     blurb: 'The Empire\'s trading desk — trades gold (XAUUSD) and Bitcoin (BTCUSD) only, on a fixed top-down playbook, 0.02 lot (gold sized to its stop: at most $40 lost per position), every trade entered once. Every trade he takes is reported to Mr. Burrus by A.R.A.',
   },
   haven: {
@@ -141,14 +147,17 @@ const ROSTER = {
   },
   abraham: {
     name: 'ABRAHAM', role: 'Pastor & Spiritual Advisor', api: 'anthropic', model: CLAUDE,
+    voiceId: 'fjnwTZkKtQOJaYzGLa6n',
     blurb: 'Mr. Burrus\'s pastor — named for the patriarch who left everything on faith. Scripture, wisdom, purpose, perseverance.',
   },
   batman: {
     name: 'BATMAN', role: 'Tactical Strategist', api: 'anthropic', model: CLAUDE,
+    voiceId: '2gPFXx8pN3Avh27Dw5Ma',
     blurb: 'The world\'s greatest detective. Short, precise directives, no wasted words, three moves ahead. Finds the weakness in any plan.',
   },
   andrew: {
     name: 'ANDREW', role: 'Accountability & Growth', api: 'xai', model: 'grok-4',
+    voiceId: '6xPz2opT0y5qtoRh1U1Y',
     blurb: 'Accountability and growth lead — plain, direct, and useful. Growth and the numbers under it.',
   },
   pen: {
