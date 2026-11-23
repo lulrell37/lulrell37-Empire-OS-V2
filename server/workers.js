@@ -86,6 +86,15 @@ function d() {
       if (!bot || !bot.isConfigured() || !tg.OWNER_ID) throw new Error('no Telegram bot to send it on');
       await bot.sendMessage(tg.OWNER_ID, id === 'jarvis' ? text : `J.A.R.V.I.S.:\n${text}`);
     },
+    voice: async (spoken) => {
+      const tg = require('./telegram');
+      const bot = tg.botFor('jarvis');
+      if (!bot || !bot.isConfigured() || !tg.OWNER_ID) return false; // no J.A.R.V.I.S. bot: the text path decides where it goes
+      const { ogg, error } = await require('./personaVoice').voiceNote('jarvis', spoken);
+      if (!ogg) throw new Error(error || 'no audio');
+      await bot.sendVoice(tg.OWNER_ID, ogg);
+      return true;
+    },
     onDone: (w) => (w.purpose === 'autofix' ? require('./autoFix').finish(w) : w.purpose === 'feature' ? require('./featureRequests').finish(w) : null),
     saveNote: (title, body) => require('./google').saveDriveNote(title, body),
     board: tgBoardDeps(),
@@ -372,8 +381,61 @@ function defaultReport(w) {
     const head = { done: 'finished', needs_you: 'stopped — it needs you', failed: 'FAILED' }[w.status] || w.status;
     const links = [w.pushed ? `Branch: ${w.pushed}` : (w.branch && w.kind === 'code' ? `Branch: ${w.branch} (nothing pushed)` : ''), w.issueUrl ? `Full report: ${w.issueUrl}` : ''].filter(Boolean).join('\n');
     const text = `${icon} Worker ${w.slot || '?'} of 3 ${head} — "${w.title}" (${w.kind}, ${mins} min)\n\n${String(w.result || '(no report)').slice(0, 3000)}${links ? `\n\n${links}` : ''}${w.kind === 'code' && w.status === 'done' && w.pushed && /pushed/.test(w.pushed) ? '\n\nSay "push" to J.A.R.V.I.S. to ship it.' : ''}`;
-    return d().tell(text);
+    return voiceThenText(w, text);
   }
+}
+
+// ---- the voice note before the text (WORKER_VOICE=off to stop) ----
+const VOICE_MAX = 600;
+const VOICE_TIMEOUT_MS = 75e3;
+const voiceEnabled = () => !/^(off|0|false|no)$/i.test(String(process.env.WORKER_VOICE || ''));
+
+// Short, plain, no AI: slot + title, the outcome, a sentence or two of what it did or why
+// it failed, and what he does next. Never URLs, branches, issue numbers or code.
+function spokenReport(w) {
+  const clean = (t) => String(t || '')
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/`[^`]*`/g, ' ')
+    .replace(/https?:\/\/\S+/gi, ' ')
+    .replace(/\b(?:[\w.-]+\/)+[\w.-]+/g, ' ')            // paths and branch names
+    .replace(/\b[0-9a-f]{7,40}\b/gi, ' ')                 // commit hashes
+    .replace(/#\d+/g, ' ')                                // issue / PR numbers
+    .replace(/[*_>#|]+/g, ' ')
+    .replace(/^\s*(?:[-•]|\d+[.)])\s+/gm, ' ')
+    .replace(/\s+/g, ' ').trim();
+  const body = clean(String(w.result || '').replace(/^\s*(?:DONE|PARTLY DONE|FAILED|CONTINUE)\b[:.\-—\s]*/i, ''));
+  const sentences = (body.match(/[^.!?]+[.!?]+(?=\s|$)|[^.!?]+$/g) || []).map((x) => x.trim()).filter((x) => x.length > 3);
+  const outcome = { done: 'is done', failed: 'failed', needs_you: 'needs you', stopped: 'was stopped' }[w.status] || w.status;
+  const partly = w.status === 'done' && /^\s*PARTLY DONE/i.test(String(w.result || ''));
+  const ask = w.status === 'failed' ? 'Tell me if you want it tried again.'
+    : w.status === 'needs_you' ? 'It is waiting on you.'
+    : w.kind === 'code' && w.status === 'done' && w.pushed && /pushed/.test(w.pushed) ? 'Say push to ship it.' : '';
+  const head = `Worker ${w.slot || ''}${w.slot ? ', ' : ' '}${clean(w.title)}, ${partly ? 'is partly done' : outcome}.`.replace(/\s+/g, ' ');
+  let out = head;
+  const room = VOICE_MAX - head.length - (ask ? ask.length + 1 : 0) - 1;
+  let mid = '';
+  for (const s of sentences.slice(0, 2)) { if ((mid + ' ' + s).trim().length <= room) mid = (mid + ' ' + s).trim(); else break; }
+  if (!mid && sentences[0] && room > 40) mid = sentences[0].slice(0, room - 1).replace(/\s+\S*$/, '') + '.';
+  if (mid) out += ' ' + mid;
+  if (ask) out += ' ' + ask;
+  return require('./voiceCues').speakNames(out).slice(0, VOICE_MAX);
+}
+
+// Voice first, then the text exactly as before. The voice can't hold the text back past its
+// own timeout, and its failures are logged for the sentinel.
+async function voiceThenText(w, text) {
+  const send = d().voice;
+  if (send && voiceEnabled()) {
+    let timer, late = false;
+    try {
+      const job = Promise.resolve().then(() => send(spokenReport(w)));
+      job.catch(() => {});
+      await Promise.race([job, new Promise((_, rej) => { timer = setTimeout(() => { late = true; rej(new Error(`timed out after ${Math.round(VOICE_TIMEOUT_MS / 1000)}s`)); }, VOICE_TIMEOUT_MS); })]);
+    } catch (e) {
+      console.error(`workers failed: voice for #${w.id}: ${e.message}`);
+    } finally { clearTimeout(timer); }
+  }
+  return d().tell(text);
 }
 
 async function stop(id) {
@@ -606,4 +668,4 @@ const WORKER_TOOLS = ` - [WORKER_START: code|browse | short title | the full tas
 // Persona jobs (jobProgress.js) share this one board: load the workers, then update it.
 async function kick() { await load(); boardKick(); }
 
-module.exports = { kick, start, stop, ship, driveIdsIn, fileGrant, MAX_LEGS, recover, statusText, forApp, tag, WORKER_TOOLS, enabled, _setDeps: (x) => { deps = x; list = null; board = undefined; boardLast = 0; }, _list: () => list, _boardText: () => boardText(), logFailure, FAIL_KEY, _tgBoardDeps: tgBoardDeps, parsePlan, percentOf, progressLabel, readPlanComment, PLAN_FILE };
+module.exports = { spokenReport, VOICE_MAX, kick, start, stop, ship, driveIdsIn, fileGrant, MAX_LEGS, recover, statusText, forApp, tag, WORKER_TOOLS, enabled, _setDeps: (x) => { deps = x; list = null; board = undefined; boardLast = 0; }, _list: () => list, _boardText: () => boardText(), logFailure, FAIL_KEY, _tgBoardDeps: tgBoardDeps, parsePlan, percentOf, progressLabel, readPlanComment, PLAN_FILE };

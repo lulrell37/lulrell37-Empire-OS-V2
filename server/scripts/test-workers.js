@@ -372,7 +372,7 @@ function fakeGitHub() {
   // WORKER_TG_BOARD=off: no board at all.
   process.env.WORKER_TG_BOARD = 'off'; tgCalls.length = 0;
   await W.start({ kind: 'code', title: 'quiet job', task: 'do it' }); await sleep(GAP * 3);
-  assert.strictEqual(tgCalls.length, 0, 'kill switch');
+  assert.strictEqual(tgCalls.length, 0, 'kill switch ' + JSON.stringify(tgCalls));
   delete process.env.WORKER_TG_BOARD;
 
   // The real Telegram side: silent send, edit in place, "not modified" is fine, nothing in tg_messages but the one line.
@@ -382,6 +382,39 @@ function fakeGitHub() {
     if (method === 'editMessageText' && body.text === 'same') return { status: 400, json: async () => ({ ok: false, description: 'Bad Request: message is not modified: specified new message content and reply markup are exactly the same' }) };
     return { status: 200, json: async () => ({ ok: true, result: { message_id: 9 } }) };
   };
+  // ---- A worker's report is voiced first, then the text, unchanged ----
+  try {
+    const events = []; const re3 = console.error; const errs3 = []; console.error = (...x) => errs3.push(x.join(' '));
+    const long = 'DONE\nRebuilt the report path so it speaks first. Details at https://github.com/x/y/issues/12 on branch worker/37-voice-thing, commit abcdef1234. See server/workers.js `voiceThenText()`. Third sentence that is dropped. ' + 'More text. '.repeat(80);
+    const mk = (extra) => baseDeps(gh, { browse: async () => ({ status: 'done', text: long }), tell: async (t) => events.push(['text', t]), ...extra });
+    const run = async (title) => { events.length = 0; await W.start({ kind: 'browse', title, task: 'open example.com' }); await sleep(GAP * 4); };
+    delete process.env.WORKER_VOICE;
+    W._setDeps(mk({ voice: async (sp) => events.push(['voice', sp]) })); settings.workers = '{}';
+    await run('voiced job');
+    assert.deepStrictEqual(events.map((e) => e[0]), ['voice', 'text'], 'voice first, then text');
+    const spoken = events[0][1], text = events[1][1];
+    assert.ok(spoken.length <= 600, 'at most 600 chars');
+    assert.match(spoken, /Worker \d, voiced job, is done/); assert.match(spoken, /Rebuilt the report path/);
+    assert.ok(!/https?:|github\.com|worker\/37|abcdef|issues\/12|#\d|server\/workers|voiceThenText|`/.test(spoken), 'no URLs, branches, ids, code: ' + spoken);
+    assert.match(text, /^✅ Worker \d of 3 finished — "voiced job" \(browse, \d+ min\)\n\n/, 'text unchanged');
+    assert.match(text, /worker\/37-voice-thing/, 'the text keeps its details');
+    assert.strictEqual(W.spokenReport({ slot: 2, title: 'Fix thing', kind: 'code', status: 'failed', result: 'FAILED\nIt crashed: no key.' }), 'Worker 2, Fix thing, failed. It crashed: no key. Tell me if you want it tried again.');
+    assert.match(W.spokenReport({ slot: 1, title: 'x', kind: 'code', status: 'done', pushed: 'pushed worker/1-x', result: 'DONE\nOk.' }), /Say push to ship it\.$/);
+    assert.match(W.spokenReport({ slot: 1, title: 'x', kind: 'code', status: 'needs_you', result: 'Which account?' }), /needs you/);
+    assert.match(W.spokenReport({ slot: 1, title: 'J.A.R.V.I.S. fix', kind: 'code', status: 'done', result: 'ok' }), /Jarvis fix/, 'speakNames applied');
+    // off switch
+    process.env.WORKER_VOICE = 'off'; W._setDeps(mk({ voice: async (sp) => events.push(['voice', sp]) })); settings.workers = '{}';
+    await run('silent job');
+    assert.deepStrictEqual(events.map((e) => e[0]), ['text'], 'WORKER_VOICE=off sends no voice');
+    delete process.env.WORKER_VOICE;
+    // a failing voice still sends the text, and is logged for the sentinel
+    errs3.length = 0; W._setDeps(mk({ voice: async () => { throw new Error('elevenlabs 401'); } })); settings.workers = '{}';
+    await run('failing voice');
+    assert.deepStrictEqual(events.map((e) => e[0]), ['text'], 'text still sent');
+    assert.ok(errs3.some((e) => /^workers failed: voice for #\d+: elevenlabs 401/.test(e)), 'voice failure logged');
+    console.error = re3;
+  } catch (e) { console.error = Object.getPrototypeOf(console).error.bind(console); throw e; }
+
   const real = W._tgBoardDeps();
   dbRows.length = 0;
   assert.strictEqual(real.ready(), true);
