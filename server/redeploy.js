@@ -43,6 +43,15 @@ async function startOutsideCheck(since) {
   }
 }
 
+// Persona jobs running right now (clip scans, edits, research…): the receipt says which, and
+// that they pick up again after the restart (server/jobProgress.js recover()).
+function runningJobsNote() {
+  try {
+    const l = require('./jobProgress').runningLines();
+    return l.length ? ` Running now and cut off by the restart: ${l.join('; ')}.` : '';
+  } catch { return ''; }
+}
+
 async function requestRedeploy(by = 'jarvis') {
   if (process.env.EMPIRE_SUPERVISED !== '1') {
     throw new Error('the self-updating boot isn\'t running yet — redeploy once from Replit (Deployments → Redeploy) to install it; after that I can do it from here');
@@ -55,7 +64,7 @@ async function requestRedeploy(by = 'jarvis') {
   const check = await startOutsideCheck(at);
   // Let the Confirm card update and this reply go out first.
   setTimeout(() => { console.log('redeploy: exiting for boot.js to pull main'); process.exit(RESTART_CODE); }, 4000);
-  return `Restarting onto the latest main now — A.R.A. will confirm in a couple of minutes when it's live. (${check})`;
+  return `Restarting onto the latest main now — A.R.A. will confirm in a couple of minutes when it's live. (${check})${runningJobsNote()}`;
 }
 
 async function changesSince(fromSha, toSha) {
@@ -200,4 +209,4 @@ function wakeJarvis(pending, what) {
   return true;
 }
 
-module.exports = { heartbeat, guardReports, vanished, wakeJarvis, WAKE_QUIET, requestRedeploy, onBoot, codeInfo, publicUrl, RESTART_CODE };
+module.exports = { runningJobsNote, heartbeat, guardReports, vanished, wakeJarvis, WAKE_QUIET, requestRedeploy, onBoot, codeInfo, publicUrl, RESTART_CODE };

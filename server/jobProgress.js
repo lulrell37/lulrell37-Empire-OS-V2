@@ -16,12 +16,24 @@
 // State: app_settings.jobs — running ones plus the last 50 finished, so they
 // survive a restart; a job found "running" at boot was cut off by it and is
 // failed (and logged) then. JOBS=off turns tracking off (calls become no-ops).
+//
+// Resume (owner, 2026-11-23): a job started with a `resume` ({ kind, args, to }) keeps
+// what it takes to rerun it. At boot (recover(), ~60 s in) every job the restart cut
+// off is restarted once with those arguments through RESUMERS (clip scan, raw edit,
+// style learn, transcribe, deep research); A.R.A. tells him first, as text, which
+// job, how far it got and that it's resuming. A job that was itself a resumption
+// and is cut off again is only reported ("jobs failed: …"), not retried. A job with
+// no resume info, or JOB_RESUME=off, is reported as cut off and left.
 const { getSetting, setSetting } = require('./syncStore');
 
 const KEY = 'jobs';
 const KEEP = 50;
 const SHOW_DONE_MS = 15 * 60e3; // finished ones stay on the strip / board 15 min
 const enabled = () => String(process.env.JOBS || '').toLowerCase() !== 'off';
+const resumeOn = () => String(process.env.JOB_RESUME || '').toLowerCase() !== 'off';
+const keyOf = (kind, args) => `${kind}:${JSON.stringify(args || {})}`;
+const carry = new Map(); // keyOf(resume) -> attempts, set by recover() so the rerun's start() counts them
+let deps = {}; // tests
 
 let jobs = {}; // id -> job
 let seq = 0;
@@ -42,7 +54,9 @@ function load() {
       if (jobs[id]) continue;
       if (j.status === 'running') { // the process that ran it is gone
         j.status = 'failed'; j.endedAt = Date.now(); j.reason = 'cut off by a server restart'; j.progress = 'Failed';
-        console.error(`jobs failed: ${personaName(j.persona)} ${j.title}: ${j.reason}`);
+        j.cutOff = true;
+        if (willResume(j)) console.warn(`jobs: ${personaName(j.persona)} ${j.title} was cut off by a restart, resuming it`);
+        else console.error(`jobs failed: ${personaName(j.persona)} ${j.title}: ${j.reason}`);
       }
       jobs[id] = j;
     }
@@ -51,6 +65,8 @@ function load() {
   })().catch((e) => { console.error(`jobs failed: loading state: ${e.message}`); });
   return loaded;
 }
+
+const willResume = (j) => resumeOn() && j.resume && j.resume.kind && RESUMERS[j.resume.kind] && !((j.attempts || 0) >= 1);
 
 function save() {
   const fin = Object.values(jobs).filter((j) => j.status !== 'running').sort((a, b) => a.endedAt - b.endedAt);
@@ -76,11 +92,13 @@ function touch(j, patch) {
   save(); kick();
 }
 
-function start(persona, title, steps = []) {
+function start(persona, title, steps = [], resume = null) {
   if (!enabled()) return null;
   load();
   const id = String(++seq);
-  jobs[id] = { id, persona: String(persona || 'ara').toLowerCase(), title: String(title || 'job').slice(0, 80), steps: steps.map((s) => String(s).slice(0, 60)).slice(0, 30), doneCount: 0, current: '', status: 'running', progress: 'Starting', percent: 0, reason: '', startedAt: Date.now(), endedAt: null, updatedAt: Date.now() };
+  let attempts = 0;
+  if (resume && resume.kind) { const k = keyOf(resume.kind, resume.args); attempts = carry.get(k) || 0; carry.delete(k); }
+  jobs[id] = { resume: resume && resume.kind ? { kind: resume.kind, args: resume.args || {}, to: resume.to || '' } : undefined, attempts, id, persona: String(persona || 'ara').toLowerCase(), title: String(title || 'job').slice(0, 80), steps: steps.map((s) => String(s).slice(0, 60)).slice(0, 30), doneCount: 0, current: '', status: 'running', progress: 'Starting', percent: 0, reason: '', startedAt: Date.now(), endedAt: null, updatedAt: Date.now() };
   jobs[id].percent = percentOf(jobs[id]);
   save(); kick();
   return id;
@@ -129,8 +147,8 @@ function fail(id, reason) {
 
 // Track fn as one job. fn gets { id, step, note, plan }; its return value is the result;
 // a throw fails the job and is rethrown. Tracking off → fn still runs.
-async function run(persona, title, steps, fn) {
-  const id = start(persona, title, steps);
+async function run(persona, title, steps, fn, resume = null) {
+  const id = start(persona, title, steps, resume);
   const h = { id, step: (l, d) => step(id, l, d), note: (t) => note(id, t), plan: (n, c) => plan(id, n, c) };
   try {
     const out = await fn(h);
@@ -168,4 +186,63 @@ async function forApp() {
   }));
 }
 
-module.exports = { start, step, note, plan, done, fail, run, forApp, load, live, shown, boardLine, percentOf, enabled, KEEP, _reset: () => { jobs = {}; seq = 0; loaded = null; saving = Promise.resolve(); }, _jobs: () => jobs, _flush: () => saving };
+
+// --- resume at boot ---------------------------------------------------
+
+const send = (text) => (deps.tell || ((t) => require('./loud').tellAra(`job-cut:${text.length}:${text.slice(0, 40)}`, t)))(text);
+const via = (persona) => {
+  const tg = require('./telegram');
+  const own = tg.botFor(persona);
+  const bot = own && own.isConfigured() ? own : tg.botFor('ara');
+  return bot && bot.isConfigured() ? { bot, owner: tg.OWNER_ID } : null;
+};
+const toOwner = async (persona, text) => { const b = via(persona); if (b) await b.bot.sendMessage(b.owner, text, { remember: true }); };
+
+// kind -> (args, job) starts the same work again with the saved arguments; the result goes out as usual.
+const RESUMERS = {
+  clip_scan: (a) => require('./clipScan').scanInBackground(a.url, a.focus || '', { title: a.title || '' }),
+  transcribe: (a) => require('./transcribe').transcribeInBackground(a.url, a.persona || 'ara'),
+  raw_edit: (a) => require('./rawEdit').resumeEdit(a),
+  style_learn: (a) => require('./rawEdit').resumeStyleLearn(a),
+  deep_research: (a) => require('./personaRuntime').runDeepResearch(a.topic, async (t) => toOwner(a.persona || 'ara', t), a.persona || 'ara'),
+};
+
+const how = (j) => `${j.percent != null ? `${j.percent}%` : 'no steps'} done${j.current ? `, on "${j.current}"` : ''}`;
+
+// Boot, once the server is healthy: restart each cut-off job once; report the rest.
+async function recover() {
+  await load();
+  const cut = Object.values(jobs).filter((j) => j.cutOff && !j.handled);
+  const out = [];
+  for (const j of cut) {
+    j.handled = true;
+    const who = personaName(j.persona);
+    const what = `${who}'s job "${j.title}" (${how(j)})`;
+    let note;
+    if (!j.resume || !j.resume.kind || !RESUMERS[j.resume.kind]) note = `A restart cut off ${what}. It can't be resumed (nothing saved to rerun it), so it needs asking again.`;
+    else if (!resumeOn()) note = `A restart cut off ${what}. Resuming is switched off (JOB_RESUME=off), so it was not restarted.`;
+    else if ((j.attempts || 0) >= 1) note = `A restart cut off ${what} again. It had already been resumed once, so I've stopped rather than loop. Ask again once the server has settled.`;
+    else {
+      carry.set(keyOf(j.resume.kind, j.resume.args), (j.attempts || 0) + 1);
+      note = `A restart cut off ${what}. Resuming it now from where its saved work left off; the result comes as usual.`;
+      try {
+        const r = (deps.resumers || RESUMERS)[j.resume.kind](j.resume.args, j);
+        if (r && r.catch) r.catch((e) => { console.error(`jobs failed: resuming ${who} ${j.title}: ${e.message}`); send(`Resuming ${who}'s job "${j.title}" failed: ${e.message}`).catch(() => {}); });
+        j.handled = 'resumed'; out.push({ id: j.id, resumed: true });
+      } catch (e) {
+        carry.delete(keyOf(j.resume.kind, j.resume.args));
+        console.error(`jobs failed: resuming ${who} ${j.title}: ${e.message}`);
+        note = `A restart cut off ${what}, and resuming it failed: ${e.message}`;
+      }
+    }
+    if (j.handled !== 'resumed') { console.error(`jobs failed: ${who} ${j.title}: cut off by a server restart, not resumed`); out.push({ id: j.id, resumed: false }); }
+    await send(note).catch((e) => console.error(`jobs failed: telling him about ${j.title}: ${e.message}`));
+  }
+  if (cut.length) await save();
+  return out;
+}
+
+// For the redeploy receipt: what persona jobs are running and will resume.
+const runningLines = () => live().map((j) => `${personaName(j.persona)}'s "${j.title}" (${j.percent != null ? j.percent + '%' : 'starting'})${willResume(j) ? ' — resumes after the restart' : ' — cannot resume, ask again'}`);
+
+module.exports = { recover, runningLines, RESUMERS, resumeOn, _setDeps: (d) => { deps = d || {}; }, start, step, note, plan, done, fail, run, forApp, load, live, shown, boardLine, percentOf, enabled, KEEP, _reset: () => { jobs = {}; seq = 0; loaded = null; saving = Promise.resolve(); }, _jobs: () => jobs, _flush: () => saving };

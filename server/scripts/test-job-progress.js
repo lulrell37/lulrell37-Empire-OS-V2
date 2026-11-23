@@ -79,6 +79,59 @@ console.error = (...a) => errs.push(a.join(' '));
   assert.match(errs[0], /^jobs failed: J\.A\.R\.V\.I\.S\. Website: Joe: cut off by a server restart/);
   const nid = J.start('ara', 'after', []); assert.ok(Number(nid) > 60, 'ids keep counting up after a restart');
 
+
+  // Resume: a cut-off job with saved arguments restarts once; a second cut-off is reported, not retried.
+  {
+    const told = [], ran = [];
+    J._setDeps({ tell: async (t) => { told.push(t); }, resumers: { clip_scan: (a) => { ran.push(a); J.start('rogue', 'Clip scan: resumed', ['a', 'b'], { kind: 'clip_scan', args: a, to: 'rogue' }); } } });
+    const boot = async () => { J._reset(); await J.load(); return J.recover(); };
+    delete settings.jobs; J._reset(); await J.load();
+    const r1 = J.start('rogue', 'Clip scan: big', ['Download audio', 'Transcribe', 'Pick moments'], { kind: 'clip_scan', args: { url: 'https://youtu.be/x', focus: 'funny', title: '' }, to: 'rogue' });
+    J.step(r1, 'Transcribe');
+    const plain = J.start('jarvis', 'Website: Joe', ['a', 'b']);
+    await J._flush();
+    errs.length = 0;
+    let out = await boot(); // restart #1
+    assert.deepStrictEqual(ran, [{ url: 'https://youtu.be/x', focus: 'funny', title: '' }], 'restarted once with its saved arguments');
+    assert.deepStrictEqual(out.map((o) => o.resumed).sort(), [false, true]);
+    assert.strictEqual(told.length, 2, 'A.R.A. is told about each cut-off job');
+    assert.ok(told.some((t) => /R\.O\.G\.U\.E\.'s job "Clip scan: big" \(33% done, on "Transcribe"\).*Resuming it now/.test(t)), told.join('\n'));
+    assert.ok(told.some((t) => /Website: Joe.*can't be resumed/.test(t)));
+    assert.ok(!errs.some((e) => /Clip scan: big/.test(e)), 'a job being resumed isn\'t logged as failed');
+    assert.ok(errs.some((e) => /^jobs failed: J\.A\.R\.V\.I\.S\. Website: Joe/.test(e)), 'the one that can\'t resume is');
+    const again = Object.values(J._jobs()).find((j) => j.title === 'Clip scan: resumed');
+    assert.strictEqual(again.attempts, 1, 'the rerun counts as attempt 1');
+    await J._flush();
+    // restart #2 while the resumed one runs: reported, not retried
+    ran.length = 0; told.length = 0; errs.length = 0;
+    out = await boot();
+    assert.strictEqual(ran.length, 0, 'not retried a second time');
+    assert.deepStrictEqual(out.map((o) => o.resumed), [false]);
+    assert.ok(told.length === 1 && /again.*stopped rather than loop/.test(told[0]), told.join('\n'));
+    assert.ok(errs.some((e) => /^jobs failed: R\.O\.G\.U\.E\. Clip scan: resumed/.test(e)));
+    // handled jobs aren't acted on twice in one boot
+    assert.deepStrictEqual(await J.recover(), []);
+    // JOB_RESUME=off only reports
+    delete settings.jobs; J._reset(); await J.load();
+    J.start('ara', 'Deep research: x', ['a'], { kind: 'deep_research', args: { topic: 'x', persona: 'ara' }, to: 'ara' });
+    await J._flush();
+    process.env.JOB_RESUME = 'off'; ran.length = 0; told.length = 0;
+    J._setDeps({ tell: async (t) => { told.push(t); }, resumers: { deep_research: () => { ran.push('x'); } } });
+    out = await boot();
+    assert.strictEqual(ran.length, 0); assert.deepStrictEqual(out.map((o) => o.resumed), [false]);
+    assert.match(told[0], /JOB_RESUME=off/);
+    delete process.env.JOB_RESUME;
+    // the redeploy receipt names running jobs
+    J._reset(); await J.load();
+    J.start('rogue', 'Clip scan: live', ['a', 'b'], { kind: 'clip_scan', args: { url: 'u' } });
+    J.start('ara', 'Odd job', ['a']);
+    const lines = J.runningLines();
+    assert.ok(/R\.O\.G\.U\.E\.'s "Clip scan: live" \(0%\) — resumes after the restart/.test(lines[0]) && /cannot resume/.test(lines[1]), lines.join('|'));
+    assert.match(require('../redeploy').runningJobsNote(), /Running now and cut off by the restart: .*Clip scan: live/);
+    J._setDeps({});
+    delete settings.jobs; J._reset();
+  }
+
   // The strip's items.
   delete settings.jobs; J._reset(); await J.load();
   const a = J.start('rogue', 'Clip scan: a', ['one', 'two']); J.step(a, 'two');

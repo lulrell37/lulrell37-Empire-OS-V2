@@ -1203,7 +1203,7 @@ async function runDeepResearch(topic, deliver, persona = 'ara') {
   const say = deliver.voiced || deliver;
   // Live progress (server/jobProgress.js): the research call is one long step.
   const jobs = require('./jobProgress');
-  const jid = jobs.start(persona, `Deep research: ${String(topic).slice(0, 50)}`, ['Search the web and write the brief', 'Save the note']);
+  const jid = jobs.start(persona, `Deep research: ${String(topic).slice(0, 50)}`, ['Search the web and write the brief', 'Save the note'], { kind: 'deep_research', args: { topic: String(topic).slice(0, 4000), persona }, to: persona });
   try {
     jobs.step(jid, 'Search the web and write the brief');
     const brief = await claudeText(DR_SYSTEM, `Research this thoroughly:\n\n${String(topic).slice(0, 4000)}`, {

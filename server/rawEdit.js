@@ -177,7 +177,7 @@ function renderPrefs(s) {
 
 // [STYLE_LEARN: handle or reel links] — watch up to 5 of his past edits.
 // [STYLE_LEARN: tate: x.com/… links] builds the named profile "tate" instead of his own (X and other video links work).
-const learnStyle = (arg) => jobs.run('rogue', `Style learn: ${String(arg || '').slice(0, 45)}`, ['List his edits', 'Watch each edit', 'Build the profile'], (job) => learnStyleInner(arg, job));
+const learnStyle = (arg) => jobs.run('rogue', `Style learn: ${String(arg || '').slice(0, 45)}`, ['List his edits', 'Watch each edit', 'Build the profile'], (job) => learnStyleInner(arg, job), { kind: 'style_learn', args: { arg: String(arg || '') }, to: 'rogue' });
 
 async function learnStyleInner(argIn, job = NOJOB) {
   const { name: profile, rest: arg } = splitProfile(argIn);
@@ -275,29 +275,51 @@ ${styleText(prof)}${notes ? `\nHis notes for this video: ${notes}` : ''}${songs.
 const jobs = require('./jobProgress');
 const NOJOB = { step() {}, note() {} };
 const EDIT_STEPS = ['Download footage', 'Transcribe', 'Plan the cut', 'Render', 'Upload'];
-const editOne = (link, notes = '', profile = '') => jobs.run('rogue', `Raw edit: ${String(link).replace(/^https?:\/\/(www\.)?/, '').slice(0, 45)}`, EDIT_STEPS, (job) => editOneInner(link, notes, job, profile));
+const editOne = (link, notes = '', profile = '') => jobs.run('rogue', `Raw edit: ${String(link).replace(/^https?:\/\/(www\.)?/, '').slice(0, 45)}`, EDIT_STEPS, (job) => editOneInner(link, notes, job, profile), { kind: 'raw_edit', args: { link, notes, profile }, to: 'rogue' });
+
+// Checkpoints (same idea as the clip scan's): the downloaded footage and its word
+// transcript are kept in a directory keyed by the link until the edit succeeds, so a
+// restart's resume skips both; pruned after 2 days.
+const EDIT_DIR = process.env.RAW_EDIT_JOBS_DIR || path.join(os.homedir(), '.empire-bin', 'raw-edit-jobs');
+const editDirFor = (link) => path.join(EDIT_DIR, require('crypto').createHash('sha1').update(String(link).trim()).digest('hex').slice(0, 16));
 
 async function editOneInner(link, notes = '', job = NOJOB, profile = '') {
   const clip = require('./clipScan');
   const layout = require('./clipLayout');
   const google = require('./google');
   const { transcribeWords } = require('./llm');
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rogue-edit-'));
+  clip.pruneJobDirs(EDIT_DIR);
+  const dir = editDirFor(link);
+  fs.mkdirSync(dir, { recursive: true });
+  const meta = path.join(dir, 'state.json');
+  const words_f = path.join(dir, 'words.json');
+  let ok = false;
   try {
     let src = path.join(dir, 'raw'), name;
     job.step('Download footage');
     const id = clip.driveId(link);
-    if (id) name = await google.driveDownloadTo(id, src, clip.MAX_BYTES);
-    else if (clip.isYouTube(link) || clip.isSocialVideo(link)) ({ file: src, name } = await clip.downloadYouTube(link, dir));
-    else throw new Error('needs a Google Drive link to the raw footage (or an Instagram, TikTok, X or YouTube link)');
+    let saved = null; try { saved = JSON.parse(fs.readFileSync(meta, 'utf8')); } catch { /* none */ }
+    if (saved && saved.file && fs.existsSync(path.join(dir, saved.file)) && (await clip.duration(path.join(dir, saved.file)).catch(() => 0)) > 0) {
+      src = path.join(dir, saved.file); name = saved.name; // resumed: the footage was already down
+    } else {
+      for (const f of fs.readdirSync(dir)) fs.rmSync(path.join(dir, f), { recursive: true, force: true });
+      if (id) name = await google.driveDownloadTo(id, src, clip.MAX_BYTES);
+      else if (clip.isYouTube(link) || clip.isSocialVideo(link)) ({ file: src, name } = await clip.downloadYouTube(link, dir));
+      else throw new Error('needs a Google Drive link to the raw footage (or an Instagram, TikTok, X or YouTube link)');
+      fs.writeFileSync(meta, JSON.stringify({ file: path.basename(src), name }));
+    }
     const total = await clip.duration(src);
     if (!total) throw new Error("couldn't read that file as a video");
     if (total > MAX_MIN * 60) throw new Error(`that's ${clip.mmss(total)} of footage; the limit is ${MAX_MIN} minutes a video`);
     job.step('Transcribe');
-    const a = path.join(dir, 'a.mp3');
-    await run(['-hide_banner', '-loglevel', 'error', '-y', '-i', src, '-vn', '-ac', '1', '-ar', '16000', '-b:a', '48k', a]);
-    const words = await transcribeWords(fs.readFileSync(a), 'raw.mp3');
-    if (!words.length) throw new Error('no speech found in it');
+    let words = null; try { words = JSON.parse(fs.readFileSync(words_f, 'utf8')); } catch { /* none */ }
+    if (!Array.isArray(words) || !words.length) {
+      const a = path.join(dir, 'a.mp3');
+      await run(['-hide_banner', '-loglevel', 'error', '-y', '-i', src, '-vn', '-ac', '1', '-ar', '16000', '-b:a', '48k', a]);
+      words = await transcribeWords(fs.readFileSync(a), 'raw.mp3');
+      if (!words.length) throw new Error('no speech found in it');
+      fs.writeFileSync(words_f, JSON.stringify(words));
+    }
     job.step('Plan the cut');
     const ls = lines(words);
     const [prof, music] = await Promise.all([style(profile), musicFiles()]);
@@ -348,13 +370,32 @@ async function editOneInner(link, notes = '', job = NOJOB, profile = '') {
       up.link,
     ].filter(Boolean).join('\n   ');
     const size2 = fs.statSync(out).size;
-    return { summary, media: size2 <= 45 * 1024 * 1024 ? [{ name: 'SEND_VIDEO', buffer: fs.readFileSync(out), filename: 'edit.mp4', caption: base }] : [] };
-  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    const res = { summary, media: size2 <= 45 * 1024 * 1024 ? [{ name: 'SEND_VIDEO', buffer: fs.readFileSync(out), filename: 'edit.mp4', caption: base }] : [] };
+    ok = true;
+    return res;
+  } finally { if (ok) fs.rmSync(dir, { recursive: true, force: true }); } // a failure keeps the footage + transcript for a rerun
 }
 
 // [RAW_EDIT: link, link, … | notes] — in the background, two at a time; each goes
 // out from A.R.A.'s bot as it finishes.
 let active = 0;
+// Out from A.R.A.'s bot: text, then each video.
+async function sendAra(text, media = []) {
+  const telegram = require('./telegram');
+  const ara = telegram.botFor('ara');
+  if (!ara || !ara.isConfigured()) return;
+  await ara.sendMessage(telegram.OWNER_ID, text, { remember: true }).catch(() => {});
+  for (const m of media) await ara.sendFile(telegram.OWNER_ID, 'video', m.buffer, { filename: m.filename, caption: m.caption }).catch((e) => console.error('raw edit send failed:', e.message));
+}
+// Boot resume (server/jobProgress.js): rerun one cut-off edit / style learn with its saved arguments.
+async function resumeEdit({ link, notes = '', profile = '' }) {
+  try { const r = await editOne(link, notes, profile); await sendAra(`🎬 **R.O.G.U.E. → A.R.A.** Edit ready (resumed after the restart):\n   ${r.summary}`, r.media); }
+  catch (e) { console.error(`raw edit failed: ${e.message}`); await sendAra(`🎬 R.O.G.U.E.'s resumed edit didn't work: ${e.message}`); }
+}
+async function resumeStyleLearn({ arg }) {
+  try { await sendAra(`🎬 **R.O.G.U.E. → A.R.A.** Style learn finished (resumed after the restart):\n${String(await learnStyle(arg)).slice(0, 3500)}`); }
+  catch (e) { console.error(`raw edit failed: style learn: ${e.message}`); await sendAra(`🎬 R.O.G.U.E.'s resumed style learn didn't work: ${e.message}`); }
+}
 function editBatch(arg) {
   if (!enabled()) throw new Error('the editor is switched off (RAW_EDIT=off)');
   const [list, ...n] = String(arg || '').split('|');
@@ -401,4 +442,4 @@ async function tag(name, arg) {
   return '';
 }
 
-module.exports = { splitProfile, keyFor, tag, lines, parsePlan, segments, remap, cutLength, videoChain, audioChain, titleAss, renderPrefs, styleText, RAW_EDIT_TOOLS, enabled, TAIL };
+module.exports = { resumeEdit, resumeStyleLearn, editDirFor, splitProfile, keyFor, tag, lines, parsePlan, segments, remap, cutLength, videoChain, audioChain, titleAss, renderPrefs, styleText, RAW_EDIT_TOOLS, enabled, TAIL };

@@ -34,6 +34,34 @@ const TRANSCRIPT_CHARS = 350000;
 
 let running = false;
 
+// Checkpoints (owner, 2026-11-23: a restart must not cost a scan its download and
+// transcript). Work happens in a directory keyed by the video, outside $TMPDIR's
+// per-run folders: the downloaded audio/video, the transcript, the picks and each
+// finished clip's upload are saved as they complete, and a rerun (the boot resume
+// in server/jobProgress.js, or the same link sent again) skips every step whose
+// output is already there and valid. Removed when the scan finishes; ones untouched
+// for 2 days are pruned (`pruneJobDirs`).
+const JOBS_DIR = process.env.CLIP_JOBS_DIR || path.join(os.homedir(), '.empire-bin', 'clip-jobs');
+const JOB_DIR_MAX_AGE_MS = 2 * 24 * 3600e3;
+function jobKey(url, focus = '') {
+  const u = String(url).trim();
+  const id = driveId(u) || (/youtu/.test(u) && (u.match(/(?:v=|youtu\.be\/|shorts\/)([\w-]{11})/) || [])[1]);
+  const h = require('crypto').createHash('sha1').update(`${u}|${String(focus || '').trim().toLowerCase()}`).digest('hex').slice(0, 10);
+  return `${id ? String(id).replace(/[^\w-]/g, '') : 'x'}-${h}`; // the focus changes the picks, so it is part of the key
+}
+function pruneJobDirs(root = JOBS_DIR, now = Date.now()) {
+  let n = 0;
+  try {
+    for (const d of fs.readdirSync(root)) {
+      const p = path.join(root, d);
+      try { if (now - fs.statSync(p).mtimeMs > JOB_DIR_MAX_AGE_MS) { fs.rmSync(p, { recursive: true, force: true }); n++; } } catch { /* gone already */ }
+    }
+  } catch { /* no directory yet */ }
+  return n;
+}
+const readJson = (f) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return null; } };
+const writeJson = (f, v) => { try { fs.writeFileSync(f, JSON.stringify(v)); } catch (e) { console.warn(`clip scan: couldn't save a checkpoint (${e.message})`); } };
+
 function enabled() { return String(process.env.CLIP_SCAN || '').toLowerCase() !== 'off'; }
 
 function driveId(url) {
@@ -403,11 +431,22 @@ async function clipScan(url, focus = '', { onProgress = () => {}, title = '' } =
   const kind = linkKind(url);
   if (!kind) throw new Error('needs a Google Drive link or a YouTube URL (youtube.com/watch, youtu.be, youtube.com/shorts)');
   running = true;
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clipscan-'));
+  pruneJobDirs();
+  const dir = path.join(JOBS_DIR, jobKey(url, focus));
+  fs.mkdirSync(dir, { recursive: true });
+  const stamp = () => { try { const t = new Date(); fs.utimesSync(dir, t, t); } catch { /* best effort */ } };
+  stamp();
+  const ck = (n) => path.join(dir, n);
+  const state = readJson(ck('state.json')) || {};
+  const saveState = (patch) => { Object.assign(state, patch); writeJson(ck('state.json'), state); stamp(); };
+  // Stale leftovers from a cut-off run (half-downloaded sections, chunks) go; checkpoints stay.
+  for (const f of fs.readdirSync(dir)) if (/^(cand|section)\d+\./.test(f) || /^a\d+\.mp3$/.test(f) || /^chat/.test(f) || /\.(part|ytdl)$/.test(f)) fs.rmSync(ck(f), { recursive: true, force: true });
   let chatP = null;
+  let ok = false;
   // Live progress (server/jobProgress.js): auto clips pass their own title.
   const jobs = require('./jobProgress');
-  const jid = jobs.start('rogue', title || `Clip scan: ${String(url).replace(/^https?:\/\/(www\.)?/, '').slice(0, 45)}`, ['Download audio', 'Transcribe', 'Pick moments', 'Download sections', 'Render each clip', 'Upload']);
+  const jid = jobs.start('rogue', title || `Clip scan: ${String(url).replace(/^https?:\/\/(www\.)?/, '').slice(0, 45)}`, ['Download audio', 'Transcribe', 'Pick moments', 'Download sections', 'Render each clip', 'Upload'],
+    { kind: 'clip_scan', args: { url: String(url).trim(), focus: String(focus || ''), title }, to: 'rogue' });
   try {
     let src = path.join(dir, 'source');
     let name;
@@ -426,10 +465,18 @@ async function clipScan(url, focus = '', { onProgress = () => {}, title = '' } =
     onProgress(sections ? 'downloading the audio' : 'downloading');
     jobs.step(jid, 'Download audio');
     let offset = 0, full = null;
-    if (sections) ({ file: src, name, offset, full } = await downloadYouTubeAudio(String(url).trim(), dir, meta && meta.heatmap));
-    else if (kind === 'youtube') ({ file: src, name } = await downloadYouTube(String(url).trim(), dir));
-    else name = await google.driveDownloadTo(driveId(url), src, MAX_BYTES);
+    const have = state.source && fs.existsSync(ck(state.source.file)) ? await duration(ck(state.source.file)).catch(() => 0) : 0;
+    if (have > 0 && (!state.source.total || have >= 0.95 * state.source.total)) {
+      // Resumed: the download finished before the restart.
+      ({ name, offset, full } = state.source); src = ck(state.source.file);
+      onProgress('download already done, resuming');
+    } else {
+      if (sections) ({ file: src, name, offset, full } = await downloadYouTubeAudio(String(url).trim(), dir, meta && meta.heatmap));
+      else if (kind === 'youtube') ({ file: src, name } = await downloadYouTube(String(url).trim(), dir));
+      else name = await google.driveDownloadTo(driveId(url), src, MAX_BYTES);
+    }
     const total = await duration(src);
+    if (total) saveState({ source: { file: path.basename(src), name, offset, full, total } });
     if (!total) throw new Error(`couldn't read that file as ${sections ? 'audio' : 'a video'}`);
     if (total > MAX_SEC + 60) throw new Error(`that video is ${mmss(total)} — the limit is ${mmss(MAX_SEC)}`);
     if (offset || (full && full > MAX_SEC)) sigNotes.push(`the video is ${mmss(full)}, over the ${mmss(MAX_SEC)} limit, so only ${mmss(offset)}–${mmss(offset + total)} was scanned${meta && meta.heatmap && meta.heatmap.length ? ', the stretch viewers replayed most' : ', from the start (no most-replayed graph yet)'}`);
@@ -437,54 +484,70 @@ async function clipScan(url, focus = '', { onProgress = () => {}, title = '' } =
     onProgress('transcribing');
     jobs.step(jid, 'Transcribe');
     const audioDir = path.join(dir, 'audio');
+    fs.rmSync(audioDir, { recursive: true, force: true });
     fs.mkdirSync(audioDir);
-    const segments = await transcribeVideo(src, audioDir, { prompt: '' });
-    if (!segments.length) throw new Error('no speech found in that video');
-
-    onProgress('reading viewer signals');
-    const sig = await signals.gather({ kind, url: String(url).trim(), src, dir, ytdlpBin: await ytdlpBin(), ytdlpArgs: cookieArgs(url), total, meta, chat: chatP, offset, full: full || total })
-      .catch((e) => ({ hot: [], used: [], notes: [`signals failed (${e.message})`] }));
-    sigNotes.push(...sig.notes);
-
-    onProgress('picking');
-    jobs.step(jid, 'Pick moments');
-    const cands = await pickMoments(segments, String(focus || '').trim(), total, sig.hot);
-    // Viewer hot spots the model passed over come back as candidates (not under a focus: they can't be matched to it).
-    if (!String(focus || '').trim()) cands.push(...judge.seedCandidates(sig.hot, cands, segments, total).slice(0, Math.max(0, MAX_CANDIDATES - cands.length)));
-    // Second opinion: frames of the top candidates through the vision chain (CLIP_VISION=off skips it).
-    const sectionCache = new Map();   // "start-end" -> { file, offset }, reused by the render below
-    let picks = cands.slice(0, MAX_PICKS);
-    if (cands.length && String(process.env.CLIP_VISION || '').toLowerCase() !== 'off') {
-      onProgress('checking the top moments');
-      jobs.step(jid, 'Check moments');
-      cands.sort((a, b) => b.score - a.score);
-      const judgements = cands.map(() => null);
-      let failed = '';
-      for (let i = 0; i < Math.min(cands.length, judge.VISION_MAX) && !failed.startsWith('stop'); i++) {
-        const c = cands[i];
-        try {
-          let file = src, from = c.start;
-          if (sections) {
-            const sec = await downloadSection(String(url).trim(), c.start + offset, c.end + offset, dir, `cand${i + 1}`);
-            sectionCache.set(`${c.start}-${c.end}`, sec);
-            file = sec.file; from = sec.offset;
-          }
-          const words = segments.filter((x) => x.end > c.start && x.start < c.end).map((x) => x.text.trim()).join(' ');
-          judgements[i] = await judge.judgeCandidate(file, from, c, words, dir, `cand${i + 1}`);
-        } catch (e) {
-          failed = `${failed ? failed + '; ' : ''}${e.message.slice(0, 80)}`;
-          if (/no vision/.test(e.message)) failed = 'stop: ' + failed;
-        }
-      }
-      if (judgements.some(Boolean)) {
-        picks = judge.rerank(cands, judgements, { max: MAX_PICKS });
-        sigNotes.push(`${judgements.filter(Boolean).length} of ${cands.length} candidate moments checked on video for laughs and reactions`);
-      } else if (failed) sigNotes.push(`video check skipped (${failed.replace(/^stop: /, '')})`);
-      // Candidates that didn't make the cut: free their section files.
-      for (const [k, sec] of sectionCache) if (!picks.some((p) => `${p.start}-${p.end}` === k)) { fs.rmSync(sec.file, { force: true }); sectionCache.delete(k); }
+    let segments = readJson(ck('transcript.json'));
+    if (Array.isArray(segments) && segments.length && state.transcriptOf === path.basename(src)) onProgress('transcript already done, resuming');
+    else {
+      segments = await transcribeVideo(src, audioDir, { prompt: '' });
+      if (!segments.length) throw new Error('no speech found in that video');
+      writeJson(ck('transcript.json'), segments);
+      saveState({ transcriptOf: path.basename(src) });
     }
-    if (!picks.length) throw new Error('no moment in it was strong enough to cut' + (focus ? ` for "${focus}"` : ''));
 
+    const sectionCache = new Map();   // "start-end" -> { file, offset }, reused by the render below
+    let sig = { hot: [], used: [], notes: [] };
+    let picks;
+    if (Array.isArray(state.picks) && state.picks.length && state.transcriptOf === path.basename(src)) {
+      // Resumed: the moments were already picked (and checked on video) before the restart.
+      onProgress('moments already picked, resuming');
+      picks = state.picks; sig = { hot: [], used: state.sigUsed || [], notes: [] }; sigNotes.push(...(state.sigNotes || []));
+    } else {
+      onProgress('reading viewer signals');
+      sig = await signals.gather({ kind, url: String(url).trim(), src, dir, ytdlpBin: await ytdlpBin(), ytdlpArgs: cookieArgs(url), total, meta, chat: chatP, offset, full: full || total })
+        .catch((e) => ({ hot: [], used: [], notes: [`signals failed (${e.message})`] }));
+      sigNotes.push(...sig.notes);
+
+      onProgress('picking');
+      jobs.step(jid, 'Pick moments');
+      const cands = await pickMoments(segments, String(focus || '').trim(), total, sig.hot);
+      // Viewer hot spots the model passed over come back as candidates (not under a focus: they can't be matched to it).
+      if (!String(focus || '').trim()) cands.push(...judge.seedCandidates(sig.hot, cands, segments, total).slice(0, Math.max(0, MAX_CANDIDATES - cands.length)));
+      // Second opinion: frames of the top candidates through the vision chain (CLIP_VISION=off skips it).
+      picks = cands.slice(0, MAX_PICKS);
+      if (cands.length && String(process.env.CLIP_VISION || '').toLowerCase() !== 'off') {
+        onProgress('checking the top moments');
+        jobs.step(jid, 'Check moments');
+        cands.sort((a, b) => b.score - a.score);
+        const judgements = cands.map(() => null);
+        let failed = '';
+        for (let i = 0; i < Math.min(cands.length, judge.VISION_MAX) && !failed.startsWith('stop'); i++) {
+          const c = cands[i];
+          try {
+            let file = src, from = c.start;
+            if (sections) {
+              const sec = await downloadSection(String(url).trim(), c.start + offset, c.end + offset, dir, `cand${i + 1}`);
+              sectionCache.set(`${c.start}-${c.end}`, sec);
+              file = sec.file; from = sec.offset;
+            }
+            const words = segments.filter((x) => x.end > c.start && x.start < c.end).map((x) => x.text.trim()).join(' ');
+            judgements[i] = await judge.judgeCandidate(file, from, c, words, dir, `cand${i + 1}`);
+          } catch (e) {
+            failed = `${failed ? failed + '; ' : ''}${e.message.slice(0, 80)}`;
+            if (/no vision/.test(e.message)) failed = 'stop: ' + failed;
+          }
+        }
+        if (judgements.some(Boolean)) {
+          picks = judge.rerank(cands, judgements, { max: MAX_PICKS });
+          sigNotes.push(`${judgements.filter(Boolean).length} of ${cands.length} candidate moments checked on video for laughs and reactions`);
+        } else if (failed) sigNotes.push(`video check skipped (${failed.replace(/^stop: /, '')})`);
+        // Candidates that didn't make the cut: free their section files.
+        for (const [k, sec] of sectionCache) if (!picks.some((p) => `${p.start}-${p.end}` === k)) { fs.rmSync(sec.file, { force: true }); sectionCache.delete(k); }
+      }
+      if (!picks.length) throw new Error('no moment in it was strong enough to cut' + (focus ? ` for "${focus}"` : ''));
+      saveState({ picks, sigNotes: [...sigNotes], sigUsed: sig.used });
+
+    }
     // One download / render / upload step per clip, so the percent moves clip by clip.
     jobs.plan(jid, ['Download audio', 'Transcribe', 'Pick moments', 'Check moments', ...picks.flatMap((_, i) => [...(sections ? [`Download section ${i + 1}`] : []), `Render clip ${i + 1}`, `Upload clip ${i + 1}`]), 'Finish'], 4);
     const base = String(name).replace(/\.[^.]+$/, '').slice(0, 60);
@@ -496,6 +559,14 @@ async function clipScan(url, focus = '', { onProgress = () => {}, title = '' } =
       const range = `${mmss(p.start + offset)}–${mmss(p.end + offset)}`;
       onProgress(`cutting ${i + 1}/${picks.length}`);
       const out = path.join(dir, `clip${i + 1}.mp4`);
+      const doneClip = state.clips && state.clips[i];
+      if (doneClip && doneClip.range === range) {
+        // Resumed: this clip was already uploaded before the restart.
+        jobs.step(jid, `Upload clip ${i + 1}`);
+        lines.push(doneClip.line);
+        if (fs.existsSync(out) && fs.statSync(out).size <= TG_VIDEO_MAX) media.push({ name: 'SEND_VIDEO', buffer: fs.readFileSync(out), filename: `clip${i + 1}.mp4`, caption: `${i + 1}. ${p.hook || range} — ${p.reason}`.slice(0, 1000) });
+        continue;
+      }
       try {
         let look = '';
         // The clip's own source: just that stretch of the video, when sectioned.
@@ -521,6 +592,7 @@ async function clipScan(url, focus = '', { onProgress = () => {}, title = '' } =
         jobs.step(jid, `Upload clip ${i + 1}`);
         const up = await google.driveUploadFile(out, `Clip ${i + 1} — ${p.title || base} (${range}).mp4`);
         lines.push(`${i + 1}. ${range} (${Math.round(p.end - p.start)}s) — ${p.title ? `${p.title}: ` : ''}${p.reason}${p.hook ? `\n   Hook: "${p.hook}"` : ''}\n   ${look}\n   ${up.link}`);
+        saveState({ clips: Object.assign(state.clips || {}, { [i]: { range, line: lines[lines.length - 1] } }) });
         if (size <= TG_VIDEO_MAX) media.push({ name: 'SEND_VIDEO', buffer: fs.readFileSync(out), filename: `clip${i + 1}.mp4`, caption: `${i + 1}. ${p.hook || range} — ${p.reason}`.slice(0, 1000) });
       } catch (e) {
         lines.push(`${i + 1}. ${range} — ${p.reason}\n   ⚠️ couldn't render this one: ${e.message.slice(0, 160)}`);
@@ -529,6 +601,7 @@ async function clipScan(url, focus = '', { onProgress = () => {}, title = '' } =
     const head = `CLIP SCAN — "${base}" (${mmss(total)}), ${picks.length} moment${picks.length === 1 ? '' : 's'}${focus ? ` for "${focus}"` : ''}, best first. Picked from ${sig.used.length ? `${sig.used.join(', ')} + the transcript` : 'the transcript alone'}${sigNotes.length ? ` (${sigNotes.join('; ')})` : ''}. Each is a finished 9:16 clip (layout to the shot, word-by-word captions, hook on top), uploaded to his Drive:`;
     const out = { text: `${head}\n${lines.join('\n')}\nEach can still go through [EDIT_CLIP: <its link> | brief] for captions, music or S.E.L.E.N.E.'s dress-up.`, media };
     jobs.done(jid, `${picks.length} moment(s)`);
+    ok = true;
     return out;
   } catch (e) {
     jobs.fail(jid, e);
@@ -536,14 +609,16 @@ async function clipScan(url, focus = '', { onProgress = () => {}, title = '' } =
   } finally {
     running = false;
     if (chatP && chatP.stop) chatP.stop();
-    fs.rmSync(dir, { recursive: true, force: true });
+    // Done: nothing to resume. A failure keeps the checkpoints (the same link sent
+    // again, or the boot resume, picks them up); pruneJobDirs clears them after 2 days.
+    if (ok) fs.rmSync(dir, { recursive: true, force: true });
   }
 }
 
 // Fire-and-forget for the app: runs the scan and delivers the result on
 // Telegram through A.R.A. (list as text, then each clip as a video).
-function scanInBackground(url, focus) {
-  clipScan(url, focus).then(async ({ text, media }) => {
+function scanInBackground(url, focus, opts = {}) {
+  clipScan(url, focus, opts).then(async ({ text, media }) => {
     const telegram = require('./telegram');
     const ara = telegram.botFor('ara');
     if (ara && ara.isConfigured()) {
@@ -568,4 +643,4 @@ async function videoInfo(url) {
   return { duration: Number(d) || 0, live: /is_live|is_upcoming/.test(live || ''), tags };
 }
 
-module.exports = { PICK_SYSTEM, MAX_CANDIDATES, downloadYouTubeAudio, downloadSection, withFfmpegProxy, SECTION_PAD, ytdlp, cookieArgs, isBotCheck, hasYouTubeCookies, videoInfo, clipScan, scanInBackground, CLIP_TOOLS, driveId, isYouTube, isSocialVideo, linkKind, downloadYouTube, transcribeVideo, duration, MIN_CHUNK_SEC, MAX_BYTES, MAX_SEC, parsePicks, sanitizePicks, mmss };
+module.exports = { PICK_SYSTEM, MAX_CANDIDATES, downloadYouTubeAudio, downloadSection, withFfmpegProxy, SECTION_PAD, ytdlp, cookieArgs, isBotCheck, hasYouTubeCookies, videoInfo, clipScan, scanInBackground, jobKey, pruneJobDirs, JOBS_DIR, CLIP_TOOLS, driveId, isYouTube, isSocialVideo, linkKind, downloadYouTube, transcribeVideo, duration, MIN_CHUNK_SEC, MAX_BYTES, MAX_SEC, parsePicks, sanitizePicks, mmss };

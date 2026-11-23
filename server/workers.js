@@ -584,7 +584,7 @@ async function ship(ref) {
       require('./loud').tellAra('ship-redeploy', `J.A.R.V.I.S. shipped workers' work to main, but the redeploy couldn't start: ${e.message}. Say "redeploy" to J.A.R.V.I.S.`);
     }), 60000).unref();
   }
-  return `${lines.join('; ')}.${server ? ' Server code changed: the server redeploys in about a minute and A.R.A. confirms when it is live.' : ''}${app ? ' App files changed: the new APK builds from main now.' : ''}`;
+  return `${lines.join('; ')}.${server ? ' Server code changed: the server redeploys in about a minute and A.R.A. confirms when it is live.' + require('./redeploy').runningJobsNote() : ''}${app ? ' App files changed: the new APK builds from main now.' : ''}`;
 }
 
 async function tag(name, arg) {
