@@ -1,0 +1,107 @@
+/* The Empire — Tarell Burrus. Rebuilt from the Canva design "Welcome to The Empire". */
+:root { --gold: #d4af37; --red: #b3302b; --ink: #0b0b0b; --text: #f3f0e8; --muted: #b9b2a3; --line: rgba(212,175,55,.35); }
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body { margin: 0; background: var(--ink) url("media/texture.svg"); color: var(--text); font: 16px/1.55 'Inter', system-ui, sans-serif; }
+a { color: inherit; }
+img, video { max-width: 100%; display: block; }
+
+/* top bar */
+.top { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  padding: 10px clamp(16px, 4vw, 40px); background: rgba(8,8,8,.88); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); }
+.brand { display: flex; align-items: center; gap: 10px; text-decoration: none; }
+.brand img { width: 42px; height: 42px; object-fit: contain; }
+.brand span { font-family: 'Great Vibes', cursive; font-size: 26px; color: #fff; }
+.top nav { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; justify-content: flex-end; }
+.top nav a { font-family: 'Cinzel', serif; font-size: 14px; letter-spacing: .06em; text-decoration: none; color: var(--text); opacity: .85; }
+.top nav a:hover, .top nav a[aria-current] { color: var(--gold); opacity: 1; }
+.burger { display: none; background: none; border: 0; padding: 8px; cursor: pointer; }
+.burger i { display: block; width: 24px; height: 2px; background: #fff; margin: 5px 0; }
+@media (max-width: 900px) {
+  .burger { display: block; }
+  .top nav { display: none; position: absolute; top: 100%; left: 0; right: 0; flex-direction: column; align-items: stretch;
+    background: #0b0b0b; padding: 12px 20px 20px; border-bottom: 1px solid var(--line); gap: 4px; }
+  body.open .top nav { display: flex; }
+  .top nav a { padding: 10px 0; font-size: 16px; border-bottom: 1px solid rgba(255,255,255,.06); }
+}
+
+/* Sections rebuilt from Canva: on a computer every element sits where the design put
+   it (positions in %, text sized off the section's width); on a phone they stack. */
+section.cv { position: relative; overflow: hidden; container-type: inline-size; width: 100%; max-width: 1600px; margin: 0 auto; }
+.cv .bg { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 0; }
+.el { position: absolute; z-index: 1; margin: 0; }
+.el.tx { font-size: calc(var(--fs) / 1366 * 100cqw); line-height: 1.35; overflow-wrap: break-word; height: auto !important; box-sizing: content-box; padding: 0 2%; margin-left: -2%; }
+.el.tx p { margin: 0; }
+.el.tx p.gap { height: .6em; }
+.el.md { overflow: hidden; height: auto; }
+.el.md img, .el.md video { display: block; }
+.el.sh svg { width: 100%; height: 100%; display: block; overflow: visible; }
+.el.grp { container-type: inline-size; height: auto; }
+.el.grp .el.tx { font-size: calc(var(--fs) / var(--gw) * 100cqw); }
+.el.emb iframe { width: 100%; height: 100%; border: 0; border-radius: 12px; background: #fff; }
+a.go { text-decoration: none; cursor: pointer; transition: filter .2s, transform .2s; }
+a.go:hover { filter: brightness(1.25) drop-shadow(0 0 6px rgba(212,175,55,.6)); }
+button.btn { background: none; border: 0; padding: 0; cursor: pointer; color: inherit; }
+button.btn:hover { filter: brightness(1.25) drop-shadow(0 0 6px rgba(212,175,55,.6)); }
+@media (max-width: 700px) {
+  section.cv { aspect-ratio: auto !important; display: flex; flex-direction: column; align-items: center; gap: 14px; padding: 36px 18px; }
+  .cv > .bg { opacity: .45 !important; }
+  .cv > .bg::after { content: none; }
+  .cv > .el { position: relative !important; left: auto !important; top: auto !important; width: 100% !important; transform: none !important; }
+  .cv > .el.tx { font-size: clamp(15px, calc(var(--fs) * .38px + 7px), 46px); text-align: center !important; white-space: normal !important; }
+  .cv > .el.tx[style*="--fs2"] p { font-size: clamp(15px, calc(var(--fs2) * .45px + 6px), 22px); }
+  .cv > .el.md { width: min(100%, calc(var(--w) * 2.6%)) !important; }
+  .cv > .el.grp { width: min(100%, calc(var(--w) * 2.4%)) !important; }
+  .cv > .el.sh, .cv > .el.ln { display: none; }
+  .el.emb { height: 620px !important; }
+  /* a section that is only a picture or video (the content is in it): show it whole */
+  section.cv:not(:has(> .el)) { aspect-ratio: var(--ar) !important; display: block; padding: 0; }
+  section.cv:not(:has(> .el)) > .bg { opacity: 1 !important; }
+}
+
+/* links to pages + buttons */
+.pill { display: inline-block; text-decoration: none; padding: .35em .9em; border: 1px solid var(--line); border-radius: 999px;
+  background: rgba(0,0,0,.45); transition: background .2s, border-color .2s, transform .2s; }
+.pill:hover { border-color: var(--gold); background: rgba(212,175,55,.14); transform: translateY(-1px); }
+.cta { cursor: pointer; border: 0; border-radius: 6px; padding: .45em 1.2em; background: var(--red); color: #fff !important;
+  box-shadow: 0 6px 18px rgba(179,48,43,.35); transition: transform .15s, filter .15s; }
+.cta:hover { transform: translateY(-1px); filter: brightness(1.1); }
+.cta.small { font: 600 13px/1 'Cinzel', serif; padding: 10px 14px; letter-spacing: .05em; }
+
+/* map + menu */
+.hero-map { min-height: 70vh; background: radial-gradient(ellipse at top, #2a0d0b 0%, #0b0b0b 65%); }
+.display { font-family: 'Cinzel', serif; font-size: clamp(40px, 8vw, 110px); text-align: center; margin: 0 0 8px; color: #fff; }
+.lede { text-align: center; color: var(--muted); margin: 0 0 32px; }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 14px; }
+.card { display: flex; align-items: center; justify-content: center; text-align: center; min-height: 110px; padding: 18px; text-decoration: none;
+  border: 1px solid var(--line); border-radius: 14px; background: linear-gradient(160deg, rgba(212,175,55,.12), rgba(0,0,0,.6));
+  font-family: 'Cinzel', serif; font-size: 20px; transition: transform .2s, border-color .2s; }
+.card:hover { transform: translateY(-3px); border-color: var(--gold); }
+.groups { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 28px; margin-top: 24px; }
+.grp h3 { font-family: 'Cinzel', serif; color: var(--gold); margin: 0 0 10px; font-size: 18px; letter-spacing: .08em; }
+.grp a { display: block; padding: 7px 0; text-decoration: none; border-bottom: 1px solid rgba(255,255,255,.07); }
+.grp a:hover { color: var(--gold); }
+
+/* footer + forms */
+footer { border-top: 1px solid var(--line); background: #070707; padding: 40px clamp(16px, 4vw, 48px) 24px; }
+.fwrap { max-width: 1240px; margin: 0 auto; display: grid; grid-template-columns: 1fr 1.3fr 1fr; gap: 32px; align-items: start; }
+@media (max-width: 800px) { .fwrap { grid-template-columns: 1fr; } }
+.flogo { width: 90px; }
+.motto { font-family: 'Cinzel', serif; color: var(--muted); font-size: 13px; letter-spacing: .05em; }
+.news label { display: block; font-family: 'Cinzel', serif; margin-bottom: 10px; }
+.news div { display: flex; gap: 8px; }
+input, textarea { width: 100%; padding: 12px 14px; border-radius: 8px; border: 1px solid #333; background: #141414; color: #fff; font: inherit; }
+input:focus, textarea:focus { outline: 2px solid var(--gold); border-color: transparent; }
+form button, .btns button { cursor: pointer; border: 0; border-radius: 8px; padding: 12px 18px; background: var(--red); color: #fff; font: 600 15px 'Inter', sans-serif; white-space: nowrap; }
+.btns .ghost { background: #2a2a2a; }
+.flinks { display: flex; flex-direction: column; gap: 8px; }
+.flinks a, .linkish { color: var(--muted); text-decoration: none; background: none; border: 0; padding: 0; font: inherit; text-align: left; cursor: pointer; }
+.flinks a:hover, .linkish:hover { color: var(--gold); }
+.copy { text-align: center; color: #777; font-size: 13px; margin: 32px 0 0; }
+.msg { display: block; margin-top: 8px; color: var(--gold); min-height: 1em; }
+dialog { border: 1px solid var(--line); border-radius: 14px; background: #111; color: var(--text); padding: 0; width: min(460px, calc(100% - 32px)); }
+dialog::backdrop { background: rgba(0,0,0,.7); }
+.lead { display: flex; flex-direction: column; gap: 10px; padding: 24px; }
+.lead h3 { margin: 0 0 6px; font-family: 'Cinzel', serif; color: var(--gold); }
+.btns { display: flex; justify-content: flex-end; gap: 8px; }
+.hp { position: absolute; left: -9999px; }

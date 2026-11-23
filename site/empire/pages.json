@@ -1,0 +1,197 @@
+[
+ {
+  "name": "Home",
+  "slug": "index",
+  "canva_page": 1
+ },
+ {
+  "name": "Menu",
+  "slug": "menu",
+  "canva_page": 3
+ },
+ {
+  "name": "Empire Map",
+  "slug": "empire-map",
+  "canva_page": 4
+ },
+ {
+  "name": "Motivation",
+  "slug": "motivation",
+  "canva_page": 6
+ },
+ {
+  "name": "Financial Literacy",
+  "slug": "financial-literacy",
+  "canva_page": 7
+ },
+ {
+  "name": "Financial Terms",
+  "slug": "financial-terms",
+  "canva_page": 8
+ },
+ {
+  "name": "Charity",
+  "slug": "charity",
+  "canva_page": 9
+ },
+ {
+  "name": "Let's Do Business",
+  "slug": "let-s-do-business",
+  "canva_page": 10
+ },
+ {
+  "name": "Opportunity",
+  "slug": "opportunity",
+  "canva_page": 11
+ },
+ {
+  "name": "Remote Jobs",
+  "slug": "remote-jobs",
+  "canva_page": 12
+ },
+ {
+  "name": "Application Assistance",
+  "slug": "application-assistance",
+  "canva_page": 13
+ },
+ {
+  "name": "Testimonials",
+  "slug": "testimonials",
+  "canva_page": 14
+ },
+ {
+  "name": "Life Insurance Opportunity",
+  "slug": "life-insurance-opportunity",
+  "canva_page": 15
+ },
+ {
+  "name": "Church",
+  "slug": "church",
+  "canva_page": 17
+ },
+ {
+  "name": "Discipline",
+  "slug": "discipline",
+  "canva_page": 18
+ },
+ {
+  "name": "Blueprint",
+  "slug": "blueprint",
+  "canva_page": 19
+ },
+ {
+  "name": "Disclaimers",
+  "slug": "disclaimers",
+  "canva_page": 21
+ },
+ {
+  "name": "Empire Merch",
+  "slug": "empire-merch",
+  "canva_page": 22
+ },
+ {
+  "name": "Networking",
+  "slug": "networking",
+  "canva_page": 23
+ },
+ {
+  "name": "Money",
+  "slug": "money",
+  "canva_page": 24
+ },
+ {
+  "name": "Entrepreneurship",
+  "slug": "entrepreneurship",
+  "canva_page": 26
+ },
+ {
+  "name": "Time to Get Rich",
+  "slug": "time-to-get-rich",
+  "canva_page": 27
+ },
+ {
+  "name": "Time to Get Rich (Part 2)",
+  "slug": "time-to-get-rich-part-2",
+  "canva_page": 28
+ },
+ {
+  "name": "Invest",
+  "slug": "invest",
+  "canva_page": 30
+ },
+ {
+  "name": "Digital Products",
+  "slug": "digital-products",
+  "canva_page": 31
+ },
+ {
+  "name": "AI Business",
+  "slug": "ai-business",
+  "canva_page": 32
+ },
+ {
+  "name": "Affiliate Marketing",
+  "slug": "affiliate-marketing",
+  "canva_page": 33
+ },
+ {
+  "name": "Digital real estate",
+  "slug": "digital-real-estate",
+  "canva_page": 34
+ },
+ {
+  "name": "Gym",
+  "slug": "gym",
+  "canva_page": 35
+ },
+ {
+  "name": "Chest",
+  "slug": "chest",
+  "canva_page": 36
+ },
+ {
+  "name": "Arms",
+  "slug": "arms",
+  "canva_page": 37
+ },
+ {
+  "name": "Back",
+  "slug": "back",
+  "canva_page": 38
+ },
+ {
+  "name": "Core",
+  "slug": "core",
+  "canva_page": 39
+ },
+ {
+  "name": "Legs",
+  "slug": "legs",
+  "canva_page": 40
+ },
+ {
+  "name": "Full body",
+  "slug": "full-body",
+  "canva_page": 41
+ },
+ {
+  "name": "Boxing",
+  "slug": "boxing",
+  "canva_page": 42
+ },
+ {
+  "name": "Deals",
+  "slug": "deals",
+  "canva_page": 43
+ },
+ {
+  "name": "Marketplace",
+  "slug": "marketplace",
+  "canva_page": 44
+ },
+ {
+  "name": "Consulting",
+  "slug": "consulting",
+  "canva_page": 45
+ }
+]

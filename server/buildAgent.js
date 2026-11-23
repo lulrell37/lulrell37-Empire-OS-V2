@@ -113,7 +113,7 @@ async function mergeBuild(n) {
 // What a merge actually sets off, from the PR's files — the same rules as
 // build.yml's paths-ignore: app files start the APK build; server/, docs and .md
 // files don't (the server goes live on a [REDEPLOY]).
-const NO_APK = /^(server\/|docs\/)|\.md$|^\.github\/workflows\/(server-check|claude|worker)\.yml$/;
+const NO_APK = /^(server\/|docs\/|site\/|scripts\/canva-site\/)|\.md$|^\.github\/workflows\/(server-check|claude|worker)\.yml$/;
 async function whatShips(prNumber) {
   let files = [];
   try { files = (await gh(`${rp(REPO)}/pulls/${prNumber}/files?per_page=100`)).map((f) => f.filename); } catch { /* unknown */ }
