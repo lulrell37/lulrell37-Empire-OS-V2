@@ -489,8 +489,9 @@ const CLIP_TOOLS = ` - [CLIP_SCAN: drive link or YouTube URL | focus] — for a 
 
 // Length and live state of one video, before deciding to scan it.
 async function videoInfo(url) {
-  const [d, live] = (await ytdlp(['--skip-download', '--print', '%(duration)s\n%(live_status)s', String(url).trim()])).split('\n').map((x) => x.trim());
-  return { duration: Number(d) || 0, live: /is_live|is_upcoming/.test(live || '') };
+  const [d, live, tagsJson] = (await ytdlp(['--skip-download', '--print', '%(duration)s\n%(live_status)s\n%(tags)j', String(url).trim()])).split('\n').map((x) => x.trim());
+  let tags = []; try { const j = JSON.parse(tagsJson || '[]'); if (Array.isArray(j)) tags = j.map(String); } catch {}
+  return { duration: Number(d) || 0, live: /is_live|is_upcoming/.test(live || ''), tags };
 }
 
 module.exports = { downloadYouTubeAudio, downloadSection, withFfmpegProxy, SECTION_PAD, ytdlp, cookieArgs, isBotCheck, hasYouTubeCookies, videoInfo, clipScan, scanInBackground, CLIP_TOOLS, driveId, isYouTube, isSocialVideo, linkKind, downloadYouTube, transcribeVideo, duration, MAX_BYTES, MAX_SEC, parsePicks, sanitizePicks, mmss };
