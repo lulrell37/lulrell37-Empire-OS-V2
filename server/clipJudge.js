@@ -10,7 +10,7 @@ const ffmpegPath = require('ffmpeg-static');
 
 const VISION_MAX = Number(process.env.CLIP_VISION_MAX || 6);   // candidates judged per scan
 const FRAMES = 3;                                               // frames per candidate (small: 2 GB VM)
-const MIN_FUNNY = 3;                                            // a judged candidate under this is dropped
+const MIN_FUNNY = 6;                                            // a judged candidate under this is dropped
 
 const num = (v) => { const n = Number(v); return Number.isFinite(n) ? Math.max(0, Math.min(10, n)) : null; };
 
@@ -34,7 +34,7 @@ function blendScore(score, j) {
 
 // picks + judgements ([j|null] aligned) -> best `max`. A judged pick under MIN_FUNNY is dropped
 // (as long as `keepAtLeast` remain); unjudged picks keep their score, a little discounted.
-function rerank(picks, judgements, { max = 5, keepAtLeast = 2 } = {}) {
+function rerank(picks, judgements, { max = 5, keepAtLeast = 0 } = {}) {
   const rows = picks.map((p, i) => {
     const j = judgements[i];
     if (!j) return { ...p, score: Math.round(p.score * 0.9), judged: false };
