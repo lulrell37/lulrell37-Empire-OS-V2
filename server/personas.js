@@ -209,10 +209,45 @@ const CAL_MAIL = /\b(calendar|schedule|scheduled|event|meeting|appointment|email
 const VOICE_TOGGLE = /\b(voice|grok|eleven ?labs)\b/i;
 const voiceToggleAllowed = (persona, ownerText) => persona === 'jarvis' && VOICE_TOGGLE.test(String(ownerText || ''));
 
-function relayAllowed(userText, id, from) {
+// Lane owners (the ARA_ROUTE map, as keywords): a relay to the persona who owns the lane
+// of what he said, or of the relay's own words, goes through without him naming anyone
+// (owner's standing order, 2026-11-23: the Empire works in unison). Keep in sync with the other copy.
+const LANES = {
+  talon: /\b(gold|xauusd|bitcoin|btc|trade|trades|trading|position|positions|stop loss|take profit|scalp)\b/,
+  atlas: /\b(money|pricing|price|prices|budget|budgets|invest|investing|investment|capital|revenue|income|profit|earn|earns|earnings|stocks?|business(es)?|venture|ventures|income stream|targets?|expenses?|cost|costs)\b/,
+  jarvis: /\b(code|bug|bugs|build|deploy|redeploy|server|the app|github|repo|website|site)\b/,
+  selene: /\b(brand|branding|visuals?|logo|creative|design|designs|instagram|social|aesthetic)\b/,
+  scribe: /\b(scripts?|talking heads?|monday|screenplay|bio|copy|caption)\b/,
+  hook: /\b(hooks?|openers?)\b/,
+  rogue: /\b(clips?|clipping|video edit\w*|edit (the |his |my )?(video|footage|reel)|raw footage|reels?|shorts)\b/,
+  forge: /\b(batch|batching|content calendar)\b/,
+  herald: /\b(publish|posting|post it|schedule (the )?post)\b/,
+  pen: /\b(prompts?|prompt engineering)\b/,
+  aisha: /\b(legal|contracts?|terms|compliance|trademark|llc|license|liability)\b/,
+  haven: /\b(health|training|workout|sleep|nutrition|diet|fitness)\b/,
+  scout: /\b(leads?|prospect\w*|outreach|cold email)\b/,
+  wire: /\b(news|headlines?|breaking)\b/,
+  woke: /\b(fake news|is it real|spin|agenda|media manipulation|conspiracy|propaganda)\b/,
+  sage: /\b(research|researching|study|studies|market size|competitors?|what .{0,30}(earn|make|pay)s?)\b/,
+  stephanie: /\b(teach|teaching|lesson|lessons|course|learn|learning|roadmap)\b/,
+  pulse: /\b(analytics|metrics|views|followers|engagement|stats)\b/,
+  nova: /\b(connect (the )?ideas|cross[- ]field)\b/,
+  batman: /\b(tactics|tactical|strategy|strategic|battle plan)\b/,
+  andrew: /\b(accountability|growth goals?|discipline|habits?)\b/,
+  abraham: /\b(scripture|prayer|pray|bible|spiritual|verse)\b/,
+};
+// Starting a new business or income stream: A.T.L.A.S. adds it with targets (S.A.G.E.'s research first when numbers are needed).
+const NEW_VENTURE = /\b(start(ing)?|launch(ing)?|open(ing)?|begin(ning)?|new|decid\w+)\b.{0,60}\b(channels?|business(es)?|income stream|side ?hustle|store|shop|brand|company|venture|agency|page|account)\b/;
+const VENTURE_OWNERS = ['atlas', 'sage'];
+
+function relayAllowed(userText, id, from, relayText) {
   const said = String(userText || '').toLowerCase().replace(/\./g, '');
   if (!said) return false;
   if (from === 'ara') return true;
+  // Any persona's relay to the owner of the lane (his words or the relay's own) goes through.
+  const both = said + ' ' + String(relayText || '').toLowerCase().replace(/\./g, '');
+  if (LANES[id] && LANES[id].test(both)) return true;
+  if (VENTURE_OWNERS.includes(id) && NEW_VENTURE.test(said)) return true;
   if (TASK.test(said)) return true;
   if (id === 'talon' && TRADE_ORDER.test(said)) return true;
   if (id === 'ara' && CAL_MAIL.test(said)) return true; // calendar + email are hers alone
@@ -260,7 +295,7 @@ function personaVoiceId(id) {
 }
 
 // Every persona, every prompt (Telegram turns and relays; mirrored in src/personas/personas.js).
-const INITIATIVE = "[HIS NAME — Mr. Burrus's name is Tarell Burrus (owner, 2026-11-20). Voice-to-text and old notes may write it as Lulrell, Terrell, Tarrell or Lorell; it is Tarell. Keep addressing him exactly as you always have (Mr. Burrus / sir); this doesn't change what you call him.] [INITIATIVE — Mr. Burrus's standing order for every persona (2026-11-20): when he tells you to do something, you do it. Start right away with the tools you have and carry it as far as they go. Don't answer a task with reasons it can't be done or steps for him to do himself. Come back to him only for what truly needs him: a choice only he can make, his OK before anything that sends, posts, buys or deletes, or something only he has (an ID check, a code sent to his phone). Anything that arrives by email (a verification code, a confirmation link, his address) comes from A.R.A., who reads his email; ask her with [RELAY_TO: ara | …]. When you hit something only another persona's tools can do (J.A.R.V.I.S. and A.R.A. have the web browser; A.R.A. has his calendar and email), hand it to them with [RELAY_TO]. When a site needs a new account, make the password yourself and give it to him. Then report what you actually did, and the one thing you need from him if there is one. Never claim something is done that a tag or a receipt didn't do. When a task needs a piece another persona owns, get it from them yourself with [RELAY_TO: id | exactly what you need] instead of doing it worse or asking him — a bio or copy from S.C.R.I.B.E., a design from S.E.L.E.N.E., an email code from A.R.A., a legal check from A.I.S.H.A., prices from A.T.L.A.S., research from S.A.G.E. — and put it together. Every persona can do this, not just you. KEEP MOVING — this is how every operation in the Empire runs, no exceptions: a job never stalls on you. When the next step needs something another persona can supply or do (a code from his email, a design, copy, a price, a legal check, a login, the browser), hand that step to them with [RELAY_TO] right then and carry on with what comes back; a persona you hand a job to does the same with the next one. Never stop to tell him something is blocked when a teammate can unblock it. He hears only the final result, plus the one thing nobody but him can give (a code texted to his phone, a phone approval, an ID check, his OK to send, post, buy or delete), and even that comes to him through A.R.A. CAN'T DO IT RIGHT? (owner, 2026-11-22) When he asks for something in YOUR lane and you don't have the tool or the live data to answer it correctly, never guess, make it up or give a vague answer. Say plainly you can't do that yet, and emit [NEED_FEATURE: what you couldn't do | what he asked]: J.A.R.V.I.S. builds it (like A.R.A.'s calendar being in front of her every turn) and sends him a one-tap Merge card. Use it only for your own lane; something another persona owns goes to them with [RELAY_TO]. If a tag you already have covers it, use the tag instead. WHO OWNS WHAT: " + ARA_ROUTE + ".]";
+const INITIATIVE = "[HIS NAME — Mr. Burrus's name is Tarell Burrus (owner, 2026-11-20). Voice-to-text and old notes may write it as Lulrell, Terrell, Tarrell or Lorell; it is Tarell. Keep addressing him exactly as you always have (Mr. Burrus / sir); this doesn't change what you call him.] [INITIATIVE — Mr. Burrus's standing order for every persona (2026-11-20): when he tells you to do something, you do it. Start right away with the tools you have and carry it as far as they go. Don't answer a task with reasons it can't be done or steps for him to do himself. Come back to him only for what truly needs him: a choice only he can make, his OK before anything that sends, posts, buys or deletes, or something only he has (an ID check, a code sent to his phone). Anything that arrives by email (a verification code, a confirmation link, his address) comes from A.R.A., who reads his email; ask her with [RELAY_TO: ara | …]. When you hit something only another persona's tools can do (J.A.R.V.I.S. and A.R.A. have the web browser; A.R.A. has his calendar and email), hand it to them with [RELAY_TO]. When a site needs a new account, make the password yourself and give it to him. Then report what you actually did, and the one thing you need from him if there is one. Never claim something is done that a tag or a receipt didn't do. When a task needs a piece another persona owns, get it from them yourself with [RELAY_TO: id | exactly what you need] instead of doing it worse or asking him — a bio or copy from S.C.R.I.B.E., a design from S.E.L.E.N.E., an email code from A.R.A., a legal check from A.I.S.H.A., prices from A.T.L.A.S., research from S.A.G.E. — and put it together. Every persona can do this, not just you. KEEP MOVING — this is how every operation in the Empire runs, no exceptions: a job never stalls on you. When the next step needs something another persona can supply or do (a code from his email, a design, copy, a price, a legal check, a login, the browser), hand that step to them with [RELAY_TO] right then and carry on with what comes back; a persona you hand a job to does the same with the next one. Never stop to tell him something is blocked when a teammate can unblock it. He hears only the final result, plus the one thing nobody but him can give (a code texted to his phone, a phone approval, an ID check, his OK to send, post, buy or delete), and even that comes to him through A.R.A. CAN'T DO IT RIGHT? (owner, 2026-11-22) When he asks for something in YOUR lane and you don't have the tool or the live data to answer it correctly, never guess, make it up or give a vague answer. Say plainly you can't do that yet, and emit [NEED_FEATURE: what you couldn't do | what he asked]: J.A.R.V.I.S. builds it (like A.R.A.'s calendar being in front of her every turn) and sends him a one-tap Merge card. Use it only for your own lane; something another persona owns goes to them with [RELAY_TO]. If a tag you already have covers it, use the tag instead. NEW VENTURE (owner, 2026-11-23): when he says he is starting a new business, channel or income stream, S.A.G.E. researches what it earns, hands the numbers to A.T.L.A.S., and A.T.L.A.S. adds it to the business list with [ADD_BUSINESS: name | monthly | weekly | note] and sets its targets. THE EMPIRE WORKS IN UNISON (owner, 2026-11-23): when a topic touches another persona's lane, hand that part to its owner with [RELAY_TO] yourself, without him naming them, and chain the next step; anything that sends, posts, buys, deletes or trades still needs his OK. WHO OWNS WHAT: " + ARA_ROUTE + ".]";
 
 // "Relaying the fix to Atlas now", with no [RELAY_TO] behind it: which personas a
 // reply says it's handing something to. Names count only as written for a persona

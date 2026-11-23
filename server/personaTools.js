@@ -405,6 +405,24 @@ async function writeTag({ name, arg }, persona) {
       await upsertSyncRow('revenue', newId(), { business: p[0], amount, type: (p[2] || 'income').toLowerCase(), note: p[3] || '', date: todayET(), created_at: now, updated_at: now });
       return { ok: `${(p[2] || 'income').toLowerCase()} logged: ${money(amount)} ${p[0]}` };
     }
+    case 'ADD_BUSINESS': {
+      // A new business or income stream, with its targets (synced row keyed by the business name, like the app's addBusiness).
+      const name = String(p[0] || '').trim();
+      if (!name) return { warn: 'ADD_BUSINESS needs a name | monthly | weekly | note' };
+      const rows = await syncedRows('business_targets');
+      const hit = rows.find((x) => String(x.business || '').toLowerCase() === name.toLowerCase());
+      const monthly = parseFloat(String(p[1] || '').replace(/[^0-9.\-]/g, ''));
+      const weekly = parseFloat(String(p[2] || '').replace(/[^0-9.\-]/g, ''));
+      const note = rest(arg, 3);
+      if (hit) {
+        const { sync_id: sid, ...data } = hit;
+        await upsertSyncRow('business_targets', sid, { ...data, target: isNaN(monthly) ? hit.target : monthly, week_goal: isNaN(weekly) ? hit.week_goal : weekly, notes: note || hit.notes || '', updated_at: now });
+        return { ok: `${hit.business} was already on the list — targets updated: ${money(isNaN(monthly) ? hit.target || 0 : monthly)}/mo` };
+      }
+      const order = rows.reduce((m, x) => Math.max(m, Number(x.sort_order) || 0), -1) + 1;
+      await upsertSyncRow('business_targets', name, { business: name, target: isNaN(monthly) ? 0 : monthly, week_goal: isNaN(weekly) ? 0 : weekly, sort_order: order, notes: note || '', updated_at: now });
+      return { ok: `business added: ${name}, target ${money(isNaN(monthly) ? 0 : monthly)}/mo` };
+    }
     case 'SET_TARGET': {
       const q = String(p[0] || '').toLowerCase();
       const b = (await syncedRows('business_targets')).find((x) => String(x.business || '').toLowerCase().includes(q));
