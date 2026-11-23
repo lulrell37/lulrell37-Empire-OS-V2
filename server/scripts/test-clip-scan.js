@@ -153,3 +153,42 @@ console.log('clip scan: ok');
   assert.strictEqual(J.seedCandidates(hot, [], segments, 400)[0].start, J.seedCandidates(hot, [], segments, 400).sort(() => 0)[0].start);
   console.log('clip scan comedy ranking: ok');
 }
+
+// Long-video audio window: an almost empty section download is caught, re-fetched whole and cut locally.
+(async () => {
+  const { downloadYouTubeAudio, duration, MAX_SEC } = require('../clipScan');
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'clip-audio-'));
+  const tone = (f, s) => spawnSync(ffmpeg, ['-y', '-v', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=16000', '-t', String(s), '-c:a', 'aac', f]);
+  const total = MAX_SEC + 600;
+  const mk = (sectionLen) => ({
+    ytdlp: async (args) => {
+      if (args.includes('--skip-download')) return `${total}\nBig stream`;
+      const out = args[args.indexOf('-o') + 1].replace('%(ext)s', 'm4a');
+      if (args.includes('--download-sections')) tone(out, sectionLen);
+      else tone(out, 40); // stands in for the whole audio
+      return '';
+    },
+    proxy: async (fn) => fn([]),
+  });
+  try {
+    // window is MAX_SEC long; scale by faking duration() so a 40 s file reads as the right length
+    let cutDone = false;
+    const fake = () => async (f) => (cutDone ? MAX_SEC : 0.05);
+    // empty section -> fallback cut
+    let deps = { ...mk(0.05), duration: fake(), run: async (args) => { cutDone = true; fs.copyFileSync(args[args.indexOf('-i') + 1], args[args.length - 1]); } };
+    let r = await downloadYouTubeAudio('https://www.youtube.com/watch?v=x', fs.mkdtempSync(path.join(d, 'a')), null, deps);
+    assert(fs.existsSync(r.file) && /audio-src/.test(r.file), 'fallback produced the audio file');
+    // good section -> no fallback
+    let full = false;
+    deps = { ...mk(40), duration: async () => MAX_SEC, run: async () => { full = true; } };
+    r = await downloadYouTubeAudio('https://www.youtube.com/watch?v=x', fs.mkdtempSync(path.join(d, 'b')), null, deps);
+    assert(!full && r.offset === 0, 'a full-length section is used as is');
+    // both short -> clear error
+    deps = { ...mk(0.05), duration: async () => 0.05, run: async (args) => { fs.copyFileSync(args[args.indexOf('-i') + 1], args[args.length - 1]); } };
+    await assert.rejects(downloadYouTubeAudio('https://www.youtube.com/watch?v=x', fs.mkdtempSync(path.join(d, 'c')), null, deps), /came out 0\.1s long|section download returned/);
+    // real duration() sees a real file
+    const f = path.join(d, 't.m4a'); tone(f, 3);
+    assert(Math.abs(await duration(f) - 3) < 0.5);
+    console.log('clip scan audio window guard: ok');
+  } finally { fs.rmSync(d, { recursive: true, force: true }); }
+})().catch((e) => { console.error(e); process.exit(1); });
