@@ -45,7 +45,7 @@ async function transcribeLink(url, { save = true, persona = 'ara' } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'transcribe-'));
   // Live progress (server/jobProgress.js).
   const jobs = require('./jobProgress');
-  const jid = jobs.start(persona, `Transcribe: ${link.replace(/^https?:\/\/(www\.)?/, '').slice(0, 45)}`, ['Download', 'Transcribe', 'Save to Drive']);
+  const jid = jobs.start(persona, `Transcribe: ${link.replace(/^https?:\/\/(www\.)?/, '').slice(0, 45)}`, ['Download', 'Transcribe', 'Save to Drive'], save ? { kind: 'transcribe', args: { url: link, persona }, to: persona } : null);
   try {
     let src = path.join(dir, 'source');
     let name;

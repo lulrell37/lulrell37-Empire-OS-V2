@@ -5,6 +5,62 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const ffmpeg = require('ffmpeg-static');
+// Resume (run in a child process, so its stubs don't touch the checks below): a scan whose
+// download and transcript were checkpointed before a restart skips both and goes on to picking;
+// with nothing saved, it downloads. Runs with CLIP_RESUME_CHILD=1.
+if (process.env.CLIP_RESUME_CHILD) {
+  const Module = require('module');
+  const load = Module._load;
+  const calls = { download: 0, whisper: 0, pick: 0 };
+  Module._load = function (req, parent, ...rest) {
+    if (req === './db') return { query: async () => ({ rows: [] }) };
+    if (req === './syncStore') return { getSetting: async (k, f) => f, setSetting: async () => {} };
+    const m = load.call(this, req, parent, ...rest);
+    if (req === './llm') return { ...m, transcribeSegments: async () => { calls.whisper++; return [{ start: 1, end: 5, text: 'hello' }]; }, claudeText: async () => { calls.pick++; return '[]'; } };
+    return m;
+  };
+  const os2 = require('os'), path2 = require('path'), fs2 = require('fs');
+  const root = fs2.mkdtempSync(path2.join(os2.tmpdir(), 'clipjobs-'));
+  process.env.CLIP_JOBS_DIR = root;
+  process.env.JOBS = 'off';
+  const ff = require('ffmpeg-static');
+  const clip = require('../clipScan');
+  const google = require('../google');
+  google.driveDownloadTo = async (id, dest) => { calls.download++; throw new Error('download called'); };
+  const url = 'https://drive.google.com/file/d/1AbCdEfGhIjKlMnOp/view';
+  (async () => {
+    // a different focus is a different job directory
+    assert.notStrictEqual(clip.jobKey(url, ''), clip.jobKey(url, 'funny'));
+    // no checkpoint: it downloads
+    await assert.rejects(clip.clipScan(url, ''), /download called/);
+    assert.strictEqual(calls.download, 1);
+    // checkpointed download + transcript: neither runs again
+    const dir = path2.join(root, clip.jobKey(url, ''));
+    fs2.mkdirSync(dir, { recursive: true });
+    const audio = path2.join(dir, 'source');
+    assert.strictEqual(spawnSync(ff, ['-y', '-v', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=16000', '-t', '20', '-ac', '1', '-b:a', '32k', '-f', 'mp3', audio]).status, 0);
+    fs2.writeFileSync(path2.join(dir, 'state.json'), JSON.stringify({ source: { file: 'source', name: 'Pod.mp4', offset: 0, full: null, total: 20 }, transcriptOf: 'source' }));
+    fs2.writeFileSync(path2.join(dir, 'transcript.json'), JSON.stringify([{ start: 1, end: 5, text: 'saved words' }]));
+    calls.download = 0; calls.whisper = 0;
+    await assert.rejects(clip.clipScan(url, ''), /no moment in it was strong enough/);
+    assert.strictEqual(calls.download, 0, 'finished download skipped');
+    assert.strictEqual(calls.whisper, 0, 'finished transcript skipped');
+    assert.strictEqual(calls.pick, 1, 'went on to pick moments');
+    assert.ok(fs2.existsSync(path2.join(dir, 'transcript.json')), 'a failed scan keeps its checkpoints');
+    // a truncated download is not trusted
+    fs2.writeFileSync(audio, 'junk');
+    await assert.rejects(clip.clipScan(url, ''), /download called/);
+    // pruning: untouched for over 2 days goes, fresh stays
+    const old = path2.join(root, 'old-1'); fs2.mkdirSync(old);
+    const t = (Date.now() - 3 * 24 * 3600e3) / 1000; fs2.utimesSync(old, t, t);
+    assert.strictEqual(clip.pruneJobDirs(root), 1);
+    assert.ok(!fs2.existsSync(old) && fs2.existsSync(dir));
+    console.log('clip scan resume: ok');
+    process.exit(0);
+  })().catch((e) => { console.error(e); process.exit(1); });
+  return;
+}
+process.env.DATABASE_URL = process.env.DATABASE_URL || 'postgres://x:x@127.0.0.1:1/x'; // google.js pulls in the db module, which only connects on first query
 const { parsePicks, sanitizePicks, driveId, isYouTube, linkKind, clipScan, mmss } = require('../clipScan');
 
 assert.strictEqual(driveId('https://drive.google.com/file/d/1AbCdEfGhIjKlMnOp/view?usp=sharing'), '1AbCdEfGhIjKlMnOp');
@@ -225,3 +281,10 @@ console.log('clip scan: ok');
     console.log('clip scan exact-multiple split + tiny audio guard: ok');
   } finally { fs.rmSync(d, { recursive: true, force: true }); }
 })().catch((e) => { console.error(e); process.exit(1); });
+
+// Resume checkpoints (child process, see the top of this file).
+{
+  const r = spawnSync(process.execPath, [__filename], { env: { ...process.env, CLIP_RESUME_CHILD: '1' }, encoding: 'utf8' });
+  process.stdout.write(r.stdout || '');
+  if (r.status !== 0) { console.error(r.stderr || r.stdout); process.exit(1); }
+}
