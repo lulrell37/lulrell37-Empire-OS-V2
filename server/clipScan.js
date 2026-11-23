@@ -195,16 +195,43 @@ async function downloadYouTube(url, dir) {
 // Over MAX_SEC (a 6-hour stream): only the MAX_SEC stretch viewers replayed most
 // (signals.bestWindow; the start without a graph) comes down, and the scan runs on
 // that. -> { file, name, offset, full } — offset = where the window starts.
-async function downloadYouTubeAudio(url, dir, heatmap = null) {
+async function downloadYouTubeAudio(url, dir, heatmap = null, deps = {}) {
   let meta;
-  try { meta = (await ytdlp(['--skip-download', '--print', '%(duration)s\n%(title)s', url])).split('\n'); } catch (e) { throw e; }
+  try { meta = (await (deps.ytdlp || ytdlp)(['--skip-download', '--print', '%(duration)s\n%(title)s', url])).split('\n'); } catch (e) { throw e; }
   const secs = Number(meta[0]);
   const name = meta.slice(1).join(' ').trim() || 'YouTube video';
   const win = Number.isFinite(secs) && secs > MAX_SEC ? signals.bestWindow(heatmap, secs, MAX_SEC) : null;
-  const get = (extra) => ytdlp(['-f', 'ba[ext=m4a]/ba/b', '--max-filesize', String(Math.floor(MAX_BYTES)),
-    ...extra, '-o', path.join(dir, 'audio-src.%(ext)s'), url]);
-  await (win ? withFfmpegProxy((px) => get(['--download-sections', `*${win.start.toFixed(0)}-${win.end.toFixed(0)}`, ...px])) : get([]));
-  const file = fs.readdirSync(dir).find((f) => /^audio-src\.(?!part|ytdl)/.test(f) && !f.endsWith('.part'));
+  const get = (extra, base = 'audio-src') => (deps.ytdlp || ytdlp)(['-f', 'ba[ext=m4a]/ba/b', '--max-filesize', String(Math.floor(MAX_BYTES)),
+    ...extra, '-o', path.join(dir, `${base}.%(ext)s`), url]);
+  const find = (base) => fs.readdirSync(dir).find((f) => new RegExp(`^${base}\\.(?!part|ytdl)`).test(f) && !f.endsWith('.part'));
+  const dur = deps.duration || duration;
+  let note = '';
+  if (win && !(win.end > win.start)) throw new Error(`the stretch to scan came out empty (${win.start}-${win.end}s)`);
+  if (!win) await get([]);
+  else {
+    // A section download of a long stream's audio can come back as an almost empty
+    // file (Whisper then refuses it: "shorter than 0.1 seconds"). Check what came
+    // down; if it's short, fetch the audio whole and cut the stretch with ffmpeg.
+    const want = win.end - win.start;
+    try { await (deps.proxy || withFfmpegProxy)((px) => get(['--download-sections', `*${win.start.toFixed(0)}-${win.end.toFixed(0)}`, ...px])); }
+    catch (e) { note = `section download failed: ${e.message}`; }
+    const f1 = find('audio-src');
+    const got = f1 ? await dur(path.join(dir, f1)).catch(() => 0) : 0;
+    if (!(got >= 0.9 * want)) {
+      note = note || `section download returned ${f1 ? `${got.toFixed(1)}s` : 'no file'} of the ${Math.round(want)}s asked for`;
+      if (f1) fs.rmSync(path.join(dir, f1), { force: true });
+      await get([], 'audio-full');
+      const ff = find('audio-full');
+      if (!ff) throw new Error(`the video's audio couldn't be downloaded (${note})`);
+      const full = path.join(dir, ff);
+      const out = path.join(dir, `audio-src${path.extname(ff) || '.m4a'}`);
+      await (deps.run || run)(['-hide_banner', '-loglevel', 'error', '-y', '-ss', String(win.start), '-t', String(want), '-i', full, '-vn', '-c:a', 'copy', out]);
+      fs.rmSync(full, { force: true });
+      const cut = await dur(out).catch(() => 0);
+      if (!(cut >= 0.9 * want)) throw new Error(`the audio for the ${mmss(want)} stretch at ${mmss(win.start)} came out ${cut.toFixed(1)}s long (${note}; cutting it from the whole audio gave ${cut.toFixed(1)}s)`);
+    }
+  }
+  const file = find('audio-src');
   if (!file) throw new Error("the video's audio couldn't be downloaded");
   return { file: path.join(dir, file), name, offset: win ? win.start : 0, full: Number.isFinite(secs) ? secs : null };
 }
