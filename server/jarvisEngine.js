@@ -244,9 +244,9 @@ let running = null;
 const current = () => (running ? { ...running } : null);
 async function turn(prompt, { persona = '', onProgress: progress, signal, source = 'telegram', ownerText, resumes = 0, recent = '' } = {}) {
   const id = crypto.randomUUID();
-  const onProgress = (p) => { if (running && running.id === id) running.step = p; if (progress) progress(p); };
+  const onProgress = (p) => { if (running && running.id === id) { running.step = p; running.stepAt = Date.now(); } if (progress) progress(p); };
   const go = async () => {
-    running = { id, what: String(ownerText || prompt).replace(/^\[[^\]]*\]\s*/, '').replace(/\s+/g, ' ').slice(0, 200), source, startedAt: Date.now(), step: 'Thinking' };
+    running = { id, what: String(ownerText || prompt).replace(/^\[[^\]]*\]\s*/, '').replace(/\s+/g, ' ').slice(0, 200), source, startedAt: Date.now(), step: 'Thinking', stepAt: Date.now() };
     logTurn({ id, text: String(ownerText || prompt).slice(0, 6000), source, startedAt: Date.now(), resumes });
     let release = () => {};
     try {
@@ -282,11 +282,15 @@ async function turn(prompt, { persona = '', onProgress: progress, signal, source
 
 // Resolves once no turn is running or queued (or after maxMs). A redeploy waits on
 // this so a restart never cuts him off mid-turn.
+// Stops waiting as soon as he looks stuck: no new step for STUCK_MS.
+const STUCK_MS = 3 * 60000;
+const stuck = (now = Date.now()) => !!running && now - (running.stepAt || running.startedAt) > STUCK_MS;
 async function idle(maxMs = 20 * 60000) {
   const until = Date.now() + maxMs;
-  while (busy > 0 && Date.now() < until) await new Promise((r) => setTimeout(r, 5000));
+  while (busy > 0 && !stuck() && Date.now() < until) await new Promise((r) => setTimeout(r, 5000));
   return busy === 0;
 }
+const isBusy = () => busy > 0;
 
 // At boot: any turn still logged was cut off by the restart. Tell him, and pick
 // it up once more in the same session (Claude Code checks where it got to). A
@@ -363,4 +367,4 @@ function status() {
 }
 
 module.exports = {
-  spawnTurn, workspace, run, ROOT, current, idle, loadSession, saveSession, enabled, turn, recover, startJob, jobStatus, cancelJob, detachJob, resetSession, status, engineBrief, describeTool };
+  spawnTurn, workspace, run, ROOT, current, idle, stuck, isBusy, loadSession, saveSession, enabled, turn, recover, startJob, jobStatus, cancelJob, detachJob, resetSession, status, engineBrief, describeTool };

@@ -47,16 +47,19 @@ async function requestRedeploy(by = 'jarvis') {
   if (process.env.EMPIRE_SUPERVISED !== '1') {
     throw new Error('the self-updating boot isn\'t running yet — redeploy once from Replit (Deployments → Redeploy) to install it; after that I can do it from here');
   }
-  // A restart kills J.A.R.V.I.S.'s engine mid-turn, and after it he was resumed AND
-  // woken (two turns for one), which read as him looping and vanishing (owner,
-  // 2026-11-23). So the restart waits for his running turn to end (up to
-  // REDEPLOY_WAIT_MIN, 20).
+  // A restart kills J.A.R.V.I.S.'s engine mid-turn (owner, 2026-11-23: he kept
+  // vanishing). Only the automatic redeploys (a feature or auto-fix merge) wait for
+  // his running turn, and only while it's moving: no new step for 3 min = stuck,
+  // and a stuck turn is a reason to restart, not to wait (owner: "why are
+  // redeploys waiting for him if he's stuck"). Capped at REDEPLOY_WAIT_MIN (20).
+  // His own tap (by 'jarvis' / 'app') restarts at once.
   const eng = require('./jarvisEngine');
-  const job = eng.enabled() ? eng.current() : null;
+  const automatic = ['feature', 'autofix'].includes(by);
+  const job = automatic && eng.enabled() && !eng.stuck() ? eng.current() : null;
   const go = async () => {
     if (job) {
       const free = await eng.idle(Number(process.env.REDEPLOY_WAIT_MIN || 20) * 60000);
-      if (!free) console.warn('redeploy: J.A.R.V.I.S. still busy after the wait — restarting anyway');
+      if (!free) console.warn('redeploy: J.A.R.V.I.S. stuck or still busy — restarting anyway');
     }
     const at = Date.now();
     await setSetting('redeploy_pending', JSON.stringify({ at, by, from_sha: process.env.EMPIRE_CODE_SHA || null }));
@@ -205,7 +208,12 @@ function wakeJarvis(pending, what) {
   if (!require('./jarvisEngine').enabled()) return false;
   const ask = `[SENT ON YOUR OWN — A.R.A. just confirmed the redeploy you asked for: ${what}. Mr. Burrus did not send this; it's the confirmation you were waiting on. If you told him you would carry something on once the server was back on the new code, do it now, all the way, and report the result to him. If it fell back, look at why. If nothing was waiting on this redeploy, reply with exactly NOTHING and nothing else.]`;
   // After A.R.A.'s note, so he hears hers first.
-  setTimeout(() => require('./routes/telegram').jarvisOutOfBand(ask, { quiet: WAKE_QUIET }).catch((e) => console.error('redeploy wake failed:', e.message)), 8000);
+  // A turn the restart cut off is already being resumed (recover) — that one carries
+  // on; a second wake-up turn on top of it was the "loop".
+  setTimeout(() => {
+    if (require('./jarvisEngine').isBusy()) return console.log('redeploy wake: skipped, his cut-off turn is already resuming');
+    require('./routes/telegram').jarvisOutOfBand(ask, { quiet: WAKE_QUIET }).catch((e) => console.error('redeploy wake failed:', e.message));
+  }, 8000);
   return true;
 }
 

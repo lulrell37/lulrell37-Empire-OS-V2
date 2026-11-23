@@ -4,7 +4,7 @@ const Module = require('module');
 const assert = require('assert');
 const woke = [];
 const stubs = {
-  './jarvisEngine': { enabled: () => true },
+  './jarvisEngine': { enabled: () => true, isBusy: () => false },
   './routes/telegram': { jarvisOutOfBand: async (t, o) => { woke.push({ t, o }); return true; } },
 };
 const load = Module._load;
