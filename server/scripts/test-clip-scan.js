@@ -192,3 +192,36 @@ console.log('clip scan: ok');
     console.log('clip scan audio window guard: ok');
   } finally { fs.rmSync(d, { recursive: true, force: true }); }
 })().catch((e) => { console.error(e); process.exit(1); });
+
+// Exact-multiple split: a 1200 s file in 600 s chunks leaves an empty trailing stub that Whisper rejects
+// (audio_too_short). transcribeVideo must skip it, keep offsets right, and the Whisper wrappers return [] on stubs.
+(async () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'clip-split-'));
+  try {
+    const src = path.join(d, 'src.mp3');
+    const r = spawnSync(ffmpeg, ['-y', '-v', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=16000', '-t', '1200', '-ac', '1', '-b:a', '32k', src]);
+    assert.strictEqual(r.status, 0, 'made the 1200 s file');
+    // stub Whisper: fail like the real API on anything tiny, otherwise return one segment per chunk
+    const llm = require('../llm');
+    const sent = [];
+    require.cache[require.resolve('../llm')].exports = { ...llm, transcribeSegments: async (buf, name) => {
+      sent.push([name, buf.length]);
+      if (buf.length < 1024) throw new Error('whisper 400: audio_too_short');
+      return [{ start: 1, end: 2, text: name }];
+    } };
+    delete require.cache[require.resolve('../clipScan')];
+    const { transcribeVideo, MIN_CHUNK_SEC } = require('../clipScan');
+    assert.strictEqual(MIN_CHUNK_SEC, 0.5);
+    const work = path.join(d, 'w'); fs.mkdirSync(work);
+    const segs = await transcribeVideo(src, work, {});
+    const stubs = fs.readdirSync(work).filter((f) => /^a\d+\.mp3$/.test(f));
+    assert.strictEqual(stubs.length, 3, 'ffmpeg writes a 3rd, empty chunk for an exact multiple');
+    assert(sent.every(([, n]) => n >= 1024), 'no tiny chunk reached Whisper');
+    assert.deepStrictEqual(segs.map((s) => [s.start, s.text]), [[1, 'a000.mp3'], [601, 'a001.mp3']], 'offsets stay right');
+    // backstop in the wrappers themselves
+    process.env.OPENAI_API_KEY = 'x';
+    assert.deepStrictEqual(await llm.transcribeSegments(Buffer.alloc(512), 'a.mp3'), []);
+    assert.deepStrictEqual(await llm.transcribeWords(Buffer.alloc(512), 'a.mp3'), []);
+    console.log('clip scan exact-multiple split + tiny audio guard: ok');
+  } finally { fs.rmSync(d, { recursive: true, force: true }); }
+})().catch((e) => { console.error(e); process.exit(1); });

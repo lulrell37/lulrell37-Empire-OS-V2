@@ -321,6 +321,7 @@ async function duration(file) {
   return m ? (+m[1]) * 3600 + (+m[2]) * 60 + (+m[3]) : 0;
 }
 
+const MIN_CHUNK_SEC = 0.5; // shorter chunks are skipped, not sent to Whisper
 // Whole recording -> [{ start, end, text }] with absolute seconds.
 async function transcribeVideo(src, dir, opts) {
   await run(['-hide_banner', '-loglevel', 'error', '-i', src, '-vn', '-ac', '1', '-ar', '16000', '-b:a', '32k',
@@ -329,6 +330,10 @@ async function transcribeVideo(src, dir, opts) {
   if (!chunks.length) throw new Error('no audio track in that video');
   const all = [];
   for (let i = 0; i < chunks.length; i++) {
+    // An exact multiple of CHUNK_SEC leaves a trailing stub with no audio in it (measured: 512 bytes, no
+    // duration); Whisper rejects it (audio_too_short) and that aborted the whole scan. Offsets keep the chunk index.
+    const len = await duration(path.join(dir, chunks[i])).catch(() => 0);
+    if (len < MIN_CHUNK_SEC) { console.warn(`clip scan: skipping ${chunks[i]}, only ${len.toFixed(2)}s of audio`); continue; }
     const segs = await transcribeSegments(fs.readFileSync(path.join(dir, chunks[i])), chunks[i], opts);
     for (const s of segs) all.push({ start: s.start + i * CHUNK_SEC, end: s.end + i * CHUNK_SEC, text: s.text });
   }
@@ -561,4 +566,4 @@ async function videoInfo(url) {
   return { duration: Number(d) || 0, live: /is_live|is_upcoming/.test(live || ''), tags };
 }
 
-module.exports = { PICK_SYSTEM, MAX_CANDIDATES, downloadYouTubeAudio, downloadSection, withFfmpegProxy, SECTION_PAD, ytdlp, cookieArgs, isBotCheck, hasYouTubeCookies, videoInfo, clipScan, scanInBackground, CLIP_TOOLS, driveId, isYouTube, isSocialVideo, linkKind, downloadYouTube, transcribeVideo, duration, MAX_BYTES, MAX_SEC, parsePicks, sanitizePicks, mmss };
+module.exports = { PICK_SYSTEM, MAX_CANDIDATES, downloadYouTubeAudio, downloadSection, withFfmpegProxy, SECTION_PAD, ytdlp, cookieArgs, isBotCheck, hasYouTubeCookies, videoInfo, clipScan, scanInBackground, CLIP_TOOLS, driveId, isYouTube, isSocialVideo, linkKind, downloadYouTube, transcribeVideo, duration, MIN_CHUNK_SEC, MAX_BYTES, MAX_SEC, parsePicks, sanitizePicks, mmss };
