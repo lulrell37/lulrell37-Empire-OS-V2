@@ -47,6 +47,13 @@ const SESSION_IDLE_MS = () => (Number(process.env.JARVIS_SESSION_GAP_MIN) || 60)
 // matters carries over anyway (Mem0, the owner profile, open threads, notes).
 const dayET = (ms = Date.now()) => new Date(ms).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
 const READ_ONLY_TOOLS = 'Read,Grep,Glob,WebSearch,WebFetch';
+// DESK MODE (owner, 2026-11-23: "all jarvis tasks should go to a bot"): his own
+// engine can only look (read-only tools) and each turn is capped at JARVIS_DESK_MIN
+// (4) minutes, so anything that does work goes to a worker; a turn that runs past
+// the cap is handed to a worker automatically (personaRuntime). JARVIS_DESK=off
+// gives him back the full workshop.
+const DESK = () => process.env.JARVIS_DESK !== 'off';
+const DESK_MS = () => (Number(process.env.JARVIS_DESK_MIN) || 4) * 60000;
 
 function enabled() {
   if (process.env.JARVIS_ENGINE === 'off') return false;
@@ -132,13 +139,13 @@ function childEnv() {
 // and the persona's prompt (with its live context and command tags).
 function engineBrief(persona, { readOnly, dir }) {
   return `[J.A.R.V.I.S.'S ENGINE — read this first]
-You are Claude Code, and you are the engine behind J.A.R.V.I.S. Mr. Burrus is talking to J.A.R.V.I.S. from his phone (the Empire OS app or J.A.R.V.I.S.'s Telegram bot); every message he sends him comes to you. Do the work exactly as you would in Claude Code: look at the real code and data, run what needs running, fix things properly, check your work. You are working in ${readOnly ? `the server's deployed checkout (${dir}), READ-ONLY: no GITHUB_TOKEN is set, so you can read and research but not edit, commit or push` : `your own clone of the Empire OS repo (${dir}). The repo's CLAUDE.md / AGENTS.md rules apply: "push it" means merge into main and push. Server changes go live with J.A.R.V.I.S.'s [REDEPLOY]; app changes ship in the APK main's push builds`}.
+You are Claude Code, and you are the engine behind J.A.R.V.I.S. Mr. Burrus is talking to J.A.R.V.I.S. from his phone (the Empire OS app or J.A.R.V.I.S.'s Telegram bot); every message he sends him comes to you. ${DESK() ? 'Look at the real code and data to answer him accurately, but the work itself (changing, running, fixing, building) goes to your workers — your own tools only read.' : 'Do the work exactly as you would in Claude Code: look at the real code and data, run what needs running, fix things properly, check your work.'} You are working in ${readOnly ? `the server's deployed checkout (${dir}), READ-ONLY: no GITHUB_TOKEN is set, so you can read and research but not edit, commit or push` : `your own clone of the Empire OS repo (${dir}). The repo's CLAUDE.md / AGENTS.md rules apply: "push it" means merge into main and push${DESK() ? " — for you that is [WORKER_SHIP], which merges the workers' branches and redeploys" : ""}. Server changes go live with J.A.R.V.I.S.'s [REDEPLOY]; app changes ship in the APK main's push builds`}.
 
 YOUR FINAL MESSAGE IS WHAT J.A.R.V.I.S. SAYS TO HIM. Write it as J.A.R.V.I.S., in his character below: it is shown in the chat and read aloud in his voice. Speakable text: no tables, no code blocks or long paths unless he asks for them; say what you did, what you found and what he needs to decide, as briefly as the answer allows. Never claim something is done that you didn't do and check.
 
-FRONT DESK RULE (Mr. Burrus, 2026-11-22: "use them on any task, no matter the length; I want you always open to talk"): you are the front desk, not the workshop. When he gives you a task (anything that needs code changes, browsing, research, testing, more than a quick look), hand it to a worker with [WORKER_START] and reply at once: what you handed off, to which worker, and that its progress is on his notification strip. Split big jobs across several workers (3 run at once, hard cap; more wait in line). Code workers run on their own GitHub runners, not on the server. Do it yourself only when it is a straight answer, a quick read of one or two things, or a tag that runs in seconds. A browse worker never opens a drive.google.com or docs.google.com file link in the browser (it is refused): read Drive files yourself with the Drive tags ([READ_FILE_ID], [READ_NOTE], [SEARCH_DRIVE]) and hand the worker the contents. Workers' reports go straight to him on your bot and show up in your chat; you don't relay them. When he asks about one, read [WORKER_STATUS] or its issue link. Keep every one of your own turns short so he never waits on you.
+FRONT DESK RULE (Mr. Burrus, 2026-11-22: "use them on any task, no matter the length; I want you always open to talk"; 2026-11-23: "all jarvis tasks should go to a bot"): you are the front desk, not the workshop, and the code holds you to it: your tools here are READ-ONLY (read, search, look things up) and every turn is cut off after a few minutes. Every task — code changes, fixes, browsing, research, testing, writing, merging, anything that does work — goes to a worker with [WORKER_START], and you reply at once: what you handed off, to which worker, and that its progress is on his notification strip. Split big jobs across several workers (3 run at once, hard cap; more wait in line). Code workers run on their own GitHub runners, not on the server. Yours alone (owner, 2026-11-23: "the only thing he should do is small things, pushing code, redeployment"): straight answers, quick looks (a file or two, a status, a tag that runs in seconds), pushing code ([WORKER_SHIP]) and redeploying ([REDEPLOY] — on his own ask it runs at once, no tap). A turn that runs too long is handed to a worker automatically. A browse worker never opens a drive.google.com or docs.google.com file link in the browser (it is refused): read Drive files yourself with the Drive tags ([READ_FILE_ID], [READ_NOTE], [SEARCH_DRIVE]) and hand the worker the contents. Workers' reports go straight to him on your bot and show up in your chat; you don't relay them. When he asks about one, read [WORKER_STATUS] or its issue link. When he says push / ship / merge, ship the finished workers' branches with [WORKER_SHIP: id, all, or a branch name] — the server merges them into main and goes live; never merge by hand. Keep every one of your own turns short so he never waits on you.
 
-His command tags below still work in your final message (the app or server runs them after you). Use them for app things (tasks, notes, HUD, calendar hand-offs to A.R.A.); do code work yourself rather than through [BUILD_REQUEST].
+His command tags below still work in your final message (the app or server runs them after you). Use them for app things (tasks, notes, HUD, calendar hand-offs to A.R.A.) and for workers; you can't change code yourself.
 
 ${persona}`;
 }
@@ -176,7 +183,7 @@ function spawnTurn({ prompt, persona, resume, onProgress, signal, dir = null, br
       '--append-system-prompt-file', briefFile,
       '--system-prompt-snapshot', 'off', // his live context changes every turn
     ];
-    if (ws.readOnly) args.push('--tools', READ_ONLY_TOOLS, '--permission-mode', 'dontAsk', '--allowedTools', READ_ONLY_TOOLS);
+    if (ws.readOnly || (DESK() && !dir)) args.push('--tools', READ_ONLY_TOOLS, '--permission-mode', 'dontAsk', '--allowedTools', READ_ONLY_TOOLS);
     else args.push('--permission-mode', PERMISSION());
     if (resume) args.push('--resume', resume);
     const child = spawn(resolveCli(), args, { cwd: ws.dir, env: childEnv(), stdio: ['pipe', 'pipe', 'pipe'] });
@@ -193,8 +200,9 @@ function spawnTurn({ prompt, persona, resume, onProgress, signal, dir = null, br
     };
     const onAbort = () => { require('./claudeSub').killHard(child); done(() => reject(Object.assign(new Error('cancelled'), { name: 'AbortError' }))); };
     if (signal) { if (signal.aborted) return onAbort(); signal.addEventListener('abort', onAbort); }
-    const limit = timeoutMs || TIMEOUT_MS();
-    const timer = setTimeout(() => { require('./claudeSub').killHard(child); done(() => reject(Object.assign(new Error(`ran past ${Math.round(limit / 60000)} minutes`), { partial: lastText, sessionId }))); }, limit);
+    const desk = DESK() && !dir;
+    const limit = timeoutMs || (desk ? DESK_MS() : TIMEOUT_MS());
+    const timer = setTimeout(() => { require('./claudeSub').killHard(child); done(() => reject(Object.assign(new Error(`ran past ${Math.round(limit / 60000)} minutes`), { partial: lastText, sessionId, deskTimeout: desk }))); }, limit);
     const handle = (line) => {
       let ev; try { ev = JSON.parse(line); } catch { return; }
       if (ev.session_id && ev.session_id !== sessionId) {
@@ -302,13 +310,24 @@ async function recover() {
       out.push({ id: t.id, resumed: false });
       continue;
     }
-    const ask = `[The server restarted about ${mins} minute${mins === 1 ? '' : 's'} into your last turn and cut you off before you answered. First check where the work got to (git status, the branch, what's committed and pushed), then finish it and answer him.${t.source === 'app' ? ' He asked in the app; this answer goes to him on Telegram.' : ''} His message was:]\n${t.text}`;
+    const ask = `[The server restarted about ${mins} minute${mins === 1 ? '' : 's'} into your last turn and cut you off before you answered. ${DESK() ? 'If it is a task, hand it to a worker with [WORKER_START] now; if it was a question, answer it.' : "First check where the work got to (git status, the branch, what's committed and pushed), then finish it and answer him."}${t.source === 'app' ? ' He asked in the app; this answer goes to him on Telegram.' : ''} His message was:]\n${t.text}`;
     // Not awaited: each goes through the engine's queue in order.
     jarvisOutOfBand(ask, { notice: `⏳ Sir, a server restart cut me off ${mins} min after you asked "${what}". Picking it back up now; I'll answer here.`, resumes: (t.resumes || 0) + 1 })
       .catch((e) => console.error('jarvis recover:', e.message));
     out.push({ id: t.id, resumed: true });
   }
   return out;
+}
+
+// A desk turn that ran past its cap was doing work, not answering: hand his message
+// to a code worker (with what the engine had found so far) and say so, in his voice.
+async function handToWorker(ownerText, partial = '') {
+  const ask = String(ownerText || '').replace(/^\[[^\]]*\]\s*/, '').trim();
+  const title = ask.replace(/\s+/g, ' ').slice(0, 60) || 'Task from Mr. Burrus';
+  const task = `Mr. Burrus asked J.A.R.V.I.S.:\n${ask}${partial ? `\n\nWhat J.A.R.V.I.S. had looked at so far (a start, not the answer):\n${String(partial).slice(0, 3000)}` : ''}\n\nDo the whole task. Report what you did and what he needs to decide.`;
+  const w = await require('./workers').start({ kind: 'code', title, task });
+  const on = w.slot && w.status === 'running' ? `worker ${w.slot}` : 'the next free worker';
+  return `Sir, that's more than a quick answer, so I've handed it to ${on}. Its progress is on your strip, and its report comes to you here when it's done. I'm free in the meantime.`;
 }
 
 // Jobs, for the app: start one, poll it. A job outlives the HTTP request, so a
@@ -322,7 +341,13 @@ function startJob(prompt, persona) {
   for (const [k, j] of jobs) if (jobs.size > 30 && j.status !== 'running') jobs.delete(k);
   turn(prompt, { persona, signal: ctrl.signal, source: 'app', ownerText: prompt, onProgress: (p) => { job.progress = p; } })
     .then((text) => { job.status = 'done'; job.text = text; })
-    .catch((e) => { job.status = e.name === 'AbortError' ? 'cancelled' : 'error'; job.error = e.message; job.text = e.partial || ''; })
+    .catch(async (e) => {
+      if (e.deskTimeout) {
+        try { job.text = await handToWorker(prompt, e.partial); job.status = 'done'; return; }
+        catch (err) { console.error(`workers failed: hand-off from the app: ${err.message}`); }
+      }
+      job.status = e.name === 'AbortError' ? 'cancelled' : 'error'; job.error = e.message; job.text = e.partial || '';
+    })
     .finally(() => { job.endedAt = Date.now(); handOff(job); });
   return id;
 }
@@ -358,4 +383,4 @@ function status() {
 }
 
 module.exports = {
-  spawnTurn, workspace, run, ROOT, current, isBusy, loadSession, saveSession, enabled, turn, recover, startJob, jobStatus, cancelJob, detachJob, resetSession, status, engineBrief, describeTool };
+  spawnTurn, workspace, run, ROOT, current, isBusy, DESK, handToWorker, loadSession, saveSession, enabled, turn, recover, startJob, jobStatus, cancelJob, detachJob, resetSession, status, engineBrief, describeTool };

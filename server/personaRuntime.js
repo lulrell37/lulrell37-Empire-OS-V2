@@ -671,6 +671,14 @@ async function runInjections(text, persona = 'ara', { convo = '', depth = 0, sin
         }
         catch (e) { console.error(`feature requests failed: ${e.message}`); return `NEED_FEATURE failed: ${e.message} — tell him plainly you can't do it yet.`; }
       }
+      if (name === 'WORKER_SHIP' && persona === 'jarvis') {
+        // Only on his own "push / ship / merge" (not a relay, a wake-up or a resumed turn).
+        if (depth > 0 || !/\b(push|ship|merge)\b/i.test(String(asked || '')) || /^\[(SENT ON YOUR OWN|The server restarted)/.test(String(asked || ''))) {
+          return 'WORKER_SHIP refused: it only runs when his own message says push, ship or merge — ask him.';
+        }
+        try { return await require('./workers').tag(name, arg); }
+        catch (e) { console.error(`workers failed: ${name}: ${e.message}`); return `${name} failed: ${e.message}`; }
+      }
       if (['WORKER_START', 'WORKER_STATUS', 'WORKER_STOP'].includes(name) && persona === 'jarvis') {
         try { return await require('./workers').tag(name, arg); }
         catch (e) { console.error(`workers failed: ${name}: ${e.message}`); return `${name} failed: ${e.message}`; }
@@ -904,6 +912,15 @@ async function applyEffects(text, deliver, persona = 'ara', { full = false, owne
       } else if (name === 'DEEP_RESEARCH' && arg) {
         notes.push('deep research started');
         runDeepResearch(arg, deliver, persona);
+      } else if (name === 'REDEPLOY' && persona === 'jarvis' && /\b(re-?deploy|deploy|push|ship|go live|restart (the )?server)\b/i.test(String(ownerText || '')) && !/^\[(SENT ON YOUR OWN|The server restarted)/.test(String(ownerText || ''))) {
+        // Redeploying is his job (owner, 2026-11-23: "the only thing he should do is small
+        // things, pushing code, redeployment"): on his own ask, no Confirm tap. A delay so
+        // this reply (and its voice note) goes out before the server restarts.
+        setTimeout(() => require('./redeploy').requestRedeploy('jarvis').catch((e) => {
+          console.error(`redeploy failed: ${e.message}`);
+          require('./loud').tellAra('jarvis-redeploy', `J.A.R.V.I.S.'s redeploy couldn't start: ${e.message}`);
+        }), 45000).unref();
+        notes.push('Redeploying in under a minute — A.R.A. confirms when the server is live');
       } else if (name === 'ARA_VOICE_ENGINE') {
         const v = arg.trim().toLowerCase().replace(/\s+/g, '');
         if (!voiceToggleAllowed(persona, ownerText)) warnings.push('ARA_VOICE_ENGINE not run — only Mr. Burrus can order that, directly to J.A.R.V.I.S.');
@@ -1320,7 +1337,13 @@ async function runPersonaTurn(personaId, userText, deliver, { reply: given, resu
     if (given != null) { const out = String(given); given = null; engineUsed = !!engine; return out; }
     if (engine && !engineNote) {
       try { const out = await engine.turn(String(msgs[msgs.length - 1].content), { persona: sys, source: 'telegram', ownerText: userText, resumes, recent: convoLines(history.slice(-12), '', persona).split('\n').slice(0, -1).join('\n') }); engineUsed = true; return out; }
-      catch (e) { engineNote = `⚠️ Claude Code (his engine) failed, so this answer is from the plain chat model: ${e.message.slice(0, 200)}`; console.error('jarvis engine:', e.message); }
+      catch (e) {
+        if (e.deskTimeout) {
+          try { const out = await engine.handToWorker(userText, e.partial); engineUsed = true; return out; }
+          catch (err) { console.error(`workers failed: hand-off: ${err.message}`); }
+        }
+        engineNote = `⚠️ Claude Code (his engine) failed, so this answer is from the plain chat model: ${e.message.slice(0, 200)}`; console.error('jarvis engine:', e.message);
+      }
     }
     return chatAs(p.api, p.model, sys, msgs, { maxTokens: 4000, fallback: persona !== 'ara' });
   };

@@ -498,9 +498,55 @@ async function forApp() {
     .map((w) => ({ id: w.id, kind: w.kind, title: w.title, status: w.status, step: w.step || 0, progress: w.progress || '', percent: w.percent ?? null, current: w.current || '', plan: w.plan || [], branch: w.branch || null, startedAt: w.startedAt || null, endedAt: w.endedAt || null, url: w.runUrl || w.issueUrl || null, slot: w.status === 'running' ? w.slot || null : null }));
 }
 
+// [WORKER_SHIP: id | all] — his "push" for workers' work (owner, 2026-11-23: every
+// J.A.R.V.I.S. task goes to a worker, so shipping is done by the server, not by his
+// engine): each finished code worker's branch is merged into main through GitHub
+// (a merge commit; nothing to merge is fine; a conflict is reported and the branch is
+// left alone), and if server files changed the server redeploys a minute later, once
+// this reply has gone out. App files ship in the APK main's push builds.
+const NO_APK = /^(server\/|docs\/|site\/|scripts\/canva-site\/)|\.md$|^\.github\/workflows\/(server-check|claude|worker)\.yml$/;
+async function ship(ref) {
+  await load();
+  const want = String(ref || 'all').trim().toLowerCase();
+  const done = Object.values(list).filter((w) => w.kind === 'code' && w.status === 'done' && w.branch && !w.shipped && !/no commits/i.test(w.pushed || ''));
+  const pick = want === 'all' || !want ? done : done.filter((w) => w.id === want.replace(/^#/, '') || w.branch === want || String(w.title).toLowerCase().includes(want));
+  // Not a worker's: any other branch on GitHub ships the same way (pushing code is his job).
+  if (!pick.length && want !== 'all' && /^[\w./-]+$/.test(String(ref).trim())) {
+    pick.push({ id: '', title: String(ref).trim(), branch: String(ref).trim(), createdAt: 0, external: true });
+  }
+  if (!pick.length) return 'nothing to ship: no finished worker with an unmerged branch' + (want !== 'all' ? ` matches "${ref}"` : '');
+  const { owner, repo } = d().repo();
+  const lines = [];
+  let server = false, app = false;
+  for (const w of pick.sort((a, b) => a.createdAt - b.createdAt)) {
+    try {
+      const cmp = await d().gh(`/repos/${owner}/${repo}/compare/main...${encodeURIComponent(w.branch)}`).catch(() => null);
+      const files = ((cmp && cmp.files) || []).map((f) => f.filename);
+      const r = await d().gh(`/repos/${owner}/${repo}/merges`, { method: 'POST', body: { base: 'main', head: w.branch, commit_message: w.external ? `Ship ${w.branch}` : `Ship worker #${w.id}: ${w.title}` } });
+      if (!w.external) update(w, { shipped: Date.now() });
+      if (!r || !r.sha) { lines.push(`"${w.title}": already in main`); continue; }
+      if (files.some((f) => /^server\//.test(f) || /^site\//.test(f))) server = true;
+      if (files.some((f) => !NO_APK.test(f))) app = true;
+      lines.push(`"${w.title}": merged into main (${files.length} file${files.length === 1 ? '' : 's'})`);
+    } catch (e) {
+      const conflict = /409|conflict/i.test(e.message);
+      lines.push(`"${w.title}": NOT merged — ${conflict ? 'it conflicts with main; start a worker to rebase its branch ' + w.branch + ' onto main, then ship again' : e.message}`);
+      if (!conflict && !w.external) logFailure(w, `ship failed: ${e.message}`);
+    }
+  }
+  if (server) {
+    setTimeout(() => require('./redeploy').requestRedeploy('ship').catch((e) => {
+      console.error(`workers failed: redeploy after shipping: ${e.message}`);
+      require('./loud').tellAra('ship-redeploy', `J.A.R.V.I.S. shipped workers' work to main, but the redeploy couldn't start: ${e.message}. Say "redeploy" to J.A.R.V.I.S.`);
+    }), 60000).unref();
+  }
+  return `${lines.join('; ')}.${server ? ' Server code changed: the server redeploys in about a minute and A.R.A. confirms when it is live.' : ''}${app ? ' App files changed: the new APK builds from main now.' : ''}`;
+}
+
 async function tag(name, arg) {
   if (name === 'WORKER_STATUS') return `WORKERS:\n${await statusText()}`;
   if (name === 'WORKER_STOP') return `WORKER_STOP: ${await stop(String(arg || '').trim())}`;
+  if (name === 'WORKER_SHIP') return `WORKER_SHIP: ${await ship(arg)}`;
   const p = String(arg || '').split('|').map((x) => x.trim());
   let [kind, title, task, note] = p;
   if (!/^(code|browse)$/i.test(kind || '')) { note = task; task = title; title = kind; kind = 'code'; }
@@ -510,10 +556,10 @@ async function tag(name, arg) {
   return `WORKER_START: ✓ ${on ? `worker ${on.slot} of 3` : 'a worker'} (${w.kind}) "${w.title}" ${on ? 'is working on it now' : `is in line (all 3 slots busy)`}${w.kind === 'code' ? ', on its own GitHub runner' : ''}. Its progress shows on his notification strip; its report goes straight to him on your bot when it's done (you'll see it in this chat).`;
 }
 
-const WORKER_TOOLS = ` - [WORKER_START: code|browse | short title | the full task, self-contained | Drive note title (browse only, optional)] — hand a task to a worker of your own so you stay free to talk to him. code = its own Claude Code on its own GitHub runner (not the server), on a worker/ branch cut from main: it commits, the job pushes that branch only, never main; good for any general job (code, research, checks, writing). browse = a browser task on the server, its result saved to that Drive note; one browse at a time. Every browser shares the same saved logins, so a site you or A.R.A. are signed in to works for a worker too. A file in his Google Drive is read with your Drive tags ([READ_NOTE], [SEARCH_DRIVE], [READ_FILE_ID]), not a browse worker. HARD CAP: 3 workers running at once, total; the rest wait in line. Call them by their slot, "worker 1, 2 or 3", never by a running count; [WORKER_STOP: 2] stops the one in slot 2. A browse worker stuck on information (a sign-in, an account email, a code) gets it from A.R.A., who searches his email and notes, and carries on; only what nobody can supply comes to him, from you. Each one's progress shows live on his notification strip, and its report goes straight to him on your bot when it ends (you'll see it in this chat), so you don't need to relay it; if he asks, read [WORKER_STATUS]. A code worker's work ships when he says push: merge its branch into main then. Use them for EVERY task, whatever its length (his standing order, 2026-11-22), so you are always free to talk to him. Only straight answers and seconds-long lookups stay with you.
+const WORKER_TOOLS = ` - [WORKER_START: code|browse | short title | the full task, self-contained | Drive note title (browse only, optional)] — hand a task to a worker of your own so you stay free to talk to him. code = its own Claude Code on its own GitHub runner (not the server), on a worker/ branch cut from main: it commits, the job pushes that branch only, never main; good for any general job (code, research, checks, writing). browse = a browser task on the server, its result saved to that Drive note; one browse at a time. Every browser shares the same saved logins, so a site you or A.R.A. are signed in to works for a worker too. A file in his Google Drive is read with your Drive tags ([READ_NOTE], [SEARCH_DRIVE], [READ_FILE_ID]), not a browse worker. HARD CAP: 3 workers running at once, total; the rest wait in line. Call them by their slot, "worker 1, 2 or 3", never by a running count; [WORKER_STOP: 2] stops the one in slot 2. A browse worker stuck on information (a sign-in, an account email, a code) gets it from A.R.A., who searches his email and notes, and carries on; only what nobody can supply comes to him, from you. Each one's progress shows live on his notification strip, and its report goes straight to him on your bot when it ends (you'll see it in this chat), so you don't need to relay it; if he asks, read [WORKER_STATUS]. A code worker's work ships when he says push / ship / merge: [WORKER_SHIP: id] (or all, or any branch name) — the server merges it into main and redeploys if server code changed; never merge by hand. Use them for EVERY task, whatever its length (his standing order, 2026-11-22), so you are always free to talk to him. Only straight answers and seconds-long lookups stay with you.
  - [WORKER_STATUS] — every worker: running, waiting, done, with its current step and GitHub link. [WORKER_STOP: id] — stop one (a GitHub run is cancelled).`;
 
 // Persona jobs (jobProgress.js) share this one board: load the workers, then update it.
 async function kick() { await load(); boardKick(); }
 
-module.exports = { kick, start, stop, recover, statusText, forApp, tag, WORKER_TOOLS, enabled, _setDeps: (x) => { deps = x; list = null; board = undefined; boardLast = 0; }, _list: () => list, _boardText: () => boardText(), logFailure, FAIL_KEY, _tgBoardDeps: tgBoardDeps, parsePlan, percentOf, progressLabel, readPlanComment, PLAN_FILE };
+module.exports = { kick, start, stop, ship, recover, statusText, forApp, tag, WORKER_TOOLS, enabled, _setDeps: (x) => { deps = x; list = null; board = undefined; boardLast = 0; }, _list: () => list, _boardText: () => boardText(), logFailure, FAIL_KEY, _tgBoardDeps: tgBoardDeps, parsePlan, percentOf, progressLabel, readPlanComment, PLAN_FILE };
