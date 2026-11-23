@@ -16,6 +16,18 @@ assert.deepStrictEqual(A.newUploads(feed, ch, s).map((v) => v.id), ['bbbbbbbbbbb
 assert.deepStrictEqual(A.newUploads(feed, ch, { queue: [{ id: 'bbbbbbbbbbb' }], done: [] }), [], 'not queued twice');
 assert.deepStrictEqual(A.newUploads(feed, ch, { queue: [], done: [{ id: 'bbbbbbbbbbb' }] }), [], 'not clipped twice');
 assert.ok(/\[AUTO_CLIP:/.test(A.AUTO_CLIP_TOOLS));
+// topic filter
+assert.deepStrictEqual(A.splitArg('https://youtube.com/@kai | GTA'), { link: 'https://youtube.com/@kai', topic: 'GTA' });
+assert.deepStrictEqual(A.splitArg('https://youtube.com/@kai'), { link: 'https://youtube.com/@kai', topic: '' });
+assert.deepStrictEqual(A.topicTerms('any'), []);
+assert.ok(A.matchesTopic('', { title: 'anything' }), 'no topic = everything');
+assert.ok(A.matchesTopic('GTA', { title: 'GTA 5 RP with Speed' }));
+assert.ok(A.matchesTopic('GTA', { title: 'Heists', tags: ['Grand Theft Auto V'] }), 'alias in tags');
+assert.ok(A.matchesTopic('GTA', { title: 'Ranked lobby', tags: ['gta', 'funny'] }));
+assert.ok(!A.matchesTopic('GTA', { title: 'Minecraft hardcore', tags: ['minecraft'] }), 'other game skipped');
+assert.ok(!A.matchesTopic('GTA', { title: 'Gtalking about food' }), 'whole words only');
+assert.ok(A.matchesTopic('gta, fortnite', { title: 'Fortnite finals' }), 'any of several');
+assert.ok(/AUTO_CLIP_TOPIC/.test(A.AUTO_CLIP_TOOLS));
 const C = require('../clipScan');
 assert.ok(C.isBotCheck('yt-dlp: ERROR: [youtube] KAgxDihEu4M: Sign in to confirm you’re not a bot. This helps protect our community.'));
 assert.ok(!C.isBotCheck('yt-dlp: ERROR: Video unavailable'));

@@ -13,7 +13,12 @@
 //     are put back too
 //   - AUTO_CLIP_MAX_PER_DAY (3) scans a day at most, since each one bills
 //     Whisper and Claude; the rest wait for the next day, oldest first
-// Tags: [AUTO_CLIP: channel or video link], [AUTO_CLIP_OFF: channel],
+//   - topic filter (owner, 2026-11-22): [AUTO_CLIP: channel | topic] watches a channel
+//     for one subject only (e.g. GTA); an upload whose title or tags don't mention it
+//     is skipped as "off topic" (not counted toward the day). [AUTO_CLIP_TOPIC:
+//     channel | topic] changes it, "any" clears it. Known topics expand to aliases
+//     (`ALIASES`); several can be given with commas, any one matches.
+// Tags: [AUTO_CLIP: channel or video link (| topic)], [AUTO_CLIP_TOPIC], [AUTO_CLIP_OFF: channel],
 // [AUTO_CLIP_LIST] (R.O.G.U.E., A.R.A., J.A.R.V.I.S.). AUTO_CLIP=off stops it.
 // State: app_settings.auto_clip. node server/scripts/test-auto-clip.js.
 const { getSetting, setSetting } = require('./syncStore');
@@ -81,18 +86,76 @@ async function resolveChannel(link) {
   return { id: out[0], name: out[1] || out[0], url: out[2] && out[2] !== 'NA' ? out[2] : `https://www.youtube.com/channel/${out[0]}` };
 }
 
+// --- the topic filter (pure) ---------------------------------------------------
+
+const ALIASES = {
+  gta: ['gta', 'grand theft auto', 'gta5', 'gta 5', 'gta v', 'gta online', 'gta rp', 'nopixel'],
+  'call of duty': ['call of duty', 'cod', 'warzone', 'modern warfare', 'black ops'],
+  minecraft: ['minecraft'],
+  fortnite: ['fortnite'],
+  valorant: ['valorant'],
+  roblox: ['roblox'],
+};
+const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const ANY = /^(any|all|everything|none|off|clear|no topic|no filter)?$/i;
+
+// "GTA" / "gta, fortnite" -> ['gta','grand theft auto',…]; '' = no filter.
+function topicTerms(topic) {
+  const t = String(topic || '').trim();
+  if (ANY.test(t)) return [];
+  const out = new Set();
+  for (const part of t.split(/[,;]|\bor\b/i).map((x) => x.trim().toLowerCase()).filter(Boolean)) {
+    for (const a of ALIASES[part] || [part]) out.add(a);
+  }
+  return [...out];
+}
+
+// Does a video (title + tags) belong to the topic? No topic = everything.
+function matchesTopic(topic, v) {
+  const terms = topicTerms(topic);
+  if (!terms.length) return true;
+  const hay = ` ${[v.title, ...(v.tags || [])].join(' \n ').toLowerCase()} `;
+  return terms.some((x) => new RegExp(`(^|[^a-z0-9])${esc(x)}([^a-z0-9]|$)`).test(hay));
+}
+
+function splitArg(arg) {
+  const i = String(arg || '').lastIndexOf('|');
+  return i < 0 ? { link: String(arg || '').trim(), topic: '' } : { link: arg.slice(0, i).trim(), topic: arg.slice(i + 1).trim() };
+}
+
 // --- tags ---------------------------------------------------------------------
 
-async function addChannel(link) {
+const topicNote = (topic) => (topicTerms(topic).length ? ` Only videos about "${topic}" (title or tags) are clipped; everything else is skipped.` : '');
+
+async function addChannel(arg) {
+  const { link, topic: rawTopic } = splitArg(arg);
+  const topic = topicTerms(rawTopic).length ? rawTopic : '';
   const s = await load();
   const ch = await resolveChannel(link);
-  if (s.channels.some((c) => c.id === ch.id)) return `already watching ${ch.name}`;
+  const have = s.channels.find((c) => c.id === ch.id);
+  if (have) {
+    if (!rawTopic) return `already watching ${ch.name}${have.topic ? ` (topic: ${have.topic})` : ''}`;
+    have.topic = topic; await save(s);
+    return topic ? `already watching ${ch.name}; now only "${topic}" videos get clipped.` : `already watching ${ch.name}; topic filter cleared, every video over ${MIN_SEC / 60} minutes gets clipped.`;
+  }
   if (s.channels.length >= MAX_CHANNELS) return `already watching ${MAX_CHANNELS} channels — turn one off first`;
   // Start from the newest upload already out, so the back catalog isn't clipped.
   const feed = await fetchFeed(ch.id).catch(() => []);
-  s.channels.push({ ...ch, since: feed.length ? feed[0].published : Date.now(), addedAt: Date.now() });
+  s.channels.push({ ...ch, since: feed.length ? feed[0].published : Date.now(), addedAt: Date.now(), ...(topic ? { topic } : {}) });
   await save(s);
-  return `watching ${ch.name} (${ch.url}). Starting from its next upload: every new video over ${MIN_SEC / 60} minutes gets clipped and sent to him, ${MAX_PER_DAY} a day at most.`;
+  return `watching ${ch.name} (${ch.url}). Starting from its next upload: every new video over ${MIN_SEC / 60} minutes gets clipped and sent to him, ${MAX_PER_DAY} a day at most.${topicNote(topic)}`;
+}
+
+async function setTopic(arg) {
+  const { link, topic: rawTopic } = splitArg(arg);
+  const s = await load();
+  const q = link.toLowerCase();
+  const hit = s.channels.find((c) => c.name.toLowerCase() === q || c.id.toLowerCase() === q) || s.channels.find((c) => q && (c.name.toLowerCase().includes(q) || c.url.toLowerCase().includes(q.replace(/^https?:\/\/(www\.)?/, ''))));
+  if (!hit) return `not watching anything matching "${link}"`;
+  const topic = topicTerms(rawTopic).length ? rawTopic : '';
+  if (topic) hit.topic = topic; else delete hit.topic;
+  await save(s);
+  return topic ? `${hit.name}: now only "${topic}" videos get clipped.` : `${hit.name}: topic filter cleared, every video over ${MIN_SEC / 60} minutes gets clipped.`;
 }
 
 async function removeChannel(arg) {
@@ -110,7 +173,7 @@ async function removeChannel(arg) {
 async function listText() {
   const s = await load();
   if (!s.channels.length) return 'not watching any channels';
-  const lines = s.channels.map((c) => `- ${c.name} (${c.url}), watched since ${new Date(c.addedAt).toLocaleDateString('en-US', { timeZone: 'America/New_York' })}`);
+  const lines = s.channels.map((c) => `- ${c.name} (${c.url})${c.topic ? ` — only "${c.topic}"` : ''}, watched since ${new Date(c.addedAt).toLocaleDateString('en-US', { timeZone: 'America/New_York' })}`);
   const q = s.queue.length ? `\nWaiting to be clipped: ${s.queue.map((v) => `"${v.title}"`).join(', ')}` : '';
   const last = s.done.slice(-3).reverse().map((d) => `"${d.title}" (${d.status}${d.why ? `: ${d.why}` : ''})`).join('; ');
   return `${lines.join('\n')}${q}${last ? `\nLatest: ${last}` : ''}\n${s.day === todayET() ? s.ranToday : 0} of ${MAX_PER_DAY} scans used today.`;
@@ -119,6 +182,7 @@ async function listText() {
 async function tag(name, arg) {
   if (!enabled()) return 'auto clips are switched off on this server (AUTO_CLIP=off)';
   if (name === 'AUTO_CLIP') return addChannel(arg);
+  if (name === 'AUTO_CLIP_TOPIC') return setTopic(arg);
   if (name === 'AUTO_CLIP_OFF') return removeChannel(arg);
   return listText();
 }
@@ -159,6 +223,7 @@ async function tick() {
     }
     await save(s);
     // 2. One scan per tick, oldest first, within the daily cap.
+    for (let n = 0; n < 15; n++) {
     const v = s.queue[0];
     if (!v || s.ranToday >= MAX_PER_DAY) return { queued: s.queue.length };
     const meta = await clip.videoInfo(v.url).catch((e) => ({ error: e.message }));
@@ -188,6 +253,13 @@ async function tick() {
       if (v.tries >= 3) { await finish('failed', meta.error); await deliver(v, null, meta.error); } else await save(s);
       return { error: meta.error };
     }
+    // Topic filter: off-topic uploads are skipped (no scan, not counted) and the next one is looked at.
+    const watched = s.channels.find((c) => c.id === v.channelId);
+    if (watched && watched.topic && !matchesTopic(watched.topic, { title: v.title, tags: meta.tags })) {
+      await finish('skipped', `off topic (only "${watched.topic}")`);
+      Object.assign(s, await load());
+      continue;
+    }
     if (meta.duration && meta.duration < MIN_SEC) { await finish('skipped', `only ${Math.round(meta.duration / 60)} min`); return { skipped: 'short' }; }
     console.log(`auto clip: scanning ${v.channel} — "${v.title}"`);
     try {
@@ -202,9 +274,11 @@ async function tick() {
       await deliver(v, null, e.message);
     }
     return { scanned: v.id };
+    }
+    return { queued: s.queue.length };
   } finally { busy = false; }
 }
 
-const AUTO_CLIP_TOOLS = ` - [AUTO_CLIP: YouTube channel link, or any video of theirs] — watch that channel: every new upload over ${MIN_SEC / 60} minutes is clip-scanned on its own (viewer signals, the 3-5 best moments, finished 9:16 clips) and sent to him on Telegram from A.R.A., ${MAX_PER_DAY} scans a day at most. Starts from the channel's NEXT upload. [AUTO_CLIP_OFF: channel name] stops one; [AUTO_CLIP_LIST] shows what's watched and the latest runs. Report only what the result says.`;
+const AUTO_CLIP_TOOLS = ` - [AUTO_CLIP: YouTube channel link, or any video of theirs] — watch that channel: every new upload over ${MIN_SEC / 60} minutes is clip-scanned on its own (viewer signals, the 3-5 best moments, finished 9:16 clips) and sent to him on Telegram from A.R.A., ${MAX_PER_DAY} scans a day at most. Starts from the channel's NEXT upload. To clip only one subject from a channel (e.g. GTA), add it after a pipe: [AUTO_CLIP: channel link | GTA] — uploads whose title or tags don't mention it are skipped; [AUTO_CLIP_TOPIC: channel | topic] changes it ("any" clears it). [AUTO_CLIP_OFF: channel name] stops one; [AUTO_CLIP_LIST] shows what's watched and the latest runs. Report only what the result says.`;
 
-module.exports = { tick, tag, addChannel, removeChannel, listText, parseFeed, newUploads, resolveChannel, AUTO_CLIP_TOOLS, enabled };
+module.exports = { topicTerms, matchesTopic, splitArg, setTopic, tick, tag, addChannel, removeChannel, listText, parseFeed, newUploads, resolveChannel, AUTO_CLIP_TOOLS, enabled };

@@ -649,7 +649,7 @@ async function runInjections(text, persona = 'ara', { convo = '', depth = 0, sin
         }
         catch (e) { return `TRANSCRIBE failed: ${e.message}`; }
       }
-      if (['AUTO_CLIP', 'AUTO_CLIP_OFF', 'AUTO_CLIP_LIST'].includes(name) && ['rogue', 'ara', 'jarvis'].includes(persona) && (arg || name === 'AUTO_CLIP_LIST')) {
+      if (['AUTO_CLIP', 'AUTO_CLIP_TOPIC', 'AUTO_CLIP_OFF', 'AUTO_CLIP_LIST'].includes(name) && ['rogue', 'ara', 'jarvis'].includes(persona) && (arg || name === 'AUTO_CLIP_LIST')) {
         try { return `${name}: ${await require('./autoClip').tag(name, arg)}`; }
         catch (e) { return `${name} failed: ${e.message}`; }
       }
