@@ -35,7 +35,9 @@ const MAX = () => Math.min(HARD_CAP, Math.max(1, Number(process.env.WORKERS_MAX)
 const BROWSE_MAX = 1; // Chrome on the 2 GB server: one at a time
 const POLL_MS = () => Number(process.env.WORKER_POLL_MS) || 60e3;
 const NO_RUN_MS = 6 * 60e3; // dispatched but GitHub never started it
-const CODE_TIMEOUT_MS = () => (Number(process.env.WORKER_CODE_MIN) || 130) * 60e3; // the job's own limit is 120
+const CODE_TIMEOUT_MS = () => (Number(process.env.WORKER_CODE_MIN) || 210) * 60e3; // per run; the job's own limit is 200
+// Big jobs run as several runs on the same branch (CONTINUE or the time limit): up to this many.
+const MAX_LEGS = () => Math.max(1, Math.min(6, Number(process.env.WORKER_MAX_RUNS) || 3));
 const KEEP_MS = 24 * 3600e3; // finished ones stay listed a day
 const SHOW_DONE_MS = 15 * 60e3; // and on his strip for 15 minutes
 const enabled = () => String(process.env.WORKERS || '').toLowerCase() !== 'off';
@@ -257,6 +259,42 @@ const sleepFor = (ms, signal) => new Promise((r) => {
 });
 const noMention = (t) => String(t).replace(/@claude/gi, '@ claude'); // claude.yml answers "@claude"
 
+// Drive files named in a code worker's task download through the server
+// (GET /worker-files/:id) with a token only that worker's runs get, for those files,
+// for WORKER_FILES_H (12) hours. The task itself sits in a public issue, so the token
+// never goes there: it rides in the dispatch payload and the job masks it.
+const DRIVE_IDS = /(?:drive|docs)\.google\.com\/(?:file\/d\/|document\/d\/|spreadsheets\/d\/|presentation\/d\/|open\?id=|uc\?id=)([\w-]{20,})|\bdrive(?:[ _-]?file)?(?: id)?:\s*([\w-]{20,})/gi;
+function driveIdsIn(text) {
+  return [...new Set([...String(text || '').matchAll(DRIVE_IDS)].map((m) => m[1] || m[2]).filter(Boolean))].slice(0, 20);
+}
+async function grantFiles(w) {
+  const ids = driveIdsIn(w.task);
+  if (!ids.length) return '';
+  const token = require('crypto').randomBytes(24).toString('hex');
+  const { getSetting, setSetting } = require('./syncStore');
+  let grants = {};
+  try { grants = JSON.parse(await getSetting('worker_file_grants', '{}')) || {}; } catch { grants = {}; }
+  const now = Date.now();
+  for (const [k, g] of Object.entries(grants)) if (!g || g.exp < now) delete grants[k];
+  grants[token] = { worker: w.id, ids, exp: now + (Number(process.env.WORKER_FILES_H) || 12) * 3600e3 };
+  await setSetting('worker_file_grants', JSON.stringify(grants));
+  return token;
+}
+async function fileGrant(token, id) {
+  if (!token || !id) return null;
+  const { getSetting } = require('./syncStore');
+  let grants = {};
+  try { grants = JSON.parse(await getSetting('worker_file_grants', '{}')) || {}; } catch { return null; }
+  const g = grants[token];
+  return g && g.exp > Date.now() && g.ids.includes(id) ? g : null;
+}
+async function dispatch(w, base, branch, leg) {
+  const files_token = (w.leg ? null : await grantFiles(w).catch((e) => { console.error(`workers failed: #${w.id} file grant: ${e.message}`); return ''; })) || w.filesToken || '';
+  const server_url = (() => { try { return require('./redeploy').publicUrl() || ''; } catch { return ''; } })();
+  await d().gh(`${base}/dispatches`, { method: 'POST', body: { event_type: 'worker-run', client_payload: { worker: w.id, issue: w.issue, branch, title: w.title.slice(0, 60), leg, max_legs: MAX_LEGS(), server_url, files_token } } });
+  update(w, { dispatchedAt: Date.now(), leg, filesToken: files_token || undefined });
+}
+
 // A code worker on its own GitHub runner (.github/workflows/worker.yml).
 async function runCode(w, signal) {
   if (!process.env.GITHUB_TOKEN && !deps) throw new Error('no GITHUB_TOKEN on the server, so a code worker can\'t be started on GitHub');
@@ -267,21 +305,27 @@ async function runCode(w, signal) {
     update(w, { branch, progress: 'Opening its GitHub issue' });
     const issue = await d().gh(`${base}/issues`, { method: 'POST', body: { title: `Worker #${w.id}: ${w.title}`.slice(0, 120), body: noMention(w.task), labels: ['worker'] } });
     update(w, { issue: issue.number, issueUrl: issue.html_url, progress: 'Starting its own Claude Code on GitHub' });
-    await d().gh(`${base}/dispatches`, { method: 'POST', body: { event_type: 'worker-run', client_payload: { worker: w.id, issue: issue.number, branch, title: w.title.slice(0, 60) } } });
-    update(w, { dispatchedAt: Date.now() });
+    await dispatch(w, base, branch, 1);
   }
-  const deadline = (w.dispatchedAt || Date.now()) + CODE_TIMEOUT_MS();
   for (;;) {
+    const deadline = (w.dispatchedAt || Date.now()) + CODE_TIMEOUT_MS(); // per run
     if (signal.aborted) {
       if (w.runId) await d().gh(`${base}/actions/runs/${w.runId}/cancel`, { method: 'POST' }).catch(() => {});
       return { status: 'stopped', result: 'stopped on request', branch };
     }
     const comments = await d().gh(`${base}/issues/${w.issue}/comments?per_page=100`).catch(() => null);
-    const done = (comments || []).find((c) => /<!-- worker-result/.test(c.body || ''));
+    const leg = w.leg || 1;
+    const done = (comments || []).find((c) => /<!-- worker-result/.test(c.body || '') && ((/leg=(\d+)/.exec(c.body) || [0, '1'])[1] === String(leg)));
+    if (done && /status=continue/.test(done.body) && leg < MAX_LEGS()) {
+      // Too big for one run: the next run picks up on the same branch and issue.
+      update(w, { leg: leg + 1, runId: null, runUrl: null, completedSeen: null, progress: `Continuing — run ${leg + 1} of up to ${MAX_LEGS()}` });
+      await dispatch(w, base, branch, leg + 1);
+      continue;
+    }
     readPlanComment(w, comments); // its plan, mirrored into an issue comment by the job
     if (done) {
       const body = String(done.body);
-      const ok = /status=done/.test(body);
+      const ok = /status=(done|continue)/.test(body);
       const pushed = (/branch: ([^·\n]+)/.exec(body) || [])[1] || '';
       return { status: ok ? 'done' : 'failed', result: body.replace(/<!--[^>]*-->\n?/, '').trim(), branch, pushed: pushed.trim() };
     }
@@ -556,10 +600,10 @@ async function tag(name, arg) {
   return `WORKER_START: ✓ ${on ? `worker ${on.slot} of 3` : 'a worker'} (${w.kind}) "${w.title}" ${on ? 'is working on it now' : `is in line (all 3 slots busy)`}${w.kind === 'code' ? ', on its own GitHub runner' : ''}. Its progress shows on his notification strip; its report goes straight to him on your bot when it's done (you'll see it in this chat).`;
 }
 
-const WORKER_TOOLS = ` - [WORKER_START: code|browse | short title | the full task, self-contained | Drive note title (browse only, optional)] — hand a task to a worker of your own so you stay free to talk to him. code = its own Claude Code on its own GitHub runner (not the server), on a worker/ branch cut from main: it commits, the job pushes that branch only, never main; good for any general job (code, research, checks, writing). browse = a browser task on the server, its result saved to that Drive note; one browse at a time. Every browser shares the same saved logins, so a site you or A.R.A. are signed in to works for a worker too. A file in his Google Drive is read with your Drive tags ([READ_NOTE], [SEARCH_DRIVE], [READ_FILE_ID]), not a browse worker. HARD CAP: 3 workers running at once, total; the rest wait in line. Call them by their slot, "worker 1, 2 or 3", never by a running count; [WORKER_STOP: 2] stops the one in slot 2. A browse worker stuck on information (a sign-in, an account email, a code) gets it from A.R.A., who searches his email and notes, and carries on; only what nobody can supply comes to him, from you. Each one's progress shows live on his notification strip, and its report goes straight to him on your bot when it ends (you'll see it in this chat), so you don't need to relay it; if he asks, read [WORKER_STATUS]. A code worker's work ships when he says push / ship / merge: [WORKER_SHIP: id] (or all, or any branch name) — the server merges it into main and redeploys if server code changed; never merge by hand. Use them for EVERY task, whatever its length (his standing order, 2026-11-22), so you are always free to talk to him. Only straight answers and seconds-long lookups stay with you.
+const WORKER_TOOLS = ` - [WORKER_START: code|browse | short title | the full task, self-contained | Drive note title (browse only, optional)] — hand a task to a worker of your own so you stay free to talk to him. code = its own Claude Code on its own GitHub runner (not the server), on a worker/ branch cut from main: it commits, the job pushes that branch only, never main; good for any general job (code, research, checks, writing), big ones included: a code worker has Chrome, ffmpeg, ImageMagick and Python, keeps large media in GitHub releases, and a job too big for one run (about 3 h) carries on in up to 3 runs on the same branch by itself. Put any Google Drive file it needs in the task as its link (drive.google.com/file/d/…, docs.google.com/…) or "drive: <id>": the worker downloads it through the server, however big. browse = a browser task on the server, its result saved to that Drive note; one browse at a time. Every browser shares the same saved logins, so a site you or A.R.A. are signed in to works for a worker too. A file in his Google Drive is read with your Drive tags ([READ_NOTE], [SEARCH_DRIVE], [READ_FILE_ID]), not a browse worker. HARD CAP: 3 workers running at once, total; the rest wait in line. Call them by their slot, "worker 1, 2 or 3", never by a running count; [WORKER_STOP: 2] stops the one in slot 2. A browse worker stuck on information (a sign-in, an account email, a code) gets it from A.R.A., who searches his email and notes, and carries on; only what nobody can supply comes to him, from you. Each one's progress shows live on his notification strip, and its report goes straight to him on your bot when it ends (you'll see it in this chat), so you don't need to relay it; if he asks, read [WORKER_STATUS]. A code worker's work ships when he says push / ship / merge: [WORKER_SHIP: id] (or all, or any branch name) — the server merges it into main and redeploys if server code changed; never merge by hand. Use them for EVERY task, whatever its length (his standing order, 2026-11-22), so you are always free to talk to him. Only straight answers and seconds-long lookups stay with you.
  - [WORKER_STATUS] — every worker: running, waiting, done, with its current step and GitHub link. [WORKER_STOP: id] — stop one (a GitHub run is cancelled).`;
 
 // Persona jobs (jobProgress.js) share this one board: load the workers, then update it.
 async function kick() { await load(); boardKick(); }
 
-module.exports = { kick, start, stop, ship, recover, statusText, forApp, tag, WORKER_TOOLS, enabled, _setDeps: (x) => { deps = x; list = null; board = undefined; boardLast = 0; }, _list: () => list, _boardText: () => boardText(), logFailure, FAIL_KEY, _tgBoardDeps: tgBoardDeps, parsePlan, percentOf, progressLabel, readPlanComment, PLAN_FILE };
+module.exports = { kick, start, stop, ship, driveIdsIn, fileGrant, MAX_LEGS, recover, statusText, forApp, tag, WORKER_TOOLS, enabled, _setDeps: (x) => { deps = x; list = null; board = undefined; boardLast = 0; }, _list: () => list, _boardText: () => boardText(), logFailure, FAIL_KEY, _tgBoardDeps: tgBoardDeps, parsePlan, percentOf, progressLabel, readPlanComment, PLAN_FILE };

@@ -7,6 +7,13 @@
 # a <!-- worker-result --> marker, which the server polls and sends to Mr. Burrus
 # on J.A.R.V.I.S.'s bot. The server keeps at most 3 of these running.
 #
+# Big jobs (owner, 2026-11-23, after the website rebuild): each run gets up to
+# 170 min; a job bigger than one run ends with CONTINUE (or hits the limit) and the
+# server starts the next run on the same branch and issue, up to max_legs runs.
+# The runner has Chrome, ffmpeg and ImageMagick; big media goes to a GitHub release,
+# not the repo; Drive files named in the task download through the server with a
+# short-lived token (files_token, masked, never in the public issue).
+#
 # Repo setup: secret CLAUDE_CODE_OAUTH_TOKEN (the same one claude.yml uses).
 name: Worker
 run-name: "Worker #${{ github.event.client_payload.worker }} — ${{ github.event.client_payload.title }}"
@@ -18,7 +25,7 @@ concurrency:
 jobs:
   work:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 200
     permissions:
       contents: write
       issues: write
@@ -29,7 +36,19 @@ jobs:
       ISSUE: ${{ github.event.client_payload.issue }}
       BRANCH: ${{ github.event.client_payload.branch }}
       WORKER: ${{ github.event.client_payload.worker }}
+      LEG: ${{ github.event.client_payload.leg || 1 }}
+      MAX_LEGS: ${{ github.event.client_payload.max_legs || 1 }}
+      EMPIRE_URL: ${{ github.event.client_payload.server_url }}
     steps:
+      - name: Keep the file token secret
+        run: |
+          t=$(jq -r '.client_payload.files_token // ""' "$GITHUB_EVENT_PATH")
+          if [ -n "$t" ]; then echo "::add-mask::$t"; echo "WORKER_FILES_TOKEN=$t" >> "$GITHUB_ENV"; fi
+      - name: Tools (ffmpeg, ImageMagick; Chrome is on the runner already)
+        run: |
+          sudo apt-get update -qq >/dev/null 2>&1 || true
+          sudo apt-get install -y -qq ffmpeg imagemagick >/dev/null 2>&1 || echo "tool install failed"
+          echo "chrome: $(google-chrome --version 2>/dev/null || echo missing)"; ffmpeg -version 2>/dev/null | head -1
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -47,13 +66,23 @@ jobs:
             git checkout -B "$BRANCH" origin/main
           fi
           (cd server && npm ci --ignore-scripts --no-audit --no-fund >/dev/null 2>&1) || echo "server npm ci failed; tests may not run"
-          gh issue comment "$ISSUE" --repo "$GITHUB_REPOSITORY" --body "Worker #$WORKER started on branch \`$BRANCH\` — [run]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)"
+          gh issue comment "$ISSUE" --repo "$GITHUB_REPOSITORY" --body "Worker #$WORKER started run $LEG of up to $MAX_LEGS on branch \`$BRANCH\` — [run]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)"
+          # A continuation picks the plan back up from the issue (the file is gitignored).
+          if [ "$LEG" != "1" ]; then
+            gh api "repos/$GITHUB_REPOSITORY/issues/$ISSUE/comments?per_page=100" -q '[.[] | select(.body | startswith("<!-- worker-plan -->"))] | last | .body // ""' | sed '1d' > .worker-plan.md || true
+            gh api "repos/$GITHUB_REPOSITORY/issues/$ISSUE/comments?per_page=100" -q '[.[] | select(.body | startswith("<!-- worker-result"))] | map(.body) | join("\n\n---\n\n")' > /tmp/earlier.md || true
+          fi
+          date +%s > /tmp/claude-start
           {
             echo 'prompt<<WORKER_TASK_EOF'
             echo "[YOU ARE J.A.R.V.I.S.'S WORKER #$WORKER, on your own GitHub runner. You are on branch $BRANCH of the Empire OS repo, cut from main. The repo's AGENTS.md / CLAUDE.md rules apply.]"
             echo "Do the task below fully. Code: read the real code, change what's needed, run the tests that cover it (node server/scripts/test-*.js), check your work, and COMMIT on this branch (don't push, don't merge, never touch main: the job pushes the branch and Mr. Burrus ships it). Research, checks, writing: do it thoroughly and report with sources; commit only if something in the repo changes."
             echo "PROGRESS (Mr. Burrus watches it live as a percentage): before anything else, write your plan of 3 to 10 numbered steps to the file .worker-plan.md at the root of the repo, one per line, exactly like \"1. [ ] Read the worker code\" — short step names (under 60 characters) he can read on a phone. The moment you finish a step, change its [ ] to [x] in that file (one at a time as you go, never all at the end). If the plan changes, rewrite the file and keep the finished steps ticked. Don't commit it (it is gitignored)."
-            echo "Your final message is your report to Mr. Burrus (he reads it on Telegram): first line DONE, PARTLY DONE or FAILED; then what you did, the proof (test output, sources), anything unfinished or that needs his decision. Short and plain."
+            echo "BIG JOBS: you have about 2 h 45 min in this run (run $LEG of up to $MAX_LEGS). Work in steps and commit after each finished step. If the whole job can't fit, stop at a clean point with everything committed and make the FIRST line of your report CONTINUE, then exactly what's left: a fresh run on this branch picks up from your commits and .worker-plan.md. Runs left after this one: $((MAX_LEGS - LEG))."
+            echo "TOOLS on this runner: Bash, Python 3, Node 20 (server/node_modules has ws for the DevTools protocol), google-chrome (headless: --dump-dom, --screenshot, or --remote-debugging-port for a real browser session), ffmpeg, ImageMagick (magick/convert), gh CLI with write access to this repo, curl. You can Read images (screenshots) to check visual work. Large media (images, video, anything over ~1 MB) NEVER goes in the repo: put it in a GitHub release (gh release create <tag> / gh release upload <tag> files --clobber) and reference the release download URL; the server only downloads server/ from GitHub, so anything the server must serve lives under server/."
+            if [ -n "$WORKER_FILES_TOKEN" ]; then echo "HIS GOOGLE DRIVE: the Drive files named in the task download through his server: curl -fsSL -H \"x-worker-token: \$WORKER_FILES_TOKEN\" \"\$EMPIRE_URL/worker-files/<drive file id>\" -o <file> (Google Docs/Sheets/Slides come as PDF; ?format=text for plain text). Never print the token."; fi
+            echo "Your final message is your report to Mr. Burrus (he reads it on Telegram): first line DONE, PARTLY DONE, FAILED or CONTINUE; then what you did, the proof (test output, sources, links), anything unfinished or that needs his decision. Short and plain."
+            if [ -s /tmp/earlier.md ]; then echo; echo "THIS IS RUN $LEG: earlier runs already did part of it (their commits are on this branch). Their reports:"; cat /tmp/earlier.md | head -c 15000; echo; echo "Carry on from where they stopped; don't redo finished steps."; fi
             echo
             echo "TASK:"
             gh issue view "$ISSUE" --repo "$GITHUB_REPOSITORY" --json body -q .body
@@ -81,6 +110,7 @@ jobs:
           ' >/dev/null 2>&1 &
       - id: claude
         uses: anthropics/claude-code-action@v1
+        timeout-minutes: 170
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ github.token }}
@@ -105,11 +135,18 @@ jobs:
             secs=$(jq -r '[.[] | select(.type == "result")] | last | ((.duration_ms // 0) / 1000 | floor)' "$LOG")
           fi
           status=done; [ "$OUTCOME" = "success" ] || status=failed
+          # A job too big for one run: CONTINUE, or it ran into the run's time limit.
+          ran=$(( $(date +%s) - $(cat /tmp/claude-start 2>/dev/null || date +%s) ))
+          wants=no
+          if [ "$OUTCOME" = "success" ] && printf '%s' "$result" | head -1 | grep -qi '^\**CONTINUE'; then wants=yes; fi
+          if [ "$OUTCOME" != "success" ] && [ "$ran" -ge 9900 ]; then wants=yes; result="CONTINUE — this run hit its time limit after $((ran / 60)) min; the work so far is committed on the branch.
+          $result"; fi
+          if [ "$wants" = yes ]; then if [ "$LEG" -lt "$MAX_LEGS" ]; then status=continue; else status=done; fi; fi
           {
-            echo "<!-- worker-result status=$status -->"
-            echo "**Worker #$WORKER — $status** after ${secs}s · branch: $pushed · [run]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)"
+            echo "<!-- worker-result status=$status leg=$LEG -->"
+            echo "**Worker #$WORKER — $status** (run $LEG of up to $MAX_LEGS) after ${secs}s · branch: $pushed · [run]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)"
             echo
             printf '%s\n' "$result" | head -c 60000
           } > result.md
           gh issue comment "$ISSUE" --repo "$GITHUB_REPOSITORY" --body-file result.md
-          gh issue close "$ISSUE" --repo "$GITHUB_REPOSITORY" >/dev/null || true
+          [ "$status" = continue ] || gh issue close "$ISSUE" --repo "$GITHUB_REPOSITORY" >/dev/null || true

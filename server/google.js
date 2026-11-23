@@ -610,8 +610,25 @@ async function driveDownloadTo(fileId, destPath, maxBytes) {
   return meta.name || 'video';
 }
 
+// A Drive file as a web stream, for a worker's download (routes in index.js:
+// /worker-files). Google Docs / Sheets / Slides are exported (PDF, or plain text with
+// format=text); anything else comes as stored.
+async function driveStream(fileId, { format = '' } = {}) {
+  const token = await accessToken();
+  if (!token) throw new Error('google not linked');
+  const meta = await gapi(`/drive/v3/files/${encodeURIComponent(fileId)}`, { query: { fields: 'name,size,mimeType', supportsAllDrives: true } });
+  const native = /^application\/vnd\.google-apps\./.test(meta.mimeType || '');
+  const exportMime = format === 'text' ? (/spreadsheet/.test(meta.mimeType) ? 'text/csv' : 'text/plain') : 'application/pdf';
+  const url = native
+    ? `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}/export?mimeType=${encodeURIComponent(exportMime)}`
+    : `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media&supportsAllDrives=true`;
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  if (!res.ok) throw new Error(`google ${res.status}: ${(await res.text()).slice(0, 160)}`);
+  return { body: res.body, name: meta.name || fileId, mime: native ? exportMime : (meta.mimeType || 'application/octet-stream'), size: native ? null : Number(meta.size) || null };
+}
+
 module.exports = {
-  driveUploadFile, driveDownloadTo, driveFolderAudio,
+  driveUploadFile, driveDownloadTo, driveStream, driveFolderAudio,
   calendarFind, calendarUpdate, driveMoveNote,
   accessToken, googleLinked, googleStatus, readDriveNote, saveDriveNote, gmailSend,
   gmailList, gmailRead, calendarList, calendarCreate, calendarDelete,

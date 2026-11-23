@@ -72,6 +72,22 @@ app.get('/mem0/status', auth, async (req, res) => {
 app.use('/telegram', express.json({ limit: '1mb' }), require('./routes/telegram'));
 // The website desk's pages (server/siteDesk.js): public, since the business owners open them.
 app.use('/sites', require('./routes/sites'));
+// A code worker (on its GitHub runner) downloading a Drive file its task names:
+// token from workers.fileGrant (only that worker, only those files, hours not days).
+app.get('/worker-files/:id', async (req, res) => {
+  const id = String(req.params.id || '');
+  try {
+    if (!/^[\w-]{20,}$/.test(id) || !(await require('./workers').fileGrant(String(req.get('x-worker-token') || ''), id))) return res.status(403).json({ error: 'no access to that file' });
+    const f = await require('./google').driveStream(id, { format: String(req.query.format || '') });
+    res.set({ 'Content-Type': f.mime, 'Content-Disposition': `attachment; filename="${String(f.name).replace(/[^\w. -]/g, '_')}"`, 'Cache-Control': 'no-store' });
+    if (f.size) res.set('Content-Length', String(f.size));
+    const { Readable } = require('stream');
+    Readable.fromWeb(f.body).on('error', (e) => { console.error(`workers failed: file ${id}: ${e.message}`); res.destroy(e); }).pipe(res);
+  } catch (e) {
+    console.error(`workers failed: file ${id}: ${e.message}`);
+    if (!res.headersSent) res.status(502).json({ error: e.message });
+  }
+});
 // His own website, "Welcome to The Empire" (server/site-empire, rebuilt from his Canva design): public.
 app.use('/empire', require('./routes/empireSite').router);
 setTimeout(() => require('./routes/empireSite').prewarm(), 3 * 60e3).unref();
