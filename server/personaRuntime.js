@@ -1281,6 +1281,43 @@ async function saveMessage(persona, role, content) {
 
 // --- the turn -------------------------------------------------------
 
+// Runs the fixed new-venture order for his own message. Same message not twice within 10 min.
+const ventureSeen = new Map();
+async function ventureStep(persona, userText, { given, resumes, queue }, sink) {
+  const V = require('./venture');
+  const text = String(userText || '');
+  if (!V.enabled() || given != null || resumes || queue || /^\[(SENT ON YOUR OWN|The server restarted|HE IS REPLYING TO)/.test(text)) return '';
+  if (!V.detectVenture(text)) return '';
+  const key = text.toLowerCase().replace(/\W+/g, ' ').trim().slice(0, 200);
+  const t = ventureSeen.get(key);
+  if (t && Date.now() - t < 600000) return '';
+  ventureSeen.set(key, Date.now());
+  try {
+    const r = await require('./jobProgress').run(persona, 'New venture', ['S.A.G.E. research', 'A.T.L.A.S. business + targets', 'Lane owners', 'Report back'], async (job) => {
+      const before = new Map((await syncedRows('business_targets').catch(() => [])).map((x) => [String(x.business || '').toLowerCase(), JSON.stringify(x)]));
+      const out = await V.runVenture(text, {
+        asker: persona,
+        relay: (id, message) => relayToPersona(id, message, { from: persona, depth: 1, sink, asked: text, chain: [persona] }),
+        businesses: async () => {
+          const rows = await syncedRows('business_targets');
+          const fresh = rows.filter((x) => x.business && before.get(String(x.business).toLowerCase()) !== JSON.stringify(x));
+          return fresh.length ? fresh.map((x) => x.business).join(', ') : null;
+        },
+        step: (n) => { try { job.step(['S.A.G.E. research', 'A.T.L.A.S. business + targets', 'Lane owners'][n - 1]); } catch {} },
+      });
+      try { job.step('Report back'); } catch {}
+      return out;
+    });
+    sink.notes.push(`New venture ran in order: S.A.G.E.${r.money ? ' → A.T.L.A.S.' : ''} → ${r.lanes.map((id) => (ROSTER[id] || {}).name || id).join(', ') || 'no lane owners'}`);
+    return V.resultBlock(r, persona);
+  } catch (e) {
+    console.error(`venture failed: ${e.message}`);
+    sink.warnings.push(`new venture pipeline failed: ${e.message.slice(0, 200)}`);
+    return '';
+  }
+}
+
+
 // Run one turn for `personaId` on `userText`. `deliver(text)` sends a message to
 // the owner — used for the final reply and for background job results. Returns
 // { text, effects }. `reply`: J.A.R.V.I.S.'s engine already wrote the first answer
@@ -1347,6 +1384,10 @@ async function runPersonaTurn(personaId, userText, deliver, { reply: given, resu
     }
     return chatAs(p.api, p.model, sys, msgs, { maxTokens: 4000, fallback: persona !== 'ara' });
   };
+  // NEW VENTURE (owner's standing order, 2026-11-23): "I want to start …" runs S.A.G.E. → A.T.L.A.S. → lane
+  // owners in code before the asked persona answers; the combined result rides into this turn (server/venture.js).
+  const ventureOut = await ventureStep(persona, userText, { given, resumes, queue }, sink);
+  if (ventureOut) messages[messages.length - 1] = { role: 'user', content: `${messages[messages.length - 1].content}\n\n${ventureOut}` };
   let reply = await brain(messages);
   const replies = [reply];
   const looked = [];
