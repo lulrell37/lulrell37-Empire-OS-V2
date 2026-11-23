@@ -89,7 +89,7 @@ function chunk(text, max = 3900) {
 // Retries for Telegram's blips (see tg() below): 3 tries, ~1s then ~2.5s apart.
 const TG_TRIES = 3;
 // editMessageText is safe too: editing the same message twice lands the same text.
-const SAFE_METHODS = new Set(['getFile', 'getMe', 'getWebhookInfo', 'sendChatAction', 'setWebhook', 'answerCallbackQuery', 'editMessageText']);
+const SAFE_METHODS = new Set(['getFile', 'getMe', 'getWebhookInfo', 'sendChatAction', 'setWebhook', 'answerCallbackQuery', 'editMessageText', 'pinChatMessage', 'unpinChatMessage']);
 const retryDelay = (attempt) => [1000, 2500, 5000][attempt] || 5000;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -159,6 +159,11 @@ function makeBot(personaId, token) {
       throw e;
     }
   }
+
+  // Pin / unpin one message in a chat (J.A.R.V.I.S.'s live worker board). Pinning is
+  // silent unless opts say otherwise; pinning twice or unpinning twice is harmless.
+  const pinChatMessage = (chatId, messageId, opts = {}) => tg('pinChatMessage', { chat_id: chatId, message_id: messageId, disable_notification: true, ...opts });
+  const unpinChatMessage = (chatId, messageId) => tg('unpinChatMessage', { chat_id: chatId, message_id: messageId });
 
   // Photo / document / video / audio. `src` is a URL or a Buffer. A URL Telegram
   // can't fetch itself (or won't take as that type) is downloaded here and
@@ -236,7 +241,7 @@ function makeBot(personaId, token) {
   return {
     personaId, token, secret,
     isConfigured: () => !!(API && OWNER_ID),
-    tg, sendMessage, editMessageText, sendFile, sendVoice, sendChatAction, downloadFile, setWebhook,
+    tg, sendMessage, editMessageText, pinChatMessage, unpinChatMessage, sendFile, sendVoice, sendChatAction, downloadFile, setWebhook,
     getMe: () => tg('getMe'),
     getWebhookInfo: () => tg('getWebhookInfo'),
   };

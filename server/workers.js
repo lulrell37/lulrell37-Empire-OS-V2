@@ -420,6 +420,8 @@ const BOARD_KEY = 'workers_tg_board';
 const BOARD_GAP_MS = 10e3;
 const BOARD_REFRESH_MS = 60e3; // keeps the minutes current between steps
 const boardEnabled = () => String(process.env.WORKER_TG_BOARD || '').toLowerCase() !== 'off';
+const pinEnabled = () => String(process.env.WORKER_TG_PIN || '').toLowerCase() !== 'off'; // WORKER_TG_PIN=off: never pin the board
+const PIN_TRIES = 3; // a pin that keeps failing is given up on, not retried on every edit
 
 function tgBoardDeps() {
   const pick = () => {
@@ -433,6 +435,8 @@ function tgBoardDeps() {
     ready: () => { try { pick(); return true; } catch { return false; } }, // no bot (dev): no board, no noise
     send: async (text) => { const { tg, bot } = pick(); const m = await bot.tg('sendMessage', { chat_id: tg.OWNER_ID, text, disable_notification: true }); return m.message_id; },
     edit: async (id, text) => { const { tg, bot } = pick(); await bot.editMessageText(tg.OWNER_ID, id, text); },
+    pin: async (id) => { const { tg, bot } = pick(); await bot.pinChatMessage(tg.OWNER_ID, id); },
+    unpin: async (id) => { const { tg, bot } = pick(); await bot.unpinChatMessage(tg.OWNER_ID, id); },
     log: async (text) => { const { tg, persona } = pick(); await tg.logOwn(persona, tg.OWNER_ID, text); },
   };
 }
@@ -471,6 +475,22 @@ async function loadBoard() {
   if (board && !board.messageId) board = null;
   return board;
 }
+// Pin / unpin the board message. Never throws: a failure is logged for the sentinel
+// and the board carries on. `board.pinned` is saved with the id, so a restart or an
+// edit never pins twice.
+async function boardPin(B) {
+  if (!board || board.pinned || !pinEnabled() || !B.pin || (board.pinTries || 0) >= PIN_TRIES) return;
+  try { await B.pin(board.messageId); board.pinned = true; } catch (e) {
+    board.pinTries = (board.pinTries || 0) + 1;
+    console.error(`workers failed: telegram board pin: ${e.message}`);
+  }
+}
+async function boardUnpin(B, b) {
+  if (!b || !b.pinned || !pinEnabled() || !B.unpin) return;
+  try { await B.unpin(b.messageId); } catch (e) {
+    if (!/not found|not pinned|can't be edited/i.test(e.message)) console.error(`workers failed: telegram board pin: unpin: ${e.message}`);
+  }
+}
 const saveBoard = () => setSetting(BOARD_KEY, JSON.stringify(board || null));
 
 // Every state change kicks the board; edits wait out the 10 s gap.
@@ -496,17 +516,19 @@ async function boardTick() {
     if (!board) {
       const messageId = await B.send(text);
       board = { messageId, text, openedAt: Date.now() };
+      await boardPin(B);
       await saveBoard();
       const first = [...[...running(), ...queued()].map((w) => `${w.slot ? `worker ${w.slot}` : 'a waiting worker'} "${w.title}"`), ...require('./jobProgress').live().map((j) => `${j.persona} job "${j.title}"`)].join(', ');
       Promise.resolve(B.log(`[J.A.R.V.I.S.'s live worker board posted (${first}); it updates in place as they work]`)).catch(() => {});
     } else {
       try { await B.edit(board.messageId, text); } catch (e) {
         // Deleted by him, or too old to edit: start a fresh board next time.
-        if (/not found|can't be edited|cannot be edited/i.test(e.message)) { board = null; await saveBoard(); boardAgain = true; return; }
+        if (/not found|can't be edited|cannot be edited/i.test(e.message)) { const old = board; board = null; await boardUnpin(B, old); await saveBoard(); boardAgain = true; return; }
         throw e;
       }
       board.text = text;
-      if (!active) board = null; // the all-done edit: this board is finished
+      if (!active) { await boardUnpin(B, board); board = null; }
+      else await boardPin(B); // the all-done edit: this board is finished
       await saveBoard();
     }
   } catch (e) {
