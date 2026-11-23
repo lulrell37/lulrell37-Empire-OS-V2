@@ -3,8 +3,9 @@
 const Module = require('module');
 const assert = require('assert');
 const woke = [];
+let busy = false;
 const stubs = {
-  './jarvisEngine': { enabled: () => true, isBusy: () => false },
+  './jarvisEngine': { enabled: () => true, isBusy: () => busy },
   './routes/telegram': { jarvisOutOfBand: async (t, o) => { woke.push({ t, o }); return true; } },
 };
 const load = Module._load;
@@ -17,6 +18,13 @@ const R = require('../redeploy');
   assert.ok(R.wakeJarvis({ by: 'app' }, 'x'));
   assert.strictEqual(R.wakeJarvis({ by: 'ara' }, 'x'), false, 'her redeploy has no J.A.R.V.I.S. work waiting');
   assert.strictEqual(R.wakeJarvis(null, 'x'), false, 'a crash restart is not a redeploy');
+  assert.strictEqual(R.wakeJarvis({ by: 'feature' }, 'x'), false, 'an automatic feature redeploy: the persona answers, not him');
+  assert.strictEqual(R.wakeJarvis({ by: 'autofix' }, 'x'), false);
+  // A cut-off turn already resuming → no second wake-up turn on top of it.
+  busy = true; const n = woke.length;
+  R.wakeJarvis({ by: 'jarvis' }, 'x');
+  assert.strictEqual(woke.length, n, 'no wake while his resumed turn runs');
+  busy = false;
   assert.ok(R.WAKE_QUIET.test('NOTHING') && R.WAKE_QUIET.test(' nothing. ') && !R.WAKE_QUIET.test('Nothing was waiting, but…'));
   global.setTimeout = realTimeout;
   console.log('redeploy wake: all checks passed');

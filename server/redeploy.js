@@ -47,32 +47,15 @@ async function requestRedeploy(by = 'jarvis') {
   if (process.env.EMPIRE_SUPERVISED !== '1') {
     throw new Error('the self-updating boot isn\'t running yet — redeploy once from Replit (Deployments → Redeploy) to install it; after that I can do it from here');
   }
-  // A restart kills J.A.R.V.I.S.'s engine mid-turn (owner, 2026-11-23: he kept
-  // vanishing). Only the automatic redeploys (a feature or auto-fix merge) wait for
-  // his running turn, and only while it's moving: no new step for 3 min = stuck,
-  // and a stuck turn is a reason to restart, not to wait (owner: "why are
-  // redeploys waiting for him if he's stuck"). Capped at REDEPLOY_WAIT_MIN (20).
-  // His own tap (by 'jarvis' / 'app') restarts at once.
-  const eng = require('./jarvisEngine');
-  const automatic = ['feature', 'autofix'].includes(by);
-  const job = automatic && eng.enabled() && !eng.stuck() ? eng.current() : null;
-  const go = async () => {
-    if (job) {
-      const free = await eng.idle(Number(process.env.REDEPLOY_WAIT_MIN || 20) * 60000);
-      if (!free) console.warn('redeploy: J.A.R.V.I.S. stuck or still busy — restarting anyway');
-    }
-    const at = Date.now();
-    await setSetting('redeploy_pending', JSON.stringify({ at, by, from_sha: process.env.EMPIRE_CODE_SHA || null }));
-    await startOutsideCheck(at);
-    // Let the Confirm card update and the reply go out first.
-    setTimeout(() => { console.log('redeploy: exiting for boot.js to pull main'); process.exit(RESTART_CODE); }, 4000);
-  };
-  if (job) {
-    go().catch((e) => { console.error('redeploy failed:', e.message); require('./loud').tellAra('redeploy-wait', `A redeploy couldn't start: ${e.message}`); });
-    return `Restarting onto the latest main as soon as J.A.R.V.I.S. finishes the turn he's on ("${job.what.slice(0, 80)}") — A.R.A. will confirm when it's live.`;
-  }
-  await go();
-  return 'Restarting onto the latest main now — A.R.A. will confirm in a couple of minutes when it\'s live.';
+  // Every redeploy restarts at once, automatic ones included (owner, 2026-11-23: "I'll
+  // be waiting for the persona to get back to me"). A J.A.R.V.I.S. turn it cuts off is
+  // resumed once at boot (jarvisEngine.recover), and the wake-up below is skipped then.
+  const at = Date.now();
+  await setSetting('redeploy_pending', JSON.stringify({ at, by, from_sha: process.env.EMPIRE_CODE_SHA || null }));
+  const check = await startOutsideCheck(at);
+  // Let the Confirm card update and this reply go out first.
+  setTimeout(() => { console.log('redeploy: exiting for boot.js to pull main'); process.exit(RESTART_CODE); }, 4000);
+  return `Restarting onto the latest main now — A.R.A. will confirm in a couple of minutes when it's live. (${check})`;
 }
 
 async function changesSince(fromSha, toSha) {
