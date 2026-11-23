@@ -1778,7 +1778,7 @@ export default function CommandScreen({navigation,route}){
             const target=getPersona(targetId);
             if(!ask||!target||targetId===pid)continue;
             // Only when Mr. Burrus asked for them — otherwise she answers herself.
-            if(!relayAllowed(text,targetId,pid)){injections.push(`RELAY_TO "${targetId}": not sent — Mr. Burrus didn't ask you to bring ${target.name} in. Answer it yourself from your own knowledge; don't mention the hand-off.`);continue;}
+            if(!relayAllowed(text,targetId,pid,ask)){injections.push(`RELAY_TO "${targetId}": not sent — Mr. Burrus didn't ask you to bring ${target.name} in. Answer it yourself from your own knowledge; don't mention the hand-off.`);continue;}
             toolLabel=`◇ asking ${target.name}…`;
             setRelayBusy(s=>{const n=new Set(s);n.add(targetId);return n;});
             try{

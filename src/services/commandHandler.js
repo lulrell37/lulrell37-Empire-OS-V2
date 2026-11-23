@@ -1,6 +1,6 @@
 import{rememberCued}from './voiceCues';
 import{voiceToggleAllowed}from '../personas/personas';
-import{addTask,updateTask,completeTask,deleteTask,saveNote,getNote,addRevenue,getTasks,getHudState,updateHudState,setRoutineDone,addRoutineItem,removeRoutineItem,renameRoutineItem,setBatmanDay,getBusinessTargets,setBusinessTarget,setPanelLayout,addExpense,addImportantDate,addLead,updateLead,appendLeadLog,findLead,leadHasContact,pinMemory,unpinMemory,getPinnedMemories,getSetting,setSetting,addContentItem,updateContentItem,deleteContentItem,getContentItems}from './database';
+import{addTask,updateTask,completeTask,deleteTask,saveNote,getNote,addRevenue,getTasks,getHudState,updateHudState,setRoutineDone,addRoutineItem,removeRoutineItem,renameRoutineItem,setBatmanDay,getBusinessTargets,setBusinessTarget,addBusiness,setPanelLayout,addExpense,addImportantDate,addLead,updateLead,appendLeadLog,findLead,leadHasContact,pinMemory,unpinMemory,getPinnedMemories,getSetting,setSetting,addContentItem,updateContentItem,deleteContentItem,getContentItems}from './database';
 
 // Resolve a content-item reference — full id or an 8-char prefix from a listing.
 async function findContentByRef(ref){
@@ -433,6 +433,16 @@ export async function handleCommands(response,personaId,callbacks={}){
       callbacks.onShowDiagram?.();
     }
   }
+  for(const m of allMatches(response,/\[ADD_BUSINESS:\s*([^|\]]+)(?:\|([^|\]]*))?(?:\|([^|\]]*))?(?:\|([^\]]*))?\]/gi)){
+    const monthly=parseFloat(String(m[2]||'').replace(/[^0-9.\-]/g,''));
+    const weekly=parseFloat(String(m[3]||'').replace(/[^0-9.\-]/g,''));
+    const added=await addBusiness(m[1].trim(),isNaN(monthly)?0:monthly,isNaN(weekly)?0:weekly);
+    if(!added){
+      const b=(await getBusinessTargets()).find(x=>x.business.toLowerCase()===m[1].trim().toLowerCase());
+      if(b)await setBusinessTarget(b.business,isNaN(monthly)?b.target:monthly,isNaN(weekly)?b.week_goal:weekly);
+    }
+    hudChanged();
+  }
   for(const m of allMatches(response,/\[SET_TARGET:\s*([^|\]]+)\|([^|\]]+)(?:\|([^\]]+))?\]/gi)){
     const targets=await getBusinessTargets();
     const b=targets.find(x=>x.business.toLowerCase().includes(m[1].trim().toLowerCase()));
@@ -460,7 +470,7 @@ export function stripCommands(text){
     .replace(/\[ROUTINE_ADD:[^\]]*\]/gi,'').replace(/\[ROUTINE_REMOVE:[^\]]*\]/gi,'')
     .replace(/\[ROUTINE_RENAME:[^\]]*\]/gi,'').replace(/\[BATMAN_SET:[^\]]*\]/gi,'')
     .replace(/\[SET_WORD:[^\]]*\]/gi,'').replace(/\[SET_VERSE:[^\]]*\]/gi,'')
-    .replace(/\[SET_FACT:[^\]]*\]/gi,'').replace(/\[SET_TARGET:[^\]]*\]/gi,'')
+    .replace(/\[SET_FACT:[^\]]*\]/gi,'').replace(/\[SET_TARGET:[^\]]*\]/gi,'').replace(/\[ADD_BUSINESS:[^\]]*\]/gi,'')
     .replace(/\[HUD_DETACH:[^\]]*\]/gi,'').replace(/\[HUD_DOCK:[^\]]*\]/gi,'').replace(/\[DIAGRAM_SHOW:[^\]]*\]/gi,'')
     .replace(/\[RELAY_TO:[^\]]*\]/gi,'').replace(/\[SEARCH_WEB:[^\]]*\]/gi,'')
     .replace(/\[COUNCIL_IDEA:[^\]]*\]/gi,'').replace(/\[COUNCIL_IDEAS_CLEAR\]/gi,'')

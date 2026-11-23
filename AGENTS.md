@@ -428,30 +428,11 @@ It opens with HIS NAME: Tarell Burrus (owner, 2026-11-20; Lulrell/Terrell are mi
 
 How every operation in Empire OS is built, prompts and code alike. A job never stalls waiting on him when a persona (or the code) can supply the next step: an emailed code comes from his Gmail, a design from S.E.L.E.N.E., copy from S.C.R.I.B.E., a login from J.A.R.V.I.S.'s browser, and the job carries on. He is pulled in only for what nobody else can give (a texted code, a phone approval, an ID check, his OK to send/post/buy/delete), and then through A.R.A. In prompts: the KEEP MOVING clause of `INITIATIVE` (both copies; `test-desks.js` fails if they drift). In the relay code: inside a job (a relayed persona, depth 1+) any `[RELAY_TO]` goes through without the top-level gate, up to `MAX_RELAY_DEPTH` (3) hand-offs deep, never back to a persona already on the job (`chain` in `runInjections`/`relayToPersona`). **New code follows it too:** a loop or desk that hits a step another persona or module can do calls it (e.g. `siteLogins.emailCode`, `ensureLogin`) instead of failing to him; it messages him only for what only he can do, from A.R.A.
 
-## Persona hand-offs only on request
+## The Empire works in unison: hand-offs go to the lane owner (owner's standing order, 2026-11-23)
 
-**Except A.R.A.:** she runs the team, so her relays always go through
-(`relayAllowed(text, id, from)` passes when `from === 'ara'`) and her prompt
-carries `ARA_ROUTE` (who owns what — keep `server/personas.js` and
-`src/personas/personas.js` in sync): "make me a logo" goes to S.E.L.E.N.E.,
-"close the gold trade" to T.A.L.O.N., without him naming anyone. Questions and
-opinions she still answers herself unless they need someone's live tools.
+When a topic touches another persona's lane, that persona does its part without him naming them, and each chains the next step (research → S.A.G.E., numbers/targets → A.T.L.A.S., copy → S.C.R.I.B.E., design → S.E.L.E.N.E., clips → R.O.G.U.E., code → J.A.R.V.I.S., …: `ARA_ROUTE`). **Gate:** `relayAllowed(userText, id, from, relayText)` (`server/personas.js`, mirrored in `src/personas/personas.js`, keep in sync; `test-relay-lanes.js` fails if `LANES` drifts) lets a relay through when it comes from A.R.A., or the target owns the lane of his words or of the relay's own text (`LANES`, keywords per persona), or he named the target / asked for a hand-off / gave a task as before. A message that touches no lane and names no one still stays in the persona's own lane (opinions, quick questions). **Limits unchanged:** `MAX_RELAY_DEPTH` (3), never back to a persona already on the job (`chain`), and anything that sends, posts, buys, deletes or trades still needs his OK. The THE EMPIRE block (`personaRuntime.js`, app `buildSys` in `aiService.js`) and `INITIATIVE` say this; the rule is pinned in `PINNED`.
 
-For everyone else, a persona's `[RELAY_TO]` only goes through when the owner's message asks for it:
-it names the target persona or plainly asks for a hand-off ("check with", "run
-it by", "loop in"…). `relayAllowed()` in `server/personas.js` and
-`src/personas/personas.js` (keep in sync) gates it on both the server (Telegram)
-and in the app; a blocked relay tells the persona to answer it herself. Code-level
-hand-offs he set up (W.I.R.E.'s 8:30 desk → T.A.L.O.N., `[DELEGATE]`, the
-council) aren't affected.
-
-A relay can carry an order, not just a question: "tell J.A.R.V.I.S. to…", "have
-S.E.L.E.N.E. make…" → `[RELAY_TO: id | the full instruction]`. On Telegram the
-relayed persona gets A.R.A.'s shared write set (`SHARED_OPS` in
-`server/personaRuntime.js`: tasks, money, dates, HUD, leads) on top of its own
-tools — `applyEffects(…, { full: true })` — and any image/diagram/file it makes
-goes out on the asking bot (`sink.media`). T.A.L.O.N. relayed can run
-`[TALON_RUN]` / `[TALON_UPDATE]` himself.
+**New ventures:** when he says he is starting a new business, channel or income stream, S.A.G.E. researches what it earns, hands it to A.T.L.A.S., and A.T.L.A.S. adds it with `[ADD_BUSINESS: name | monthly | weekly | note]` (server `personaTools.js`, app `commandHandler.js`; `SET_TARGET` only edits existing lines; `NEW_VENTURE` in `relayAllowed` lets those two relays through). A.R.A.'s calendar and email stay hers alone, and relays inside a job still skip the top-level gate.
 
 ## J.A.R.V.I.S. runs on Claude Code (`server/jarvisEngine.js`)
 

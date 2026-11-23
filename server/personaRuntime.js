@@ -322,7 +322,7 @@ const TG_FRAME = `[TELEGRAM: you are talking to Mr. Burrus over Telegram (text),
 const SHARED_OPS = ` TASKS, MONEY, DATES:
  - [ADD_TASK: title | notes | YYYY-MM-DD] (app list) / [CREATE_TASK: title | notes | YYYY-MM-DD] (app + Google Tasks) / [COMPLETE_TASK: name] / [TASK_EDIT: name | new title] / [DELETE_TASK: name] / [READ_TASKS] (app + Google Tasks).
  - [ADD_EXPENSE: amount | category | note] / [EXPENSE_SUMMARY] (this month by category).
- - [ADD_REVENUE: business | amount | income or expense | note] / [SET_TARGET: business | monthly | weekly].
+ - [ADD_REVENUE: business | amount | income or expense | note] / [SET_TARGET: business | monthly | weekly] / [ADD_BUSINESS: name | monthly | weekly | note] (a NEW business or income stream on the list with its targets — SET_TARGET only changes ones already there).
  - [ADD_DATE: label | YYYY-MM-DD | note] / [SET_REMINDER: text | YYYY-MM-DD] (a dated entry on the HUD only — no alert, and NOT his Google Calendar: "put it on my calendar", "add an event", "schedule…" is always [CREATE_EVENT]).
  - [REMIND_ME: what to remind him | YYYY-MM-DD HH:MM] — a real push notification to his phone (plus a ping here) at that Eastern time, 24h clock; "+20m" / "+2h" also work. Use this whenever he says "remind me…". Work out the absolute time from the current time in your context.
  THE HUD (edits land in the app on its next sync):
@@ -523,7 +523,7 @@ function personaSystemPrompt(personaId, ctx, gs, custom, mem) {
     memoryLine(),
     genericTools(personaId),
     googleLine(gs),
-    `[THE EMPIRE — the other personas. Only when Mr. Burrus asks you to bring someone in — he names them or says to check with / run it by someone — do you use [RELAY_TO]. Otherwise answer it yourself from your own knowledge and lane, even if it's someone else's specialty (asked about trading, give your own take — don't go get T.A.L.O.N.). This overrides any hand-off instruction elsewhere in your prompt.\n${rosterLines()}\n]`,
+    `[THE EMPIRE — the other personas. The Empire works in unison (Mr. Burrus's standing order, 2026-11-23): when what he says touches another persona's lane, that persona does its part without him naming anyone. Hand the piece to whoever owns it with [RELAY_TO: id | exactly what you need, every detail he gave] and chain the next step: research → S.A.G.E., numbers, pricing and targets → A.T.L.A.S., copy and scripts → S.C.R.I.B.E., design and brand → S.E.L.E.N.E., clips and edits → R.O.G.U.E., code → J.A.R.V.I.S., leads → S.C.O.U.T., trades → T.A.L.O.N., email and calendar → A.R.A. (WHO OWNS WHAT: ${ARA_ROUTE}). NEW VENTURE: when he says he is starting a new business, channel or income stream, S.A.G.E. researches what it earns, hands that to A.T.L.A.S., and A.T.L.A.S. adds it with [ADD_BUSINESS: name | monthly | weekly | note] and sets its targets. Anything that sends, posts, buys, deletes or trades still waits for his OK. A plain question or an opinion inside your own lane you just answer yourself. This overrides any hand-off instruction elsewhere in your prompt.\n${rosterLines()}\n]`,
     faithBlock(personaId),
     accountFact(personaId, ctx),
     `[LIVE CONTEXT:\n${contextBlock(ctx)}\n]`,
@@ -732,7 +732,7 @@ async function runInjections(text, persona = 'ara', { convo = '', depth = 0, sin
         if (depth >= MAX_RELAY_DEPTH) return `RELAY_TO "${ref}": this job is already ${depth} hand-offs deep — finish it with what you have and say what's still open.`;
         if (chain.includes(id)) return `RELAY_TO "${ref}": ${ROSTER[id].name} is already on this job (they handed it to you) — finish your part and give it back in your answer.`;
         // Top level: questions and opinions stay in your lane unless he asked. Inside a job (depth 1+), the next step goes to whoever can do it.
-        if (depth === 0 && !relayAllowed(asked, id, persona)) return `RELAY_TO "${ref}": not sent — Mr. Burrus didn't ask you to bring ${ROSTER[id].name} in. Answer it yourself from your own knowledge; don't mention the hand-off.`;
+        if (depth === 0 && !relayAllowed(asked, id, persona, msg)) return `RELAY_TO "${ref}": not sent — Mr. Burrus didn't ask you to bring ${ROSTER[id].name} in. Answer it yourself from your own knowledge; don't mention the hand-off.`;
         // Shown in the Empire group chat as it happens (nothing when no group is set).
         const gc = require('./groupChat');
         await gc.relayAsked(persona, id, msg);
