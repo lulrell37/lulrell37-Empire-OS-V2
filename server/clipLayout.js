@@ -283,9 +283,9 @@ async function clipWords(src, start, end, dir, tag, context = '') {
 
 // --- the render ------------------------------------------------------------------
 
-// Playback speed of finished clips: app_settings.rogue_clip_speed, then env CLIP_SPEED, default 1.1,
+// Playback speed of finished clips: app_settings.rogue_clip_speed, then env CLIP_SPEED, default 1.5,
 // clamped 1.0-1.5 (1.0 = off). Clip ranges reported to him stay in the source video's own time.
-const DEFAULT_SPEED = 1.1;
+const DEFAULT_SPEED = 1.5;
 function parseSpeed(...vals) {
   for (const v of vals) {
     if (v === undefined || v === null || String(v).trim() === '') continue;
@@ -294,10 +294,13 @@ function parseSpeed(...vals) {
   }
   return DEFAULT_SPEED;
 }
+// 1.1 was the old default, so a stored 1.1 is almost certainly just that and is ignored (2026-11-23,
+// default now 1.5); any other stored value (1.0 = off, 1.25...) is a real choice and still wins.
+const legacySpeed = (v) => (Math.abs(Number(v) - 1.1) < 1e-9 ? '' : v);
 async function clipSpeed() {
   let stored;
   try { stored = await require('./syncStore').getSetting('rogue_clip_speed', ''); } catch { /* no db: env/default */ }
-  return parseSpeed(stored, process.env.CLIP_SPEED);
+  return parseSpeed(legacySpeed(stored), process.env.CLIP_SPEED);
 }
 
 // Cut [start,end] of src to dest as a finished 1080x1920 clip. pick = { hook, keywords }.
@@ -337,4 +340,4 @@ async function renderClip({ src, start, end, dest, dir, pick = {}, size, context
   return { layout: lay.layout, captions: words.length > 0, notes };
 }
 
-module.exports = { gridAss, parseCheck, adjustBox, renderClip, layoutGraph, parseLayout, buildAss, parseSpeed, clipSpeed, phrases, videoSize, ensureFont };
+module.exports = { gridAss, parseCheck, adjustBox, renderClip, layoutGraph, parseLayout, buildAss, parseSpeed, legacySpeed, clipSpeed, phrases, videoSize, ensureFont };

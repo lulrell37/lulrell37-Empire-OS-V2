@@ -18,6 +18,7 @@ const ffmpegPath = require('ffmpeg-static');
 const { claudeText, transcribeSegments } = require('./llm');
 const signals = require('./clipSignals');
 const layout = require('./clipLayout');
+const judge = require('./clipJudge');
 const LAYOUT_WORDS = { facecam: 'face cam on top, gameplay below', talking: 'vertical crop on the speaker', wide: 'full frame over a blurred background', vertical: 'already vertical' };
 const google = require('./google');
 
@@ -25,6 +26,7 @@ const CHUNK_SEC = 600; // 10 min of 32 kbps mono mp3 ≈ 2.4 MB, far under Whisp
 const MIN_CLIP = 12;
 const MAX_CLIP = 90;
 const MAX_PICKS = 5;
+const MAX_CANDIDATES = 12;   // the picker's longer list; the vision check cuts it to MAX_PICKS
 const TG_VIDEO_MAX = 45 * 1024 * 1024; // Telegram's bot upload cap is 50 MB
 const MAX_BYTES = (parseFloat(process.env.CLIP_SCAN_MAX_GB) || 2) * 1e9;
 const MAX_SEC = (parseFloat(process.env.CLIP_SCAN_MAX_MIN) || 180) * 60;
@@ -306,15 +308,19 @@ async function transcribeVideo(src, dir, opts) {
   return all;
 }
 
-const PICK_SYSTEM = `You are R.O.G.U.E., the Empire's video editor, finding the moments in a long recording that would go viral as vertical short-form clips (Reels / TikTok / Shorts). You get a transcript with [mm:ss] timestamps. Pick the 3 to 5 best self-contained moments: a hook in the first seconds, a complete thought or story or punchline, an emotional or surprising or high-stakes beat, something a stranger would share. Each clip runs ${MIN_CLIP} to ${MAX_CLIP} seconds (ideal 25-60), starts where the thought starts and ends where it lands. Don't overlap clips. Use only timestamps that exist in the transcript. When you're given VIEWER SIGNALS (where real viewers replayed, cited in comments, spammed chat, or the audio jumped), those are the strongest evidence of what people want: start from the strongest of them, find in the transcript where that moment's thought starts and where it lands, and cut that. A signal with nothing worth clipping in the transcript can be passed over, and a moment the signals missed can still be picked if the words clearly carry it. Name the signal in the reason when a pick comes from one. Reply with ONLY a JSON array, best first: [{"start": seconds, "end": seconds, "title": "3-6 word label", "reason": "one line on why it hits", "score": 1-100, "hook": "the line shown at the top of the clip", "keywords": ["2-5 words said in the clip to color"]}]. The HOOK is the most important part: it makes a stranger who has never heard of this person need to see what happens ("Kai went ALL IN on one GTA stock", never "Kai plays GTA"). For each clip write five hooks in your head and give only the strongest: 3-9 words, plain words, no hashtags, no emoji, no quotation marks, never giving away the ending. KEYWORDS are 2-5 single words actually spoken in that clip that carry it (a number, a name, the punchline word). Nothing else.`;
+const PICK_SYSTEM = `You are R.O.G.U.E., the Empire's video editor. You find the FUNNIEST, most entertaining moments in a long recording and cut them as vertical short-form clips (Reels / TikTok / Shorts). People only share and comment on a clip that makes them laugh or react, so a moment that merely reads well in the transcript is NOT enough. You get a transcript with [mm:ss] timestamps and usually VIEWER SIGNALS (where real viewers replayed, cited in comments, spammed chat with laughter like LMAO / KEKW / 💀 / 😂, or the audio jumped).
+The viewer signals are the PRIMARY evidence. Every signal with laughter is a candidate: start from the strongest, laughter-heavy ones first (a chat full of LMAO/KEKW/💀 beats a chat full of W or hype, and a loud audio jump with a laugh beats one without), and use the transcript only to find where the setup starts and where the reaction lands. Signals fire AFTER the funny thing, so the setup is usually 10-30 seconds earlier. A signal with nothing in the transcript can still be a visual gag or a pure reaction, so keep it as a candidate. Add moments the signals missed only when the words clearly carry a punchline or a story with a payoff.
+Return 8 to 12 candidates, best first (they will be re-ranked after a look at the video, so give more rather than fewer). Each one must have: (1) a clear setup and payoff both inside the clip; (2) a reaction peak (laughing, screaming, shock, chat exploding); (3) something a cold viewer who never saw the stream gets with no context; (4) a hook in the first 2 seconds, so start AT or just before the setup, never on dead lead-in; (5) the end shortly after the laugh or reaction (1-3 seconds), never mid-buildup and never lingering after it. Each clip runs ${MIN_CLIP} to ${MAX_CLIP} seconds (ideal 15-45; shorter is funnier if the payoff lands). Don't overlap clips. Use only timestamps that exist in the transcript.
+PENALIZE (score low or leave out): filler and small talk, inside jokes that need the stream's context, long talking with no reaction, a story whose payoff is cut off, pure hype with nothing funny, repeating the same joke twice.
+Reply with ONLY a JSON array, best first: [{"start": seconds, "end": seconds, "title": "3-6 word label", "reason": "one line: what the setup and payoff are, and which signal backs it", "score": 1-100 (how likely a stranger laughs and shares), "hook": "the line shown at the top of the clip", "keywords": ["2-5 words said in the clip to color"]}]. The HOOK is the most important text: it makes a stranger need to see what happens ("Kai went ALL IN on one GTA stock", never "Kai plays GTA"). For each clip write five hooks in your head and give only the strongest: 3-9 words, plain words, no hashtags, no emoji, no quotation marks, never giving away the ending. KEYWORDS are 2-5 single words actually spoken in that clip that carry it (a number, a name, the punchline word). Nothing else.`;
 
 async function pickMoments(segments, focus, total, hot = []) {
   let text = segments.map((s) => `[${mmss(s.start)}] ${s.text.trim()}`).join('\n');
   if (text.length > TRANSCRIPT_CHARS) text = text.slice(0, TRANSCRIPT_CHARS) + '\n[transcript truncated]';
   const sig = hot.length ? `VIEWER SIGNALS, strongest first (window, strength 0-100, evidence):\n${hot.map((h) => `- ${mmss(h.start)}${h.end > h.start ? `–${mmss(h.end)}` : ''} · ${h.score} · ${h.why}`).join('\n')}\n\n` : '';
   const prompt = `${focus ? `FOCUS: ${focus}. Only pick moments that fit this.\n\n` : ''}Recording length ${mmss(total)}.\n\n${sig}TRANSCRIPT:\n${text}`;
-  const raw = await claudeText(PICK_SYSTEM, prompt, { maxTokens: 1500 });
-  return sanitizePicks(parsePicks(raw), total);
+  const raw = await claudeText(PICK_SYSTEM, prompt, { maxTokens: 3500 });
+  return sanitizePicks(parsePicks(raw), total, MAX_CANDIDATES);
 }
 
 function parsePicks(raw) {
@@ -326,7 +332,7 @@ function parsePicks(raw) {
 }
 
 // Clamp to the recording and to clip length, drop overlaps, keep the best few in rank order.
-function sanitizePicks(arr, total) {
+function sanitizePicks(arr, total, limit = MAX_PICKS) {
   const out = [];
   const ranked = arr
     .map((p) => ({ start: Number(p.start), end: Number(p.end), title: String(p.title || '').slice(0, 60), reason: String(p.reason || '').slice(0, 240), score: Number(p.score) || 0,
@@ -341,7 +347,7 @@ function sanitizePicks(arr, total) {
     if (p.end - p.start < MIN_CLIP) continue;
     if (out.some((q) => p.start < q.end && q.start < p.end)) continue;
     out.push(p);
-    if (out.length >= MAX_PICKS) break;
+    if (out.length >= limit) break;
   }
   return out;
 }
@@ -408,11 +414,45 @@ async function clipScan(url, focus = '', { onProgress = () => {}, title = '' } =
 
     onProgress('picking');
     jobs.step(jid, 'Pick moments');
-    const picks = await pickMoments(segments, String(focus || '').trim(), total, sig.hot);
+    const cands = await pickMoments(segments, String(focus || '').trim(), total, sig.hot);
+    // Viewer hot spots the model passed over come back as candidates (not under a focus: they can't be matched to it).
+    if (!String(focus || '').trim()) cands.push(...judge.seedCandidates(sig.hot, cands, segments, total).slice(0, Math.max(0, MAX_CANDIDATES - cands.length)));
+    // Second opinion: frames of the top candidates through the vision chain (CLIP_VISION=off skips it).
+    const sectionCache = new Map();   // "start-end" -> { file, offset }, reused by the render below
+    let picks = cands.slice(0, MAX_PICKS);
+    if (cands.length && String(process.env.CLIP_VISION || '').toLowerCase() !== 'off') {
+      onProgress('checking the top moments');
+      jobs.step(jid, 'Check moments');
+      cands.sort((a, b) => b.score - a.score);
+      const judgements = cands.map(() => null);
+      let failed = '';
+      for (let i = 0; i < Math.min(cands.length, judge.VISION_MAX) && !failed.startsWith('stop'); i++) {
+        const c = cands[i];
+        try {
+          let file = src, from = c.start;
+          if (sections) {
+            const sec = await downloadSection(String(url).trim(), c.start + offset, c.end + offset, dir, `cand${i + 1}`);
+            sectionCache.set(`${c.start}-${c.end}`, sec);
+            file = sec.file; from = sec.offset;
+          }
+          const words = segments.filter((x) => x.end > c.start && x.start < c.end).map((x) => x.text.trim()).join(' ');
+          judgements[i] = await judge.judgeCandidate(file, from, c, words, dir, `cand${i + 1}`);
+        } catch (e) {
+          failed = `${failed ? failed + '; ' : ''}${e.message.slice(0, 80)}`;
+          if (/no vision/.test(e.message)) failed = 'stop: ' + failed;
+        }
+      }
+      if (judgements.some(Boolean)) {
+        picks = judge.rerank(cands, judgements, { max: MAX_PICKS });
+        sigNotes.push(`${judgements.filter(Boolean).length} of ${cands.length} candidate moments checked on video for laughs and reactions`);
+      } else if (failed) sigNotes.push(`video check skipped (${failed.replace(/^stop: /, '')})`);
+      // Candidates that didn't make the cut: free their section files.
+      for (const [k, sec] of sectionCache) if (!picks.some((p) => `${p.start}-${p.end}` === k)) { fs.rmSync(sec.file, { force: true }); sectionCache.delete(k); }
+    }
     if (!picks.length) throw new Error('no moment in it was strong enough to cut' + (focus ? ` for "${focus}"` : ''));
 
     // One download / render / upload step per clip, so the percent moves clip by clip.
-    jobs.plan(jid, ['Download audio', 'Transcribe', 'Pick moments', ...picks.flatMap((_, i) => [...(sections ? [`Download section ${i + 1}`] : []), `Render clip ${i + 1}`, `Upload clip ${i + 1}`]), 'Finish'], 3);
+    jobs.plan(jid, ['Download audio', 'Transcribe', 'Pick moments', 'Check moments', ...picks.flatMap((_, i) => [...(sections ? [`Download section ${i + 1}`] : []), `Render clip ${i + 1}`, `Upload clip ${i + 1}`]), 'Finish'], 4);
     const base = String(name).replace(/\.[^.]+$/, '').slice(0, 60);
     const srcSize = sections ? null : await layout.videoSize(src);
     const lines = [];
@@ -429,7 +469,7 @@ async function clipScan(url, focus = '', { onProgress = () => {}, title = '' } =
         if (sections) {
           onProgress(`downloading clip ${i + 1}/${picks.length}`);
           jobs.step(jid, `Download section ${i + 1}`);
-          const sec = await downloadSection(String(url).trim(), p.start + offset, p.end + offset, dir, `section${i + 1}`);
+          const sec = sectionCache.get(`${p.start}-${p.end}`) || await downloadSection(String(url).trim(), p.start + offset, p.end + offset, dir, `section${i + 1}`);
           clipSrc = sec.file; cs = sec.offset; ce = sec.offset + (p.end - p.start);
           clipSize = await layout.videoSize(clipSrc);
         }
@@ -494,4 +534,4 @@ async function videoInfo(url) {
   return { duration: Number(d) || 0, live: /is_live|is_upcoming/.test(live || ''), tags };
 }
 
-module.exports = { downloadYouTubeAudio, downloadSection, withFfmpegProxy, SECTION_PAD, ytdlp, cookieArgs, isBotCheck, hasYouTubeCookies, videoInfo, clipScan, scanInBackground, CLIP_TOOLS, driveId, isYouTube, isSocialVideo, linkKind, downloadYouTube, transcribeVideo, duration, MAX_BYTES, MAX_SEC, parsePicks, sanitizePicks, mmss };
+module.exports = { PICK_SYSTEM, MAX_CANDIDATES, downloadYouTubeAudio, downloadSection, withFfmpegProxy, SECTION_PAD, ytdlp, cookieArgs, isBotCheck, hasYouTubeCookies, videoInfo, clipScan, scanInBackground, CLIP_TOOLS, driveId, isYouTube, isSocialVideo, linkKind, downloadYouTube, transcribeVideo, duration, MAX_BYTES, MAX_SEC, parsePicks, sanitizePicks, mmss };
