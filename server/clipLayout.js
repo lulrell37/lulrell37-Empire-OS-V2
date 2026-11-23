@@ -272,12 +272,32 @@ function buildAss({ words = [], hook = '', keywords = [], duration, captionY, ho
 // the full transcript's text for this stretch as its prompt; the lead-in words
 // are dropped and the rest shifted back to the clip's own clock.
 const PRE_ROLL = 2;
+// The prompt is vocabulary only: names and odd terms the full transcript spelled (capitalised mid-sentence,
+// or with digits), never its running text. Whisper continues a prompt written as sentences, so 800 characters
+// of the stretch before and around the clip could put those words, or the long transcript's own mishearings,
+// into the captions (2026-11-23: "captions don't match the video").
+function vocabPrompt(context, max = 300) {
+  const seen = new Set(), out = [];
+  const toks = String(context || '').split(/\s+/);
+  for (let i = 0; i < toks.length; i++) {
+    const raw = toks[i];
+    const w = raw.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '');
+    if (w.length < 3 || w === 'I' || /^I'/.test(w)) continue;
+    const afterStop = i === 0 || /[.!?]$/.test(toks[i - 1]);
+    if (!(/\d/.test(w) || (/^\p{Lu}/u.test(w) && !afterStop))) continue;
+    const k = w.toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k); out.push(w);
+    if (out.join(', ').length > max) { out.pop(); break; }
+  }
+  return out.join(', ');
+}
 async function clipWords(src, start, end, dir, tag, context = '') {
   const { transcribeWords } = require('./llm');
   const a = path.join(dir, `${tag}-words.mp3`);
   const from = Math.max(0, start - PRE_ROLL), lead = start - from;
   await run(['-hide_banner', '-loglevel', 'error', '-y', '-ss', from.toFixed(2), '-i', src, '-t', (end - from).toFixed(2), '-vn', '-ac', '1', '-ar', '16000', '-b:a', '64k', a]);
-  const words = await transcribeWords(fs.readFileSync(a), `${tag}.mp3`, { prompt: context });
+  const words = await transcribeWords(fs.readFileSync(a), `${tag}.mp3`, { prompt: vocabPrompt(context) });
   return words.map((w) => ({ ...w, start: w.start - lead, end: w.end - lead })).filter((w) => w.end > 0.05).map((w) => ({ ...w, start: Math.max(0, w.start) }));
 }
 
@@ -340,4 +360,4 @@ async function renderClip({ src, start, end, dest, dir, pick = {}, size, context
   return { layout: lay.layout, captions: words.length > 0, notes };
 }
 
-module.exports = { gridAss, parseCheck, adjustBox, renderClip, layoutGraph, parseLayout, buildAss, parseSpeed, legacySpeed, clipSpeed, phrases, videoSize, ensureFont };
+module.exports = { vocabPrompt, gridAss, parseCheck, adjustBox, renderClip, layoutGraph, parseLayout, buildAss, parseSpeed, legacySpeed, clipSpeed, phrases, videoSize, ensureFont };
