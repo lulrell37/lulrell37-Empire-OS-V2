@@ -34,6 +34,20 @@ const ZOOM = 1.15;
 const MAX_MIN = Number(process.env.RAW_EDIT_MAX_MIN || 20);
 const PARALLEL = 2;
 const STYLE_KEY = 'rogue_style';
+// Named profiles (app_settings.rogue_style_<name>) sit beside his own default one.
+// A name alone is only a profile when it's one of these or already saved, so a bare
+// Instagram handle still works.
+const KNOWN_PROFILES = ['tate'];
+const profileSlug = (n) => String(n || '').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 20);
+const keyFor = (name) => (profileSlug(name) ? `${STYLE_KEY}_${profileSlug(name)}` : STYLE_KEY);
+// "tate: link, link" / "tate | link" -> { name: 'tate', rest: 'link, link' }; no name -> { name: '', rest: arg }.
+function splitProfile(arg) {
+  const a = String(arg || '').trim();
+  const m = !/^https?:/i.test(a) && a.match(/^([a-z][a-z0-9_-]{1,19})\s*[:|]\s*([\s\S]*)$/i);
+  if (m) return { name: profileSlug(m[1]), rest: m[2].trim() };
+  if (KNOWN_PROFILES.includes(a.toLowerCase())) return { name: a.toLowerCase(), rest: '' };
+  return { name: '', rest: a };
+}
 
 function enabled() { return String(process.env.RAW_EDIT || '').toLowerCase() !== 'off'; }
 
@@ -148,8 +162,8 @@ function titleAss(ass, titles) {
 
 // --- style profile ---------------------------------------------------------------
 
-async function style() {
-  try { const raw = await getSetting(STYLE_KEY, ''); return raw ? (typeof raw === 'string' ? JSON.parse(raw) : raw) : null; } catch { return null; }
+async function style(name = '') {
+  try { const raw = await getSetting(keyFor(name), ''); return raw ? (typeof raw === 'string' ? JSON.parse(raw) : raw) : null; } catch { return null; }
 }
 function styleText(s) {
   if (!s) return 'No style profile yet ([STYLE_LEARN] builds one from his past edits). Default: big word-by-word captions, a hook up top, punch-ins on the lines that land, tight cuts.';
@@ -162,15 +176,23 @@ function renderPrefs(s) {
 }
 
 // [STYLE_LEARN: handle or reel links] — watch up to 5 of his past edits.
+// [STYLE_LEARN: tate: x.com/… links] builds the named profile "tate" instead of his own (X and other video links work).
 const learnStyle = (arg) => jobs.run('rogue', `Style learn: ${String(arg || '').slice(0, 45)}`, ['List his edits', 'Watch each edit', 'Build the profile'], (job) => learnStyleInner(arg, job));
 
-async function learnStyleInner(arg, job = NOJOB) {
+async function learnStyleInner(argIn, job = NOJOB) {
+  const { name: profile, rest: arg } = splitProfile(argIn);
   const clip = require('./clipScan');
   const { transcribeWords } = require('./llm');
   const { lookAtImages } = require('./vision');
   job.step('List his edits');
   const links = String(arg || '').match(/https?:\/\/\S+/g) || [];
   let urls = links;
+  if (!urls.length && profile) {
+    // A named profile has no Instagram account to list: relearn from the links it was built from, or ask for links.
+    const cur = await style(profile);
+    urls = (cur && cur.from) || [];
+    if (!urls.length) throw new Error(`needs links to the ${profile} videos to learn from (X posts with a video, Instagram, TikTok or YouTube links), e.g. [STYLE_LEARN: ${profile}: link, link]`);
+  }
   if (!urls.length) {
     const handle = String(arg || '').replace(/^@/, '').trim();
     if (!/^[\w.]{2,30}$/.test(handle)) throw new Error('needs his Instagram handle or links to his reels');
@@ -200,7 +222,7 @@ async function learnStyleInner(arg, job = NOJOB) {
         await run(['-hide_banner', '-loglevel', 'error', '-y', '-i', file, '-vn', '-ac', '1', '-ar', '16000', '-b:a', '32k', a]);
         const words = await transcribeWords(fs.readFileSync(a), 'a.mp3').catch(() => []);
         const gaps = words.slice(1).map((w, j) => w.start - words[j].end).filter((g) => g > 0);
-        const look = await lookAtImages(frames, 'Three frames from one of his edited short videos. Describe the EDITING STYLE only, in 4-6 short lines: captions (on/off, position, size, font feel, colors, how many words at a time), framing (tight/wide, centered), zooms or punch-ins, on-screen titles or graphics, color grade, anything else distinctive. No guesses about what is said.');
+        const look = await lookAtImages(frames, `Three frames from one ${profile ? `of the ${profile} reference videos` : 'of his edited short videos'}. Describe the EDITING STYLE only, in 4-6 short lines: captions (on/off, position, size, font feel, colors, how many words at a time), framing (tight/wide, centered), zooms or punch-ins, on-screen titles or graphics, color grade, anything else distinctive. No guesses about what is said.`);
         seen.push({ url: u, secs: Math.round(total), wps: words.length && total ? (words.length / total).toFixed(2) : '?', pause: gaps.length ? (gaps.reduce((x, y) => x + y, 0) / gaps.length).toFixed(2) : '?', look });
       } catch (e) { seen.push({ url: u, error: e.message.slice(0, 120) }); }
     }
@@ -213,23 +235,24 @@ async function learnStyleInner(arg, job = NOJOB) {
     ok.map((x, i) => `VIDEO ${i + 1} (${x.secs}s, ${x.wps} words/sec, average pause ${x.pause}s):\n${x.look}`).join('\n\n'), { maxTokens: 900 });
   const m = String(raw).match(/\{[\s\S]*\}/);
   let prof; try { prof = JSON.parse(m[0]); } catch { prof = { summary: String(raw).slice(0, 1500), prefs: {} }; }
-  const cur = await style();
+  const cur = await style(profile);
   const next = { summary: String(prof.summary || '').slice(0, 2500), prefs: prof.prefs || {}, notes: (cur && cur.notes) || [], from: ok.map((x) => x.url), at: Date.now() };
-  await setSetting(STYLE_KEY, JSON.stringify(next));
-  return `Style profile built from ${ok.length} of his edits${seen.length > ok.length ? ` (${seen.length - ok.length} couldn't be read)` : ''}:\n${next.summary}`;
+  await setSetting(keyFor(profile), JSON.stringify(next));
+  return `${profile ? `The "${profile}" style profile` : 'Style profile'} built from ${ok.length} of his edits${seen.length > ok.length ? ` (${seen.length - ok.length} couldn't be read)` : ''}:\n${next.summary}`;
 }
 
-async function addStyleNote(text) {
-  const t = String(text || '').trim().slice(0, 300);
+async function addStyleNote(textIn) {
+  const { name: profile, rest } = splitProfile(textIn);
+  const t = String(profile ? rest : textIn || '').trim().slice(0, 300);
   if (!t) throw new Error('needs the correction');
-  const cur = (await style()) || { summary: '', prefs: {}, notes: [] };
+  const cur = (await style(profile)) || { summary: '', prefs: {}, notes: [] };
   cur.notes = [...(cur.notes || []), t].slice(-30);
   if (/no captions|without captions|captions off/i.test(t)) cur.prefs = { ...cur.prefs, captions: false };
   if (/captions (back )?on|add captions/i.test(t)) cur.prefs = { ...cur.prefs, captions: true };
   if (/no zoom|stop zoom/i.test(t)) cur.prefs = { ...cur.prefs, zooms: false };
   if (/no hook/i.test(t)) cur.prefs = { ...cur.prefs, hook: false };
-  await setSetting(STYLE_KEY, JSON.stringify(cur));
-  return `Noted for every edit from now on: "${t}"`;
+  await setSetting(keyFor(profile), JSON.stringify(cur));
+  return `Noted for ${profile ? `every ${profile}-style edit` : 'every edit'} from now on: "${t}"`;
 }
 
 // --- one edit ----------------------------------------------------------------------
@@ -252,9 +275,9 @@ ${styleText(prof)}${notes ? `\nHis notes for this video: ${notes}` : ''}${songs.
 const jobs = require('./jobProgress');
 const NOJOB = { step() {}, note() {} };
 const EDIT_STEPS = ['Download footage', 'Transcribe', 'Plan the cut', 'Render', 'Upload'];
-const editOne = (link, notes = '') => jobs.run('rogue', `Raw edit: ${String(link).replace(/^https?:\/\/(www\.)?/, '').slice(0, 45)}`, EDIT_STEPS, (job) => editOneInner(link, notes, job));
+const editOne = (link, notes = '', profile = '') => jobs.run('rogue', `Raw edit: ${String(link).replace(/^https?:\/\/(www\.)?/, '').slice(0, 45)}`, EDIT_STEPS, (job) => editOneInner(link, notes, job, profile));
 
-async function editOneInner(link, notes = '', job = NOJOB) {
+async function editOneInner(link, notes = '', job = NOJOB, profile = '') {
   const clip = require('./clipScan');
   const layout = require('./clipLayout');
   const google = require('./google');
@@ -266,7 +289,7 @@ async function editOneInner(link, notes = '', job = NOJOB) {
     const id = clip.driveId(link);
     if (id) name = await google.driveDownloadTo(id, src, clip.MAX_BYTES);
     else if (clip.isYouTube(link) || clip.isSocialVideo(link)) ({ file: src, name } = await clip.downloadYouTube(link, dir));
-    else throw new Error('needs a Google Drive link to the raw footage (or an Instagram, TikTok or YouTube link)');
+    else throw new Error('needs a Google Drive link to the raw footage (or an Instagram, TikTok, X or YouTube link)');
     const total = await clip.duration(src);
     if (!total) throw new Error("couldn't read that file as a video");
     if (total > MAX_MIN * 60) throw new Error(`that's ${clip.mmss(total)} of footage; the limit is ${MAX_MIN} minutes a video`);
@@ -277,7 +300,7 @@ async function editOneInner(link, notes = '', job = NOJOB) {
     if (!words.length) throw new Error('no speech found in it');
     job.step('Plan the cut');
     const ls = lines(words);
-    const [prof, music] = await Promise.all([style(), musicFiles()]);
+    const [prof, music] = await Promise.all([style(profile), musicFiles()]);
     const pl = parsePlan(await plan(ls, prof, notes, music.files).catch(() => ''), ls.length);
     const prefs = renderPrefs(prof);
     const segs = segments(ls, pl.keep, prefs.zooms ? pl.zoom : []);
@@ -320,7 +343,7 @@ async function editOneInner(link, notes = '', job = NOJOB) {
       `${pl.planned ? `${cutLines} line${cutLines === 1 ? '' : 's'} dropped (retakes, stumbles)` : 'the take picker failed, so every line was kept'}, dead air cut`,
       [prefs.captions && cutWords.length ? 'captions' : '', prefs.hook && pl.hook ? `hook "${pl.hook}"` : '', segs.some((s) => s.zoom) ? `${segs.filter((s) => s.zoom).length} punch-ins` : '', titles.length ? `${titles.length} title card${titles.length === 1 ? '' : 's'}` : ''].filter(Boolean).join(', '),
       song && songFile ? `music: ${song.name}` : music.files.length ? 'no music (none fit)' : `no music (no "${music.name}" folder in his Drive yet)`,
-      prof ? 'cut to his style profile' : 'no style profile yet',
+      prof ? `cut to ${profile ? `the ${profile}` : 'his'} style profile` : `no ${profile ? `${profile} ` : ''}style profile yet`,
       ...notesOut,
       up.link,
     ].filter(Boolean).join('\n   ');
@@ -338,7 +361,11 @@ function editBatch(arg) {
   const links = [...new Set(list.match(/https?:\/\/[^\s,]+/g) || [])].slice(0, 10);
   if (!links.length) throw new Error('needs a link to the raw footage (a Google Drive link works best)');
   if (active) throw new Error('an edit batch is already running; send these when it finishes');
-  const notes = n.join('|').trim();
+  let notes = n.join('|').trim();
+  // "style: tate" (or "tate style") in the notes cuts it to that named profile.
+  let profile = '';
+  const sm = notes.match(/^\s*(?:style\s*[:=]\s*([a-z][\w-]{1,19})|([a-z][\w-]{1,19}) style)\b[\s,;.:-]*/i);
+  if (sm) { profile = profileSlug(sm[1] || sm[2]); notes = notes.slice(sm[0].length).trim(); }
   const queue = links.map((l, i) => ({ l, i }));
   active = links.length;
   const telegram = require('./telegram');
@@ -352,7 +379,7 @@ function editBatch(arg) {
     for (let job = queue.shift(); job; job = queue.shift()) {
       const tag = links.length > 1 ? ` (${job.i + 1} of ${links.length})` : '';
       try {
-        const r = await editOne(job.l, notes);
+        const r = await editOne(job.l, notes, profile);
         await send(`🎬 **R.O.G.U.E. → A.R.A.** Edit ready${tag}:\n   ${r.summary}`, r.media);
       } catch (e) {
         console.error(`raw edit failed: ${e.message}`);
@@ -365,7 +392,7 @@ function editBatch(arg) {
 }
 
 const RAW_EDIT_TOOLS = ` - [RAW_EDIT: Drive link to his raw footage (several links, comma-separated, for a batch) | notes for this edit] — R.O.G.U.E. edits his own recordings into finished 9:16 videos: best take of each line, retakes and stumbles dropped, dead air cut, word-by-word captions, a hook, punch-in zooms, title cards, music from his Drive folder, all to his style profile. Runs in the background; each one comes to him from A.R.A. and lands in his Drive. Say it's started, never that it's done.
- - [STYLE_LEARN: his Instagram handle, or links to his reels] — watch his past edits and build the style profile every edit follows. [STYLE_NOTE: a correction he gave] — add one of his style corrections ("no zooms", "captions in the middle", "shorter hooks").`;
+ - [STYLE_LEARN: his Instagram handle, or links to his reels] — watch his past edits and build the style profile every edit follows. [STYLE_LEARN: tate: link, link] builds a separate named profile (here "tate") from videos he hand-picks (X posts with a video, Instagram, TikTok, YouTube links); a [RAW_EDIT: link | style: tate, notes] is then cut to that profile instead of his own. [STYLE_NOTE: a correction he gave] — add one of his style corrections ("no zooms", "captions in the middle", "shorter hooks"); [STYLE_NOTE: tate: correction] goes to the named profile.`;
 
 async function tag(name, arg) {
   if (name === 'RAW_EDIT') return editBatch(arg);
@@ -374,4 +401,4 @@ async function tag(name, arg) {
   return '';
 }
 
-module.exports = { tag, lines, parsePlan, segments, remap, cutLength, videoChain, audioChain, titleAss, renderPrefs, styleText, RAW_EDIT_TOOLS, enabled, TAIL };
+module.exports = { splitProfile, keyFor, tag, lines, parsePlan, segments, remap, cutLength, videoChain, audioChain, titleAss, renderPrefs, styleText, RAW_EDIT_TOOLS, enabled, TAIL };

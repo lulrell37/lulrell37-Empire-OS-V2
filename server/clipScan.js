@@ -88,13 +88,14 @@ function ytdlpBin() {
   return ytdlpReady;
 }
 
-// Instagram (reels, posts, IGTV) and TikTok links, also fetched with yt-dlp.
+// Instagram (reels, posts, IGTV), TikTok and X (x.com / twitter.com status) links, also fetched with yt-dlp.
 function isSocialVideo(url) {
   let u;
   try { u = new URL(String(url || '').trim()); } catch { return null; }
   if (!/^https?:$/.test(u.protocol)) return null;
   const host = u.hostname.toLowerCase().replace(/^(www|m)\./, '');
   if ((host === 'instagram.com' || host === 'instagr.am') && /^\/(?:[\w.]+\/)?(reel|reels|p|tv)\/[\w-]+/.test(u.pathname)) return 'instagram';
+  if (['x.com', 'twitter.com', 'mobile.twitter.com', 'fxtwitter.com', 'vxtwitter.com'].includes(host) && /^\/(?:\w+\/status(?:es)?\/\d+|i\/(?:web\/)?status\/\d+)/.test(u.pathname)) return 'x';
   if ((host === 'tiktok.com' || host.endsWith('.tiktok.com')) && (/\/video\/\d+/.test(u.pathname) || /^(vm|vt)\./.test(host))) return 'tiktok';
   return null;
 }
@@ -115,12 +116,12 @@ function cookieFile(name) {
 // Any youtube.com / youtu.be link: videos, channels, feeds.
 const isYouTubeAny = (url) => /^https?:\/\/([\w-]+\.)?(youtube\.com|youtu\.be)\//i.test(String(url || '').trim());
 // The site a link needs a login for: 'youtube' | 'instagram' | null.
-const loginSite = (url) => (isSocialVideo(url) === 'instagram' ? 'instagram' : isYouTubeAny(url) ? 'youtube' : null);
+const loginSite = (url) => (isSocialVideo(url) === 'instagram' ? 'instagram' : isSocialVideo(url) === 'x' ? 'x' : isYouTubeAny(url) ? 'youtube' : null);
 // A cookies.txt he set wins; otherwise the one J.A.R.V.I.S.'s browser keeps signed in (siteLogins.js).
 function cookieArgs(url) {
   const site = loginSite(url);
-  const f = site === 'instagram' ? cookieFile('INSTAGRAM_COOKIES') : site === 'youtube' ? cookieFile('YOUTUBE_COOKIES') : null;
-  const g = f || (site ? require('./siteLogins').cookieFor(site) : null);
+  const f = site === 'instagram' ? cookieFile('INSTAGRAM_COOKIES') : site === 'youtube' ? cookieFile('YOUTUBE_COOKIES') : site === 'x' ? cookieFile('X_COOKIES') : null;
+  const g = f || (site && site !== 'x' ? require('./siteLogins').cookieFor(site) : null);
   return g ? ['--cookies', g] : [];
 }
 const hasYouTubeCookies = () => !!(process.env.YOUTUBE_COOKIES_FILE || process.env.YOUTUBE_COOKIES || require('./siteLogins').cookieFor('youtube') || require('./siteLogins').hasAccount('youtube'));
@@ -175,10 +176,11 @@ async function downloadYouTube(url, dir) {
   try { meta = (await ytdlp(['--skip-download', '--print', '%(duration)s\n%(title)s', url])).split('\n'); }
   catch (e) {
     if (isSocialVideo(url) === 'instagram' && !cookieArgs(url).length && /login|cookie|empty media|rate.?limit|not available|private/i.test(e.message)) throw new Error(`Instagram wouldn't hand the video over without a login (${e.message.slice(0, 140)}). An Instagram account on the server (INSTAGRAM_LOGIN_USER and INSTAGRAM_LOGIN_PASSWORD, which J.A.R.V.I.S.'s browser signs in with) fixes that`);
+    if (isSocialVideo(url) === 'x' && !cookieArgs(url).length && /login|log in|cookie|sign in|guest token|age.?restrict|nsfw|protected|not authorized|rate.?limit|no video|not available|status code 40[13]/i.test(e.message)) throw new Error(`X wouldn't hand the video over without a login (${e.message.slice(0, 140)}), or that post has no video. Set X_COOKIES (the cookies.txt text of a logged-in x.com session) or X_COOKIES_FILE (a path to it) on the server`);
     throw e;
   }
   const secs = Number(meta[0]);
-  const name = (meta.slice(1).join(' ').trim() || (isSocialVideo(url) === 'instagram' ? 'Instagram video' : isSocialVideo(url) === 'tiktok' ? 'TikTok video' : 'YouTube video'));
+  const name = (meta.slice(1).join(' ').trim() || (isSocialVideo(url) === 'instagram' ? 'Instagram video' : isSocialVideo(url) === 'tiktok' ? 'TikTok video' : isSocialVideo(url) === 'x' ? 'X video' : 'YouTube video'));
   if (Number.isFinite(secs) && secs > MAX_SEC) throw new Error(`that video is ${mmss(secs)} — the limit is ${mmss(MAX_SEC)}`);
   await ytdlp(['-f', 'bv*[height<=720]+ba/b[height<=720]/b', '--merge-output-format', 'mp4', '--max-filesize', String(Math.floor(MAX_BYTES)),
     '-o', path.join(dir, 'source.%(ext)s'), url]);

@@ -42,3 +42,20 @@ assert.deepStrictEqual(R.renderPrefs({ prefs: { captions: false, caption_positio
 assert.ok(/No style profile yet/.test(R.styleText(null)));
 assert.ok(/\[RAW_EDIT:/.test(R.RAW_EDIT_TOOLS) && /\[STYLE_LEARN:/.test(R.RAW_EDIT_TOOLS));
 console.log('raw edit: all checks passed');
+
+// Named style profiles + X links (worker #31).
+{
+  const clipScan = require('../clipScan');
+  assert.strictEqual(clipScan.isSocialVideo('https://x.com/Cobratate/status/1234567890'), 'x');
+  assert.strictEqual(clipScan.isSocialVideo('https://twitter.com/i/status/99'), 'x');
+  assert.strictEqual(clipScan.isSocialVideo('https://x.com/home'), null);
+  assert.strictEqual(clipScan.isSocialVideo('https://www.instagram.com/reel/abc/'), 'instagram');
+  assert.deepStrictEqual(clipScan.cookieArgs('https://x.com/a/status/1').length, 0); // no X_COOKIES set
+  assert.deepStrictEqual(R.splitProfile('tate: https://x.com/a/status/1, https://x.com/b/status/2'), { name: 'tate', rest: 'https://x.com/a/status/1, https://x.com/b/status/2' });
+  assert.deepStrictEqual(R.splitProfile('tate'), { name: 'tate', rest: '' });
+  assert.deepStrictEqual(R.splitProfile('somehandle'), { name: '', rest: 'somehandle' });
+  assert.deepStrictEqual(R.splitProfile('https://x.com/a/status/1'), { name: '', rest: 'https://x.com/a/status/1' });
+  assert.strictEqual(R.keyFor(''), 'rogue_style');
+  assert.strictEqual(R.keyFor('Tate'), 'rogue_style_tate');
+  console.log('named profiles + X links ok');
+}

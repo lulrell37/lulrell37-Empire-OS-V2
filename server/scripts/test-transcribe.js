@@ -23,6 +23,6 @@ assert.strictEqual(t.formatTranscript([{ start: 0, end: 3, text: ' Hello there. 
 assert.ok(/\[TRANSCRIBE: link\]/.test(t.TRANSCRIBE_TOOLS));
 
 (async () => {
-  await assert.rejects(t.transcribeLink('https://example.com/x'), /YouTube, Instagram, TikTok or Google Drive/);
+  await assert.rejects(t.transcribeLink('https://example.com/x'), /YouTube, Instagram, TikTok, X or Google Drive/);
   console.log('transcribe: all checks passed');
 })().catch((e) => { console.error(e); process.exit(1); });
