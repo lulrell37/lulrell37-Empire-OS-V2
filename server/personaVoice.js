@@ -179,7 +179,7 @@ function relayHint(text, loose = false) {
   const [He, him, his] = she ? ['She', 'her', 'her'] : ['He', 'him', 'his'];
   const role = ROSTER[id] ? `, the Empire's ${ROSTER[id].role}` : '';
   const word = id === 'woke' ? ' "Woke" here is his name, not the ordinary word.' : '';
-  return `(These notes are ${who}'s message to you, in ${his.toUpperCase()} words — "I"/"my" means ${who}. ${who} is a separate persona${role}, a ${she ? 'woman' : 'man'} (${she ? 'she/her' : 'he/him'}): not you, not Mr. Burrus, and not any other persona the message mentions.${word} ${He} is talking to you, and you're passing it on to Mr. Burrus as ${his}: "${who} says…", "${she ? 'she' : 'he'}…". Not as yours, and not as if Mr. Burrus said it. Keep ${him} as the one speaking throughout. Don't read it out: you've read it, now tell him about it in your own sentences and your own order, what matters first, ${String(text || '').length > ARA_LONG_CHARS ? 'as a very detailed summary: every point, every number and name, nothing he needs left out' : 'far shorter than this'}. He gets the full message as text.)\n\n`;
+  return `(These notes are ${who}'s message to you, in ${his.toUpperCase()} words — "I"/"my" means ${who}. ${who} is a separate persona${role}, a ${she ? 'woman' : 'man'} (${she ? 'she/her' : 'he/him'}): not you, not Mr. Burrus, and not any other persona the message mentions.${word} ${He} is talking to you, and you're passing it on to Mr. Burrus as ${his}: "${who} says…", "${she ? 'she' : 'he'}…". Not as yours, and not as if Mr. Burrus said it. Keep ${him} as the one speaking throughout. Don't read it out: you've read it, now tell him about it in your own sentences and your own order, what matters first, ${String(text || '').length > ARA_LONG_CHARS ? 'a bit longer than usual since it is long, but still you, never a report' : 'far shorter than this'}. He gets the full message as text.)\n\n`;
 }
 
 // Her script pass failed on someone else's message: say whose it is and give the
@@ -199,29 +199,58 @@ function relayFallback(text, who) {
   return `Message from ${who}, Mr. Burrus. ${start}${key ? ` The key points: ${key.trim()}` : ''} The rest is in the message.`;
 }
 
+// Total time she may spend scripting one voice note, writers and repair together,
+// so a voice note never hangs: past it she voices what she has (or the fallback).
+const SCRIPT_BUDGET_MS = 80000;
+
 async function araScript(text, userText, { relay = false } = {}) {
+  const { mustSay, missingFrom, listFacts } = require('./scriptCoverage');
   const who = relayFrom(text, relay);
   const long = String(text || '').length > ARA_LONG_CHARS;
-  // Capped: Telegram sends her text after the voice note, so a slow script
-  // mustn't hold the reply up — past 25s (45s for a long message, which gets a
-  // detailed summary) she voices the reply as written.
-  const write = (api, model) => {
+  const started = Date.now();
+  const left = () => Math.max(1000, SCRIPT_BUDGET_MS - (Date.now() - started));
+  const system = `${ARA_VOICE}\n\nYou are A.R.A. — full personal assistant to Mr. Burrus, sharp and a step ahead. You say "Mr. Burrus" only now and then, for a moment that calls for it: most of the time you don't use his name at all, you just talk to him.\n\n[THE TEAM, for who's who and their pronouns:\n${require('./personas').rosterLines()}\n]\n\n${ARA_SCRIPT}`;
+  const timed = (p, ms) => {
     let timer;
-    const timeout = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('script timed out')), long ? 45000 : 25000); });
-    return Promise.race([timeout, require('./llm').chatAs(api, model,
-      `${ARA_VOICE}\n\nYou are A.R.A. — full personal assistant to Mr. Burrus, sharp and a step ahead. You say "Mr. Burrus" only now and then, for a moment that calls for it: most of the time you don't use his name at all, you just talk to him.\n\n[THE TEAM, for who's who and their pronouns:\n${require('./personas').rosterLines()}\n]\n\n${ARA_SCRIPT}`,
-      [{ role: 'user', content: `${userText ? `Mr. Burrus just said: "${String(userText).slice(0, 1500)}"\n\n` : ''}${relayHint(text, relay)}${araLongHint(text)}What you want to get across (notes, not a script):\n${text}` }],
-      { maxTokens: long ? 2200 : 1200, fallback: false })]).finally(() => clearTimeout(timer));
+    const timeout = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('script timed out')), ms); });
+    return Promise.race([timeout, p]).finally(() => clearTimeout(timer));
   };
+  // Capped: Telegram sends her text after the voice note, so a slow script
+  // mustn't hold the reply up — past 25s (45s for a long message) she voices
+  // the reply as written.
+  const write = (api, model) => timed(require('./llm').chatAs(api, model, system,
+    [{ role: 'user', content: `${userText ? `Mr. Burrus just said: "${String(userText).slice(0, 1500)}"\n\n` : ''}${relayHint(text, relay)}${araLongHint(text)}What you want to get across (notes, not a script):\n${text}` }],
+    { maxTokens: long ? 2200 : 1200, fallback: false }), Math.min(long ? 45000 : 25000, left()));
   const clean = (out) => String(out || '').replace(/\[[A-Z][A-Z0-9_]*(?::[^\]]*)?\]/g, '').replace(/[*#`_]/g, '').trim();
   // Her own reply can be voiced as written. A relay can't, so it gets a second writer.
+  // The Claude backup gets the same ARA_VOICE system prompt.
   for (const [api, model] of who ? [['xai', 'grok-4'], ['anthropic', null]] : [['xai', 'grok-4']]) {
     try {
-      const script = clean(await write(api, model));
-      if (script) return script;
+      let script = clean(await write(api, model));
+      if (script) return await coverFacts(script);
     } catch (e) { console.error(`ara script failed (${api}):`, e.message); }
   }
   return who ? relayFallback(text, who) : text;
+
+  // Every number, level, time and name in the source must be in the script.
+  // One repair pass (Grok, only the missing items); still short after that, one
+  // line at the end says them.
+  async function coverFacts(script) {
+    let items, missing;
+    try {
+      items = mustSay(text);
+      missing = missingFrom(script, items);
+    } catch (e) { console.error('ara coverage check failed:', e.message); return script; }
+    if (!missing.length) return script;
+    try {
+      const fixed = clean(await timed(require('./llm').chatAs('xai', 'grok-4', system,
+        [{ role: 'user', content: `This is your spoken script so far:\n${script}\n\nIt left out these facts from the message: ${listFacts(missing)}.\nWork each of them in, in your own words and your own attitude, where they fit. Don't rewrite the rest: keep everything else as it is. Reply with only the full script.` }],
+        { maxTokens: long ? 2400 : 1400, fallback: false }), Math.min(20000, left())));
+      if (fixed) { script = fixed; missing = missingFrom(script, items); }
+    } catch (e) { console.error('ara script repair failed:', e.message); }
+    if (missing.length) script = `${script} [husky] oh, and before I forget... ${listFacts(missing)}.`;
+    return script;
+  }
 }
 
 // personaId + reply text -> { ogg, error, fallback }. `ogg` is null only when
