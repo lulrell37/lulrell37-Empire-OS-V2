@@ -60,10 +60,20 @@ saved under the owner's message was being read back as the owner's).
 
 She also doesn't read a relay out on her ElevenLabs voice: she catches him up on it
 in her own sentences, because the full message is in the chat. Short messages stay
-short; anything over `ARA_LONG_CHARS` (1200 characters, relay or her own reply) gets a
-very detailed summary instead — every point, number, level, name and time, ending with
-what he has to act on, up to ~550 words (`araLongHint`, in both `ARA_SCRIPT` copies;
-more script tokens and time for those). Long audio is voiced in sentence-split pieces
+short; anything over `ARA_LONG_CHARS` (1200 characters, relay or her own reply) runs
+longer (up to ~450 words) but is still her, never a report: the full `ARA_VOICE` +
+`ARA_SCRIPT` always lead (the Claude backup gets the same system prompt), and `araLongHint`
+only adds a short MUST-SAY list the code pulled out of the message (`mustSay`,
+`server/scriptCoverage.js`: numbers, price levels, times, percents, market and persona names;
+dates and list numbers skipped). **Coverage is checked in code** (`missingFrom`, no AI,
+spoken forms count: "4,215", "4215", "forty-two fifteen", "four thousand two hundred
+fifteen"): any fact missing from her script gets **one** Grok repair pass (script + missing
+items, told to work them in without rewriting the rest); still missing after that, one short
+line in her voice at the end says them. Never more than one repair call, and the whole
+script pass is capped at `SCRIPT_BUDGET_MS` (80 s) so a voice note never hangs (then the
+usual fallback). The morning brief's script (`spokenScript`) uses the full `ARA_VOICE` +
+`ARA_SCRIPT` too, 450-600 words, every section kept. The Telegram text stays as the desk
+wrote it. Long audio is voiced in sentence-split pieces
 joined into one note (`ttsChunks`), never cut off at the TTS limit; the app allows
 A.R.A.'s script 4000 characters. Alerts
 from the desks (`sendFromAra`, `relay: true`) count as relays when a persona is named

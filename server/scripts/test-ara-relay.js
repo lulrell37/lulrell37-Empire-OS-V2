@@ -9,6 +9,7 @@ const araVoice = require('../araVoice');
 let grokVoice = async () => null;
 araVoice.synthesizeAraVoice = (...a) => grokVoice(...a);
 const { relayFrom, relayHint, araScript } = require('../personaVoice');
+const { mustSay, missingFrom } = require('../scriptCoverage');
 const { ARA_SCRIPT, ARA_VOICE } = require('../araVoice');
 
 (async () => {
@@ -64,13 +65,15 @@ const { ARA_SCRIPT, ARA_VOICE } = require('../araVoice');
     // A long message: the writer is told to give a very detailed summary, with room for it.
     const report = `Talon → Ara: here is my full read. ${'Gold held 2,410 and I moved my stop to 2,395. '.repeat(40)}`;
     let seen;
-    llm.chatAs = async (api, model, sys, msgs, opts) => { seen = { user: msgs[0].content, opts }; return 'Talon walked me through it...'; };
+    llm.chatAs = async (api, model, sys, msgs, opts) => { seen = { user: msgs[0].content, opts }; return 'Talon walked me through it... gold held 2,410 and the stop is 2,395.'; };
     await araScript(report, '');
-    assert.match(seen.user, /very detailed summary/);
     assert.match(seen.user, /long message, about \d+ words/);
+    assert.match(seen.user, /MUST-SAY facts[^\n]*2,410[^\n]*2,395/);
+    assert.doesNotMatch(seen.user, /very detailed summary/);
     assert.strictEqual(seen.opts.maxTokens, 2200);
     await araScript('Talon → Ara: gold hit target.', '');
     assert.doesNotMatch(seen.user, /very detailed summary|long message/);
+    assert.match(seen.user, /MUST-SAY facts[^\n]*Talon\./);
     assert.match(seen.user, /far shorter than this/);
     assert.strictEqual(seen.opts.maxTokens, 1200);
     // Both writers down on a long one: the start plus the lines with numbers.
@@ -83,7 +86,58 @@ const { ARA_SCRIPT, ARA_VOICE } = require('../araVoice');
     llm.chatAs = async (api) => { calls.push(api); throw new Error('down'); };
     assert.strictEqual(await araScript('Your 3pm moved to 4.', ''), 'Your 3pm moved to 4.');
     assert.deepStrictEqual(calls, ['xai']);
+
+    // The extractor: numbers, levels, times, percents, markets, personas.
+    const src = 'Talon → Ara: Gold XAUUSD at 4,215.50, stop 4,195, target 4,260 at 9:30 AM. Risk $40, up 0.8%. Wire says 3 PM. 2026-11-23, 2 of 3.';
+    const shows = mustSay(src).map((i) => i.show);
+    for (const want of ['4,215.50', '4,195', '4,260', '9:30 AM', '$40', '0.8 percent', '3 PM', 'gold', 'Talon', 'Wire']) assert.ok(shows.includes(want), `${want} in ${shows}`);
+    assert.ok(!shows.some((x) => /2026|^2$|^3$|^11$|^23$/.test(x)), `dates and list numbers skipped: ${shows}`);
+    const items = mustSay(src);
+    // Spoken forms count.
+    const spoken = 'Talon says gold is at forty-two fifteen point five, stop at 4195, target forty two sixty, nine thirty a.m. Risk is forty dollars, up point eight percent. Wire says three pm.';
+    assert.deepStrictEqual(missingFrom(spoken, items).map((i) => i.show), []);
+    assert.deepStrictEqual(missingFrom('Talon says gold at four thousand two hundred fifteen point five, stop 4,195, target 4260, 9:30, $40, 0.8%, 3 PM, wire', items).map((i) => i.show), []);
+    // Missing ones are named; a number isn't found inside a bigger one.
+    assert.deepStrictEqual(missingFrom('Talon says gold at 4215.50, target 4,260, nine thirty, forty dollars, 0.8 percent, Wire at 3 PM', items).map((i) => i.show), ['4,195']);
+    assert.deepStrictEqual(missingFrom('Talon says gold 4215.50 stop 41950 target 4260 9:30 $40 0.8% 3pm wire', items).map((i) => i.show), ['4,195']);
+
+    // Coverage in araScript: complete -> one call; missing a price -> one repair; still missing -> a closing line.
+    const rep = 'Talon → Ara: gold long filled at 4,215, stop 4,195, target 4,260.';
+    let n = 0, repairUser = '';
+    llm.chatAs = async (api, model, sys, msgs) => { n++; if (n === 2) repairUser = msgs[0].content; return n === 1 ? 'Talon says gold is in, target 4,260, stop 4,195.' : 'Talon says gold is in at 4,215, target 4,260, stop 4,195.'; };
+    assert.strictEqual(await araScript(rep, ''), 'Talon says gold is in at 4,215, target 4,260, stop 4,195.');
+    assert.strictEqual(n, 2);
+    assert.match(repairUser, /left out these facts from the message: 4,215\./);
+    n = 0;
+    llm.chatAs = async () => { n++; return 'Talon says gold is in, target forty two sixty, stop 4195.'; };
+    const closed = await araScript(rep, '');
+    assert.strictEqual(n, 2, 'one repair call, never more');
+    assert.match(closed, /oh, and before I forget\.\.\. 4,215\.$/);
+    n = 0;
+    llm.chatAs = async () => { n++; return 'Talon says gold is in at 4,215, target 4,260, stop 4,195.'; };
+    await araScript(rep, '');
+    assert.strictEqual(n, 1, 'a complete script gets no repair');
+    // Repair call failing leaves her script plus the closing line.
+    n = 0;
+    llm.chatAs = async () => { n++; if (n > 1) throw new Error('down'); return 'Talon says gold is in, target 4,260, stop 4,195.'; };
+    assert.match(await araScript(rep, ''), /^Talon says gold is in.*before I forget\.\.\. 4,215\.$/);
   } finally { llm.chatAs = real; }
+
+  // The Claude backup sees her full voice too.
+  {
+    const sys = [];
+    llm.chatAs = async (api, m, s) => { sys.push(s); if (api === 'xai') throw new Error('x'); return 'Talon says gold hit target.'; };
+    await araScript('Talon → Ara: gold hit target.', '');
+    assert.ok(sys.length === 2 && sys.every((x) => x.includes(ARA_VOICE) && x.includes(ARA_SCRIPT)));
+    llm.chatAs = real;
+  }
+
+  // The morning brief uses her full voice and 450-600 words.
+  {
+    const mb = read('server/morningBrief.js');
+    assert.match(mb, /450-600 words/);
+    assert.match(mb, /\$\{ARA_VOICE\}[\s\S]*\$\{ARA_SCRIPT\}/);
+  }
 
   // ElevenLabs down: she falls to her own Grok voice; other personas don't.
   {
