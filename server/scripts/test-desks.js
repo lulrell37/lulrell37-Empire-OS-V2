@@ -139,6 +139,8 @@ assert(validatePick(raw({ horizon: 'long', exitBy: date(900) }), snap({ atr: 4 }
   const keep = INITIATIVE.slice(INITIATIVE.indexOf(' KEEP MOVING'), INITIATIVE.indexOf(' WHO OWNS WHAT'));
   assert.ok(keep.length > 200, 'KEEP MOVING missing from INITIATIVE');
   assert.ok(app.includes(keep), 'app copy of KEEP MOVING drifted');
+  const nv = INITIATIVE.slice(INITIATIVE.indexOf(' NEW VENTURE FIXED ORDER'), INITIATIVE.indexOf(' THE EMPIRE WORKS IN UNISON'));
+  assert.ok(nv.length > 200 && app.includes(nv), 'NEW VENTURE FIXED ORDER missing or drifted in app copy');
   const rt = require('fs').readFileSync(require('path').join(__dirname, '../personaRuntime.js'), 'utf8');
   assert.ok(/MAX_RELAY_DEPTH = 3/.test(rt) && /chain\.includes\(id\)/.test(rt) && /depth === 0 && !relayAllowed/.test(rt), 'hand-offs inside a job must go through');
 }

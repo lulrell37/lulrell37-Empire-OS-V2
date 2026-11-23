@@ -23,6 +23,7 @@ const PINNED = [
   '- [all] Anything a job needs that his email or notes hold (a code, a link, an account email, a login) comes from A.R.A. first; a persona comes to him only when it absolutely has to (2026-11-22)',
   '- [all] J.A.R.V.I.S.\'s workers are him: everything about them, their questions included, comes from J.A.R.V.I.S.\'s bot, so it reads as him doing all the work (this replaces routing worker sign-in questions through A.R.A.) (2026-11-22)',
   '- [all] The Empire works in unison: when a topic touches another persona\'s lane, that persona does its part automatically without him naming them, and each chains the next step (a new business or channel: S.A.G.E. researches what it earns, A.T.L.A.S. adds it to the business list with targets); anything that sends, posts, buys, deletes or trades still needs his OK (2026-11-23)',
+  '- [all] New venture, fixed order (2026-11-23): whenever he says he wants to start anything (business, channel, product, project, idea), to any persona, S.A.G.E. researches it first, then A.T.L.A.S. adds it as a business with monthly and weekly targets if it makes money, then every persona whose lane it touches does its part (copy, brand, legal, leads…), and the result comes back to whoever he told, who reports it; sending, posting, buying, deleting and trading still need his OK',
 ];
 // These see every line: A.R.A. runs the team and J.A.R.V.I.S. builds for all of it.
 // Mirrored in src/services/aiService.js (profileFor).
