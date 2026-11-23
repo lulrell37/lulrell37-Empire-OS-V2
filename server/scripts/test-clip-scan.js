@@ -114,3 +114,42 @@ console.log('clip scan: ok');
     fs.rmSync(d, { recursive: true, force: true });
   }
 })().catch((e) => { console.error(e); process.exit(1); });
+
+// Comedy-first picking: candidate list, vision judge, re-rank, seeds from viewer hot spots.
+{
+  const J = require('../clipJudge');
+  const { PICK_SYSTEM, MAX_CANDIDATES } = require('../clipScan');
+  assert(/FUNNIEST/.test(PICK_SYSTEM) && /setup and payoff/.test(PICK_SYSTEM) && /KEKW/.test(PICK_SYSTEM) && /8 to 12/.test(PICK_SYSTEM) && /PENALIZE/.test(PICK_SYSTEM));
+  // the model can return up to MAX_CANDIDATES non-overlapping candidates; the old 5 cap is only for the final list
+  const many = Array.from({ length: 14 }, (_, i) => ({ start: i * 100, end: i * 100 + 30, score: 90 - i }));
+  assert.strictEqual(sanitizePicks(many, 5000, MAX_CANDIDATES).length, MAX_CANDIDATES);
+  assert.strictEqual(sanitizePicks(many, 5000).length, 5);
+
+  assert.strictEqual(J.parseJudge('nope'), null);
+  assert.strictEqual(J.parseJudge('{"funny": "x"}'), null);
+  const j = J.parseJudge('sure {"funny": 9, "visual": 8, "reaction": 9, "standalone": 8, "hook": "He \\"fell\\" off the stage", "note": "guy faceplants"}');
+  assert.strictEqual(j.funny, 9); assert.strictEqual(j.hook, 'He fell off the stage');
+  assert.strictEqual(J.parseJudge('{"funny": 40}').funny, 10, 'clamped');
+
+  // Funny-on-video beats a good-looking transcript pick; flat ones are dropped; unjudged are discounted.
+  const mk = (start, score) => ({ start, end: start + 30, title: 't', reason: 'r', score, hook: '', keywords: [] });
+  const picks = [mk(0, 90), mk(100, 80), mk(200, 70), mk(300, 85), mk(400, 60)];
+  const judg = [J.parseJudge('{"funny":1,"standalone":2}'), J.parseJudge('{"funny":9,"reaction":9,"standalone":9,"hook":"Wait for it"}'), J.parseJudge('{"funny":6,"standalone":6}'), null, null];
+  const r = J.rerank(picks, judg, { max: 3 });
+  assert.strictEqual(r[0].start, 100, 'the funniest on video ranks first');
+  assert(!r.some((p) => p.start === 0), 'a flat judged pick is dropped');
+  assert.strictEqual(r[0].hook, 'Wait for it', 'missing hook filled from the judge');
+  assert.strictEqual(r.length, 3);
+  // all judged flat and nothing else: still returns something rather than nothing
+  assert.strictEqual(J.rerank([mk(0, 90)], [J.parseJudge('{"funny":0}')]).length, 1);
+
+  // Seeds: laughter windows no candidate covers, setup ~20 s before the peak, snapped to speech.
+  const segments = Array.from({ length: 40 }, (_, i) => ({ start: i * 10, end: i * 10 + 9, text: `s${i}` }));
+  const hot = [{ start: 205, end: 210, score: 60, laugh: 14, why: 'chat x4, 14 laughing' }, { start: 50, end: 50, score: 90, laugh: 0, why: 'audio +9 dB' }, { start: 120, end: 120, score: 30, laugh: 0, why: 'weak' }];
+  const seeds = J.seedCandidates(hot, [mk(40, 80)], segments, 400);
+  assert.strictEqual(seeds.length, 1, 'covered and weak windows are skipped');
+  assert(seeds[0].start <= 185 && seeds[0].start >= 170 && seeds[0].end >= 218 && seeds[0].end - seeds[0].start <= 60 && seeds[0].end - seeds[0].start >= 12, JSON.stringify(seeds[0]));
+  assert.strictEqual(J.seedCandidates(hot, [], segments, 400)[0].start < 190, true);
+  assert.strictEqual(J.seedCandidates(hot, [], segments, 400)[0].start, J.seedCandidates(hot, [], segments, 400).sort(() => 0)[0].start);
+  console.log('clip scan comedy ranking: ok');
+}

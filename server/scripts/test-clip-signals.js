@@ -64,3 +64,22 @@ assert.deepStrictEqual(S.hotspots({}), []);
   assert.strictEqual(b.capped, false);
   console.log('clip signals: all checks passed');
 })().catch((e) => { console.error(e); process.exit(1); });
+
+// Laughter words outweigh hype in chat: a bucket of LMAO/KEKW/💀 spikes harder than one of W/bro.
+{
+  const S = require('../clipSignals');
+  const line = (ms, text) => JSON.stringify({ replayChatItemAction: { videoOffsetTimeMsec: String(ms), actions: [{ addChatItemAction: { item: { liveChatTextMessageRenderer: { message: { runs: [{ text }] } } } } }] } });
+  const lines = [];
+  for (let i = 0; i < 6; i++) lines.push(line(15000 + i * 500, ['LMAOOO', 'KEKW', '💀💀', 'im dead', 'lol', 'bruh'][i]));
+  for (let i = 0; i < 6; i++) lines.push(line(60000 + i * 500, ['W', 'bro', 'omg', 'W', 'nah', 'W'][i]));
+  const b = S.chatBuckets(lines);
+  const laughy = b.find((x) => x.t === 15), hype = b.find((x) => x.t === 60);
+  assert(laughy.laugh >= 5, `laugh count ${laughy.laugh}`);
+  assert.strictEqual(hype.laugh, 0);
+  assert(S.chatWeight(laughy) > S.chatWeight(hype) + 10, 'laughter weighs more than hype');
+  // hotspots: laughter lifts a chat window above an equal-ratio hype one and says so
+  const h = S.hotspots({ chat: [{ t: 100, ratio: 4, react: 10, laugh: 8 }, { t: 400, ratio: 4, react: 10, laugh: 0 }] });
+  assert.strictEqual(h[0].start, 100);
+  assert(h[0].score > h[1].score && /laughing/.test(h[0].why) && h[0].laugh === 8, JSON.stringify(h));
+  console.log('clip signals laughter weighting: ok');
+}
