@@ -209,7 +209,7 @@ async function jarvisOutOfBand(text, { reply, notice, resumes = 0, quiet = null 
   if (notice) await deliver(notice);
   if (!String(text || '').trim() && reply == null) return true; // just the notice
   if (personaId !== 'jarvis') { if (reply) await deliver(`J.A.R.V.I.S.:\n${reply}`); return true; }
-  const result = await runPersonaTurn('jarvis', text, deliver, { reply, resumes });
+  const result = await runPersonaTurn('jarvis', text, deliver, { reply, resumes, queue: true });
   if (quiet && quiet.test(String(result.text || ''))) return true;
   await sendTurnResult('jarvis', bot, chatId, result, text, deliver);
   return true;

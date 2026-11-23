@@ -135,7 +135,7 @@ async function finish(w) {
   af.send(`🛠 Built and merged for ${entry.persona ? (require('./personas').ROSTER[entry.persona] || {}).name || entry.persona : 'a persona'}: ${title} (PR #${pr.number}, ${pr.url})${server ? '. Redeploying the server now.' : ''}${app ? ' The app part arrives in the next APK (building now).' : ''}`).catch(() => {});
   if (server && process.env.EMPIRE_SUPERVISED === '1') {
     await done('merged, going live', { pr: pr.number, merged_at: Date.now(), app });
-    await require('./redeploy').requestRedeploy('jarvis'); // exits; followUps() answers him after the restart
+    await require('./redeploy').requestRedeploy('feature'); // exits; followUps() answers him after the restart
     return true;
   }
   await done('answered', { pr: pr.number, merged_at: Date.now(), app });

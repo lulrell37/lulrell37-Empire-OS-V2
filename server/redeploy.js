@@ -47,12 +47,29 @@ async function requestRedeploy(by = 'jarvis') {
   if (process.env.EMPIRE_SUPERVISED !== '1') {
     throw new Error('the self-updating boot isn\'t running yet — redeploy once from Replit (Deployments → Redeploy) to install it; after that I can do it from here');
   }
-  const at = Date.now();
-  await setSetting('redeploy_pending', JSON.stringify({ at, by, from_sha: process.env.EMPIRE_CODE_SHA || null }));
-  const check = await startOutsideCheck(at);
-  // Let the Confirm card update and this reply go out first.
-  setTimeout(() => { console.log('redeploy: exiting for boot.js to pull main'); process.exit(RESTART_CODE); }, 4000);
-  return `Restarting onto the latest main now — A.R.A. will confirm in a couple of minutes when it's live. (${check})`;
+  // A restart kills J.A.R.V.I.S.'s engine mid-turn, and after it he was resumed AND
+  // woken (two turns for one), which read as him looping and vanishing (owner,
+  // 2026-11-23). So the restart waits for his running turn to end (up to
+  // REDEPLOY_WAIT_MIN, 20).
+  const eng = require('./jarvisEngine');
+  const job = eng.enabled() ? eng.current() : null;
+  const go = async () => {
+    if (job) {
+      const free = await eng.idle(Number(process.env.REDEPLOY_WAIT_MIN || 20) * 60000);
+      if (!free) console.warn('redeploy: J.A.R.V.I.S. still busy after the wait — restarting anyway');
+    }
+    const at = Date.now();
+    await setSetting('redeploy_pending', JSON.stringify({ at, by, from_sha: process.env.EMPIRE_CODE_SHA || null }));
+    await startOutsideCheck(at);
+    // Let the Confirm card update and the reply go out first.
+    setTimeout(() => { console.log('redeploy: exiting for boot.js to pull main'); process.exit(RESTART_CODE); }, 4000);
+  };
+  if (job) {
+    go().catch((e) => { console.error('redeploy failed:', e.message); require('./loud').tellAra('redeploy-wait', `A redeploy couldn't start: ${e.message}`); });
+    return `Restarting onto the latest main as soon as J.A.R.V.I.S. finishes the turn he's on ("${job.what.slice(0, 80)}") — A.R.A. will confirm when it's live.`;
+  }
+  await go();
+  return 'Restarting onto the latest main now — A.R.A. will confirm in a couple of minutes when it\'s live.';
 }
 
 async function changesSince(fromSha, toSha) {

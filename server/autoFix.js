@@ -91,7 +91,7 @@ async function mergeFix(prNumber) {
   const app = files.some((f) => !/^server\/|\.md$|^docs\//.test(f.filename));
   let text = `Auto-fix PR #${prNumber} merged into main.${app ? ' It touches the app too, so the APK build starts.' : ''}`;
   await require('./featureRequests').onTapMerged(prNumber, { willRedeploy: serverSide && process.env.EMPIRE_SUPERVISED === '1' }).catch(() => {});
-  if (serverSide) text += ` ${await require('./redeploy').requestRedeploy('jarvis')}`;
+  if (serverSide) text += ` ${await require('./redeploy').requestRedeploy('autofix')}`;
   return text;
 }
 

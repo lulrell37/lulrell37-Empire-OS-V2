@@ -237,9 +237,16 @@ function unlogTurn(id) { const t = readTurns(); if (t[id]) { delete t[id]; write
 // `source` says where he asked; `resumes` counts restarts already survived.
 let chain = Promise.resolve();
 let busy = 0;
-async function turn(prompt, { persona = '', onProgress, signal, source = 'telegram', ownerText, resumes = 0, recent = '' } = {}) {
+// The turn running right now (null when he's free): what he's on, since when, its
+// latest step. The front desk (personaRuntime) answers new messages from it
+// instead of queueing them, and redeploys wait for it (redeploy.js).
+let running = null;
+const current = () => (running ? { ...running } : null);
+async function turn(prompt, { persona = '', onProgress: progress, signal, source = 'telegram', ownerText, resumes = 0, recent = '' } = {}) {
   const id = crypto.randomUUID();
+  const onProgress = (p) => { if (running && running.id === id) running.step = p; if (progress) progress(p); };
   const go = async () => {
+    running = { id, what: String(ownerText || prompt).replace(/^\[[^\]]*\]\s*/, '').replace(/\s+/g, ' ').slice(0, 200), source, startedAt: Date.now(), step: 'Thinking' };
     logTurn({ id, text: String(ownerText || prompt).slice(0, 6000), source, startedAt: Date.now(), resumes });
     let release = () => {};
     try {
@@ -263,13 +270,22 @@ async function turn(prompt, { persona = '', onProgress, signal, source = 'telegr
     } finally {
       release();
       unlogTurn(id); // finished, failed or cancelled: it has been answered either way
+      if (running && running.id === id) running = null;
       busy--;
     }
   };
-  if (busy++ > 0 && onProgress) onProgress('Finishing the job before this one first');
+  if (busy++ > 0 && progress) progress('Finishing the job before this one first');
   const p = chain.then(go, go);
   chain = p.catch(() => {});
   return p;
+}
+
+// Resolves once no turn is running or queued (or after maxMs). A redeploy waits on
+// this so a restart never cuts him off mid-turn.
+async function idle(maxMs = 20 * 60000) {
+  const until = Date.now() + maxMs;
+  while (busy > 0 && Date.now() < until) await new Promise((r) => setTimeout(r, 5000));
+  return busy === 0;
 }
 
 // At boot: any turn still logged was cut off by the restart. Tell him, and pick
@@ -347,4 +363,4 @@ function status() {
 }
 
 module.exports = {
-  spawnTurn, workspace, run, ROOT, loadSession, saveSession, enabled, turn, recover, startJob, jobStatus, cancelJob, detachJob, resetSession, status, engineBrief, describeTool };
+  spawnTurn, workspace, run, ROOT, current, idle, loadSession, saveSession, enabled, turn, recover, startJob, jobStatus, cancelJob, detachJob, resetSession, status, engineBrief, describeTool };

@@ -43,7 +43,7 @@ const F = require('../featureRequests');
   const w = { id: '21', title: 'Give A.R.A.: live weather', status: 'done', branch: 'worker/21-live-weather', pushed: 'pushed `worker/21-live-weather` (2 commit(s) ahead of main)', result: 'DONE\nShe has the forecast every turn.\nAUTOFIX_TITLE: A.R.A. always sees the weather' };
   assert.strictEqual(await F.finish(w), true);
   assert.strictEqual(merged.length, 1, 'merged on its own');
-  assert.deepStrictEqual(redeploys, ['jarvis'], 'server change → redeploy');
+  assert.deepStrictEqual(redeploys, ['feature'], 'server change → redeploy (not a J.A.R.V.I.S. one, so no wake-up turn)');
   assert.strictEqual(cards.length, 0, 'no tap needed');
   assert.strictEqual(outOfBand.length, 0, 'she waits for the restart');
 

@@ -1269,7 +1269,7 @@ async function saveMessage(persona, role, content) {
 // { text, effects }. `reply`: J.A.R.V.I.S.'s engine already wrote the first answer
 // (an app job finished after the app stopped listening) — use it instead of
 // asking again; its tags and any lookup rounds still run.
-async function runPersonaTurn(personaId, userText, deliver, { reply: given, resumes = 0, group = false } = {}) {
+async function runPersonaTurn(personaId, userText, deliver, { reply: given, resumes = 0, group = false, queue = false } = {}) {
   userText = require('./llm').fixNames(userText); // "Aura" is always A.R.A.
   const persona = ROSTER[personaId] ? personaId : 'ara';
   const p = ROSTER[persona];
@@ -1282,7 +1282,19 @@ async function runPersonaTurn(personaId, userText, deliver, { reply: given, resu
   let sys = persona === 'ara' ? systemPrompt(ctx, gs, custom, mem) : personaSystemPrompt(persona, ctx, gs, custom, mem);
   // J.A.R.V.I.S. runs on Claude Code (server/jarvisEngine.js), which reads the
   // repo itself, so the code brief is only for the plain-model fallback.
-  const engine = persona === 'jarvis' && require('./jarvisEngine').enabled() ? require('./jarvisEngine') : null;
+  let engine = persona === 'jarvis' && require('./jarvisEngine').enabled() ? require('./jarvisEngine') : null;
+  // FRONT DESK (owner, 2026-11-23: "he's never supposed to be gone and yet he still
+  // leaves"): the engine runs one turn at a time, so a new message used to wait
+  // behind whatever he was working on, sometimes half an hour. While a turn is
+  // running, his own new message is answered now on his plain model, which knows
+  // what the engine is on and can hand a new task to a worker. Out-of-band turns
+  // (a resume after a restart, a redeploy wake-up, an app job) still queue.
+  const onJob = engine && given == null && !resumes && !queue && process.env.JARVIS_FRONT_DESK !== 'off' ? engine.current() : null;
+  if (onJob) {
+    const mins = Math.max(1, Math.round((Date.now() - onJob.startedAt) / 60000));
+    engine = null;
+    sys = `${sys}\n\n[FRONT DESK — your Claude Code engine is busy right now on "${onJob.what}" (${mins} min in, now: ${onJob.step}). That job keeps going; you answer him yourself, right now, from here. Say briefly what you're on if it helps. A new task → [WORKER_START] so it runs on its own. Something about the running job (a change, an addition) → tell him you'll pick it up the moment that turn ends and write [FOR_ENGINE: exactly what to tell the running job]; it goes to the engine as soon as the turn ends. Never say you're unavailable.]`;
+  }
   if (persona === 'jarvis' && !engine) sys = `${sys}\n\n${await empireOsBrief()}`;
   { const prof = await require('./ownerProfile').profileBlock(persona).catch(() => ''); if (prof) sys = `${sys}\n\n${prof}`; }
   if (persona === 'stephanie') {
@@ -1357,6 +1369,13 @@ async function runPersonaTurn(personaId, userText, deliver, { reply: given, resu
   fx.warnings.push(...sink.warnings);
   fx.confirms.push(...sink.confirms);
   const all = replies.join('\n');
+  if (onJob) {
+    for (const t of findTags(all).filter((x) => x.name === 'FOR_ENGINE' && String(x.arg || '').trim())) {
+      const ask = `[Mr. Burrus sent this while you were on "${onJob.what}"; the front desk told him you'd pick it up when that turn ended. Do it now:]\n${t.arg}\n\n(His own words: ${userText})`;
+      require('./routes/telegram').jarvisOutOfBand(ask).catch((e) => console.error('jarvis front desk failed:', e.message));
+      fx.notes.push('Passed to the job I\'m on — it picks this up when that turn ends');
+    }
+  }
   if (findTags(all).some((t) => /EVENT$/.test(t.name))) calendarFresh();
   for (const t of openTags(all)) {
     fx.warnings.push(`${t} was cut off before it closed — what ran may be incomplete; ask again for the rest`);
