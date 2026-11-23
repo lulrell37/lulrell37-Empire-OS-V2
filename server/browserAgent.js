@@ -420,14 +420,35 @@ const NO = /\b(no|don'?t|do not|stop|cancel|hold off|wait)\b/i;
 function approves(ownerText) { const t = String(ownerText || ''); return YES.test(t) && !NO.test(t.replace(/\bno problem\b/ig, '')); }
 
 // The brain's reply -> one action, or a reason it's unusable.
-function parseAction(raw) {
+// `baseUrl` is the current page, so a relative goto ("/watch?v=…") resolves against it.
+const ACTION_KEYS = ['action', 'type', 'next', 'step', 'next_action', 'nextAction'];
+function parseAction(raw, baseUrl = '') {
   const m = String(raw || '').match(/\{[\s\S]*\}/);
   if (!m) return { error: 'no JSON in the reply' };
   let j; try { j = JSON.parse(m[0]); } catch { return { error: 'the JSON did not parse' }; }
-  // The brain doesn't always nest it: {"action":"scroll"}, {"action":"click","id":7}
-  // and {"type":"click",...} all mean the same step (Canva run, 2026-11-22).
-  const a = typeof j.action === 'string' ? { ...j, type: j.action } : j.action && typeof j.action === 'object' ? { ...j, ...j.action, type: j.action.type || j.action.action || j.type } : j;
-  const t = String(a.type || '').toLowerCase();
+  if (!j || typeof j !== 'object' || Array.isArray(j)) return { error: 'the reply was not a JSON object' };
+  // The brain doesn't always nest it: {"action":"scroll"}, {"action":"click","id":7},
+  // {"type":"click",...}, {"next":{"type":"goto",...}} all mean the same step.
+  let a = j;
+  for (const k of ACTION_KEYS) {
+    const v = j[k];
+    if (typeof v === 'string' && v.trim()) { a = { ...j, type: v.trim() }; break; }
+    if (v && typeof v === 'object' && !Array.isArray(v)) { a = { ...j, ...v, type: v.type || v.action || (typeof j.type === 'string' ? j.type : '') }; break; }
+  }
+  let t = String(a.type || '').toLowerCase().trim();
+  // A bare url (no action named) is a goto.
+  if (!t && typeof (a.url || a.href) === 'string') t = 'goto';
+  if (!t && a.result != null) t = 'done';
+  if (!t) return { error: `no action in the reply (keys: ${Object.keys(j).join(', ') || 'none'})` };
+  if (['navigate', 'open', 'visit'].includes(t)) t = 'goto';
+  if (t === 'input' || t === 'fill') t = 'type';
+  if (t === 'finish' || t === 'finished') t = 'done';
+  a = { ...a, type: t };
+  if (t === 'goto') {
+    const u = String(a.url || a.href || '').trim();
+    a.url = u;
+    if (u && !/^https?:\/\//i.test(u) && baseUrl) { try { a.url = new URL(u, baseUrl).href; } catch {} }
+  }
   const ok = { goto: ['url'], click: ['id'], type: ['id', 'text'], select: ['id', 'option'], press: ['key'], scroll: [], back: [], wait: [], done: ['result'], ask: ['question'] };
   if (!ok[t]) return { error: `unknown action "${a.type}" in ${String(m[0]).slice(0, 160)}` };
   for (const k of ok[t]) if (a[k] == null || a[k] === '') return { error: `"${t}" needs "${k}"` };
@@ -443,7 +464,7 @@ function parseAction(raw) {
 
 const AGENT_SYSTEM = (personaName, planned = false) => `You are ${personaName}'s hands on a real web browser — your own computer in the cloud, a desktop Chrome with your own saved logins. You complete Mr. Burrus's task by driving it one step at a time, like a careful person would.
 
-Every turn you get the task, the steps you've taken so far, and the page as it is now: its URL and title, every clickable or typeable element numbered [n], and the visible text. Reply with ONLY one JSON object:
+Every turn you get the task, the steps you've taken so far, and the page as it is now: its URL and title, every clickable or typeable element numbered [n], and the visible text. Reply with ONLY one JSON object, and it MUST contain exactly one "action" (a thought alone is never a valid reply; if unsure, scroll or wait, or use done/ask):
 {"thought":"one line: what you see and why this step","action":{"type":"goto","url":"https://..."}}
 Actions:
  goto {url} · click {id} · type {id, text} (replaces what's in the field) · select {id, option} · press {key: Enter|Tab|Escape|ArrowDown|ArrowUp|PageDown|PageUp|Backspace|Space} · scroll {direction: down|up} · back · wait
@@ -525,7 +546,14 @@ async function runTask({ persona, personaName = persona, task, ownerText = '', b
       const history = log.length ? log.map((l, i) => `${i + 1}. ${l}`).join('\n') : '(none yet — start)';
       const prompt = `TASK: ${task}${plan.prompt()}${pending ? `\n\nEARLIER IN THIS TASK you stopped to ask him: "${pending.question}". His reply: "${String(ownerText).slice(0, 500)}". ${approvedText ? `He APPROVED that action — you may do exactly that, nothing more.` : `That is NOT an approval to act — do not take that action; continue only with what doesn't need it, or ask again.`}` : ''}\n\nSTEPS SO FAR:\n${history}\n\nTHE PAGE NOW (step ${step} of ${MAX_STEPS}):\n${pageText(page)}`;
       const raw = await brain(AGENT_SYSTEM(personaName, !!onPlan), prompt);
-      const a = parseAction(raw);
+      let a = parseAction(raw, page.url);
+      if (a.error) {
+        // One corrective re-ask before it counts against the stop limit.
+        const fix = `${prompt}\n\nYOUR LAST REPLY WAS UNUSABLE: ${a.error}. Reply again with ONLY one JSON object holding exactly one action, e.g. {"thought":"...","action":{"type":"goto","url":"https://..."}} (types: goto{url} click{id} type{id,text} select{id,option} press{key} scroll{direction} back wait done{result} ask{question}). A goto url must be a full https:// URL.`;
+        const raw2 = await brain(AGENT_SYSTEM(personaName, !!onPlan), fix).catch(() => '');
+        const a2 = parseAction(raw2, page.url);
+        if (!a2.error) { log.push(`(reply fixed on re-ask: ${a.error})`); a = a2; }
+      }
       if (!a.error) plan.note(a);
       if (a.error) { if (++fails >= 3) return finish(b, 'stopped', `the brain kept giving unusable steps (${a.error})`, log); log.push(`(unusable reply: ${a.error})`); continue; }
       if (a.type === 'done') return finish(b, 'done', String(a.result), log);
