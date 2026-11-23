@@ -10,6 +10,16 @@ assert.strictEqual(B.parseAction('{"thought":"x","action":"scroll"}').type, 'scr
 assert.strictEqual(B.parseAction('{"action":"click","id":7}').id, 7, 'flat click');
 assert.strictEqual(B.parseAction('{"action":{"action":"press","key":"PageDown"}}').key, 'PageDown', 'nested action key');
 assert.ok(B.parseAction('no json').error);
+assert.match(B.parseAction('{"thought":"Need exact URL and date for DAY 3"}').error, /no action/, 'thought-only reply is unusable, with a clear reason');
+assert.strictEqual(B.parseAction('{"action":{"type":"goto","url":"/watch?v=abc"}}', 'https://www.youtube.com/@x/streams').url, 'https://www.youtube.com/watch?v=abc', 'relative goto resolves against the page');
+assert.strictEqual(B.parseAction('{"action":"goto","url":"watch?v=1"}', 'https://a.com/b/c').url, 'https://a.com/b/watch?v=1');
+assert.ok(B.parseAction('{"action":{"type":"goto","url":"/x"}}').error, 'relative goto with no page URL fails');
+assert.strictEqual(B.parseAction('{"url":"https://a.com"}').type, 'goto', 'bare url = goto');
+assert.strictEqual(B.parseAction('{"thought":"x","next":{"type":"click","id":4}}').id, 4, 'next object');
+assert.strictEqual(B.parseAction('{"step":{"action":"scroll","direction":"down"}}').type, 'scroll', 'nested step.action');
+assert.strictEqual(B.parseAction('{"next":"back"}').type, 'back', 'next string');
+assert.strictEqual(B.parseAction('{"thought":"x","action":{"type":"click","id":3}}').type, 'click');
+assert.match(B.AGENT_SYSTEM('J'), /exactly one "action"/, 'system prompt demands one action');
 assert.strictEqual(B.parseAction('{"action":{"type":"done","result":"found it"}}').type, 'done');
 
 // World-changing clicks stop for his OK; reading and moving around don't.
