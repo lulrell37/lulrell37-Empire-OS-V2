@@ -406,13 +406,17 @@ function boardLine(w, now = Date.now()) {
   return `${BOARD_MARK[w.status] || '•'} ${who} ${title} · ${BOARD_STATE[w.status] || w.status}${at} · ${mins} min`;
 }
 function boardText(now = Date.now()) {
+  const J = require('./jobProgress');
   const shown = Object.values(list)
     .filter((w) => ['running', 'queued'].includes(w.status) || (w.endedAt && now - w.endedAt < SHOW_DONE_MS))
     .sort((a, b) => a.createdAt - b.createdAt);
+  const jobShown = J.shown(now);
+  const jr = J.live().length;
   const r = running().length, q = queued().length;
-  const head = r || q ? `J.A.R.V.I.S.'s workers: ${r} running${q ? `, ${q} waiting` : ''}` : 'J.A.R.V.I.S.\'s workers: all done ✓';
+  const head = jr ? `Live jobs: ${r + jr} running${q ? `, ${q} waiting` : ''}` : r || q ? `J.A.R.V.I.S.'s workers: ${r} running${q ? `, ${q} waiting` : ''}` : jobShown.length && !shown.length ? 'Live jobs: all done ✓' : 'J.A.R.V.I.S.\'s workers: all done ✓';
+  const lines = [...shown.map((w) => [w.createdAt, boardLine(w, now)]), ...jobShown.map((j) => [j.startedAt, J.boardLine(j, now)])].sort((a, b) => a[0] - b[0]).map((x) => x[1]);
   const time = new Date(now).toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit' });
-  return `${head}\n\n${shown.map((w) => boardLine(w, now)).join('\n')}\n\n${r || q ? 'Updated' : 'Finished'} ${time} ET`.slice(0, 4000);
+  return `${head}\n\n${lines.join('\n')}\n\n${r || q || jr ? 'Updated' : 'Finished'} ${time} ET`.slice(0, 4000);
 }
 
 let board; // undefined = not read yet; null = no live board
@@ -438,7 +442,7 @@ async function boardTick() {
   boardBusy = true;
   try {
     await loadBoard();
-    const active = running().length + queued().length;
+    const active = running().length + queued().length + require('./jobProgress').live().length;
     if (!board && !active) return;
     const text = boardText();
     if (board && text === board.text) return;
@@ -449,7 +453,7 @@ async function boardTick() {
       const messageId = await B.send(text);
       board = { messageId, text, openedAt: Date.now() };
       await saveBoard();
-      const first = [...running(), ...queued()].map((w) => `${w.slot ? `worker ${w.slot}` : 'a waiting worker'} "${w.title}"`).join(', ');
+      const first = [...[...running(), ...queued()].map((w) => `${w.slot ? `worker ${w.slot}` : 'a waiting worker'} "${w.title}"`), ...require('./jobProgress').live().map((j) => `${j.persona} job "${j.title}"`)].join(', ');
       Promise.resolve(B.log(`[J.A.R.V.I.S.'s live worker board posted (${first}); it updates in place as they work]`)).catch(() => {});
     } else {
       try { await B.edit(board.messageId, text); } catch (e) {
@@ -509,4 +513,7 @@ async function tag(name, arg) {
 const WORKER_TOOLS = ` - [WORKER_START: code|browse | short title | the full task, self-contained | Drive note title (browse only, optional)] — hand a task to a worker of your own so you stay free to talk to him. code = its own Claude Code on its own GitHub runner (not the server), on a worker/ branch cut from main: it commits, the job pushes that branch only, never main; good for any general job (code, research, checks, writing). browse = a browser task on the server, its result saved to that Drive note; one browse at a time. Every browser shares the same saved logins, so a site you or A.R.A. are signed in to works for a worker too. A file in his Google Drive is read with your Drive tags ([READ_NOTE], [SEARCH_DRIVE], [READ_FILE_ID]), not a browse worker. HARD CAP: 3 workers running at once, total; the rest wait in line. Call them by their slot, "worker 1, 2 or 3", never by a running count; [WORKER_STOP: 2] stops the one in slot 2. A browse worker stuck on information (a sign-in, an account email, a code) gets it from A.R.A., who searches his email and notes, and carries on; only what nobody can supply comes to him, from you. Each one's progress shows live on his notification strip, and its report goes straight to him on your bot when it ends (you'll see it in this chat), so you don't need to relay it; if he asks, read [WORKER_STATUS]. A code worker's work ships when he says push: merge its branch into main then. Use them for EVERY task, whatever its length (his standing order, 2026-11-22), so you are always free to talk to him. Only straight answers and seconds-long lookups stay with you.
  - [WORKER_STATUS] — every worker: running, waiting, done, with its current step and GitHub link. [WORKER_STOP: id] — stop one (a GitHub run is cancelled).`;
 
-module.exports = { start, stop, recover, statusText, forApp, tag, WORKER_TOOLS, enabled, _setDeps: (x) => { deps = x; list = null; board = undefined; boardLast = 0; }, _list: () => list, _boardText: () => boardText(), logFailure, FAIL_KEY, _tgBoardDeps: tgBoardDeps, parsePlan, percentOf, progressLabel, readPlanComment, PLAN_FILE };
+// Persona jobs (jobProgress.js) share this one board: load the workers, then update it.
+async function kick() { await load(); boardKick(); }
+
+module.exports = { kick, start, stop, recover, statusText, forApp, tag, WORKER_TOOLS, enabled, _setDeps: (x) => { deps = x; list = null; board = undefined; boardLast = 0; }, _list: () => list, _boardText: () => boardText(), logFailure, FAIL_KEY, _tgBoardDeps: tgBoardDeps, parsePlan, percentOf, progressLabel, readPlanComment, PLAN_FILE };

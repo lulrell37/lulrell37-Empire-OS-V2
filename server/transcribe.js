@@ -35,7 +35,7 @@ function formatTranscript(segments) {
 
 const SOURCE_NAME = { youtube: 'YouTube', instagram: 'Instagram', tiktok: 'TikTok', drive: 'Google Drive' };
 
-async function transcribeLink(url, { save = true } = {}) {
+async function transcribeLink(url, { save = true, persona = 'ara' } = {}) {
   if (!enabled()) throw new Error('transcription is switched off (TRANSCRIBE=off)');
   const link = String(url || '').trim();
   const kind = sourceOf(link);
@@ -43,9 +43,13 @@ async function transcribeLink(url, { save = true } = {}) {
   if (running >= MAX_RUNNING) throw new Error('two transcriptions are already running — wait for one to finish');
   running++;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'transcribe-'));
+  // Live progress (server/jobProgress.js).
+  const jobs = require('./jobProgress');
+  const jid = jobs.start(persona, `Transcribe: ${link.replace(/^https?:\/\/(www\.)?/, '').slice(0, 45)}`, ['Download', 'Transcribe', 'Save to Drive']);
   try {
     let src = path.join(dir, 'source');
     let name;
+    jobs.step(jid, 'Download');
     if (kind === 'drive') name = await google.driveDownloadTo(clip.driveId(link), src, clip.MAX_BYTES);
     else ({ file: src, name } = await clip.downloadYouTube(link, dir));
     const total = await clip.duration(src);
@@ -53,16 +57,22 @@ async function transcribeLink(url, { save = true } = {}) {
     if (total > clip.MAX_SEC) throw new Error(`that video is ${clip.mmss(total)} — the limit is ${clip.mmss(clip.MAX_SEC)}`);
     const audioDir = path.join(dir, 'audio');
     fs.mkdirSync(audioDir);
+    jobs.step(jid, 'Transcribe');
     const segments = await clip.transcribeVideo(src, audioDir, { prompt: '' });
     if (!segments.length) throw new Error('no speech found in that video (music or silence only)');
     const title = String(name || 'video').replace(/\.[^.]+$/, '').replace(/[\r\n|[\]]+/g, ' ').trim().slice(0, 80) || 'video';
     const body = formatTranscript(segments);
     let note = null;
     if (save) {
+      jobs.step(jid, 'Save to Drive');
       const content = `# Transcript — ${title}\n\nSource: ${link} (${SOURCE_NAME[kind]}, ${clip.mmss(total)})\nTranscribed ${new Date().toLocaleString('en-US', { timeZone: 'America/New_York' })} ET with Whisper. Timestamps are [m:ss] from the start.\n\n${body}\n`;
       note = await google.saveDriveNote(`Transcript — ${title}`, content).catch((e) => ({ error: e.message }));
     }
+    jobs.done(jid, title);
     return { title, kind, total, segments, text: body, note };
+  } catch (e) {
+    jobs.fail(jid, e);
+    throw e;
   } finally {
     running--;
     fs.rmSync(dir, { recursive: true, force: true });
@@ -70,8 +80,8 @@ async function transcribeLink(url, { save = true } = {}) {
 }
 
 // The tag's result inside a persona turn.
-async function transcribeTag(arg) {
-  const r = await transcribeLink(String(arg || '').split('|')[0]);
+async function transcribeTag(arg, persona = 'ara') {
+  const r = await transcribeLink(String(arg || '').split('|')[0], { persona });
   const saved = r.note && !r.note.error
     ? `Saved to his Drive as "Transcript — ${r.title}"${r.note.link ? ` (${r.note.link})` : ''}; [READ_NOTE: Transcript — ${r.title}] reads it back later.`
     : `⚠️ Not saved to Drive${r.note && r.note.error ? ` (${r.note.error})` : ''} — the transcript is only here.`;
@@ -87,7 +97,7 @@ const TRANSCRIBE_TOOLS = ` - [TRANSCRIBE: link] — the full transcript, with ti
 // asking persona's bot if it has one, else A.R.A.'s): the note link, then the
 // transcript itself (long ones are split into several messages).
 function transcribeInBackground(url, persona = 'ara') {
-  transcribeLink(url).then(async (r) => {
+  transcribeLink(url, { persona }).then(async (r) => {
     const telegram = require('./telegram');
     const bot = (telegram.botFor(persona) && telegram.botFor(persona).isConfigured()) ? telegram.botFor(persona) : telegram.botFor('ara');
     if (!bot || !bot.isConfigured()) return;

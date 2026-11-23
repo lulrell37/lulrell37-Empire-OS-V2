@@ -356,11 +356,12 @@ async function buildHtml(facts, brief, words, images, name, changes = '', curren
   return finishHtml(t, { name, images });
 }
 
-async function buildSite(biz, { changes = '', current = '' } = {}) {
+async function buildSite(biz, { changes = '', current = '', onStage = () => {} } = {}) {
   const images = [...((biz.old && biz.old.images) || []), ...(biz.photos || [])].slice(0, 20);
   const facts = factSheet(biz, images);
   const brief = biz.brief || await design(facts);
   const words = biz.words || await copy(facts, brief);
+  onStage('Build the page');
   let html = await buildHtml(facts, brief, words, images, biz.name, changes, current);
   let bad = checkHtml(html, biz);
   if (bad.length && !current) {
@@ -412,12 +413,26 @@ const tell = (text, spoken) => require('./talonAlerts').sendFromAra(text, spoken
 
 let busy = false;
 
+// Live progress (server/jobProgress.js): a tracked job once a business is found.
 async function buildOne(s, { force = false } = {}) {
+  const jobs = require('./jobProgress');
   const biz = await findBusiness(s);
   await save(s);
   if (!biz) return { skipped: 'no business with an email found this round' };
+  const jid = jobs.start('jarvis', `Website: ${String(biz.name).slice(0, 50)}`, ['Gather photos', 'Design and copy', 'Build the page', 'Publish', 'Notify']);
+  try {
+    const r = await buildFound(s, biz, { force }, jid);
+    jobs.done(jid, r.built || '');
+    return r;
+  } catch (e) { jobs.fail(jid, e); throw e; }
+}
+
+async function buildFound(s, biz, { force = false } = {}, jid = null) {
+  const jobs = require('./jobProgress');
+  jobs.step(jid, 'Gather photos');
   if (biz.photoNames && biz.photoNames.length && placesKey()) biz.photos = await placePhotos(biz.photoNames);
-  const { html, brief, words } = await buildSite(biz);
+  jobs.step(jid, 'Design and copy');
+  const { html, brief, words } = await buildSite(biz, { onStage: (l) => jobs.step(jid, l) });
   const slug = slugFor(biz.name);
   const review = s.reviewLeft > 0;
   const site = {
@@ -426,9 +441,11 @@ async function buildOne(s, { force = false } = {}) {
     status: review ? 'review' : 'approved', brief, words, facts: { ...biz, old: biz.old ? { ...biz.old, text: biz.old.text.slice(0, 8000) } : null },
     source: placesKey() ? 'google maps' : 'web search',
   };
+  jobs.step(jid, 'Publish');
   await putSite(slug, site, html);
   s.builtToday++;
   await save(s);
+  jobs.step(jid, 'Notify');
   const url = siteUrl(slug);
   const what = site.oldUrl ? `a redesign of their site (${site.oldUrl})` : 'their first website';
   if (review) {

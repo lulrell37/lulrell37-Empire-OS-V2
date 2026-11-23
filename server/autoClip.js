@@ -191,7 +191,7 @@ async function tick() {
     if (meta.duration && meta.duration < MIN_SEC) { await finish('skipped', `only ${Math.round(meta.duration / 60)} min`); return { skipped: 'short' }; }
     console.log(`auto clip: scanning ${v.channel} — "${v.title}"`);
     try {
-      const r = await clip.clipScan(v.url, '');
+      const r = await clip.clipScan(v.url, '', { title: `Auto clip: ${String(v.title || v.url).slice(0, 50)}` });
       await finish('clipped');
       await deliver(v, r);
     } catch (e) {

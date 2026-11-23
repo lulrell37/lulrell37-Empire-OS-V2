@@ -37,6 +37,7 @@ app.post('/redeploy', auth, (req, res) => require('./redeploy').requestRedeploy(
 app.get('/weather/live', auth, (req, res) => require('./morningBrief').weatherLive(req.query.place).then((text) => res.json({ text })).catch((e) => res.status(502).json({ error: e.message })));
 app.post('/features/request', auth, express.json(), (req, res) => require('./featureRequests').request(String(req.body.persona || 'ara'), String(req.body.need || ''), { asked: String(req.body.asked || ''), from: 'app' }).then((text) => res.json({ text })).catch((e) => res.status(500).json({ error: e.message })));
 app.get('/workers', auth, (req, res) => require('./workers').forApp().then((items) => res.json({ items })).catch((e) => res.status(500).json({ error: e.message })));
+app.get('/jobs', auth, (req, res) => require('./jobProgress').forApp().then((items) => res.json({ items })).catch((e) => res.status(500).json({ error: e.message })));
 app.get('/sentinel', auth, (req, res) => require('./sentinel').status().then((items) => res.json({ items })).catch((e) => res.status(500).json({ error: e.message })));
 
 // JSON APIs.
