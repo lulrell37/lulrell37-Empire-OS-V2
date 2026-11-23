@@ -264,10 +264,15 @@ async function transcribe(buffer, filename = 'voice.ogg') {
   return fixNames(d.text || '');
 }
 
+// Whisper refuses audio under 0.1 s (audio_too_short) and that used to abort a whole scan. A stub like that
+// is a tiny file with no audio frames: anything under 1 KB can't hold 0.1 s of speech, so treat it as silence.
+const tooShort = (buf) => !buf || buf.length < 1024;
+
 // Whisper with timestamps: [{ start, end, text }] in seconds, for a long
 // recording's chunk. Needs OPENAI_API_KEY. Same persona-name vocabulary.
 async function transcribeSegments(buffer, filename = 'audio.mp3', { prompt = 'A.R.A., Ara, J.A.R.V.I.S., T.A.L.O.N., S.E.L.E.N.E. Okay. Here is what I need you to do.' } = {}) {
   if (!process.env.OPENAI_API_KEY) throw new Error('transcription needs OPENAI_API_KEY on the server');
+  if (tooShort(buffer)) return [];
   const form = new FormData();
   form.append('file', new Blob([buffer]), filename);
   form.append('model', 'whisper-1');
@@ -295,6 +300,7 @@ function fixNames(text) {
 // repetition) are dropped: that is what put words on screen nobody said.
 async function transcribeWords(buffer, filename = 'clip.mp3', { prompt = '' } = {}) {
   if (!process.env.OPENAI_API_KEY) throw new Error('captions need OPENAI_API_KEY on the server');
+  if (tooShort(buffer)) return [];
   const form = new FormData();
   form.append('file', new Blob([buffer]), filename);
   form.append('model', 'whisper-1');
