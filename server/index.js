@@ -72,6 +72,9 @@ app.get('/mem0/status', auth, async (req, res) => {
 app.use('/telegram', express.json({ limit: '1mb' }), require('./routes/telegram'));
 // The website desk's pages (server/siteDesk.js): public, since the business owners open them.
 app.use('/sites', require('./routes/sites'));
+// His own website, "Welcome to The Empire" (site/empire, rebuilt from his Canva design): public.
+app.use('/empire', require('./routes/empireSite').router);
+setTimeout(() => require('./routes/empireSite').prewarm(), 3 * 60e3).unref();
 
 app.use((req, res) => res.status(404).json({ error: 'not found' }));
 app.use((err, req, res, next) => {
