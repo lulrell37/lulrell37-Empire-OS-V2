@@ -1,6 +1,6 @@
 // /empire — "Welcome to The Empire", Tarell's own website, rebuilt from his Canva
-// design (owner, 2026-11-23; how it was built and how to change it: site/empire/README.md).
-// Public. The pages are static files in site/empire. Media (his photos and videos,
+// design (owner, 2026-11-23; how it was built and how to change it: server/site-empire/README.md).
+// Public. The pages are static files in server/site-empire. Media (his photos and videos,
 // ~32 MB) lives in the GitHub release `empire-site-media`, not in the repo, so the
 // server's tarball stays small: each file is fetched once into a disk cache and
 // served from there (Range requests work, so the videos stream).
@@ -13,7 +13,8 @@ const os = require('os');
 const path = require('path');
 
 const router = express.Router();
-const ROOT = path.join(__dirname, '..', '..', 'site', 'empire');
+// Inside server/: boot.js downloads only server/ from GitHub, so the pages must live here.
+const ROOT = path.join(__dirname, '..', 'site-empire');
 const CACHE = () => process.env.EMPIRE_SITE_CACHE || path.join(os.homedir(), '.empire-bin', 'site-media');
 const MEDIA_URL = () => process.env.EMPIRE_SITE_MEDIA_URL || 'https://github.com/lulrell37/lulrell37-Empire-OS-V2/releases/download/empire-site-media';
 const SAFE = /^[A-Za-z0-9_-]{1,40}\.(webp|svg|mp4|png|jpg)$/;

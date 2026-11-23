@@ -4,7 +4,7 @@ Live at `<server>/empire/` (served by `server/routes/empireSite.js`). Rebuilt on
 Canva website design "Welcome to The Empire" (`DAG_bBmR7rI`), 39 of its 53 pages (he left out Canva
 pages 2, 5, 16, 20, 25, 29 and 46-53).
 
-- **Pages** are plain HTML here, one file per page (`index.html` = Home). Edit them directly.
+- **Pages** are plain HTML here (inside server/, because the self-updating boot downloads only server/), one file per page (`index.html` = Home). Edit them directly.
   On a computer every element sits where the Canva design put it (positions in %, text sized off the
   section width via container units); under 700px wide the same elements stack in one column
   (`style.css`). Layered pieces (the crown + TB logo) stay together as a group.

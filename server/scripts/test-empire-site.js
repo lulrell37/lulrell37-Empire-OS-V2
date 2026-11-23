@@ -1,11 +1,11 @@
-// node server/scripts/test-empire-site.js — his website (site/empire): every link
+// node server/scripts/test-empire-site.js — his website (server/site-empire): every link
 // between pages lands on a page, every media file a page uses is in the release list
-// (site/empire/media.json), and the form endpoint takes good input and refuses bad.
+// (server/site-empire/media.json), and the form endpoint takes good input and refuses bad.
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const Module = require('module');
-const ROOT = path.join(__dirname, '..', '..', 'site', 'empire');
+const ROOT = path.join(__dirname, '..', 'site-empire');
 const media = JSON.parse(fs.readFileSync(path.join(ROOT, 'media.json'), 'utf8'));
 const pages = fs.readdirSync(ROOT).filter((f) => f.endsWith('.html'));
 assert.ok(pages.length >= 30, 'the pages are there');

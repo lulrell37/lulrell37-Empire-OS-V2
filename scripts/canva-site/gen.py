@@ -1,4 +1,4 @@
-"""pages.json -> responsive static site in ../site (copied into the repo's site/empire)."""
+"""pages.json -> responsive static site in ../site (copied into the repo's server/site-empire)."""
 import json, re, os, html, shutil, difflib
 
 OUT = os.environ.get('OUT', 'site')
