@@ -60,7 +60,10 @@ try {
   assert.deepStrictEqual(fast[0], ['0:00:00.00', '0:00:03.00'], 'hook spans the sped-up clip (3.3s / 1.1)');
   assert.strictEqual(fast[1][0], '0:00:01.00', 'word at 1.1s lands at 1.0s at 1.1x');
   assert.strictEqual(fast[2][0], '0:00:02.00', 'word at 2.2s lands at 2.0s at 1.1x');
-  assert.strictEqual(L.parseSpeed(undefined, undefined), 1.1, 'default 1.1');
+  assert.strictEqual(L.parseSpeed(undefined, undefined), 1.5, 'default 1.5');
+  assert.strictEqual(L.parseSpeed(L.legacySpeed('1.1'), undefined), 1.5, 'stored old default 1.1 ignored');
+  assert.strictEqual(L.parseSpeed(L.legacySpeed('1.25'), undefined), 1.25, 'other stored values kept');
+  assert.strictEqual(L.parseSpeed(L.legacySpeed('1.0'), undefined), 1, 'stored 1.0 = off kept');
   assert.strictEqual(L.parseSpeed('', '1.25'), 1.25, 'env used when no setting');
   assert.strictEqual(L.parseSpeed('1.3', '1.25'), 1.3, 'setting wins over env');
   assert.strictEqual(L.parseSpeed('3'), 1.5, 'clamped high');

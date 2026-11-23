@@ -4,7 +4,8 @@
 //                videos with enough views
 //   - comments:  timestamps quoted in the top comments ("4:32 I'm dead")
 //   - chat:      a past livestream's chat replay: message rate per 15 s and
-//                reaction words (LMAO, 💀, W…), spikes against the rolling norm
+//                reaction words, spikes against the rolling norm; laughter words
+//                (LMAO, KEKW, 💀, 😂) weigh LAUGH_W x a plain hype word (W, bro, omg)
 //   - loud:      audio energy jumps (any video, his own uploads included)
 // `hotspots()` merges them into ranked windows the picker is told to prefer;
 // the transcript still decides where each clip starts and ends.
@@ -80,9 +81,14 @@ function heatPeaks(heatmap) {
   return out.sort((a, b) => b.value - a.value);
 }
 
-const REACT = /\b(lmf?ao+|lo+l+|ha(ha)+|omg+|no wa+y+|bro+|w+|clip (it|that)|wtf|yo+o+)\b|😂|🤣|💀|😭|🔥|😱|‼️|❗/gi;
+// Laughter words say "this was funny"; hype words only say "something happened". Laughs count
+// LAUGH_W times in a bucket's weight, hype once more than a plain message.
+const LAUGH = /\b(lmf?ao+|lma+o+|lo+l+|ro+fl|kek+w*|ha(ha)+|i'?m dead|im dead|dead|dying|crying|i can'?t|icant|cant breathe|bruh+|bro+ what|nah+ bro|nah+ nah+|not the|stop it)\b|😂|🤣|💀|😭|☠️/gi;
+const HYPE = /\b(omg+|no wa+y+|bro+|w+|l+|nah+|clip (it|that)|wtf|yo+o+|what the)\b|🔥|😱|‼️|❗/gi;
+const REACT = new RegExp(`${LAUGH.source}|${HYPE.source}`, 'gi');
+const LAUGH_W = 4;
 
-// Live chat replay lines -> [{t, n, react}] per 15 s.
+// Live chat replay lines -> [{t, n, react, laugh}] per 15 s.
 function chatBuckets(lines) {
   const b = new Map();
   for (const line of lines) addChatLine(b, line);
@@ -98,11 +104,16 @@ function addChatLine(b, line) {
     if (!item) return;
     const text = (item.message?.runs || []).map((r) => r.text || r.emoji?.shortcuts?.[0] || r.emoji?.emojiId || '').join('');
     const k = Math.floor(ms / 1000 / CHAT_BUCKET) * CHAT_BUCKET;
-    const cur = b.get(k) || { t: k, n: 0, react: 0 };
-    cur.n++; cur.react += (text.match(REACT) || []).length;
+    const cur = b.get(k) || { t: k, n: 0, react: 0, laugh: 0 };
+    cur.n++;
+    cur.laugh += (text.match(LAUGH) || []).length;
+    cur.react += (text.match(HYPE) || []).length + (text.match(LAUGH) || []).length;
     b.set(k, cur);
   }
 }
+
+// One chat bucket's weight for spike detection: laughs count most.
+const chatWeight = (x) => x.n + 2 * (x.react - (x.laugh || 0)) + (2 + LAUGH_W) * (x.laugh || 0);
 
 // A chat replay file -> buckets, read line by line (a long stream's chat runs to
 // hundreds of MB: reading it whole and parsing it in one go froze the server,
@@ -242,7 +253,7 @@ function hotspots({ replayed = [], comments = [], chat = [], loud = [] }) {
   const hits = [];
   for (const p of replayed.slice(0, 10)) hits.push({ t: p.t, w: 40 + 50 * p.value, why: `most replayed (${p.x}x the video's norm)` });
   for (const c of comments.slice(0, 10)) if (c.n >= 1) hits.push({ t: c.t, w: Math.min(85, 30 + 15 * c.n + 5 * Math.log10(1 + c.likes)), why: `${c.n} comment${c.n === 1 ? '' : 's'} cite it${c.likes ? ` (${c.likes} likes)` : ''}` });
-  for (const s of chat.slice(0, 12)) hits.push({ t: s.t, w: Math.min(85, 25 + 12 * s.ratio), why: `chat x${s.ratio}${s.react ? `, ${s.react} reactions` : ''}` });
+  for (const s of chat.slice(0, 12)) hits.push({ t: s.t, w: Math.min(95, 25 + 12 * s.ratio + 5 * Math.min(8, s.laugh || 0)), laugh: s.laugh || 0, why: `chat x${s.ratio}${s.laugh ? `, ${s.laugh} laughing (LMAO/KEKW/💀)` : ''}${s.react - (s.laugh || 0) > 0 ? `, ${s.react - (s.laugh || 0)} hype` : ''}` });
   for (const l of loud.slice(0, 10)) hits.push({ t: l.t, w: Math.min(45, 15 + 3 * l.db), why: `audio +${l.db} dB` });
   hits.sort((a, b) => a.t - b.t);
   const wins = [];
@@ -255,7 +266,8 @@ function hotspots({ replayed = [], comments = [], chat = [], loud = [] }) {
     // Strongest signal plus a bonus for each other kind that agrees.
     const best = Math.max(...w.parts.map((p) => p.w));
     const kinds = new Set(w.parts.map((p) => p.why.split(' ')[0])).size;
-    return { start: w.start, end: w.end, score: Math.round(Math.min(100, best + 8 * (kinds - 1))), why: [...new Set(w.parts.map((p) => p.why))].join('; ') };
+    const laugh = w.parts.reduce((a, p) => a + (p.laugh || 0), 0);
+    return { start: w.start, end: w.end, laugh, score: Math.round(Math.min(100, best + 8 * (kinds - 1))), why: [...new Set(w.parts.map((p) => p.why))].join('; ') };
   }).sort((a, b) => b.score - a.score).slice(0, MAX_HOT);
 }
 
@@ -277,8 +289,8 @@ async function gather({ kind, url, src, dir, ytdlpBin, ytdlpArgs = [], total, me
         const b = await chatP;
         if (!b || !b.length) notes.push('no chat replay saved on that stream');
         else {
-          const s = spikes(b.map((x) => ({ t: x.t, v: x.n + 2 * x.react })), { floor: 3 });
-          sig.chat = inWin(s.map((x) => ({ ...x, react: (b.find((y) => y.t === x.t) || {}).react || 0 })));
+          const s = spikes(b.map((x) => ({ t: x.t, v: chatWeight(x) })), { floor: 3 });
+          sig.chat = inWin(s.map((x) => { const y = b.find((z) => z.t === x.t) || {}; return { ...x, react: y.react || 0, laugh: y.laugh || 0 }; }));
           used.push(`chat replay (${b.reduce((a, x) => a + x.n, 0)} messages${b.partial ? `, first ${Math.round(b[b.length - 1].t / 60)} min only` : ''})`);
         }
       } catch (e) { notes.push(`chat replay unavailable (${e.message})`); }
@@ -291,4 +303,4 @@ async function gather({ kind, url, src, dir, ytdlpBin, ytdlpArgs = [], total, me
   return { hot: hotspots(sig), used, notes };
 }
 
-module.exports = { bestWindow, readChatFile, gather, startChat, youtubeMeta, hotspots, commentTimestamps, commentHits, heatPeaks, chatBuckets, spikes, loudSpikes, loudness };
+module.exports = { chatWeight, LAUGH, bestWindow, readChatFile, gather, startChat, youtubeMeta, hotspots, commentTimestamps, commentHits, heatPeaks, chatBuckets, spikes, loudSpikes, loudness };
