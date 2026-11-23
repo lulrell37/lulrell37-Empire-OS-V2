@@ -17,7 +17,7 @@ const MAX_RUNNING = 2;
 
 function enabled() { return String(process.env.TRANSCRIBE || '').toLowerCase() !== 'off'; }
 
-// 'youtube' | 'instagram' | 'tiktok' | 'drive' | null
+// 'youtube' | 'instagram' | 'tiktok' | 'x' | 'drive' | null
 function sourceOf(url) {
   const u = String(url || '').trim();
   if (!/^https?:\/\//i.test(u)) return null;
@@ -33,13 +33,13 @@ function formatTranscript(segments) {
   return segments.map((s) => `[${clip.mmss(s.start)}] ${String(s.text).trim()}`).join('\n');
 }
 
-const SOURCE_NAME = { youtube: 'YouTube', instagram: 'Instagram', tiktok: 'TikTok', drive: 'Google Drive' };
+const SOURCE_NAME = { youtube: 'YouTube', instagram: 'Instagram', tiktok: 'TikTok', x: 'X', drive: 'Google Drive' };
 
 async function transcribeLink(url, { save = true, persona = 'ara' } = {}) {
   if (!enabled()) throw new Error('transcription is switched off (TRANSCRIBE=off)');
   const link = String(url || '').trim();
   const kind = sourceOf(link);
-  if (!kind) throw new Error('needs a YouTube, Instagram, TikTok or Google Drive link to one video');
+  if (!kind) throw new Error('needs a YouTube, Instagram, TikTok, X or Google Drive link to one video');
   if (running >= MAX_RUNNING) throw new Error('two transcriptions are already running — wait for one to finish');
   running++;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'transcribe-'));
@@ -91,7 +91,7 @@ async function transcribeTag(arg, persona = 'ara') {
     `${cut ? r.text.slice(0, INLINE_CHARS) + '\n…(cut here; the full transcript is in the note)' : r.text}`;
 }
 
-const TRANSCRIBE_TOOLS = ` - [TRANSCRIBE: link] — the full transcript, with timestamps, of one video: a YouTube, Instagram (reel, post, IGTV), TikTok or Google Drive link. The transcript comes back to you this turn and is saved to his Drive as "Transcript — <title>". Use it whenever he sends a video and wants what's said in it, a summary, quotes, or to break down how it's built. A short reel takes under a minute, an hour of video several. Report only what the transcript says; if it fails, give him the reason it gave.`;
+const TRANSCRIBE_TOOLS = ` - [TRANSCRIBE: link] — the full transcript, with timestamps, of one video: a YouTube, Instagram (reel, post, IGTV), TikTok, X (x.com / twitter.com post with a video) or Google Drive link. The transcript comes back to you this turn and is saved to his Drive as "Transcript — <title>". Use it whenever he sends a video and wants what's said in it, a summary, quotes, or to break down how it's built. A short reel takes under a minute, an hour of video several. Report only what the transcript says; if it fails, give him the reason it gave.`;
 
 // For the app: run it in the background and send it to him on Telegram (the
 // asking persona's bot if it has one, else A.R.A.'s): the note link, then the
