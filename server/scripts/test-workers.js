@@ -193,12 +193,14 @@ function fakeGitHub() {
   // Code workers run on GitHub, so their plan arrives as a <!-- worker-plan --> issue comment.
   const GAP = 40;
   const tgCalls = [], boardLogs = [];
-  let editFail = null;
+  let editFail = null, pinFail = null; const pinCalls = [];
   const board = {
     ready: () => true,
     send: async (text) => { tgCalls.push({ op: 'send', text, at: Date.now() }); return 500 + tgCalls.filter((c) => c.op === 'send').length; },
     edit: async (id, text) => { if (editFail) throw new Error(editFail); tgCalls.push({ op: 'edit', id, text, at: Date.now() }); },
     log: async (t) => boardLogs.push(t),
+    pin: async (id) => { if (pinFail) throw new Error(pinFail); pinCalls.push({ op: 'pin', id }); },
+    unpin: async (id) => { pinCalls.push({ op: 'unpin', id }); },
   };
   const boardSaved = () => JSON.parse(settings.workers_tg_board || 'null');
   const baseDeps = (g, extra = {}) => ({ gh: g.call, repo: () => ({ owner: 'o', repo: 'r' }), slot: async () => () => {}, browse: null, tell: async (t) => told.push(t), saveNote: async () => {}, onDone: () => null, board, boardGapMs: GAP, boardRefreshMs: 60e3, ...extra });
@@ -369,6 +371,49 @@ function fakeGitHub() {
     assert.match(require('fs').readFileSync(require('path').join(__dirname, '..', 'jarvisEngine.js'), 'utf8'), /never opens a drive\.google\.com or docs\.google\.com file link[^]*READ_FILE_ID/, 'FRONT DESK carries the rule');
   }
 
+  // Pinning: a new board is pinned once, all-done unpins it, a pin failure still posts, WORKER_TG_PIN=off makes no calls.
+  {
+    const errs2 = []; const re2 = console.error; console.error = (...a2) => errs2.push(a2.join(' '));
+    gh = fakeGitHub(); settings.workers = '{}'; delete settings.workers_tg_board; tgCalls.length = 0; pinCalls.length = 0;
+    W._setDeps(baseDeps(gh));
+    const p1 = await W.start({ kind: 'code', title: 'pin job', task: 'do it' }); await sleep(GAP * 2);
+    const sentId = tgCalls.find((c) => c.op === 'send') && 500 + tgCalls.filter((c) => c.op === 'send').length;
+    assert.deepStrictEqual(pinCalls, [{ op: 'pin', id: sentId }], 'new board pinned once');
+    assert.strictEqual(boardSaved().pinned, true, 'pinned flag saved next to the id');
+    setPlan(gh, p1.id, '1. [x] a\n2. [ ] b\n'); await sleep(GAP * 3);
+    assert.strictEqual(pinCalls.filter((c) => c.op === 'pin').length, 1, 'edits never pin again');
+    gh.finish(p1.id); await sleep(GAP * 5);
+    assert.deepStrictEqual(pinCalls[pinCalls.length - 1], { op: 'unpin', id: sentId }, 'all done unpins');
+    assert.strictEqual(boardSaved(), null);
+
+    // A restart with the flag saved: no second pin.
+    pinCalls.length = 0; tgCalls.length = 0; gh = fakeGitHub();
+    settings.workers = JSON.stringify({ 1: { id: '1', kind: 'code', title: 'cut', task: 't', status: 'running', slot: 1, attempts: 2, createdAt: Date.now() - 6e4, startedAt: Date.now() - 6e4, step: 3, progress: 'x', percent: 40, plan: P(2, 5) } });
+    settings.workers_tg_board = JSON.stringify({ messageId: 88, text: 'old', pinned: true });
+    W._setDeps(baseDeps(gh)); await W.recover(); await sleep(GAP * 4);
+    assert.ok(!pinCalls.some((c) => c.op === 'pin'), 'restart does not pin a pinned board again');
+    assert.ok(pinCalls.some((c) => c.op === 'unpin' && c.id === 88), 'and the all-done edit unpins it');
+
+    // Pin failure: board is still posted, logged for the sentinel.
+    pinCalls.length = 0; tgCalls.length = 0; settings.workers = '{}'; delete settings.workers_tg_board; errs2.length = 0; pinFail = 'not enough rights';
+    gh = fakeGitHub(); W._setDeps(baseDeps(gh));
+    const p2 = await W.start({ kind: 'code', title: 'pin fails', task: 'do it' }); await sleep(GAP * 2);
+    assert.strictEqual(tgCalls.filter((c) => c.op === 'send').length, 1, 'board posted despite the pin failure');
+    assert.ok(errs2.some((e) => /^workers failed: telegram board pin: not enough rights/.test(e)), 'pin failure logged');
+    assert.ok(boardSaved() && !boardSaved().pinned, 'not marked pinned');
+    pinFail = null; gh.finish(p2.id); await sleep(GAP * 5);
+    assert.strictEqual(boardSaved(), null);
+
+    // WORKER_TG_PIN=off: no pin calls at all, board still works.
+    process.env.WORKER_TG_PIN = 'off'; pinCalls.length = 0; tgCalls.length = 0; gh = fakeGitHub(); W._setDeps(baseDeps(gh));
+    const p3 = await W.start({ kind: 'code', title: 'no pin', task: 'do it' }); await sleep(GAP * 2);
+    gh.finish(p3.id); await sleep(GAP * 5);
+    assert.ok(tgCalls.some((c) => c.op === 'send'), 'board still posted');
+    assert.strictEqual(pinCalls.length, 0, 'WORKER_TG_PIN=off: no pin or unpin calls');
+    delete process.env.WORKER_TG_PIN;
+    console.error = re2;
+  }
+
   // WORKER_TG_BOARD=off: no board at all.
   process.env.WORKER_TG_BOARD = 'off'; tgCalls.length = 0;
   await W.start({ kind: 'code', title: 'quiet job', task: 'do it' }); await sleep(GAP * 3);
@@ -423,6 +468,8 @@ function fakeGitHub() {
   await real.edit(9, 'new text');
   assert.deepStrictEqual(sent[1], { method: 'editMessageText', body: { chat_id: '1', message_id: 9, text: 'new text' } });
   await real.edit(9, 'same'); // must not throw
+  await real.pin(9); await real.unpin(9);
+  assert.deepStrictEqual(sent.slice(-2), [{ method: 'pinChatMessage', body: { chat_id: '1', message_id: 9, disable_notification: true } }, { method: 'unpinChatMessage', body: { chat_id: '1', message_id: 9 } }], 'silent pin, then unpin');
   assert.strictEqual(dbRows.length, 0, 'sends and edits not logged');
   await real.log('[board posted]');
   assert.strictEqual(dbRows.length, 1); assert.strictEqual(dbRows[0][0], 'jarvis');
