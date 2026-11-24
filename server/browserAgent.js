@@ -447,12 +447,12 @@ function parseAction(raw, baseUrl = '') {
   if (t === 'goto') {
     const u = String(a.url || a.href || '').trim();
     a.url = u;
-    if (u && !/^https?:\/\//i.test(u) && baseUrl) { try { a.url = new URL(u, baseUrl).href; } catch {} }
+    if (u && !/^https?:\/\//i.test(u) && !/^\{\{/.test(u) && baseUrl) { try { a.url = new URL(u, baseUrl).href; } catch {} }
   }
   const ok = { goto: ['url'], click: ['id'], type: ['id', 'text'], select: ['id', 'option'], press: ['key'], scroll: [], back: [], wait: [], done: ['result'], ask: ['question'] };
   if (!ok[t]) return { error: `unknown action "${a.type}" in ${String(m[0]).slice(0, 160)}` };
   for (const k of ok[t]) if (a[k] == null || a[k] === '') return { error: `"${t}" needs "${k}"` };
-  if (t === 'goto' && !/^https?:\/\//i.test(String(a.url))) return { error: 'goto needs a full http(s) URL' };
+  if (t === 'goto' && !/^https?:\/\//i.test(String(a.url)) && !/^\{\{\s*\w+\s*\}\}$/.test(String(a.url))) return { error: 'goto needs a full http(s) URL' };
   // A worker's run also states a plan and which step of it this is (planned runs only).
   const rawPlan = Array.isArray(j.plan) ? j.plan : Array.isArray(a.plan) ? a.plan : null;
   const plan = rawPlan ? rawPlan.map((x) => String(x && typeof x === 'object' ? x.name || x.step || '' : x).trim().slice(0, 80)).filter(Boolean).slice(0, 20) : null;
@@ -468,7 +468,7 @@ Every turn you get the task, the steps you've taken so far, and the page as it i
 {"thought":"one line: what you see and why this step","action":{"type":"goto","url":"https://..."}}
 Actions:
  goto {url} · click {id} · type {id, text} (replaces what's in the field) · select {id, option} · press {key: Enter|Tab|Escape|ArrowDown|ArrowUp|PageDown|PageUp|Backspace|Space} · scroll {direction: down|up} · back · wait
- done {result} — the task is finished or can't be: what you found or did, with the real details (names, prices, links, numbers) taken from the pages. Never invent anything you didn't see.
+ done {success, result, reason?} — the task is over: "success": true ONLY if the whole task is really accomplished (the account exists, the key is in hand, the thing was found); "success": false if you were blocked or it can't be done, with "reason" saying what stopped you (a check-your-email screen, a code you don't have, a CAPTCHA…). "result": what you found or did, with the real details (names, prices, links, numbers) taken from the pages. Never invent anything you didn't see. Never write a {{PLACEHOLDER}} as a result — a value you were not given is a value you don't have.
  ask {question} — you need Mr. Burrus: a decision, a login he hasn't given you, a code, or his OK before acting.
 
 RULES
@@ -486,12 +486,32 @@ function pageText(s) {
 }
 
 // secrets: {{NAME}} placeholders the brain types without ever seeing the value.
+// fillSecrets works on any text the brain gives an action (type text, goto url, select
+// option), tolerates {{ code }} / {{code}}, and never lets a placeholder through
+// unfilled: no value means the step fails with a plain reason, not the literal "{{CODE}}"
+// typed into a box or opened as a URL (worker 57, 2026-11-24).
+const PLACEHOLDER = /\{\{\s*(\w+)\s*\}\}/g;
+function fillSecrets(text, secrets = {}) {
+  const lower = Object.fromEntries(Object.entries(secrets).map(([k, v]) => [k.toUpperCase(), v]));
+  return String(text).replace(PLACEHOLDER, (m, k) => {
+    const v = lower[k.toUpperCase()];
+    if (v == null || v === '') throw new Error(`no value for {{${k}}} was found, so nothing was typed`);
+    return v;
+  });
+}
+// true / false / null (the brain didn't say)
+function doneSuccess(a) {
+  const v = a && (a.success !== undefined ? a.success : a.succeeded);
+  if (v === true || /^(true|yes)$/i.test(String(v))) return true;
+  if (v === false || /^(false|no)$/i.test(String(v))) return false;
+  return null;
+}
 async function doAction(b, a, last, secrets = {}) {
   switch (a.type) {
-    case 'goto': await b.cdp.send('Page.navigate', { url: a.url }, b.session); await settle(b); return `opened ${a.url}`;
+    case 'goto': { const url = fillSecrets(a.url, secrets); await b.cdp.send('Page.navigate', { url }, b.session); await settle(b); return `opened ${url === a.url ? a.url : '(a link found in his email)'}`; }
     case 'click': { const c = await click(b, a.id); await settle(b, 5000); return `clicked [${a.id}] "${c.text}"`; }
-    case 'type': { const real = String(a.text).replace(/\{\{(\w+)\}\}/g, (m, k) => (k in secrets ? secrets[k] : m)); const c = await type(b, a.id, real); return `typed into [${a.id}] "${c.text}"${real !== a.text ? ' (a saved secret)' : ''}`; }
-    case 'select': return `[${a.id}]: ${await selectOption(b, a.id, a.option)}`;
+    case 'type': { const real = fillSecrets(a.text, secrets); const c = await type(b, a.id, real); return `typed into [${a.id}] "${c.text}"${real !== a.text ? ' (a saved secret)' : ''}`; }
+    case 'select': return `[${a.id}]: ${await selectOption(b, a.id, fillSecrets(a.option, secrets))}`;
     case 'press': await press(b, a.key); await settle(b, 5000); return `pressed ${a.key}`;
     case 'scroll': await ev(b, `scrollBy(0, ${a.direction === 'up' ? -1 : 1} * innerHeight * 0.85)`); await new Promise((r) => setTimeout(r, 500)); return `scrolled ${a.direction === 'up' ? 'up' : 'down'}`;
     case 'back': await ev(b, 'history.back()'); await settle(b); return 'went back';
@@ -556,7 +576,7 @@ async function runTask({ persona, personaName = persona, task, ownerText = '', b
       }
       if (!a.error) plan.note(a);
       if (a.error) { if (++fails >= 3) return finish(b, 'stopped', `the brain kept giving unusable steps (${a.error})`, log); log.push(`(unusable reply: ${a.error})`); continue; }
-      if (a.type === 'done') return finish(b, 'done', String(a.result), log);
+      if (a.type === 'done') { const f = await finish(b, 'done', String(a.result), log); f.success = doneSuccess(a); f.reason = a.reason ? String(a.reason) : ''; return f; }
       if (a.type === 'ask') { b.pending = { question: String(a.question), action: String(a.question) }; return finish(b, 'ask', String(a.question), log); }
       // Code-level gate on world-changing clicks / Enter.
       if (a.type === 'click' || a.type === 'press') {
@@ -591,18 +611,26 @@ async function finish(b, status, text, log) {
   return { status, text, url, steps: log, shot };
 }
 
-// The newest verification code in his Gmail from the last 15 minutes, any sender.
-async function emailedCode() {
+// What a site emailed him, from his Gmail (any sender): a numeric code or a magic
+// sign-in / verification link. Waits up to EMAIL_WAIT_MS (10 min, owner 2026-11-24) for
+// it to arrive. -> { code } | { link } | null. Pure parts: siteLogins.codeIn / linkIn.
+const EMAIL_WAIT_MS = () => Number(process.env.EMAIL_CODE_WAIT_MS) || 10 * 60e3;
+async function emailedCode({ wait = EMAIL_WAIT_MS(), pollMs = 15000, site = '' } = {}) {
   const g = require('./google');
-  const { codeIn } = require('./siteLogins');
-  for (let i = 0; i < 6; i++) {
-    const list = await g.gmailList({ q: 'newer_than:15m (code OR verification OR verify OR "sign in" OR confirm)', max: 3 }).catch(() => '');
+  const { codeIn, linkIn } = require('./siteLogins');
+  const from = site ? `from:${String(site).replace(/[^\w.-]/g, '')} ` : '';
+  const end = Date.now() + wait;
+  do {
+    const list = await g.gmailList({ q: `${from}newer_than:30m (code OR verification OR verify OR "sign in" OR "log in" OR confirm OR magic OR link)`, max: 5 }).catch(() => '');
     for (const id of [...String(list).matchAll(/\[id:([\w-]+)\]/g)].map((m) => m[1])) {
-      const c = codeIn((await g.gmailRead(id).catch(() => '')).split('\n').slice(4).join('\n'));
-      if (c) return c;
+      const body = (await g.gmailRead(id).catch(() => '')).split('\n').slice(4).join('\n');
+      const c = codeIn(body);
+      if (c) return { code: c };
+      const l = linkIn(body);
+      if (l) return { link: l };
     }
-    await new Promise((res) => setTimeout(res, 15000));
-  }
+    if (Date.now() + pollMs < end) await new Promise((res) => setTimeout(res, pollMs));
+  } while (Date.now() < end);
   return null;
 }
 
@@ -651,6 +679,19 @@ async function browseTag(persona, arg, { ownerText = '' } = {}) {
   });
 }
 
+// A "done" that isn't: the brain said success false, or (when it didn't say) its own
+// result reads as blocked / not created. -> status 'failed' so no board shows done.
+const BLOCKED = /\b(blocked|could ?n[o']t|cannot|can't|unable to|no account (?:has been|was|exists|yet)|no (?:api )?key (?:exists|was|has)|not (?:been )?(?:created|completed|finished|successful)|(?:did|does|do) not (?:finish|complete|succeed|work)|failed|stuck at|stopped at)\b/i;
+const UNFILLED = /\{\{\s*\w+\s*\}\}/;
+function settleResult(r) {
+  if (r.status !== 'done') return r;
+  const text = String(r.text || '');
+  let bad = r.success === false || (r.success == null && BLOCKED.test(text)) || UNFILLED.test(text);
+  if (!bad) return r;
+  const why = UNFILLED.test(text) ? 'it handed back a placeholder instead of a real value (none was found)' : (r.reason || '').trim();
+  return { ...r, status: 'failed', success: false, text: `${why ? `NOT FINISHED — ${why}\n` : 'NOT FINISHED\n'}${text}` };
+}
+
 // One browser task, consent banners and emailed codes handled. Also what a worker
 // (server/workers.js) runs, on its own browser profile.
 async function browseRun(persona, name, arg, { ownerText = '', onStep = null, onPlan = null, secrets = {} } = {}) {
@@ -665,21 +706,24 @@ async function browseRun(persona, name, arg, { ownerText = '', onStep = null, on
   // A site emailed a code: it's in his Gmail, so fetch it and carry on without him
   // (owner, 2026-11-22: "it's supposed to be automatic").
   const logins = require('./siteLogins');
-  if (r.status !== 'done' && logins.wantsEmailCode(r.text)) {
-    const code = await emailedCode().catch(() => null);
-    if (code) {
-      const r2 = await runTask({ persona, personaName: name, ownerText: 'yes', brain, secrets: { CODE: code }, allow: CONSENT, onStep, onPlan: plans, plan: last.plan, planStep: last.at,
-        task: `You are partway through this task and the page asked for the code that was emailed. Type {{CODE}} into the code box and continue. The task: ${String(arg || '').trim()}` });
-      r2.steps = [...r.steps, '(fetched the emailed code from his Gmail)', ...r2.steps];
+  if ((r.status !== 'done' || r.success === false) && logins.wantsEmailCode(r.text)) {
+    const got = await emailedCode().catch(() => null);
+    if (got) {
+      const secrets2 = got.code ? { CODE: got.code } : { LINK: got.link };
+      const how = got.code ? 'Type {{CODE}} into the code box and continue.' : 'Go to {{LINK}} (a goto action with url {{LINK}}) and continue.';
+      const r2 = await runTask({ persona, personaName: name, ownerText: 'yes', brain, secrets: secrets2, allow: CONSENT, onStep, onPlan: plans, plan: last.plan, planStep: last.at,
+        task: `You are partway through this task and the page asked for what was emailed: ${got.code ? 'the code' : 'a sign-in link'} is in your hands. ${how} The task: ${String(arg || '').trim()}` });
+      r2.steps = [...r.steps, `(fetched the emailed ${got.code ? 'code' : 'link'} from his Gmail)`, ...r2.steps];
       r = r2;
-    } else r.text += ' (no code turned up in his Gmail within 90 seconds)';
+    } else { r.text += ' (no code or sign-in link turned up in his Gmail within 10 minutes)'; r.success = false; }
   }
-  const head = { done: 'BROWSE — finished', ask: 'BROWSE — paused, needs Mr. Burrus', stopped: 'BROWSE — stopped' }[r.status];
+  r = settleResult(r);
+  const head = { done: 'BROWSE — finished', failed: 'BROWSE — did NOT finish', ask: 'BROWSE — paused, needs Mr. Burrus', stopped: 'BROWSE — stopped' }[r.status];
   const text = `${head} (${r.steps.length} step${r.steps.length === 1 ? '' : 's'}, last page ${r.url || 'none'}):\n${r.text}\n\nSTEPS:\n${r.steps.map((s, i) => `${i + 1}. ${s}`).join('\n') || '(none)'}` +
     (r.status === 'ask' ? `\n\n(Put this question to him in plain words. When he answers, run [BROWSE: the same task] again — the browser is still on that page, and his reply is what approves or stops it.)` : '') +
     `\n(Report only what's above. A screenshot of the last page goes to him after your reply.)`;
   const media = r.shot ? [{ name: 'SEND_PHOTO', buffer: r.shot, kind: 'photo', filename: 'browser.jpg', caption: `${name}'s browser — ${r.url}`.slice(0, 1000) }] : [];
-  return { text, media, status: r.status, result: r.text };
+  return { text, media, status: r.status, success: r.success, result: r.text };
 }
 
 const BROWSE_TOOLS = ` - [BROWSE: the task, in full] — your own computer: a real Chrome in the cloud that you drive like a person (open sites, search, read, click, fill in forms), with your own saved logins. For anything with no direct tool: looking someone up on LinkedIn, checking a supplier's prices, reading a site, filling a form. The result comes back to you this turn and he gets a screenshot. Sign-ups go through on their own (make the password yourself and save it with [SAVE_NOTE]), and a code a site emails is fetched from his Gmail automatically. It stops and asks only before anything else that acts in the world (sending, posting, connecting, buying, booking, deleting): put that question to him, and when he answers run [BROWSE] again with the same task — his reply is what approves it. A minute or several. One per turn. Report only what it found.
@@ -687,4 +731,4 @@ const BROWSE_TOOLS = ` - [BROWSE: the task, in full] — your own computer: a re
 
 module.exports = {
   closeBrowser: close,
-  readJar, saveJar, loadJar, planTracker, AGENT_SYSTEM, browseRun, browserKeyTag, ensureSqlite, BROWSE_PERSONAS, runTask, browseTag, BROWSE_TOOLS, close, browserFor, snapshot, click, type, press, screenshot, unzip, chromePath, parseAction, isCommit, approves, enabled };
+  readJar, saveJar, loadJar, planTracker, AGENT_SYSTEM, browseRun, settleResult, fillSecrets, doneSuccess, emailedCode, browserKeyTag, ensureSqlite, BROWSE_PERSONAS, runTask, browseTag, BROWSE_TOOLS, close, browserFor, snapshot, click, type, press, screenshot, unzip, chromePath, parseAction, isCommit, approves, enabled };

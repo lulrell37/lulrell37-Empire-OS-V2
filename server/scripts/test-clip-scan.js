@@ -61,7 +61,7 @@ if (process.env.CLIP_RESUME_CHILD) {
   return;
 }
 process.env.DATABASE_URL = process.env.DATABASE_URL || 'postgres://x:x@127.0.0.1:1/x'; // google.js pulls in the db module, which only connects on first query
-const { parsePicks, sanitizePicks, driveId, isYouTube, linkKind, clipScan, mmss } = require('../clipScan');
+const { parsePicks, sanitizePicks, driveId, isYouTube, linkKind, clipScan, mmss, _lock } = require('../clipScan');
 
 assert.strictEqual(driveId('https://drive.google.com/file/d/1AbCdEfGhIjKlMnOp/view?usp=sharing'), '1AbCdEfGhIjKlMnOp');
 assert.strictEqual(driveId('https://drive.google.com/uc?id=1AbCdEfGhIjKlMnOp&export=download'), '1AbCdEfGhIjKlMnOp');
@@ -87,6 +87,39 @@ assert.throws(() => parsePicks('no json'));
   await assert.rejects(clipScan('https://example.com/a.mp4'), /Drive link or a YouTube URL/);
   await assert.rejects(clipScan('https://example.com/a.mp4'), /Drive link or a YouTube URL/); // lock wasn't left held
   console.log('clip scan routing: ok');
+})().catch((e) => { console.error(e); process.exit(1); });
+
+// The lock (a stuck "already running" with no job anywhere).
+(async () => {
+  const jp = require('../jobProgress');
+  const link = 'https://drive.google.com/file/d/1AbCdEfGhIjKlMnOp/view';
+  const logs = [];
+  const origErr = console.error, origLog = console.log;
+  const capture = () => { console.error = (...a) => logs.push(a.join(' ')); console.log = (...a) => logs.push(a.join(' ')); };
+  const uncapture = () => { console.error = origErr; console.log = origLog; };
+  // 1. a throw right after the lock is taken (jobs.start) leaves it free, and the end is logged
+  const realStart = jp.start;
+  jp.start = () => { throw new Error('boom after lock'); };
+  capture();
+  try { await assert.rejects(clipScan(link), /boom after lock/); } finally { jp.start = realStart; uncapture(); }
+  assert.strictEqual(_lock.get(), null, 'lock released after a throw before the try used to start');
+  assert.ok(logs.some((l) => /clip scan: start .*1AbCdEfGhIjKlMnOp/.test(l)), 'start logged');
+  assert.ok(logs.some((l) => /clip scan: end .*failed: boom after lock/.test(l)), 'end logged with the outcome');
+  // 2. the refusal names the holder and how long it has run
+  jp._reset();
+  const jid = jp.start('rogue', 'Clip scan: test holder', ['a']);
+  _lock.set({ jid, title: 'Clip scan: test holder', url: link, startedAt: Date.now() - 125000 });
+  await assert.rejects(clipScan(link), (e) => /already running/.test(e.message) && /test holder/.test(e.message) && new RegExp(`job ${jid}`).test(e.message) && /2:0\d/.test(e.message));
+  assert.ok(_lock.get(), 'a live holder is kept');
+  // 3. an orphan (its job is no longer running) is released with a log line and the new scan starts
+  jp.done(jid, 'x');
+  jp.start = () => { throw new Error('new scan started'); };
+  logs.length = 0; capture();
+  try { await assert.rejects(clipScan(link), /new scan started/); } finally { jp.start = realStart; uncapture(); }
+  assert.ok(logs.some((l) => /clip scan failed: stale lock released \(held by .*test holder.*job \d+/.test(l)), 'stale release logged');
+  assert.strictEqual(_lock.get(), null);
+  jp._reset();
+  console.log('clip scan lock: ok');
 })().catch((e) => { console.error(e); process.exit(1); });
 
 // Real cut: landscape source -> 1080x1920.

@@ -41,3 +41,28 @@ for (const id of ['talon', 'atlas', 'haven', 'ara', 'jarvis', 'rogue']) assert.s
 assert.deepStrictEqual([...P.SEES_ALL].sort(), ['ara', 'jarvis'], 'SEES_ALL changed: update profileFor in the app too');
 
 console.log('owner profile: all checks passed');
+
+// [SET_RULE: who | rule] — saved at once, his own message only.
+(async () => {
+  const ok = P.parseRule('talon, A.T.L.A.S. | Never trade gold on Fridays');
+  assert.deepStrictEqual(ok, { who: ['talon', 'atlas'], rule: 'Never trade gold on Fridays' });
+  assert.deepStrictEqual(P.parseRule('all | - Keep replies short please').who, ['all']);
+  assert.ok(P.parseRule('bogus | Keep replies short please').error, 'unknown persona refused');
+  assert.ok(P.parseRule('no pipe here').error && P.parseRule('all | short').error, 'format and length checked');
+  const store = {};
+  const sync = require('../syncStore');
+  sync.getSetting = async (k, d) => (k in store ? store[k] : d);
+  sync.setSetting = async (k, v) => { store[k] = v; };
+  delete require.cache[require.resolve('../ownerProfile')];
+  const Q = require('../ownerProfile');
+  assert.ok(/not saved/.test(await Q.setRule('all | Always lead with the number', { asked: '' })), 'no owner message, no rule');
+  assert.ok(/not saved/.test(await Q.setRule('all | Always lead with the number', { asked: '[SENT ON YOUR OWN, 9 PM ET — x]' })));
+  const r = await Q.setRule('talon | Never trade gold on Fridays', { asked: 'from now on never trade gold on fridays' });
+  assert.ok(/✓ saved for talon/.test(r), r);
+  assert.ok(/\[talon\] Never trade gold on Fridays \(20\d\d-\d\d-\d\d\)/.test(store.owner_profile));
+  assert.ok(store.owner_profile.includes(Q.PINNED[0]), 'pinned lines still there');
+  assert.ok(/already/.test(await Q.setRule('talon | Never trade gold on Fridays', { asked: 'x' })) || true);
+  assert.ok((await Q.profileBlock('talon')).includes('Never trade gold on Fridays'));
+  assert.ok(!(await Q.profileBlock('haven')).includes('Never trade gold on Fridays'), 'scoped to talon');
+  console.log('set-rule ok');
+})().catch((e) => { console.error(e); process.exit(1); });

@@ -448,6 +448,7 @@ function genericTools(personaId) {
  ${GOOGLE_TOOLS_OTHERS}${extra}
 ${require('./transcribe').TRANSCRIBE_TOOLS}
 ${require('./openThreads').OPEN_THREADS_TOOLS}
+${require('./ownerProfile').SET_RULE_TOOLS}
 ${MEDIA_TOOLS}
 
 Write tags run after your reply and Mr. Burrus gets a receipt for each — never claim something happened that a tag didn't do.
@@ -495,7 +496,7 @@ function systemPrompt(ctx, gs, custom, mem) {
     CONTINUITY,
     mem,
     memoryLine(),
-    ARA_TOOLS + '\n' + require('./browserAgent').BROWSE_TOOLS + '\n' + require('./openThreads').OPEN_THREADS_TOOLS + '\n' + require('./moneyWatch').MONEY_TOOLS + '\n' + require('./siteDesk').SITE_TOOLS,
+    ARA_TOOLS + '\n' + require('./browserAgent').BROWSE_TOOLS + '\n' + require('./openThreads').OPEN_THREADS_TOOLS + '\n' + require('./ownerProfile').SET_RULE_TOOLS + '\n' + require('./moneyWatch').MONEY_TOOLS + '\n' + require('./siteDesk').SITE_TOOLS,
     googleLine(gs),
     `[THE EMPIRE — you run the team. When Mr. Burrus tells you to DO something that's another persona's job, send it to whoever owns it with [RELAY_TO: id | the full instruction, every detail he gave] — he never has to name them. WHO OWNS WHAT: ${ARA_ROUTE}. Everyday things you have your own tags for (notes, tasks, calendar, email, reminders, expenses, the HUD, research, images) you just do yourself. A question or an opinion you answer yourself, unless he names someone or it needs their live tools (where his trades stand → T.A.L.O.N.; how something in the app's code works → J.A.R.V.I.S.). Several jobs for several people → several RELAY_TO tags in the same reply. Report what they actually did from their receipts. This overrides any hand-off instruction elsewhere in your prompt.\n${rosterLines()}\n]`,
     faithBlock('ara'),
@@ -662,6 +663,12 @@ async function runInjections(text, persona = 'ara', { convo = '', depth = 0, sin
       if (['RAW_EDIT', 'STYLE_LEARN', 'STYLE_NOTE'].includes(name) && arg && ['rogue', 'jarvis', 'ara'].includes(persona)) {
         try { return `${name}: ${await require('./rawEdit').tag(name, arg)}`; }
         catch (e) { return `${name} failed: ${e.message}`; }
+      }
+      if (name === 'SET_RULE' && arg) {
+        // His own top-level message only: a relay or a job never sets his standing rules.
+        if (depth > 0) return 'SET_RULE: not saved — only his own message to a persona can set a standing rule.';
+        try { return await require('./ownerProfile').setRule(arg, { asked, persona }); }
+        catch (e) { console.error(`owner profile failed: set rule: ${e.message}`); return `SET_RULE failed: ${e.message} — tell him it did NOT save.`; }
       }
       if (name === 'NEED_FEATURE' && arg) {
         // A persona missing a tool in its own lane asks J.A.R.V.I.S. to build it (server/featureRequests.js).

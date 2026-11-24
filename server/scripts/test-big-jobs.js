@@ -71,7 +71,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   assert.strictEqual(dispatched.filter((x) => x.issue === i2).length, 3, 'three runs, no more');
   issues[i2].push({ body: '<!-- worker-result status=done leg=3 -->\nPARTLY DONE\n2 videos left' });
   for (let i = 0; i < 200 && W._list()[w2.id].status === 'running'; i++) await sleep(10);
-  assert.strictEqual(W._list()[w2.id].status, 'done');
+  // A PARTLY DONE report is never shown as done (worker 59): it waits on him, branch still shippable.
+  assert.strictEqual(W._list()[w2.id].status, 'needs_you');
+  assert.ok(W._list()[w2.id].partial && W._list()[w2.id].percent !== 100);
   console.log('big jobs: all checks passed');
   process.exit(0);
 })().catch((e) => { console.error(e); process.exit(1); });

@@ -75,5 +75,22 @@ const G = require('../groupChat');
   assert.ok(/everyone/.test(G.GROUP_FRAME) && /one at a time/.test(G.GROUP_FRAME));
   const line = G.groupLine('ara', 'selene', 'make a cover', 'Here it is.', Date.parse('2026-11-21T14:03:00Z'));
   assert.ok(line.startsWith('[IN THE EMPIRE GROUP CHAT, Sat 9:03 AM ET — A.R.A. asked you') && line.includes('You answered: Here it is.'), line);
+  // Drift: every voice id in the app roster is on the server roster (and equal); the server has none the app lacks.
+  {
+    const fs = require('fs');
+    const src = fs.readFileSync(require('path').join(__dirname, '../../src/personas/personas.js'), 'utf8');
+    const app = {};
+    for (const m of src.matchAll(/\n  (\w+):\{id:'\w+',[^\n]*?elevenlabsVoiceId:(?:'([^']*)'|null)/g)) app[m[1]] = m[2] || null;
+    assert.ok(Object.keys(app).length > 15 && app.rogue === 'bD9maNcCuQQS75DGuteM', 'app voice ids parsed');
+    const R = require('../personas').ROSTER;
+    const bad = [];
+    for (const [id, v] of Object.entries(app)) {
+      if (!R[id]) { if (v) bad.push(`${id}: in app with voice ${v} but not on the server roster`); continue; }
+      if ((R[id].voiceId || null) !== v) bad.push(`${id}: app ${v} vs server ${R[id].voiceId || null}`);
+    }
+    for (const id of Object.keys(R)) if (R[id].voiceId && !(id in app)) bad.push(`${id}: server voice with no app persona`);
+    assert.deepStrictEqual(bad, [], 'voice id drift between src/personas/personas.js and server/personas.js:\n' + bad.join('\n'));
+    assert.strictEqual(G.voiceFor('rogue'), 'bD9maNcCuQQS75DGuteM', 'rogue uses her own voice in the group');
+  }
   console.log('group chat: all checks passed');
 })().catch((e) => { console.error(e); process.exit(1); });
