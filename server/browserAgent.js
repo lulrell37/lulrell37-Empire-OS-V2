@@ -591,19 +591,11 @@ async function finish(b, status, text, log) {
   return { status, text, url, steps: log, shot };
 }
 
-// The newest verification code in his Gmail from the last 15 minutes, any sender.
-async function emailedCode() {
-  const g = require('./google');
-  const { codeIn } = require('./siteLogins');
-  for (let i = 0; i < 6; i++) {
-    const list = await g.gmailList({ q: 'newer_than:15m (code OR verification OR verify OR "sign in" OR confirm)', max: 3 }).catch(() => '');
-    for (const id of [...String(list).matchAll(/\[id:([\w-]+)\]/g)].map((m) => m[1])) {
-      const c = codeIn((await g.gmailRead(id).catch(() => '')).split('\n').slice(4).join('\n'));
-      if (c) return c;
-    }
-    await new Promise((res) => setTimeout(res, 15000));
-  }
-  return null;
+// The newest email sent after `since` (the moment the run reached its "check your email"
+// screen) holding a code or a sign-in link; polls every 20 s for up to 10 min
+// (server/emailLinks.js). -> { ok, code, url } or { ok: false, text }.
+async function emailedCode(since = Date.now(), sender = '') {
+  return require('./emailLinks').waitForEmailAuth({ since, sender });
 }
 
 // [BROWSER_KEY: steel API key, or a full wss:// CDP url] — the hosted browser to use
@@ -646,6 +638,9 @@ async function browseTag(persona, arg, { ownerText = '' } = {}) {
   }));
 }
 
+// The site a page is on, as a Gmail from: term (example.com from https://app.example.com/x).
+function siteOf(url) { try { const h = new URL(url).hostname.split('.'); return h.length >= 2 ? h.slice(-2).join('.') : ''; } catch { return ''; } }
+
 // One browser task, consent banners and emailed codes handled. Also what a worker
 // (server/workers.js) runs, on its own browser profile.
 async function browseRun(persona, name, arg, { ownerText = '', onStep = null, onPlan = null, secrets = {} } = {}) {
@@ -661,13 +656,19 @@ async function browseRun(persona, name, arg, { ownerText = '', onStep = null, on
   // (owner, 2026-11-22: "it's supposed to be automatic").
   const logins = require('./siteLogins');
   if (r.status !== 'done' && logins.wantsEmailCode(r.text)) {
-    const code = await emailedCode().catch(() => null);
-    if (code) {
-      const r2 = await runTask({ persona, personaName: name, ownerText: 'yes', brain, secrets: { CODE: code }, allow: CONSENT, onStep, onPlan: plans, plan: last.plan, planStep: last.at,
-        task: `You are partway through this task and the page asked for the code that was emailed. Type {{CODE}} into the code box and continue. The task: ${String(arg || '').trim()}` });
-      r2.steps = [...r.steps, '(fetched the emailed code from his Gmail)', ...r2.steps];
+    const reached = Date.now(); // the email must be newer than this screen
+    const got = await emailedCode(reached, siteOf(r.url)).catch((e) => ({ ok: false, text: `couldn't search his Gmail: ${e.message}` }));
+    const L = require('./emailLinks');
+    if (got.ok && (got.code || got.url)) {
+      // Same persona = same browser session, which is what a magic link needs.
+      const how = got.code
+        ? `Type {{CODE}} into the code box and continue.`
+        : `Open this sign-in link in this same browser with a goto action, exactly: ${got.url} — then continue (it is the link from his email; it only works in this session).`;
+      const r2 = await runTask({ persona, personaName: name, ownerText: 'yes', brain, secrets: got.code ? { CODE: got.code } : {}, allow: CONSENT, onStep, onPlan: plans, plan: last.plan, planStep: last.at,
+        task: `You are partway through this task and the page asked for the emailed ${got.code ? 'code' : 'sign-in link'}. ${how} The task: ${String(arg || '').trim()}` });
+      r2.steps = [...r.steps, `(fetched the emailed ${got.code ? 'code' : 'link'} from his Gmail${got.subject ? `: "${got.subject}"` : ''})`, ...r2.steps];
       r = r2;
-    } else r.text += ' (no code turned up in his Gmail within 90 seconds)';
+    } else r.text = `${r.text} (${(got && got.text) || L.NOT_ARRIVED})`;
   }
   const head = { done: 'BROWSE — finished', ask: 'BROWSE — paused, needs Mr. Burrus', stopped: 'BROWSE — stopped' }[r.status];
   const text = `${head} (${r.steps.length} step${r.steps.length === 1 ? '' : 's'}, last page ${r.url || 'none'}):\n${r.text}\n\nSTEPS:\n${r.steps.map((s, i) => `${i + 1}. ${s}`).join('\n') || '(none)'}` +

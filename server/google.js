@@ -264,27 +264,41 @@ async function gmailList({ q = INBOX_Q, max = 10 } = {}) {
   return `${q === INBOX_Q ? `Inbox — ${rows.length} unread` : `Gmail "${q}" — ${rows.length}`}:\n${rows.join('\n')}`;
 }
 
+// Body with every link kept: text/html parts become "text (url)" (the old code kept
+// text/plain only and stripped every tag from HTML, href included); the plain part is
+// used when the HTML is missing. Base64url decoded with padding (emailLinks.decodeB64Url).
 function gmailBodyText(payload) {
-  if (!payload) return '';
-  const dec = (d) => Buffer.from(String(d || '').replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
-  if (payload.mimeType === 'text/plain' && payload.body && payload.body.data) return dec(payload.body.data);
-  for (const part of payload.parts || []) {
-    const t = gmailBodyText(part);
-    if (t) return t;
-  }
-  if (payload.mimeType === 'text/html' && payload.body && payload.body.data) {
-    return dec(payload.body.data).replace(/<style[\s\S]*?<\/style>/gi, '').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s{2,}/g, ' ');
-  }
-  return '';
+  const L = require('./emailLinks');
+  const found = { plain: '', html: '' };
+  (function walk(p) {
+    if (!p) return;
+    if (p.body && p.body.data) {
+      if (p.mimeType === 'text/plain' && !found.plain) found.plain = L.decodeB64Url(p.body.data);
+      else if (p.mimeType === 'text/html' && !found.html) found.html = L.decodeB64Url(p.body.data);
+    }
+    for (const part of p.parts || []) walk(part);
+  })(payload);
+  const fromHtml = found.html ? L.htmlToText(found.html) : '';
+  // The plain part wins only if it already carries the links the HTML has.
+  if (found.plain && (!fromHtml || L.extractLinks(found.plain).length >= L.extractLinks(fromHtml).length)) return found.plain;
+  return fromHtml || found.plain;
 }
 
-async function gmailRead(id) {
+async function gmailReadParsed(id) {
   if (!id) throw new Error('no message id');
+  const L = require('./emailLinks');
   const m = await gapi(`/gmail/v1/users/me/messages/${encodeURIComponent(id)}`, { query: { format: 'full' } });
   const hdr = {};
   for (const x of (m.payload && m.payload.headers) || []) hdr[x.name.toLowerCase()] = x.value;
-  const body = gmailBodyText(m.payload).trim().slice(0, 8000);
-  return `Email [id:${id}]\nFrom: ${hdr.from || '?'}\nTo: ${hdr.to || '?'}\nDate: ${hdr.date || '?'}\nSubject: ${hdr.subject || '(no subject)'}\n\n${body || m.snippet || '(no text body)'}`;
+  const text = gmailBodyText(m.payload).trim() || m.snippet || '';
+  return { id, from: hdr.from || '?', to: hdr.to || '?', date: hdr.date || '?', subject: hdr.subject || '(no subject)', text, urls: L.extractLinks(text), internalDate: Number(m.internalDate) || 0 };
+}
+
+async function gmailRead(id) {
+  const m = await gmailReadParsed(id);
+  const links = m.urls.length ? `\n\nLINKS IN THIS EMAIL:\n${m.urls.map((l, i) => `${i + 1}. ${l.text ? `${l.text} — ` : ''}${l.url}`).join('\n')}` : '';
+  const body = m.text.slice(0, 8000) || '(no text body)';
+  return `Email [id:${id}]\nFrom: ${m.from}\nTo: ${m.to}\nDate: ${m.date}\nSubject: ${m.subject}\n\n${body}${links.slice(0, 4000)}`;
 }
 
 // --- Calendar ---
@@ -631,7 +645,7 @@ module.exports = {
   driveUploadFile, driveDownloadTo, driveStream, driveFolderAudio,
   calendarFind, calendarUpdate, driveMoveNote,
   accessToken, googleLinked, googleStatus, readDriveNote, saveDriveNote, gmailSend,
-  gmailList, gmailRead, calendarList, calendarCreate, calendarDelete,
+  gmailList, gmailRead, gmailReadParsed, gmailBodyText, calendarList, calendarCreate, calendarDelete,
   driveList, driveSearch, driveRead, driveFindByName, driveFile, driveRawText, driveUpdate, driveTrash, sheetCreate,
   gTasksList, gTaskCreate, gTaskComplete, gTaskDelete, zonedDate, gapi,
 };
