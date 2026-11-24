@@ -175,7 +175,19 @@ console.log('clip scan: ok');
 {
   const J = require('../clipJudge');
   const { PICK_SYSTEM, MAX_CANDIDATES } = require('../clipScan');
-  assert(/FUNNIEST/.test(PICK_SYSTEM) && /setup and payoff/.test(PICK_SYSTEM) && /KEKW/.test(PICK_SYSTEM) && /8 to 12/.test(PICK_SYSTEM) && /PENALIZE/.test(PICK_SYSTEM));
+  assert(/FUNNY/.test(PICK_SYSTEM) && /SETUP and PAYOFF/.test(PICK_SYSTEM) && /KEKW/.test(PICK_SYSTEM) && /REJECT/.test(PICK_SYSTEM) && /rants/.test(PICK_SYSTEM) && /15 to 45/.test(PICK_SYSTEM) && /FEWER IS BETTER/.test(PICK_SYSTEM) && /"funny": 1-10/.test(PICK_SYSTEM));
+  // the model's own 1-10 rating: under 7 is dropped, best first, fewer rather than weak
+  const { funnyOnly, MIN_FUNNY } = require('../clipScan');
+  assert.strictEqual(MIN_FUNNY, 7);
+  const parsed = sanitizePicks([
+    { start: 0, end: 30, score: 90, funny: 6, funny_why: 'mad rant' },
+    { start: 100, end: 130, score: 60, funny: 9, funny_why: 'chat 14 LMAO after the dog throw' },
+    { start: 200, end: 230, score: 99 },
+    { start: 300, end: 330, score: 70, funny: 7, funny_why: 'ok' }], 1000, 12);
+  const kept = funnyOnly(parsed);
+  assert.deepStrictEqual(kept.map((p) => p.start), [100, 300], 'under 7 and unrated are dropped, funniest first');
+  assert(/funny 9\/10: chat 14 LMAO/.test(kept[0].reason));
+  assert.deepStrictEqual(funnyOnly(parsed.filter((p) => p.funny < 7)), [], 'nothing funny -> nothing picked');
   // the model can return up to MAX_CANDIDATES non-overlapping candidates; the old 5 cap is only for the final list
   const many = Array.from({ length: 14 }, (_, i) => ({ start: i * 100, end: i * 100 + 30, score: 90 - i }));
   assert.strictEqual(sanitizePicks(many, 5000, MAX_CANDIDATES).length, MAX_CANDIDATES);
@@ -196,8 +208,9 @@ console.log('clip scan: ok');
   assert(!r.some((p) => p.start === 0), 'a flat judged pick is dropped');
   assert.strictEqual(r[0].hook, 'Wait for it', 'missing hook filled from the judge');
   assert.strictEqual(r.length, 3);
-  // all judged flat and nothing else: still returns something rather than nothing
-  assert.strictEqual(J.rerank([mk(0, 90)], [J.parseJudge('{"funny":0}')]).length, 1);
+  // all judged flat: fewer rather than weak, so nothing comes back
+  assert.strictEqual(J.rerank([mk(0, 90)], [J.parseJudge('{"funny":0}')]).length, 0);
+  assert.strictEqual(J.rerank([mk(0, 90)], [J.parseJudge('{"funny":5}')]).length, 0, 'under 6 on video is dropped');
 
   // Seeds: laughter windows no candidate covers, setup ~20 s before the peak, snapped to speech.
   const segments = Array.from({ length: 40 }, (_, i) => ({ start: i * 10, end: i * 10 + 9, text: `s${i}` }));
