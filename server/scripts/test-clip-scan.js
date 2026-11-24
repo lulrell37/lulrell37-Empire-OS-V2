@@ -61,7 +61,7 @@ if (process.env.CLIP_RESUME_CHILD) {
   return;
 }
 process.env.DATABASE_URL = process.env.DATABASE_URL || 'postgres://x:x@127.0.0.1:1/x'; // google.js pulls in the db module, which only connects on first query
-const { parsePicks, sanitizePicks, driveId, isYouTube, linkKind, clipScan, mmss } = require('../clipScan');
+const { parsePicks, sanitizePicks, driveId, isYouTube, linkKind, clipScan, mmss, _lock } = require('../clipScan');
 
 assert.strictEqual(driveId('https://drive.google.com/file/d/1AbCdEfGhIjKlMnOp/view?usp=sharing'), '1AbCdEfGhIjKlMnOp');
 assert.strictEqual(driveId('https://drive.google.com/uc?id=1AbCdEfGhIjKlMnOp&export=download'), '1AbCdEfGhIjKlMnOp');
@@ -87,6 +87,39 @@ assert.throws(() => parsePicks('no json'));
   await assert.rejects(clipScan('https://example.com/a.mp4'), /Drive link or a YouTube URL/);
   await assert.rejects(clipScan('https://example.com/a.mp4'), /Drive link or a YouTube URL/); // lock wasn't left held
   console.log('clip scan routing: ok');
+})().catch((e) => { console.error(e); process.exit(1); });
+
+// The lock (a stuck "already running" with no job anywhere).
+(async () => {
+  const jp = require('../jobProgress');
+  const link = 'https://drive.google.com/file/d/1AbCdEfGhIjKlMnOp/view';
+  const logs = [];
+  const origErr = console.error, origLog = console.log;
+  const capture = () => { console.error = (...a) => logs.push(a.join(' ')); console.log = (...a) => logs.push(a.join(' ')); };
+  const uncapture = () => { console.error = origErr; console.log = origLog; };
+  // 1. a throw right after the lock is taken (jobs.start) leaves it free, and the end is logged
+  const realStart = jp.start;
+  jp.start = () => { throw new Error('boom after lock'); };
+  capture();
+  try { await assert.rejects(clipScan(link), /boom after lock/); } finally { jp.start = realStart; uncapture(); }
+  assert.strictEqual(_lock.get(), null, 'lock released after a throw before the try used to start');
+  assert.ok(logs.some((l) => /clip scan: start .*1AbCdEfGhIjKlMnOp/.test(l)), 'start logged');
+  assert.ok(logs.some((l) => /clip scan: end .*failed: boom after lock/.test(l)), 'end logged with the outcome');
+  // 2. the refusal names the holder and how long it has run
+  jp._reset();
+  const jid = jp.start('rogue', 'Clip scan: test holder', ['a']);
+  _lock.set({ jid, title: 'Clip scan: test holder', url: link, startedAt: Date.now() - 125000 });
+  await assert.rejects(clipScan(link), (e) => /already running/.test(e.message) && /test holder/.test(e.message) && new RegExp(`job ${jid}`).test(e.message) && /2:0\d/.test(e.message));
+  assert.ok(_lock.get(), 'a live holder is kept');
+  // 3. an orphan (its job is no longer running) is released with a log line and the new scan starts
+  jp.done(jid, 'x');
+  jp.start = () => { throw new Error('new scan started'); };
+  logs.length = 0; capture();
+  try { await assert.rejects(clipScan(link), /new scan started/); } finally { jp.start = realStart; uncapture(); }
+  assert.ok(logs.some((l) => /clip scan failed: stale lock released \(held by .*test holder.*job \d+/.test(l)), 'stale release logged');
+  assert.strictEqual(_lock.get(), null);
+  jp._reset();
+  console.log('clip scan lock: ok');
 })().catch((e) => { console.error(e); process.exit(1); });
 
 // Real cut: landscape source -> 1080x1920.
@@ -175,7 +208,19 @@ console.log('clip scan: ok');
 {
   const J = require('../clipJudge');
   const { PICK_SYSTEM, MAX_CANDIDATES } = require('../clipScan');
-  assert(/FUNNIEST/.test(PICK_SYSTEM) && /setup and payoff/.test(PICK_SYSTEM) && /KEKW/.test(PICK_SYSTEM) && /8 to 12/.test(PICK_SYSTEM) && /PENALIZE/.test(PICK_SYSTEM));
+  assert(/FUNNY/.test(PICK_SYSTEM) && /SETUP and PAYOFF/.test(PICK_SYSTEM) && /KEKW/.test(PICK_SYSTEM) && /REJECT/.test(PICK_SYSTEM) && /rants/.test(PICK_SYSTEM) && /15 to 45/.test(PICK_SYSTEM) && /FEWER IS BETTER/.test(PICK_SYSTEM) && /"funny": 1-10/.test(PICK_SYSTEM));
+  // the model's own 1-10 rating: under 7 is dropped, best first, fewer rather than weak
+  const { funnyOnly, MIN_FUNNY } = require('../clipScan');
+  assert.strictEqual(MIN_FUNNY, 7);
+  const parsed = sanitizePicks([
+    { start: 0, end: 30, score: 90, funny: 6, funny_why: 'mad rant' },
+    { start: 100, end: 130, score: 60, funny: 9, funny_why: 'chat 14 LMAO after the dog throw' },
+    { start: 200, end: 230, score: 99 },
+    { start: 300, end: 330, score: 70, funny: 7, funny_why: 'ok' }], 1000, 12);
+  const kept = funnyOnly(parsed);
+  assert.deepStrictEqual(kept.map((p) => p.start), [100, 300], 'under 7 and unrated are dropped, funniest first');
+  assert(/funny 9\/10: chat 14 LMAO/.test(kept[0].reason));
+  assert.deepStrictEqual(funnyOnly(parsed.filter((p) => p.funny < 7)), [], 'nothing funny -> nothing picked');
   // the model can return up to MAX_CANDIDATES non-overlapping candidates; the old 5 cap is only for the final list
   const many = Array.from({ length: 14 }, (_, i) => ({ start: i * 100, end: i * 100 + 30, score: 90 - i }));
   assert.strictEqual(sanitizePicks(many, 5000, MAX_CANDIDATES).length, MAX_CANDIDATES);
@@ -196,8 +241,9 @@ console.log('clip scan: ok');
   assert(!r.some((p) => p.start === 0), 'a flat judged pick is dropped');
   assert.strictEqual(r[0].hook, 'Wait for it', 'missing hook filled from the judge');
   assert.strictEqual(r.length, 3);
-  // all judged flat and nothing else: still returns something rather than nothing
-  assert.strictEqual(J.rerank([mk(0, 90)], [J.parseJudge('{"funny":0}')]).length, 1);
+  // all judged flat: fewer rather than weak, so nothing comes back
+  assert.strictEqual(J.rerank([mk(0, 90)], [J.parseJudge('{"funny":0}')]).length, 0);
+  assert.strictEqual(J.rerank([mk(0, 90)], [J.parseJudge('{"funny":5}')]).length, 0, 'under 6 on video is dropped');
 
   // Seeds: laughter windows no candidate covers, setup ~20 s before the peak, snapped to speech.
   const segments = Array.from({ length: 40 }, (_, i) => ({ start: i * 10, end: i * 10 + 9, text: `s${i}` }));

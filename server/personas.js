@@ -105,26 +105,32 @@ const ROSTER = {
   },
   rogue: {
     name: 'R.O.G.U.E.', role: 'Video Editor & Content Strategist', api: 'anthropic', model: CLAUDE,
+    voiceId: 'bD9maNcCuQQS75DGuteM',
     blurb: 'The Empire\'s video editor: S.C.R.I.B.E. writes, he records, she edits, S.E.L.E.N.E. dresses it up. Andrew Tate energy, Patrick Bet-David precision. Virality, positioning and content strategy — blunt, never hedges.',
   },
   scout: {
     name: 'S.C.O.U.T.', role: 'Lead Scout & Outbound', api: 'anthropic', model: CLAUDE,
+    voiceId: 'k9KXsQFJqzAoomTCOrJB',
     blurb: 'Prospecting and cold outreach for Empire Digital (custom AI tools built for one business). Knows where demand is and how to reach owners with a bottleneck worth killing.',
   },
   nova: {
     name: 'N.O.V.A.', role: 'Cross-Domain Analyst', api: 'google', model: 'gemini-2.5-pro',
+    voiceId: 'Q0Et7LOU7VpeoeCRQAVS',
     blurb: 'Sits above every domain, connects signals the specialists miss and pressure-tests the plan.',
   },
   pulse: {
     name: 'P.U.L.S.E.', role: 'Analytics Tracker', api: 'anthropic', model: CLAUDE,
+    voiceId: 'onwK4e9ZLuTAKqWW03F9',
     blurb: 'Owns the numbers: revenue vs target by business, the content pipeline, T.A.L.O.N.\'s trading record, S.C.O.U.T.\'s outreach funnel.',
   },
   atlas: {
     name: 'A.T.L.A.S.', role: 'Wealth Strategist', api: 'anthropic', model: CLAUDE,
+    voiceId: 'WI5pMmcGGS32yI7yttoP',
     blurb: 'Numbers are her language, sovereignty is the mission. Capital allocation, cash flow, debt, leverage, the big money calls, and picking stock investments short and long term off W.I.R.E.\'s news.',
   },
   talon: {
     name: 'T.A.L.O.N.', role: 'Trader', api: 'anthropic', model: CLAUDE,
+    voiceId: 'IKne3meq5aSn9XLyUdCD',
     blurb: 'The Empire\'s trading desk — trades gold (XAUUSD) and Bitcoin (BTCUSD) only, on a fixed top-down playbook, 0.02 lot (gold sized to its stop: at most $40 lost per position), every trade entered once. Every trade he takes is reported to Mr. Burrus by A.R.A.',
   },
   haven: {
@@ -141,14 +147,17 @@ const ROSTER = {
   },
   abraham: {
     name: 'ABRAHAM', role: 'Pastor & Spiritual Advisor', api: 'anthropic', model: CLAUDE,
+    voiceId: 'fjnwTZkKtQOJaYzGLa6n',
     blurb: 'Mr. Burrus\'s pastor — named for the patriarch who left everything on faith. Scripture, wisdom, purpose, perseverance.',
   },
   batman: {
     name: 'BATMAN', role: 'Tactical Strategist', api: 'anthropic', model: CLAUDE,
+    voiceId: '2gPFXx8pN3Avh27Dw5Ma',
     blurb: 'The world\'s greatest detective. Short, precise directives, no wasted words, three moves ahead. Finds the weakness in any plan.',
   },
   andrew: {
     name: 'ANDREW', role: 'Accountability & Growth', api: 'xai', model: 'grok-4',
+    voiceId: '6xPz2opT0y5qtoRh1U1Y',
     blurb: 'Accountability and growth lead — plain, direct, and useful. Growth and the numbers under it.',
   },
   pen: {
@@ -212,6 +221,10 @@ const voiceToggleAllowed = (persona, ownerText) => persona === 'jarvis' && VOICE
 // Lane owners (the ARA_ROUTE map, as keywords): a relay to the persona who owns the lane
 // of what he said, or of the relay's own words, goes through without him naming anyone
 // (owner's standing order, 2026-11-23: the Empire works in unison). Keep in sync with the other copy.
+// A.R.A.'s inbox lane as it shows in a relay's own words: J.A.R.V.I.S. asking her for an
+// emailed code, a magic sign-in link, a verification email or a calendar/email fact
+// (the worker 57 hand-off was blocked because nothing in his message named her lane).
+const ARA_INBOX = /\b(e-?mails?|inbox|gmail|verification|verify|one[- ]time|otp|magic (sign[- ]?in )?link|sign[- ]?in link|confirm(ation)? (link|code|email)|(emailed|email|login|sign[- ]?in|security) code|code (was|that was|they|it) (emailed|sent)|calendar)\b/;
 const LANES = {
   talon: /\b(gold|xauusd|bitcoin|btc|trade|trades|trading|position|positions|stop loss|take profit|scalp)\b/,
   atlas: /\b(money|pricing|price|prices|budget|budgets|invest|investing|investment|capital|revenue|income|profit|earn|earns|earnings|stocks?|business(es)?|venture|ventures|income stream|targets?|expenses?|cost|costs)\b/,
@@ -243,6 +256,9 @@ const VENTURE_OWNERS = ['atlas', 'sage'];
 
 function relayAllowed(userText, id, from, relayText) {
   const said = String(userText || '').toLowerCase().replace(/\./g, '');
+  // J.A.R.V.I.S. asking A.R.A. for what is in his inbox (a code, a link) is her lane on the relay's own words,
+  // even when no message of his names it (a worker's hand-off, or a bare "yes" / "continue").
+  if (id === 'ara' && from === 'jarvis' && ARA_INBOX.test(String(relayText || '').toLowerCase())) return true;
   if (!said) return false;
   if (from === 'ara') return true;
   // Any persona's relay to the owner of the lane (his words or the relay's own) goes through.

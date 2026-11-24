@@ -18,6 +18,7 @@ const ffmpegPath = require('ffmpeg-static');
 const COMMENTS = Number(process.env.CLIP_SCAN_COMMENTS || 400);
 const CHAT_BUCKET = 15;
 const LOUD_BUCKET = 2;
+const FINE_BUCKET = 0.1;
 const MAX_HOT = 15;
 
 function runBin(bin, args, { timeout = 120e3, stdout = true, onProc = null } = {}) {
@@ -150,6 +151,57 @@ function spikes(series, { window = 20, ratio = 2.5, floor = 0 } = {}) {
   return out.sort((a, b) => b.ratio - a.ratio);
 }
 
+
+// Laughter in the audio: a laugh is a run of short bursts (2-5 "ha"s a second) with dips between them, loud against the surrounding speech. `fine` is dB per
+// 0.1 s. A 3 s window counts bursts: local maxima at least DIP dB above the valleys either side;
+// 4+ bursts in 3 s that also sit LIFT dB over the surrounding minute's median is a laugh.
+// -> [{t, bursts, db}] (t in seconds, best first, one per 6 s).
+const BURST_DIP = 3, LAUGH_LIFT = 4, LAUGH_MIN_BURSTS = 4;
+function laughBursts(fine, { step = FINE_BUCKET } = {}) {
+  const out = [];
+  const W = Math.round(3 / step);
+  if (!fine || fine.length < W) return out;
+  const sorted = [...fine].sort((a, b) => a - b);
+  const globalMed = sorted[Math.floor(sorted.length / 2)];
+  for (let i = 0; i + W <= fine.length; i += Math.round(1 / step)) {
+    const seg = fine.slice(i, i + W);
+    const mean = seg.reduce((a, b) => a + b, 0) / W;
+    if (mean < globalMed + LAUGH_LIFT || mean < -45) continue;
+    // Smooth over 0.2 s, then count local maxima that stand BURST_DIP over the valleys beside them.
+    const sm = seg.map((v, k) => (v + (seg[k + 1] ?? v)) / 2);
+    let bursts = 0, valley = sm[0], peak = null;
+    for (let k = 1; k < sm.length; k++) {
+      if (peak === null) { if (sm[k] - valley >= BURST_DIP) peak = sm[k]; else if (sm[k] < valley) valley = sm[k]; }
+      else if (sm[k] > peak) peak = sm[k];
+      else if (peak - sm[k] >= BURST_DIP) { bursts++; peak = null; valley = sm[k]; }
+    }
+    if (bursts >= LAUGH_MIN_BURSTS) out.push({ t: i * step, bursts, db: +(mean - globalMed).toFixed(1) });
+  }
+  // one per 6 s: keep the strongest
+  out.sort((a, b) => b.bursts - a.bursts || b.db - a.db);
+  const kept = [];
+  for (const o of out) if (!kept.some((k) => Math.abs(k.t - o.t) < 6)) kept.push(o);
+  return kept.slice(0, 40);
+}
+
+// Whisper writes laughter into the transcript ("Haha", "[Laughter]", "lol"). -> [{t, laugh}] per
+// segment that has it, laugh = how many.
+const SAID_LAUGH = /\b(ha(ha)+h?|he(he)+|hah+a+h*|lol|lmao|lmfao)\b|\[(laugh|laughter|laughing|giggl)[a-z]*\]|\((laugh|laughter|laughing|giggl)[a-z]*\)|\*laugh/gi;
+function transcriptLaughs(segments) {
+  const out = [];
+  for (const s of segments || []) {
+    const n = (String(s.text || '').match(SAID_LAUGH) || []).length;
+    if (n) out.push({ t: s.start, laugh: n });
+  }
+  return out;
+}
+
+// Laugh words alone (not hype, not volume): spikes in how many laughs per 15 s, so a bucket where
+// the room laughed stands out even in a stream whose chat is always busy.
+function laughSpikes(buckets) {
+  return spikes(buckets.map((x) => ({ t: x.t, v: x.laugh || 0 })), { floor: 3, ratio: 3 });
+}
+
 // --- fetching (each fails soft) --------------------------------------------
 
 // One yt-dlp call: metadata, heatmap and top comments.
@@ -197,9 +249,10 @@ function startChat({ ytdlpBin, url, dir, ytdlpArgs = [], meta }) {
 function loudness(src, timeout = 300e3) {
   return new Promise((resolve, reject) => {
     const p = spawn(ffmpegPath, ['-hide_banner', '-loglevel', 'error', '-i', src, '-vn', '-ac', '1', '-ar', '8000', '-f', 's16le', '-']);
-    const per = 8000 * LOUD_BUCKET;
+    const per = 8000 * LOUD_BUCKET, perFine = 8000 * FINE_BUCKET;
     const out = [];
-    let sum = 0, n = 0, carry = null;
+    const fine = [];            // dB per 0.1 s, for laughter (see laughBursts)
+    let sum = 0, n = 0, carry = null, fsum = 0, fn = 0;
     const t = setTimeout(() => { p.kill('SIGKILL'); reject(new Error('audio read timed out')); }, timeout);
     p.stdout.on('data', (buf) => {
       if (carry) { buf = Buffer.concat([carry, buf]); carry = null; }
@@ -207,12 +260,13 @@ function loudness(src, timeout = 300e3) {
       if (len < buf.length) carry = buf.subarray(len);
       for (let i = 0; i < len; i += 2) {
         const s = buf.readInt16LE(i) / 32768;
-        sum += s * s; n++;
+        sum += s * s; n++; fsum += s * s; fn++;
+        if (fn === perFine) { fine.push(10 * Math.log10(fsum / fn + 1e-10)); fsum = 0; fn = 0; }
         if (n === per) { out.push({ t: out.length * LOUD_BUCKET, v: 10 * Math.log10(sum / n + 1e-10) }); sum = 0; n = 0; }
       }
     });
     p.on('error', (e) => { clearTimeout(t); reject(e); });
-    p.on('close', () => { clearTimeout(t); resolve(out); });
+    p.on('close', () => { clearTimeout(t); out.fine = fine; resolve(out); });
   });
 }
 
@@ -229,32 +283,52 @@ function loudSpikes(series) {
 }
 
 // A stream longer than the scan's limit: the `len`-second stretch viewers replayed
-// most (yt-dlp heatmap, summed by overlap, 60 s steps), or the start when there's
-// no graph. -> { start, end }
-function bestWindow(heatmap, total, len) {
-  if (!(total > len)) return { start: 0, end: total };
+// most (yt-dlp heatmap, summed by overlap, 60 s steps). With no graph: the stretch with the
+// most chat LAUGHTER (`chat` = chat buckets [{t, n, react, laugh}], laughs counted LAUGH_W x a
+// hype word, volume breaks ties) so a funny stream isn't judged by its first 3 hours; with
+// neither, the start. -> { start, end, by: 'replays' | 'chat laughter' | 'start' }
+function bestWindow(heatmap, total, len, chat = null) {
+  if (!(total > len)) return { start: 0, end: total, by: 'start' };
   const h = (heatmap || []).filter((x) => Number.isFinite(x.value) && Number.isFinite(x.start_time) && Number.isFinite(x.end_time));
-  let best = { start: 0, end: len }, top = -1;
-  if (!h.length) return best;
-  for (let a = 0; a + len <= total + 59; a += 60) {
-    const st = Math.min(a, total - len), en = st + len;
-    let sum = 0;
-    for (const x of h) sum += x.value * Math.max(0, Math.min(en, x.end_time) - Math.max(st, x.start_time));
-    if (sum > top) { top = sum; best = { start: st, end: en }; }
+  if (h.length) {
+    let best = { start: 0, end: len, by: 'replays' }, top = -1;
+    for (let a = 0; a + len <= total + 59; a += 60) {
+      const st = Math.min(a, total - len), en = st + len;
+      let sum = 0;
+      for (const x of h) sum += x.value * Math.max(0, Math.min(en, x.end_time) - Math.max(st, x.start_time));
+      if (sum > top) { top = sum; best = { start: st, end: en, by: 'replays' }; }
+    }
+    return best;
   }
-  return best;
+  const c = (chat || []).filter((x) => Number.isFinite(x.t));
+  if (c.some((x) => (x.laugh || 0) > 0)) {
+    // prefix sums per 60 s step of the laugh weight
+    const w = (x) => LAUGH_W * (x.laugh || 0) + Math.max(0, (x.react || 0) - (x.laugh || 0)) + 0.05 * (x.n || 0);
+    let best = { start: 0, end: len, by: 'chat laughter' }, top = -1;
+    for (let a = 0; a + len <= total + 59; a += 60) {
+      const st = Math.min(a, total - len), en = st + len;
+      let sum = 0;
+      for (const x of c) if (x.t >= st && x.t < en) sum += w(x);
+      if (sum > top) { top = sum; best = { start: st, end: en, by: 'chat laughter' }; }
+    }
+    return best;
+  }
+  return { start: 0, end: len, by: 'start' };
 }
 
 // --- merging ---------------------------------------------------------------
 
 // Every source's hits -> up to MAX_HOT windows, each with a 0-100 strength and
 // the evidence in words. Hits within 20 s merge into one window.
-function hotspots({ replayed = [], comments = [], chat = [], loud = [] }) {
+function hotspots({ replayed = [], comments = [], chat = [], loud = [], laughAudio = [], said = [] }) {
   const hits = [];
   for (const p of replayed.slice(0, 10)) hits.push({ t: p.t, w: 40 + 50 * p.value, why: `most replayed (${p.x}x the video's norm)` });
-  for (const c of comments.slice(0, 10)) if (c.n >= 1) hits.push({ t: c.t, w: Math.min(85, 30 + 15 * c.n + 5 * Math.log10(1 + c.likes)), why: `${c.n} comment${c.n === 1 ? '' : 's'} cite it${c.likes ? ` (${c.likes} likes)` : ''}` });
-  for (const s of chat.slice(0, 12)) hits.push({ t: s.t, w: Math.min(95, 25 + 12 * s.ratio + 5 * Math.min(8, s.laugh || 0)), laugh: s.laugh || 0, why: `chat x${s.ratio}${s.laugh ? `, ${s.laugh} laughing (LMAO/KEKW/💀)` : ''}${s.react - (s.laugh || 0) > 0 ? `, ${s.react - (s.laugh || 0)} hype` : ''}` });
-  for (const l of loud.slice(0, 10)) hits.push({ t: l.t, w: Math.min(45, 15 + 3 * l.db), why: `audio +${l.db} dB` });
+  for (const c of comments.slice(0, 10)) if (c.n >= 1) hits.push({ t: c.t, w: Math.min(75, 30 + 12 * c.n + 5 * Math.log10(1 + c.likes)), why: `${c.n} comment${c.n === 1 ? '' : 's'} cite it${c.likes ? ` (${c.likes} likes)` : ''}` });
+  // Chat laughter is the strongest evidence there is; chat that only hyped (no laughs) tops out at 55.
+  for (const s of chat.slice(0, 16)) hits.push({ t: s.t, w: (s.laugh || 0) > 0 ? Math.min(98, 40 + 8 * s.ratio + 6 * Math.min(8, s.laugh)) : Math.min(55, 20 + 8 * s.ratio), laugh: s.laugh || 0, why: `chat x${s.ratio}${s.laugh ? `, ${s.laugh} laughing (LMAO/KEKW/💀)` : ''}${s.react - (s.laugh || 0) > 0 ? `, ${s.react - (s.laugh || 0)} hype` : ''}` });
+  for (const l of loud.slice(0, 10)) hits.push({ t: l.t, w: Math.min(40, 12 + 2 * l.db), why: `audio +${l.db} dB` });
+  for (const l of laughAudio.slice(0, 15)) hits.push({ t: l.t, w: Math.min(60, 25 + 4 * l.bursts), laugh: 1, why: `laughter in the audio (${l.bursts} bursts)` });
+  for (const l of said.slice(0, 15)) hits.push({ t: l.t, w: Math.min(70, 35 + 10 * l.laugh), laugh: 1, why: 'laughing in the transcript' });
   hits.sort((a, b) => a.t - b.t);
   const wins = [];
   for (const h of hits) {
@@ -273,7 +347,7 @@ function hotspots({ replayed = [], comments = [], chat = [], loud = [] }) {
 
 // The signals for one video. `kind` is the clip scan's link kind; `src` the
 // downloaded file (for audio). Returns { hot, used: [...], notes: [...] }.
-async function gather({ kind, url, src, dir, ytdlpBin, ytdlpArgs = [], total, meta, chat = undefined, offset = 0, full = total }) {
+async function gather({ kind, url, src, dir, ytdlpBin, ytdlpArgs = [], total, meta, chat = undefined, offset = 0, full = total, segments = [] }) {
   const used = [], notes = [];
   const sig = {};
   // A windowed scan (bestWindow): the video's own timestamps, moved into the window.
@@ -290,6 +364,7 @@ async function gather({ kind, url, src, dir, ytdlpBin, ytdlpArgs = [], total, me
         if (!b || !b.length) notes.push('no chat replay saved on that stream');
         else {
           const s = spikes(b.map((x) => ({ t: x.t, v: chatWeight(x) })), { floor: 3 });
+          for (const l of laughSpikes(b)) if (!s.some((x) => Math.abs(x.t - l.t) <= CHAT_BUCKET)) s.push(l);
           sig.chat = inWin(s.map((x) => { const y = b.find((z) => z.t === x.t) || {}; return { ...x, react: y.react || 0, laugh: y.laugh || 0 }; }));
           used.push(`chat replay (${b.reduce((a, x) => a + x.n, 0)} messages${b.partial ? `, first ${Math.round(b[b.length - 1].t / 60)} min only` : ''})`);
         }
@@ -297,10 +372,15 @@ async function gather({ kind, url, src, dir, ytdlpBin, ytdlpArgs = [], total, me
     }
   }
   try {
-    sig.loud = loudSpikes(await loudness(src));
+    const ld = await loudness(src);
+    sig.loud = loudSpikes(ld);
     if (sig.loud.length) used.push('audio energy');
+    sig.laughAudio = laughBursts(ld.fine);
+    if (sig.laughAudio.length) used.push(`laughter in the audio (${sig.laughAudio.length})`);
   } catch (e) { notes.push(`audio energy skipped (${e.message})`); }
+  sig.said = transcriptLaughs(segments);
+  if (sig.said.length) used.push(`laughing in the transcript (${sig.said.length})`);
   return { hot: hotspots(sig), used, notes };
 }
 
-module.exports = { chatWeight, LAUGH, bestWindow, readChatFile, gather, startChat, youtubeMeta, hotspots, commentTimestamps, commentHits, heatPeaks, chatBuckets, spikes, loudSpikes, loudness };
+module.exports = { laughBursts, transcriptLaughs, laughSpikes, chatWeight, LAUGH, bestWindow, readChatFile, gather, startChat, youtubeMeta, hotspots, commentTimestamps, commentHits, heatPeaks, chatBuckets, spikes, loudSpikes, loudness };

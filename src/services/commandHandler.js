@@ -359,6 +359,21 @@ export async function handleCommands(response,personaId,callbacks={}){
     const mediaUrl=m[1].trim();
     if(mediaUrl)callbacks.onTranscribe?.({mediaUrl});
   }
+  // --- [SET_RULE: who | rule] — a standing rule he states, saved at once into the synced
+  // owner_profile (the server's setRule does the same; the server tidies it on its next pass). His own message only.
+  for(const m of allMatches(response,/\[SET_RULE:\s*([^|\]]*)\|\s*([\s\S]+?)\]/gi)){
+    if(!callbacks.ownerText)continue;
+    try{
+      const who=m[1].toLowerCase().split(/[\s,]+/).map(w=>w.replace(/\./g,'')).filter(Boolean);
+      const rule=m[2].replace(/\s+/g,' ').trim();
+      if(!who.length||rule.length<8||rule.length>600){callbacks.onNotes?.(['⚠️ Rule not saved: say who it is for (all or a persona) and the rule.']);continue;}
+      const tag=who.includes('all')?'all':who.join(', ');
+      const line=`- [${tag}] ${rule} (${new Date().toLocaleDateString('en-CA')})`;
+      const cur=String((await getSetting('owner_profile',''))||'').trim();
+      if(!cur.split('\n').includes(line)){await setSetting('owner_profile',cur?`${cur}\n${line}`:line);scheduleSync(0);}
+      callbacks.onNotes?.([`✓ Standing rule saved (${tag}): ${rule}`]);
+    }catch(e){callbacks.onNotes?.([`⚠️ Rule not saved: ${e.message}`]);}
+  }
   // --- A persona missing a tool in its own lane asks J.A.R.V.I.S. to build it
   // (server/featureRequests.js). Only on his own message. The answer comes back
   // to him on Telegram once it's live (server-side writes can't land in this chat).
@@ -495,6 +510,7 @@ export function stripCommands(text){
     .replace(/\[WATCH_VIDEO:[^\]]*\]/gi,'')
     .replace(/\[TRANSCRIBE:[^\]]*\]/gi,'')
     .replace(/\[NEED_FEATURE:[^\]]*\]/gi,'')
+    .replace(/\[SET_RULE:[^\]]*\]/gi,'')
     .replace(/\[BROWSE:[^\]]*\]/gi,'')
     .replace(/\[SHOW_CHART:[^\]]*\]/gi,'').replace(/\[TRADE_CHART(?::[^\]]*)?\]/gi,'').replace(/\[SHOW_NOTE:[^\]]*\]/gi,'')
     .replace(/\[SHOW_NOTES\]/gi,'').replace(/\[SHOW_TASKS\]/gi,'')

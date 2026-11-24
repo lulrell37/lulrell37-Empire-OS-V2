@@ -71,4 +71,13 @@ try {
   assert.strictEqual(L.parseSpeed('1.0'), 1, '1.0 = off');
   assert.strictEqual(L.parseSpeed('abc', '1.2'), 1.2, 'junk setting falls to env');
 }
+// caption prompt: vocabulary only, never the transcript's running text
+{
+  const ctx = "so lacy just said the Rockstar trailer is out. He told Jason about GTA 6 and the Vice City map, and I think it is huge. Then Lucia";
+  const v = L.vocabPrompt(ctx);
+  assert.strictEqual(v, 'Rockstar, Jason, GTA, Vice, City, Lucia', 'names and terms only: ' + v);
+  assert(!/trailer|huge|think/i.test(v), 'no running text');
+  assert.strictEqual(L.vocabPrompt(''), '');
+  assert(L.vocabPrompt('x '.repeat(10) + Array.from({ length: 200 }, (_, i) => `a Name${i}x`).join(' ')).length <= 300, 'capped');
+}
 console.log('clip layout: all checks passed');

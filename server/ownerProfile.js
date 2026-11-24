@@ -90,15 +90,50 @@ async function tick({ force = false } = {}) {
   const raw = await claudeText(system(), `CURRENT PROFILE:\n${now || '(empty)'}\n\nHIS LATEST CONVERSATIONS (oldest first):\n${convo.text}`, { maxTokens: 6000 });
   // An empty answer is a failed call, not "delete everything".
   if (!String(raw || '').trim()) return { unchanged: true };
-  const next = normalize(raw, now);
+  // Re-read: a [SET_RULE] saved while the model was thinking must survive this write.
+  const next = normalize(raw, await current());
   await setSetting('owner_profile_last', String(convo.newest));
   if (!next || next === now) return { unchanged: true };
   await setSetting(KEY, next);
+  await mirror(next);
+  return { saved: true, items: next.split('\n').length };
+}
+
+async function mirror(next) {
   const g = require('./google');
   if (await g.googleLinked().catch(() => false)) {
     await g.saveDriveNote(NOTE, `# ${NOTE}\n_What the team has learned about how you like things done. Lines marked [all] go to every persona; the rest go only to the persona(s) named (A.R.A. and J.A.R.V.I.S. see every line). Nothing rotates out. Updated ${new Date().toLocaleString('en-US', { timeZone: 'America/New_York' })} ET. Edit or delete any line by telling J.A.R.V.I.S. or A.R.A._\n\n${next}\n`).catch(() => {});
   }
-  return { saved: true, items: next.split('\n').length };
+}
+
+const SET_RULE_TOOLS = ' - [SET_RULE: who | the rule] — save a standing rule he just stated, at once (not at the next 6-hourly profile pass). who = all, or persona id(s) comma-separated (e.g. talon, or atlas, ara). Only when he states a lasting rule in his own message ("from now on…", "always…", "never…"), worded as he said it; not for one-off tasks. Reply that it is saved only after the receipt says so.';
+
+// "who | rule" → { who, rule }. who is checked against the roster; unknown → error.
+function parseRule(arg, known = ids()) {
+  const m = /^([^|]*)\|([\s\S]+)$/.exec(String(arg || ''));
+  if (!m) return { error: 'format is [SET_RULE: all | the rule] or [SET_RULE: talon, atlas | the rule]' };
+  const words = m[1].toLowerCase().split(/[\s,]+/).map((w) => w.replace(/\./g, '')).filter(Boolean);
+  const bad = words.filter((w) => w !== 'all' && !known.includes(w));
+  if (!words.length || bad.length) return { error: `unknown who "${bad.join(', ') || m[1].trim()}" — use all or persona ids: ${known.join(', ')}` };
+  const rule = m[2].replace(/\s+/g, ' ').trim().replace(/^-\s+/, '');
+  if (rule.length < 8) return { error: 'the rule is too short to save' };
+  if (rule.length > 600) return { error: 'the rule is over 600 characters — say it shorter' };
+  return { who: words.includes('all') ? ['all'] : [...new Set(words)], rule };
+}
+
+// Save a standing rule now. Only on his own message (`asked`, top-level turn).
+async function setRule(arg, { asked = '', persona = '' } = {}) {
+  if (!String(asked || '').trim() || /^\[(SENT ON YOUR OWN|The server restarted)/.test(String(asked))) return 'SET_RULE: not saved — only his own message can set a standing rule.';
+  const p = parseRule(arg);
+  if (p.error) return `SET_RULE: not saved — ${p.error}`;
+  const date = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  const line = cleanLine(`- [${p.who.join(', ')}] ${p.rule} (${date})`);
+  const now = await current();
+  if (normalize('', now).split('\n').some((l) => body(l) === body(line))) return `SET_RULE: already in his profile — ${line}`;
+  const next = normalize(line, now);
+  await setSetting(KEY, next);
+  await mirror(next);
+  return `SET_RULE: ✓ saved ${p.who[0] === 'all' ? 'for the whole team' : 'for ' + p.who.join(', ')} — ${p.rule} (${date}). It's in every affected persona's prompt from their next turn.`;
 }
 
 // The block persona `id`'s prompt carries.
@@ -107,4 +142,4 @@ async function profileBlock(id) {
   return p ? `[HOW MR. BURRUS WORKS — learned from his conversations with the whole team; follow it without being told again. If he contradicts a line, he wins and the profile updates:\n${p}\n]` : '';
 }
 
-module.exports = { PINNED, tick, profileBlock, normalize, linesFor, cleanLine, current, NOTE, KEY, enabled, SEES_ALL };
+module.exports = { setRule, parseRule, SET_RULE_TOOLS, PINNED, tick, profileBlock, normalize, linesFor, cleanLine, current, NOTE, KEY, enabled, SEES_ALL };

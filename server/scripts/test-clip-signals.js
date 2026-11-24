@@ -49,8 +49,17 @@ assert.deepStrictEqual(S.hotspots({}), []);
   assert.strictEqual(w.end - w.start, H);
   assert.ok(w.start <= 0.6 * total && w.end >= 0.85 * total - 1, 'window covers the replayed stretch');
   assert.ok(w.end <= total);
-  assert.deepStrictEqual(S.bestWindow([], total, H), { start: 0, end: H });
-  assert.deepStrictEqual(S.bestWindow(hm, 3600, H), { start: 0, end: 3600 });
+  assert.deepStrictEqual(S.bestWindow([], total, H), { start: 0, end: H, by: 'start' });
+  assert.deepStrictEqual(S.bestWindow(hm, 3600, H), { start: 0, end: 3600, by: 'start' });
+  // no graph: the 3 h with the most chat LAUGHTER, not the start, and not just the busiest chat
+  const chat = [];
+  for (let t = 0; t < total; t += 15) chat.push({ t, n: t < 2 * 3600 ? 40 : 5, react: 2, laugh: 0 });   // loud, unfunny start
+  for (let t = 4.5 * 3600; t < 4.6 * 3600; t += 15) chat.push({ t, n: 20, react: 18, laugh: 15 });      // the laughing
+  const cw = S.bestWindow([], total, H, chat);
+  assert.strictEqual(cw.by, 'chat laughter');
+  assert.ok(cw.start > 0 && cw.start <= 4.5 * 3600 && cw.end >= 4.6 * 3600, `window covers the laughing: ${cw.start}-${cw.end}`);
+  assert.strictEqual(S.bestWindow([], total, H, chat.map((x) => ({ ...x, laugh: 0 }))).by, 'start', 'no laughs anywhere -> start');
+  assert.strictEqual(S.bestWindow(hm, total, H, chat).by, 'replays', 'a graph still wins');
 })();
 
 // Chat replay is read line by line and capped, never whole.
@@ -83,3 +92,31 @@ assert.deepStrictEqual(S.hotspots({}), []);
   assert(h[0].score > h[1].score && /laughing/.test(h[0].why) && h[0].laugh === 8, JSON.stringify(h));
   console.log('clip signals laughter weighting: ok');
 }
+
+// Laughter: in the audio (bursts), in the transcript, in chat (laugh-only spikes), and how hotspots weigh them.
+(() => {
+  // 0.1 s dB series: speech around -30 dB with slow swing; a 3 s laugh = 8 bursts at 2 Hz that peak -12 dB.
+  const fine = Array.from({ length: 1200 }, (_, i) => -32 + 2 * Math.sin(i / 40));
+  const laugh = fine.slice();
+  for (let i = 600; i < 640; i++) laugh[i] = -30 + 18 * Math.max(0, Math.sin(((i - 600) / 2.5) * Math.PI));   // dips back to -30
+  const L = S.laughBursts(laugh);
+  assert.ok(L.length >= 1 && Math.abs(L[0].t - 60) <= 3 && L[0].bursts >= 4, `audio laughter found near 60 s: ${JSON.stringify(L[0])}`);
+  assert.deepStrictEqual(S.laughBursts(fine), [], 'plain speech is not laughter');
+  const shout = fine.slice(); for (let i = 600; i < 640; i++) shout[i] = -12;   // one sustained loud stretch, no bursts
+  assert.deepStrictEqual(S.laughBursts(shout), [], 'a sustained shout is not laughter');
+
+  const said = S.transcriptLaughs([{ start: 5, text: 'and then... haha hahaha oh no' }, { start: 9, text: 'He said [Laughter] wow' }, { start: 20, text: 'we have a hall full of ballast' }, { start: 30, text: 'LMAO' }]);
+  assert.deepStrictEqual(said.map((x) => x.t), [5, 9, 30]);
+
+  // a laugh-only spike in a chat that is busy all the time
+  const b = Array.from({ length: 60 }, (_, i) => ({ t: i * 15, n: 50, react: 5, laugh: 1 }));
+  b[30] = { t: 450, n: 52, react: 25, laugh: 20 };
+  assert.ok(S.laughSpikes(b).some((x) => x.t === 450), 'laugh-only spike found');
+
+  // hotspots: laughing chat outranks hype-only chat of the same ratio, audio laughter and said laughter count
+  const hot = S.hotspots({ chat: [{ t: 100, ratio: 5, react: 20, laugh: 12 }, { t: 900, ratio: 5, react: 20, laugh: 0 }], laughAudio: [{ t: 102, bursts: 6, db: 8 }], said: [{ t: 98, laugh: 2 }] });
+  assert.ok(hot[0].start <= 100 && hot[0].end >= 100 && hot[0].laugh >= 12 && /laughter in the audio/.test(hot[0].why) && /laughing in the transcript/.test(hot[0].why));
+  const hype = hot.find((h) => h.start === 900);
+  assert.ok(hype.score <= 60 && hot[0].score > hype.score + 25, `hype-only chat tops out low: ${hype.score} vs ${hot[0].score}`);
+})();
+console.log('clip signals: laughter ok');
