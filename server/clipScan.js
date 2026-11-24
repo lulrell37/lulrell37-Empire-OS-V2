@@ -449,7 +449,7 @@ async function clipScan(url, focus = '', { onProgress = () => {}, title = '' } =
   }
   if (holder) {
     // Never cancels the running one (owner: nothing cancels unless he names it): refuse and say which.
-    const e = new Error(`a clip scan is already running (${heldBy(holder)}) — one at a time and nothing was cancelled. Ask him whether to cancel that one${holder.jid ? ` ([JOB_CANCEL: ${holder.jid}])` : ''} or wait for it.`);
+    const e = new Error(`a clip scan is already running${holder.jid ? ` — job #${holder.jid}` : ''} (${heldBy(holder)}) — one at a time and nothing was cancelled. Ask him whether to cancel that one${holder.jid ? ` ([JOB_CANCEL: ${holder.jid}])` : ''} or wait for it.`);
     e.busy = true;
     throw e;
   }
