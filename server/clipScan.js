@@ -32,7 +32,14 @@ const MAX_BYTES = (parseFloat(process.env.CLIP_SCAN_MAX_GB) || 2) * 1e9;
 const MAX_SEC = (parseFloat(process.env.CLIP_SCAN_MAX_MIN) || 180) * 60;
 const TRANSCRIPT_CHARS = 350000;
 
-let running = false;
+// The lock: who holds it ({ jid, title, url, startedAt }) or null. Taken and released inside clipScan only.
+let holder = null;
+const heldBy = (h) => `${h.title || h.url}${h.jid ? `, job ${h.jid}` : ''}, running ${mmss((Date.now() - h.startedAt) / 1000)}`;
+// A holder whose job is no longer running in jobProgress is an orphan (nothing is working on it).
+function orphan(h) {
+  if (!h || !h.jid) return false; // still starting up, or job tracking is off: can't tell, so it counts as live
+  try { return !require('./jobProgress').live().some((j) => String(j.id) === String(h.jid)); } catch { return false; }
+}
 
 // Checkpoints (owner, 2026-11-23: a restart must not cost a scan its download and
 // transcript). Work happens in a directory keyed by the video, outside $TMPDIR's
@@ -435,27 +442,32 @@ function cutVertical(src, start, end, dest) {
 // the upload cap; bigger ones are Drive links only).
 async function clipScan(url, focus = '', { onProgress = () => {}, title = '' } = {}) {
   if (!enabled()) throw new Error('clip scan is switched off (CLIP_SCAN=off)');
-  if (running) throw new Error('a clip scan is already running — one at a time; wait for it to finish');
+  if (holder && orphan(holder)) {
+    console.error(`clip scan failed: stale lock released (held by ${heldBy(holder)}; its job is not running)`);
+    holder = null;
+  }
+  if (holder) throw new Error(`a clip scan is already running (${heldBy(holder)}) — one at a time; wait for it to finish`);
   const kind = linkKind(url);
   if (!kind) throw new Error('needs a Google Drive link or a YouTube URL (youtube.com/watch, youtu.be, youtube.com/shorts)');
-  running = true;
-  pruneJobDirs();
-  const dir = path.join(JOBS_DIR, jobKey(url, focus));
-  fs.mkdirSync(dir, { recursive: true });
-  const stamp = () => { try { const t = new Date(); fs.utimesSync(dir, t, t); } catch { /* best effort */ } };
-  stamp();
-  const ck = (n) => path.join(dir, n);
-  const state = readJson(ck('state.json')) || {};
-  const saveState = (patch) => { Object.assign(state, patch); writeJson(ck('state.json'), state); stamp(); };
-  // Stale leftovers from a cut-off run (half-downloaded sections, chunks) go; checkpoints stay.
-  for (const f of fs.readdirSync(dir)) if (/^(cand|section)\d+\./.test(f) || /^a\d+\.mp3$/.test(f) || /^chat/.test(f) || /\.(part|ytdl)$/.test(f)) fs.rmSync(ck(f), { recursive: true, force: true });
-  let chatP = null;
-  let ok = false;
-  // Live progress (server/jobProgress.js): auto clips pass their own title.
-  const jobs = require('./jobProgress');
-  const jid = jobs.start('rogue', title || `Clip scan: ${String(url).replace(/^https?:\/\/(www\.)?/, '').slice(0, 45)}`, ['Download audio', 'Transcribe', 'Pick moments', 'Download sections', 'Render each clip', 'Upload'],
-    { kind: 'clip_scan', args: { url: String(url).trim(), focus: String(focus || ''), title }, to: 'rogue' });
+  const mine = holder = { jid: null, title: String(title || ''), url: String(url).trim(), startedAt: Date.now() };
+  let dir, chatP = null, ok = false, jid = null, jobs = null, why = 'failed';
+  console.log(`clip scan: start ${mine.url}`);
   try {
+    pruneJobDirs();
+    dir = path.join(JOBS_DIR, jobKey(url, focus));
+    fs.mkdirSync(dir, { recursive: true });
+    const stamp = () => { try { const t = new Date(); fs.utimesSync(dir, t, t); } catch { /* best effort */ } };
+    stamp();
+    const ck = (n) => path.join(dir, n);
+    const state = readJson(ck('state.json')) || {};
+    const saveState = (patch) => { Object.assign(state, patch); writeJson(ck('state.json'), state); stamp(); };
+    // Stale leftovers from a cut-off run (half-downloaded sections, chunks) go; checkpoints stay.
+    for (const f of fs.readdirSync(dir)) if (/^(cand|section)\d+\./.test(f) || /^a\d+\.mp3$/.test(f) || /^chat/.test(f) || /\.(part|ytdl)$/.test(f)) fs.rmSync(ck(f), { recursive: true, force: true });
+    // Live progress (server/jobProgress.js): auto clips pass their own title.
+    jobs = require('./jobProgress');
+    jid = jobs.start('rogue', title || `Clip scan: ${String(url).replace(/^https?:\/\/(www\.)?/, '').slice(0, 45)}`, ['Download audio', 'Transcribe', 'Pick moments', 'Download sections', 'Render each clip', 'Upload'],
+      { kind: 'clip_scan', args: { url: String(url).trim(), focus: String(focus || ''), title }, to: 'rogue' });
+    mine.jid = jid;
     let src = path.join(dir, 'source');
     let name;
     // Viewer signals: metadata (most-replayed graph, top comments) before the download.
@@ -621,14 +633,16 @@ async function clipScan(url, focus = '', { onProgress = () => {}, title = '' } =
     ok = true;
     return out;
   } catch (e) {
-    jobs.fail(jid, e);
+    why = `failed: ${String((e && e.message) || e).slice(0, 200)}`;
+    if (jobs && jid) jobs.fail(jid, e);
     throw e;
   } finally {
-    running = false;
+    if (holder === mine) holder = null;
+    console.log(`clip scan: end ${mine.url} (job ${jid || 'none'}) ${ok ? 'ok' : why}`);
     if (chatP && chatP.stop) chatP.stop();
     // Done: nothing to resume. A failure keeps the checkpoints (the same link sent
     // again, or the boot resume, picks them up); pruneJobDirs clears them after 2 days.
-    if (ok) fs.rmSync(dir, { recursive: true, force: true });
+    if (ok && dir) fs.rmSync(dir, { recursive: true, force: true });
   }
 }
 
@@ -660,4 +674,4 @@ async function videoInfo(url) {
   return { duration: Number(d) || 0, live: /is_live|is_upcoming/.test(live || ''), tags };
 }
 
-module.exports = { PICK_SYSTEM, MAX_CANDIDATES, MIN_FUNNY, funnyOnly, pickMoments, downloadYouTubeAudio, downloadSection, withFfmpegProxy, SECTION_PAD, ytdlp, cookieArgs, isBotCheck, hasYouTubeCookies, videoInfo, clipScan, scanInBackground, jobKey, pruneJobDirs, JOBS_DIR, CLIP_TOOLS, driveId, isYouTube, isSocialVideo, linkKind, downloadYouTube, transcribeVideo, duration, MIN_CHUNK_SEC, MAX_BYTES, MAX_SEC, parsePicks, sanitizePicks, mmss };
+module.exports = { _lock: { get: () => holder, set: (h) => { holder = h; } }, PICK_SYSTEM, MAX_CANDIDATES, MIN_FUNNY, funnyOnly, pickMoments, downloadYouTubeAudio, downloadSection, withFfmpegProxy, SECTION_PAD, ytdlp, cookieArgs, isBotCheck, hasYouTubeCookies, videoInfo, clipScan, scanInBackground, jobKey, pruneJobDirs, JOBS_DIR, CLIP_TOOLS, driveId, isYouTube, isSocialVideo, linkKind, downloadYouTube, transcribeVideo, duration, MIN_CHUNK_SEC, MAX_BYTES, MAX_SEC, parsePicks, sanitizePicks, mmss };
