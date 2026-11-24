@@ -109,7 +109,8 @@ WT._setDeps({ runtime, sendCard: async (c) => { cards.push(c); } });
   for (const body of Object.values(issues)) assert.ok(!JSON.stringify(body).includes(sent.tools_token));
 
   // The workflow masks it and the CLI exists.
-  const yml = require('fs').readFileSync(require('path').join(__dirname, '../../.github/workflows/worker.yml'), 'utf8');
+  // worker.yml itself can't be pushed by the worker app (no `workflows` permission), so the edit ships as a patch.
+  const yml = require('fs').readFileSync(require('path').join(__dirname, '../../scripts/worker-yml-tools.patch'), 'utf8');
   assert.match(yml, /tools_token/); assert.match(yml, /add-mask::\$t[\s\S]*WORKER_TOOLS_TOKEN/); assert.match(yml, /scripts\/jarvis-tool\.js/);
   assert.ok(require('fs').existsSync(require('path').join(__dirname, '../../scripts/jarvis-tool.js')));
   console.log('worker-tools: all passed');
