@@ -244,24 +244,80 @@ async function webResearch(prompt) {
   );
 }
 
-// Transcribe an audio buffer (a Telegram voice note is OGG/Opus) with Whisper.
-// Needs OPENAI_API_KEY. Returns the text, or throws.
-async function transcribe(buffer, filename = 'voice.ogg') {
-  if (!process.env.OPENAI_API_KEY) throw new Error('voice input needs OPENAI_API_KEY on the server');
-  const form = new FormData();
-  form.append('file', new Blob([buffer]), filename);
-  form.append('model', 'whisper-1');
-  form.append('language', 'en');
-  // The persona names as vocabulary, so "Ara" isn't heard as "Aura".
-  form.append('prompt', 'A.R.A., Ara, J.A.R.V.I.S., T.A.L.O.N., S.E.L.E.N.E., A.I.S.H.A., H.A.V.E.N. Okay. Here is what I need you to do.');
+// --- speech-to-text: Groq first, OpenAI behind it -----------------------------------------------------
+//
+// Every Whisper call goes to Groq (whisper-large-v3-turbo, OpenAI-compatible, far cheaper) first and falls
+// back to OpenAI (whisper-1) on a missing key, a file over Groq's 25 MB limit, 429 / 5xx / any other refusal,
+// a timeout, or a response with no word timestamps when words were asked for. Both take the same request
+// shape: response_format=verbose_json + timestamp_granularities[]=word|segment (Groq's docs say the granularities
+// need verbose_json; asking for it always is valid on both, and it also returns `duration` for the usage log).
+// Every call is logged (server/transcribeUsage.js). Key: GROQ_API_KEY, else app_settings.groq_api_key.
+const GROQ_URL = 'https://api.groq.com/openai/v1/audio/transcriptions';
+const GROQ_MODEL = 'whisper-large-v3-turbo';
+const GROQ_MAX_BYTES = 25 * 1024 * 1024;
+const GROQ_TIMEOUT_MS = 120000;
+let groqPausedUntil = 0;  // after a 429 Groq is skipped until its Retry-After (rate limits are per minute / hour / day)
+
+async function groqKey() {
+  if (process.env.GROQ_API_KEY) return process.env.GROQ_API_KEY;
+  try { return String(await require('./syncStore').getSetting('groq_api_key', '') || '').trim(); } catch { return ''; }
+}
+
+// fields: [[name, value]...] (model is added per provider). Returns { data, provider }. Throws only when OpenAI
+// (the last resort) fails too, or when there is no OpenAI key to fall back to.
+async function stt(buffer, filename, fields, { job = 'other', words = false } = {}) {
+  const usage = require('./transcribeUsage');
+  const form = (model) => {
+    const f = new FormData();
+    f.append('file', new Blob([buffer]), filename);
+    f.append('model', model);
+    f.append('response_format', 'verbose_json');
+    for (const [k, v] of fields) f.append(k, v);
+    return f;
+  };
+  const log = (provider, data, fallback, why) => usage.record({
+    provider, fallback, why, job, bytes: buffer.length,
+    sec: Number(data && data.duration) || (data && (data.segments || []).length ? Number(data.segments[data.segments.length - 1].end) || 0 : 0),
+  });
+  let why = '';
+  const key = await groqKey();
+  if (!key) why = 'no Groq key';
+  else if (buffer.length > GROQ_MAX_BYTES) why = 'over Groq 25 MB limit';
+  else if (groqPausedUntil > Date.now()) why = 'Groq rate-limited (paused)';
+  else {
+    try {
+      const res = await fetch(GROQ_URL, { method: 'POST', headers: { authorization: `Bearer ${key}` }, body: form(GROQ_MODEL), signal: AbortSignal.timeout(GROQ_TIMEOUT_MS) });
+      if (res.ok) {
+        const data = await res.json();
+        if (words && !(data.words || []).length && String(data.text || '').trim()) why = 'Groq returned no word timestamps';
+        else { log('groq', data, false, ''); return { data, provider: 'groq' }; }
+      } else {
+        if (res.status === 429) {
+          const wait = Math.min(Math.max(parseFloat(res.headers.get('retry-after')) || 60, 5), 600);
+          groqPausedUntil = Date.now() + wait * 1000;
+        }
+        why = `Groq ${res.status}`;
+      }
+    } catch (e) { why = /timeout|abort/i.test(`${e.name} ${e.message}`) ? 'Groq timeout' : `Groq error: ${String(e.message).slice(0, 60)}`; }
+  }
+  if (!process.env.OPENAI_API_KEY) throw new Error(`transcription needs OPENAI_API_KEY on the server (Groq unavailable: ${why})`);
   const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-    method: 'POST',
-    headers: { authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
-    body: form,
+    method: 'POST', headers: { authorization: `Bearer ${process.env.OPENAI_API_KEY}` }, body: form('whisper-1'),
   });
   if (!res.ok) throw new Error(`whisper ${res.status}: ${(await res.text()).slice(0, 160)}`);
-  const d = await res.json();
-  return fixNames(d.text || '');
+  const data = await res.json();
+  log('openai', data, true, why);
+  return { data, provider: 'openai' };
+}
+
+// Transcribe an audio buffer (a Telegram voice note is OGG/Opus) with Whisper. Returns the text, or throws.
+async function transcribe(buffer, filename = 'voice.ogg', { job = 'voice note' } = {}) {
+  // The persona names as vocabulary, so "Ara" isn't heard as "Aura".
+  const { data } = await stt(buffer, filename, [
+    ['language', 'en'],
+    ['prompt', 'A.R.A., Ara, J.A.R.V.I.S., T.A.L.O.N., S.E.L.E.N.E., A.I.S.H.A., H.A.V.E.N. Okay. Here is what I need you to do.'],
+  ], { job });
+  return fixNames(data.text || '');
 }
 
 // Whisper refuses audio under 0.1 s (audio_too_short) and that used to abort a whole scan. A stub like that
@@ -269,21 +325,13 @@ async function transcribe(buffer, filename = 'voice.ogg') {
 const tooShort = (buf) => !buf || buf.length < 1024;
 
 // Whisper with timestamps: [{ start, end, text }] in seconds, for a long
-// recording's chunk. Needs OPENAI_API_KEY. Same persona-name vocabulary.
-async function transcribeSegments(buffer, filename = 'audio.mp3', { prompt = 'A.R.A., Ara, J.A.R.V.I.S., T.A.L.O.N., S.E.L.E.N.E. Okay. Here is what I need you to do.' } = {}) {
-  if (!process.env.OPENAI_API_KEY) throw new Error('transcription needs OPENAI_API_KEY on the server');
+// recording's chunk. Same persona-name vocabulary.
+async function transcribeSegments(buffer, filename = 'audio.mp3', { prompt = 'A.R.A., Ara, J.A.R.V.I.S., T.A.L.O.N., S.E.L.E.N.E. Okay. Here is what I need you to do.', job = 'other' } = {}) {
   if (tooShort(buffer)) return [];
-  const form = new FormData();
-  form.append('file', new Blob([buffer]), filename);
-  form.append('model', 'whisper-1');
-  form.append('response_format', 'verbose_json');
-  if (prompt) form.append('prompt', prompt);
+  const fields = [];
+  if (prompt) fields.push(['prompt', prompt]);
   const ownVoice = !!prompt && /J\.A\.R\.V\.I\.S/.test(prompt);
-  const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-    method: 'POST', headers: { authorization: `Bearer ${process.env.OPENAI_API_KEY}` }, body: form,
-  });
-  if (!res.ok) throw new Error(`whisper ${res.status}: ${(await res.text()).slice(0, 160)}`);
-  const d = await res.json();
+  const { data: d } = await stt(buffer, filename, fields, { job });
   return (d.segments || []).map((s) => ({ start: s.start, end: s.end, text: ownVoice ? fixNames(s.text) : String(s.text || '').trim() })).filter((s) => s.text);
 }
 
@@ -298,25 +346,14 @@ function fixNames(text) {
 // slang come out spelled the same way. Words inside a segment Whisper itself
 // flags as probably invented (no speech + low confidence, or a looping
 // repetition) are dropped: that is what put words on screen nobody said.
-async function transcribeWords(buffer, filename = 'clip.mp3', { prompt = '' } = {}) {
-  if (!process.env.OPENAI_API_KEY) throw new Error('captions need OPENAI_API_KEY on the server');
+async function transcribeWords(buffer, filename = 'clip.mp3', { prompt = '', job = 'clip captions' } = {}) {
   if (tooShort(buffer)) return [];
-  const form = new FormData();
-  form.append('file', new Blob([buffer]), filename);
-  form.append('model', 'whisper-1');
-  form.append('response_format', 'verbose_json');
-  form.append('timestamp_granularities[]', 'word');
-  form.append('timestamp_granularities[]', 'segment');
-  form.append('temperature', '0');
-  if (prompt) form.append('prompt', String(prompt).slice(-800));
-  const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-    method: 'POST', headers: { authorization: `Bearer ${process.env.OPENAI_API_KEY}` }, body: form,
-  });
-  if (!res.ok) throw new Error(`whisper ${res.status}: ${(await res.text()).slice(0, 160)}`);
-  const d = await res.json();
+  const fields = [['timestamp_granularities[]', 'word'], ['timestamp_granularities[]', 'segment'], ['temperature', '0']];
+  if (prompt) fields.push(['prompt', String(prompt).slice(-800)]);
+  const { data: d } = await stt(buffer, filename, fields, { job, words: true });
   const bad = (d.segments || []).filter((s) => (s.no_speech_prob > 0.6 && s.avg_logprob < -0.8) || s.compression_ratio > 2.4 || s.avg_logprob < -1.2);
   return (d.words || []).map((w) => ({ word: String(w.word || '').trim(), start: Number(w.start), end: Number(w.end) }))
     .filter((w) => w.word && Number.isFinite(w.start) && !bad.some((s) => w.start >= s.start - 0.05 && w.end <= s.end + 0.05));
 }
 
-module.exports = { transcribeWords, CLAUDE_MODEL, keyFor, WEB_SEARCH_TOOL, claudeText, creditStatus, subscriptionStatus, openaiCompatText, geminiText, chatAs, webResearch, xSearch, transcribe, transcribeSegments, fixNames };
+module.exports = { stt, GROQ_URL, GROQ_MODEL, GROQ_MAX_BYTES, _resetGroqPause: () => { groqPausedUntil = 0; }, transcribeWords, CLAUDE_MODEL, keyFor, WEB_SEARCH_TOOL, claudeText, creditStatus, subscriptionStatus, openaiCompatText, geminiText, chatAs, webResearch, xSearch, transcribe, transcribeSegments, fixNames };

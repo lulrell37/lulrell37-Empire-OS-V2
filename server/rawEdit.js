@@ -220,7 +220,7 @@ async function learnStyleInner(argIn, job = NOJOB) {
         }
         const a = path.join(d, 'a.mp3');
         await run(['-hide_banner', '-loglevel', 'error', '-y', '-i', file, '-vn', '-ac', '1', '-ar', '16000', '-b:a', '32k', a]);
-        const words = await transcribeWords(fs.readFileSync(a), 'a.mp3').catch(() => []);
+        const words = await transcribeWords(fs.readFileSync(a), 'a.mp3', { job: 'raw edit' }).catch(() => []);
         const gaps = words.slice(1).map((w, j) => w.start - words[j].end).filter((g) => g > 0);
         const look = await lookAtImages(frames, `Three frames from one ${profile ? `of the ${profile} reference videos` : 'of his edited short videos'}. Describe the EDITING STYLE only, in 4-6 short lines: captions (on/off, position, size, font feel, colors, how many words at a time), framing (tight/wide, centered), zooms or punch-ins, on-screen titles or graphics, color grade, anything else distinctive. No guesses about what is said.`);
         seen.push({ url: u, secs: Math.round(total), wps: words.length && total ? (words.length / total).toFixed(2) : '?', pause: gaps.length ? (gaps.reduce((x, y) => x + y, 0) / gaps.length).toFixed(2) : '?', look });
@@ -316,7 +316,7 @@ async function editOneInner(link, notes = '', job = NOJOB, profile = '') {
     if (!Array.isArray(words) || !words.length) {
       const a = path.join(dir, 'a.mp3');
       await run(['-hide_banner', '-loglevel', 'error', '-y', '-i', src, '-vn', '-ac', '1', '-ar', '16000', '-b:a', '48k', a]);
-      words = await transcribeWords(fs.readFileSync(a), 'raw.mp3');
+      words = await transcribeWords(fs.readFileSync(a), 'raw.mp3', { job: 'raw edit' });
       if (!words.length) throw new Error('no speech found in it');
       fs.writeFileSync(words_f, JSON.stringify(words));
     }

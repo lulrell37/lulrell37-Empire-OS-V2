@@ -126,7 +126,7 @@ async function framesAndAudio(video) {
     const audio = path.join(dir, 'a.ogg');
     const a = await run(['-hide_banner', '-loglevel', 'error', '-i', src, '-vn', '-ac', '1', '-c:a', 'libopus', '-b:a', '32k', audio]);
     if (a.code === 0 && fs.existsSync(audio) && fs.statSync(audio).size > 1000) {
-      transcript = await transcribe(fs.readFileSync(audio), 'audio.ogg').catch(() => '');
+      transcript = await transcribe(fs.readFileSync(audio), 'audio.ogg', { job: 'other' }).catch(() => '');
     }
     return { frames, transcript, duration };
   } finally {

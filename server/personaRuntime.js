@@ -413,7 +413,8 @@ PERSONA_EXTRA_TOOLS.stephanie = require('./stephanieCourse').COURSE_TOOLS;
 PERSONA_EXTRA_TOOLS.rogue = require('./clipScan').CLIP_TOOLS + '\n' + require('./autoClip').AUTO_CLIP_TOOLS + '\n' + require('./rawEdit').RAW_EDIT_TOOLS;
 PERSONA_EXTRA_TOOLS.jarvis += '\n' + require('./autoClip').AUTO_CLIP_TOOLS + '\n' + require('./rawEdit').RAW_EDIT_TOOLS + '\n' + require('./siteLogins').LOGIN_TOOLS;
 PERSONA_EXTRA_TOOLS.jarvis += '\n' + require('./browserAgent').BROWSE_TOOLS + '\n' + require('./workers').WORKER_TOOLS;
-PERSONA_EXTRA_TOOLS.jarvis += '\n' + require('./siteDesk').SITE_TOOLS;
+PERSONA_EXTRA_TOOLS.jarvis += '\n' + require('./siteDesk').SITE_TOOLS + '\n' + require('./transcribeUsage').USAGE_TOOLS;
+PERSONA_EXTRA_TOOLS.rogue += '\n' + require('./transcribeUsage').USAGE_TOOLS;
 PERSONA_EXTRA_TOOLS.scout = (PERSONA_EXTRA_TOOLS.scout ? PERSONA_EXTRA_TOOLS.scout + '\n' : '') + require('./siteDesk').SITE_TOOLS;
 
 PERSONA_EXTRA_TOOLS.scribe = ` - [MONDAY_SCRIPTS] — write this week's 7 video scripts now, and file them; A.R.A. tells him they came in. They go out on their own Mondays at 8 AM ET; only use this when he asks for them again or early.`;
@@ -493,7 +494,7 @@ function systemPrompt(ctx, gs, custom, mem) {
     CONTINUITY,
     mem,
     memoryLine(),
-    ARA_TOOLS + '\n' + require('./browserAgent').BROWSE_TOOLS + '\n' + require('./openThreads').OPEN_THREADS_TOOLS + '\n' + require('./moneyWatch').MONEY_TOOLS + '\n' + require('./siteDesk').SITE_TOOLS,
+    ARA_TOOLS + '\n' + require('./browserAgent').BROWSE_TOOLS + '\n' + require('./openThreads').OPEN_THREADS_TOOLS + '\n' + require('./moneyWatch').MONEY_TOOLS + '\n' + require('./siteDesk').SITE_TOOLS + '\n' + require('./transcribeUsage').USAGE_TOOLS,
     googleLine(gs),
     `[THE EMPIRE — you run the team. When Mr. Burrus tells you to DO something that's another persona's job, send it to whoever owns it with [RELAY_TO: id | the full instruction, every detail he gave] — he never has to name them. WHO OWNS WHAT: ${ARA_ROUTE}. Everyday things you have your own tags for (notes, tasks, calendar, email, reminders, expenses, the HUD, research, images) you just do yourself. A question or an opinion you answer yourself, unless he names someone or it needs their live tools (where his trades stand → T.A.L.O.N.; how something in the app's code works → J.A.R.V.I.S.). Several jobs for several people → several RELAY_TO tags in the same reply. Report what they actually did from their receipts. This overrides any hand-off instruction elsewhere in your prompt.\n${rosterLines()}\n]`,
     faithBlock('ara'),
@@ -639,6 +640,7 @@ async function runInjections(text, persona = 'ara', { convo = '', depth = 0, sin
       }
       if (name === 'SUBSCRIPTIONS' && ['atlas', 'ara'].includes(persona)) return `SUBSCRIPTIONS (from his email):\n${await require('./moneyWatch').subscriptionsTag()}`;
       if (name === 'MONEY_IN_OUT' && ['atlas', 'ara'].includes(persona)) return `MONEY IN / OUT:\n${await require('./moneyWatch').monthText()}`;
+      if (name === 'TRANSCRIBE_USAGE' && ['jarvis', 'ara', 'rogue'].includes(persona)) return `TRANSCRIBE USAGE (measured, server/transcribeUsage.js):\n${await require('./transcribeUsage').usageTag()}`;
       if (name === 'OPEN_THREADS') return `OPEN THREADS (his Drive note "Open Threads"):\n${await require('./openThreads').readTag()}`;
       if (name === 'TRANSCRIBE' && arg) {
         try {

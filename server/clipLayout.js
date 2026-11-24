@@ -277,7 +277,7 @@ async function clipWords(src, start, end, dir, tag, context = '') {
   const a = path.join(dir, `${tag}-words.mp3`);
   const from = Math.max(0, start - PRE_ROLL), lead = start - from;
   await run(['-hide_banner', '-loglevel', 'error', '-y', '-ss', from.toFixed(2), '-i', src, '-t', (end - from).toFixed(2), '-vn', '-ac', '1', '-ar', '16000', '-b:a', '64k', a]);
-  const words = await transcribeWords(fs.readFileSync(a), `${tag}.mp3`, { prompt: context });
+  const words = await transcribeWords(fs.readFileSync(a), `${tag}.mp3`, { prompt: context, job: 'clip captions' });
   return words.map((w) => ({ ...w, start: w.start - lead, end: w.end - lead })).filter((w) => w.end > 0.05).map((w) => ({ ...w, start: Math.max(0, w.start) }));
 }
 
