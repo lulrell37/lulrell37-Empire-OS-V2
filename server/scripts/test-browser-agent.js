@@ -50,6 +50,37 @@ assert.deepStrictEqual(seen, [[4, 1], [4, 3], [4, 4]], 'fires on change only, st
 assert.match(pt.prompt(), /YOUR PLAN \(you're on step 4\):\n1\. a/);
 const off = B.planTracker(null); off.note({ plan: ['a'], planStep: 1 }); assert.strictEqual(off.prompt(), '', 'a plain [BROWSE] carries no plan');
 const carried = []; B.planTracker((n, at) => carried.push(at), ['a', 'b'], 2).note({ planStep: 2 }); assert.deepStrictEqual(carried, [], 'carried plan + step: no repeat');
+// Every reply shape the brain has used (fixture: the failing Groq sign-up replies, workers 63-65).
+for (const c of require('./fixtures/browser-brain-replies.json').cases) {
+  const r = B.parseAction(c.raw, 'https://console.groq.com/login');
+  assert.ok(!r.error, `${c.name}: ${r.error}`);
+  assert.strictEqual(r.type, c.type, c.name);
+}
+assert.match(B.parseAction('{"action":{"ask":"I requested a new sign-in email; please get the magic link"}}').question, /magic link/, 'one-key ask keeps its question');
+assert.strictEqual(B.parseAction('{"action":{"ask_user":"x","message":"m"}}').type, 'ask');
+assert.strictEqual(B.parseAction('{"action":"ask","message":"need link"}').question, 'need link', 'message becomes the question');
+assert.ok(B.parseAction('{"thought":"only"}').error, 'thought alone still unusable');
+assert.ok(B.parseAction('{"thought":"x","action":""}').error, 'empty action unusable');
+// The ask path: a brain ask for a magic link reaches A.R.A. (asksForInfo -> findForJob) and the email search.
+const AF = require('../araFinds'), SL = require('../siteLogins');
+const q = 'I requested a new sign-in email; please get the magic link from A.R.A.';
+assert.ok(AF.asksForInfo(q), 'a sign-in link ask goes to A.R.A.');
+assert.ok(SL.wantsEmailCode('Ask A.R.A. for magic link'), 'magic link ask without the word email still fetches from Gmail');
+assert.ok(!AF.asksForInfo('Should I click Submit and send this message? Go ahead?'), 'his OK is still his');
+assert.strictEqual(AF.senderOf('https://console.groq.com/login'), 'groq.com');
+// Waiting is capped: 3 waits on an unchanged page, then a nudge, then a failed stop.
+{
+  const g = B.waitGuard(), seq = [];
+  for (let i = 0; i < 6; i++) seq.push(g.see('p1', 'wait'));
+  assert.deepStrictEqual(seq, ['ok', 'ok', 'ok', 'nudge', 'stop', 'stop'], 'wait cap');
+  const g2 = B.waitGuard();
+  g2.see('p1', 'wait'); g2.see('p1', 'wait'); g2.see('p1', 'wait');
+  assert.strictEqual(g2.see('p1', 'click'), 'ok'); assert.strictEqual(g2.see('p1', 'wait'), 'ok', 'a real action resets the count');
+  const g3 = B.waitGuard(); g3.see('p1', 'wait'); g3.see('p1', 'wait'); g3.see('p1', 'wait');
+  assert.strictEqual(g3.see('p2', 'wait'), 'ok', 'a page that changed resets the count');
+  const g4 = B.waitGuard(); for (let i = 0; i < 3; i++) g4.see('p', 'wait');
+  assert.strictEqual(g4.see('p', 'wait'), 'nudge'); assert.strictEqual(g4.see('p', 'click'), 'ok', 'taking another step after the nudge clears it');
+}
 (async () => {
   await assert.rejects(B.browseTag('talon', 'look up gold'), /J\.A\.R\.V\.I\.S\..*A\.R\.A\./);
   console.log('browser agent: all checks passed');

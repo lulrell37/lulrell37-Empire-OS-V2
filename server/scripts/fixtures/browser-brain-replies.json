@@ -1,0 +1,18 @@
+{
+  "_note": "Reply shapes seen from the browser brain (Groq sign-up workers 63-65, 2026-11-24: 'no action in the reply (keys: thought, action)'). Each must parse to the expected action type.",
+  "cases": [
+    { "name": "action object without a type key, one-key form", "raw": "{\"thought\":\"the page asks me to check my email\",\"action\":{\"ask\":\"I requested a new sign-in email; please get the magic link from A.R.A.\"}}", "type": "ask" },
+    { "name": "action object, name/tool key", "raw": "{\"thought\":\"x\",\"action\":{\"name\":\"click\",\"id\":4}}", "type": "click" },
+    { "name": "action object with 'action' key and nested params", "raw": "{\"thought\":\"x\",\"action\":{\"type\":\"ask\",\"params\":{}},\"question\":\"which email?\"}", "type": "ask" },
+    { "name": "action string, fields at top level", "raw": "{\"thought\":\"x\",\"action\":\"ask\",\"question\":\"need the magic link\"}", "type": "ask" },
+    { "name": "action string 'wait'", "raw": "{\"thought\":\"waiting\",\"action\":\"wait\",\"planStep\":2}", "type": "wait" },
+    { "name": "action array", "raw": "{\"thought\":\"x\",\"action\":[{\"type\":\"scroll\",\"direction\":\"down\"}]}", "type": "scroll" },
+    { "name": "one-key click", "raw": "{\"thought\":\"x\",\"action\":{\"click\":7}}", "type": "click" },
+    { "name": "one-key wait true", "raw": "{\"thought\":\"x\",\"action\":{\"wait\":true}}", "type": "wait" },
+    { "name": "top-level one-key ask", "raw": "{\"thought\":\"x\",\"ask\":\"what is the sign-in link?\"}", "type": "ask" },
+    { "name": "code fence", "raw": "```json\n{\"thought\":\"x\",\"action\":{\"type\":\"goto\",\"url\":\"https://groq.com\"}}\n```", "type": "goto" },
+    { "name": "prose + fence + trailing braces", "raw": "Sure! Here is the step:\n```json\n{\"thought\":\"x\",\"action\":\"back\"}\n```\nLet me know if {anything} else.", "type": "back" },
+    { "name": "ask_user alias", "raw": "{\"action\":{\"type\":\"ask_user\",\"message\":\"need the email link\"}}", "type": "ask" },
+    { "name": "done with answer", "raw": "{\"action\":{\"type\":\"done\",\"answer\":\"key is in hand\"}}", "type": "done" }
+  ]
+}
