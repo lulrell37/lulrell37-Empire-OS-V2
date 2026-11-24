@@ -615,7 +615,32 @@ async function finish(b, status, text, log) {
 // screen) holding a code or a sign-in link; polls every 20 s for up to 10 min
 // (server/emailLinks.js). -> { ok, code, url } or { ok: false, text }.
 async function emailedCode(since = Date.now(), sender = '') {
+  // Options form ({ wait, pollMs, site }) is the plain any-sender search (kept from main, test-worker-honesty.js).
+  if (since && typeof since === 'object') return emailedCodeBasic(since);
   return require('./emailLinks').waitForEmailAuth({ since, sender });
+}
+
+// What a site emailed him, from his Gmail (any sender): a numeric code or a magic
+// sign-in / verification link. Waits up to EMAIL_WAIT_MS (10 min, owner 2026-11-24) for
+// it to arrive. -> { code } | { link } | null. Pure parts: siteLogins.codeIn / linkIn.
+const EMAIL_WAIT_MS = () => Number(process.env.EMAIL_CODE_WAIT_MS) || 10 * 60e3;
+async function emailedCodeBasic({ wait = EMAIL_WAIT_MS(), pollMs = 15000, site = '' } = {}) {
+  const g = require('./google');
+  const { codeIn, linkIn } = require('./siteLogins');
+  const from = site ? `from:${String(site).replace(/[^\w.-]/g, '')} ` : '';
+  const end = Date.now() + wait;
+  do {
+    const list = await g.gmailList({ q: `${from}newer_than:30m (code OR verification OR verify OR "sign in" OR "log in" OR confirm OR magic OR link)`, max: 5 }).catch(() => '');
+    for (const id of [...String(list).matchAll(/\[id:([\w-]+)\]/g)].map((m) => m[1])) {
+      const body = (await g.gmailRead(id).catch(() => '')).split('\n').slice(4).join('\n');
+      const c = codeIn(body);
+      if (c) return { code: c };
+      const l = linkIn(body);
+      if (l) return { link: l };
+    }
+    if (Date.now() + pollMs < end) await new Promise((res) => setTimeout(res, pollMs));
+  } while (Date.now() < end);
+  return null;
 }
 
 // [BROWSER_KEY: steel API key, or a full wss:// CDP url] — the hosted browser to use
