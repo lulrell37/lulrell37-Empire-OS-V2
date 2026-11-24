@@ -92,11 +92,12 @@ async function signIn(site) {
   if (!hasAccount(site)) return { ok: false, text: `no ${s.name} account on the server yet (${s.user} and ${s.pass} in Replit's secrets)` };
   const jobs = require('./jobProgress');
   const jid = jobs.start('jarvis', `Sign in to ${s.name}`, ['Sign in in the browser', 'Get the emailed code', 'Save the cookies']);
+  jobs.onCancel(jid, () => { try { require('./browserAgent').closeBrowser('jarvis'); } catch { /* none open */ } });
   try {
     const r = await signInInner(site, jid);
     if (r.ok) jobs.done(jid, r.text); else jobs.fail(jid, r.text);
     return r;
-  } catch (e) { jobs.fail(jid, e); throw e; }
+  } catch (e0) { const e = jobs.asCancel(jid, e0); jobs.fail(jid, e); throw e; }
 }
 
 async function signInInner(site, jid) {
@@ -141,7 +142,7 @@ async function ensureLogin(site, who = 'rogue') {
   const gc = require('./groupChat');
   await gc.post(who, `→ J.A.R.V.I.S.: ${SITES[site].name} refused my download, the login has expired. Can you sign me back in?`).catch(() => {});
   let r;
-  try { r = await signIn(site); } catch (e) { r = { ok: false, text: e.message }; }
+  try { r = await signIn(site); } catch (e) { if (require('./jobProgress').isCancel(e)) return false; r = { ok: false, text: e.message }; }
   last[site] = { at: Date.now(), ok: r.ok, fresh: r.ok };
   setTimeout(() => { if (last[site]) last[site].fresh = false; }, 5 * 60e3).unref?.();
   await gc.post('jarvis', r.ok ? `Done, signed back in to ${SITES[site].name}. Retrying your download.` : `I couldn't sign back in to ${SITES[site].name}: ${r.text}`).catch(() => {});

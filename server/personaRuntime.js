@@ -413,7 +413,9 @@ PERSONA_EXTRA_TOOLS.stephanie = require('./stephanieCourse').COURSE_TOOLS;
 PERSONA_EXTRA_TOOLS.rogue = require('./clipScan').CLIP_TOOLS + '\n' + require('./autoClip').AUTO_CLIP_TOOLS + '\n' + require('./rawEdit').RAW_EDIT_TOOLS;
 PERSONA_EXTRA_TOOLS.jarvis += '\n' + require('./autoClip').AUTO_CLIP_TOOLS + '\n' + require('./rawEdit').RAW_EDIT_TOOLS + '\n' + require('./siteLogins').LOGIN_TOOLS;
 PERSONA_EXTRA_TOOLS.jarvis += '\n' + require('./browserAgent').BROWSE_TOOLS + '\n' + require('./workers').WORKER_TOOLS;
-PERSONA_EXTRA_TOOLS.jarvis += '\n' + require('./siteDesk').SITE_TOOLS;
+PERSONA_EXTRA_TOOLS.jarvis += '\n' + require('./siteDesk').SITE_TOOLS + '\n' + require('./jobProgress').JOB_TOOLS;
+PERSONA_EXTRA_TOOLS.rogue += '\n' + require('./jobProgress').JOB_TOOLS;
+PERSONA_EXTRA_TOOLS.ara = (PERSONA_EXTRA_TOOLS.ara ? PERSONA_EXTRA_TOOLS.ara + '\n' : '') + require('./jobProgress').JOB_TOOLS;
 PERSONA_EXTRA_TOOLS.scout = (PERSONA_EXTRA_TOOLS.scout ? PERSONA_EXTRA_TOOLS.scout + '\n' : '') + require('./siteDesk').SITE_TOOLS;
 
 PERSONA_EXTRA_TOOLS.scribe = ` - [MONDAY_SCRIPTS] — write this week's 7 video scripts now, and file them; A.R.A. tells him they came in. They go out on their own Mondays at 8 AM ET; only use this when he asks for them again or early.`;
@@ -685,6 +687,13 @@ async function runInjections(text, persona = 'ara', { convo = '', depth = 0, sin
           return out;
         }
         catch (e) { console.error(`feature requests failed: ${e.message}`); return `NEED_FEATURE failed: ${e.message} — tell him plainly you can't do it yet.`; }
+      }
+      if ((name === 'JOBS' || name === 'JOB_CANCEL') && ['jarvis', 'ara', 'rogue'].includes(persona)) {
+        // Cancels exactly one job, only by his words (server/jobProgress.js); never from a wake-up or a resumed turn.
+        if (name === 'JOB_CANCEL' && /^\[(SENT ON YOUR OWN|The server restarted)/.test(String(asked || ''))) return 'JOB_CANCEL refused: it only runs on his own message. Nothing cancelled.';
+        if (name === 'JOB_CANCEL' && depth === 0 && !String(asked || '').trim()) return 'JOB_CANCEL refused: no message from him this turn. Nothing cancelled.';
+        try { return await require('./jobProgress').tag(name, arg, { asked: depth ? '' : asked }); }
+        catch (e) { console.error(`jobs failed: ${name}: ${e.message}`); return `${name} failed: ${e.message}`; }
       }
       if (name === 'WORKER_SHIP' && persona === 'jarvis') {
         // Only on his own "push / ship / merge" (not a relay, a wake-up or a resumed turn).
@@ -1232,7 +1241,9 @@ async function runDeepResearch(topic, deliver, persona = 'ara') {
     }
     jobs.done(jid, title);
     await say(`Deep research done — "${topic}". Saved as a Note.\n\n${brief.slice(0, 3500)}`);
-  } catch (e) {
+  } catch (e0) {
+    const e = jobs.asCancel(jid, e0);
+    if (jobs.isCancel(e)) return; // he cancelled it: no failure message
     jobs.fail(jid, e);
     await deliver(`Deep research on "${topic}" failed: ${e.message}`);
   }
@@ -1318,7 +1329,7 @@ async function ventureStep(persona, userText, { given, resumes, queue }, sink) {
           const fresh = rows.filter((x) => x.business && before.get(String(x.business).toLowerCase()) !== JSON.stringify(x));
           return fresh.length ? fresh.map((x) => x.business).join(', ') : null;
         },
-        step: (n) => { try { job.step(['S.A.G.E. research', 'A.T.L.A.S. business + targets', 'Lane owners'][n - 1]); } catch {} },
+        step: (n) => { try { job.step(['S.A.G.E. research', 'A.T.L.A.S. business + targets', 'Lane owners'][n - 1]); } catch (e) { if (require('./jobProgress').isCancel(e)) throw e; } },
       });
       try { job.step('Report back'); } catch {}
       return out;
@@ -1326,6 +1337,7 @@ async function ventureStep(persona, userText, { given, resumes, queue }, sink) {
     sink.notes.push(`New venture ran in order: S.A.G.E.${r.money ? ' → A.T.L.A.S.' : ''} → ${r.lanes.map((id) => (ROSTER[id] || {}).name || id).join(', ') || 'no lane owners'}`);
     return V.resultBlock(r, persona);
   } catch (e) {
+    if (require('./jobProgress').isCancel(e)) { sink.warnings.push('the new-venture run was cancelled by him'); return ''; }
     console.error(`venture failed: ${e.message}`);
     sink.warnings.push(`new venture pipeline failed: ${e.message.slice(0, 200)}`);
     return '';

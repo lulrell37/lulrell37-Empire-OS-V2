@@ -24,6 +24,18 @@
 // job, how far it got and that it's resuming. A job that was itself a resumption
 // and is cut off again is only reported ("jobs failed: …"), not retried. A job with
 // no resume info, or JOB_RESUME=off, is reported as cut off and left.
+//
+// Cancel (owner, 2026-11-23: "If I say cancel, it needs to get canceled … it better only cancel what I
+// say to cancel"): every job has a cancel handle. cancel(id) aborts its AbortController (signal(id)),
+// SIGKILLs every child process spawned inside the job's async context (yt-dlp, ffmpeg, the chat
+// replay, Chrome — spawn/execFile are wrapped once so nothing has to opt in), runs the job's
+// onCancel cleanups (temp files, locks like clipScan's `running`) at once, and marks it
+// "cancelled" (not failed: no "jobs failed" line, no sentinel alert; a cancelled job is never resumed).
+// step() throws JobCancelled in a cancelled job, so the work stops at the next step even if it was
+// between children. Only [JOB_CANCEL] (tag(), below) cancels, one job at a time; nothing cancels
+// automatically, and a new scan while one runs is refused, never replaces it.
+const { AsyncLocalStorage } = require('async_hooks');
+const cp = require('child_process');
 const { getSetting, setSetting } = require('./syncStore');
 
 const KEY = 'jobs';
@@ -36,6 +48,36 @@ const carry = new Map(); // keyOf(resume) -> attempts, set by recover() so the r
 let deps = {}; // tests
 
 let jobs = {}; // id -> job
+const handles = new Map(); // id -> { ctl: AbortController, children: Set, cleanups: [] }
+const als = new AsyncLocalStorage(); // the job id the current async chain belongs to
+
+class JobCancelled extends Error {
+  constructor(msg = 'cancelled by Mr. Burrus') { super(msg); this.name = 'JobCancelled'; this.cancelled = true; }
+}
+// A killed child makes the job throw some other error; once the job is cancelled, that's a cancel.
+const asCancel = (id, e) => (isCancel(e) || !(id && jobs[id] && jobs[id].status === 'cancelled') ? e : new JobCancelled());
+const isCancel = (e) => !!(e && (e.cancelled || e.name === 'JobCancelled'));
+
+// Every child process started inside a job's async chain belongs to that job. Hooked on
+// ChildProcess.prototype.spawn, which spawn / execFile / exec all go through, so it works
+// however a module imported them.
+if (!cp.ChildProcess.prototype.__jobsWrapped) {
+  const origSpawn = cp.ChildProcess.prototype.spawn;
+  cp.ChildProcess.prototype.spawn = function (...a) {
+    const ret = origSpawn.apply(this, a);
+    try {
+      const id = als.getStore();
+      const j = id && jobs[id];
+      if (j && this.pid) {
+        if (j.status === 'cancelled') killChild(this); // started after the cancel: dead on arrival
+        else { const h = handles.get(id); if (h) { h.children.add(this); this.once('close', () => h.children.delete(this)); } }
+      }
+    } catch { /* never block a spawn */ }
+    return ret;
+  };
+  cp.ChildProcess.prototype.__jobsWrapped = true;
+}
+const killChild = (c) => { try { if (c.pid) { try { process.kill(-c.pid, 'SIGKILL'); } catch { c.kill('SIGKILL'); } } } catch { /* already gone */ } };
 let seq = 0;
 let loaded = null;
 let saving = Promise.resolve();
@@ -100,6 +142,8 @@ function start(persona, title, steps = [], resume = null) {
   if (resume && resume.kind) { const k = keyOf(resume.kind, resume.args); attempts = carry.get(k) || 0; carry.delete(k); }
   jobs[id] = { resume: resume && resume.kind ? { kind: resume.kind, args: resume.args || {}, to: resume.to || '' } : undefined, attempts, id, persona: String(persona || 'ara').toLowerCase(), title: String(title || 'job').slice(0, 80), steps: steps.map((s) => String(s).slice(0, 60)).slice(0, 30), doneCount: 0, current: '', status: 'running', progress: 'Starting', percent: 0, reason: '', startedAt: Date.now(), endedAt: null, updatedAt: Date.now() };
   jobs[id].percent = percentOf(jobs[id]);
+  handles.set(id, { ctl: new AbortController(), children: new Set(), cleanups: [] });
+  als.enterWith(id);
   save(); kick();
   return id;
 }
@@ -107,6 +151,7 @@ function start(persona, title, steps = [], resume = null) {
 // Working on `label` now: the steps before it are done. Unknown label → added.
 function step(id, label, detail = '') {
   const j = id && jobs[id];
+  if (j && j.status === 'cancelled') throw new JobCancelled();
   if (!j || j.status !== 'running') return;
   label = String(label).slice(0, 60);
   let i = j.steps.indexOf(label);
@@ -134,14 +179,17 @@ function plan(id, names, doneCount) {
 function done(id, result = '') {
   const j = id && jobs[id];
   if (!j || j.status !== 'running') return;
+  handles.delete(id);
   touch(j, { status: 'done', doneCount: j.steps.length, current: '', result: String(result || '').slice(0, 2000), endedAt: Date.now(), progress: 'Finished' });
 }
 
 function fail(id, reason) {
   const j = id && jobs[id];
   if (!j || j.status !== 'running') return;
+  if (isCancel(reason)) return; // a cancel isn't a failure
   const why = String((reason && reason.message) || reason || 'unknown').replace(/\s+/g, ' ').slice(0, 300);
   console.error(`jobs failed: ${personaName(j.persona)} ${j.title}: ${why}`);
+  handles.delete(id);
   touch(j, { status: 'failed', reason: why, endedAt: Date.now(), progress: 'Failed' }); // keeps its last number
 }
 
@@ -149,13 +197,107 @@ function fail(id, reason) {
 // a throw fails the job and is rethrown. Tracking off → fn still runs.
 async function run(persona, title, steps, fn, resume = null) {
   const id = start(persona, title, steps, resume);
-  const h = { id, step: (l, d) => step(id, l, d), note: (t) => note(id, t), plan: (n, c) => plan(id, n, c) };
+  const h = { id, step: (l, d) => step(id, l, d), note: (t) => note(id, t), plan: (n, c) => plan(id, n, c), signal: signal(id), onCancel: (f) => onCancel(id, f), checkpoint: () => checkpoint(id) };
   try {
-    const out = await fn(h);
+    const out = await als.run(id, () => fn(h));
     done(id, typeof out === 'string' ? out : '');
     return out;
-  } catch (e) { fail(id, e); throw e; }
+  } catch (e) { const ce = asCancel(id, e); fail(id, ce); throw ce; }
 }
+
+// --- cancel -----------------------------------------------------------
+
+const signal = (id) => { const h = handles.get(String(id)); return h ? h.ctl.signal : undefined; };
+// Run fn when the job is cancelled (temp files, a lock). Runs at once if it already was.
+function onCancel(id, fn) {
+  const h = handles.get(String(id));
+  if (h) h.cleanups.push(fn);
+  else if (jobs[id] && jobs[id].status === 'cancelled') { try { fn(); } catch { /* best effort */ } }
+}
+// Throws JobCancelled if the job was cancelled; for long loops between steps.
+function checkpoint(id) { id = id || als.getStore(); const j = id && jobs[id]; if (j && j.status === 'cancelled') throw new JobCancelled(); }
+const currentId = () => als.getStore() || null;
+
+// Cancel exactly this job. Returns the job, or null if it isn't running.
+function cancel(id, by = 'owner') {
+  id = String(id);
+  const j = jobs[id];
+  if (!j || j.status !== 'running') return null;
+  const h = handles.get(id);
+  handles.delete(id);
+  j.status = 'cancelled'; j.endedAt = Date.now(); j.progress = 'Cancelled'; j.reason = `cancelled by ${by}`;
+  j.updatedAt = Date.now();
+  if (h) {
+    try { h.ctl.abort(new JobCancelled()); } catch { /* ignore */ }
+    for (const c of [...h.children]) killChild(c);
+    for (const f of h.cleanups) { try { f(); } catch (e) { console.warn(`jobs: cleanup after cancel: ${e.message}`); } }
+  }
+  save(); kick();
+  return j;
+}
+
+const mins = (j, now = Date.now()) => Math.max(0, Math.round((now - j.startedAt) / 60000));
+const jobLine = (j) => `#${j.id} · ${personaName(j.persona)} · "${j.title}" · ${j.current || j.progress || 'starting'}${j.percent != null ? ` (${j.percent}%)` : ''} · ${mins(j)} min`;
+
+async function listText() {
+  await load();
+  const l = live();
+  if (!l.length) return 'JOBS: nothing is running right now.';
+  return `JOBS RUNNING (${l.length}):\n${l.map(jobLine).join('\n')}`;
+}
+
+const norm = (t) => String(t || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+const NAME_ONLY = () => { try { const R = require('./personas').ROSTER; return new Set(Object.entries(R).flatMap(([k, v]) => [norm(k), norm(v.name), norm(v.name + 's'), norm(k + 's')])); } catch { return new Set(); } };
+
+// Which running jobs does `arg` name? Exact id ("7", "#7", "job-7"), else words that all appear in
+// a title. Never a persona name alone.
+async function find(arg) {
+  await load();
+  const l = live();
+  const a = String(arg || '').trim();
+  const idm = /^(?:job[- ]?|#)?(\d+)$/i.exec(a);
+  if (idm) { const j = l.find((x) => x.id === idm[1]); return { jobs: j ? [j] : [], how: 'id' }; }
+  const w = norm(a);
+  if (!w) return { jobs: [], how: 'empty' };
+  if (NAME_ONLY().has(w) && !l.some((j) => norm(j.title).includes(w))) return { jobs: [], how: 'persona', persona: w };
+  const exact = l.filter((j) => norm(j.title) === w);
+  if (exact.length === 1) return { jobs: exact, how: 'title' };
+  const words = w.split(' ');
+  return { jobs: l.filter((j) => { const t = norm(j.title); return words.every((x) => t.includes(x)); }), how: 'words' };
+}
+
+const stillRunning = (except) => {
+  const l = live().filter((j) => !except.includes(j.id));
+  return l.length ? `Every other job is untouched and still running (${l.length}): ${l.map((j) => `#${j.id} "${j.title}"`).join('; ')}.` : 'There are no other jobs running.';
+};
+
+// [JOBS] and [JOB_CANCEL: id | words | all]. `asked` is his own message this turn.
+async function tag(name, arg = '', { asked = '' } = {}) {
+  if (name === 'JOBS') return listText();
+  if (!enabled()) return 'JOB_CANCEL: job tracking is off (JOBS=off), so there is nothing to cancel here.';
+  const a = String(arg || '').trim();
+  if (!a) return `JOB_CANCEL: say which job: an id or the job's own words. Nothing cancelled.\n${await listText()}`;
+  await load();
+  if (/^(all|everything)$/i.test(a)) {
+    if (!/\bcancel\s+(all|everything)\b/i.test(String(asked || '')) || /^\[(SENT ON YOUR OWN|The server restarted)/.test(String(asked || ''))) {
+      return `JOB_CANCEL: all refused. It only runs when his own message literally says "cancel all" or "cancel everything". Nothing cancelled. Ask him which job, or whether he means all.\n${await listText()}`;
+    }
+    const l = live();
+    if (!l.length) return 'JOB_CANCEL: all — nothing is running, so nothing was cancelled.';
+    const done = l.map((j) => cancel(j.id)).filter(Boolean);
+    return `JOB_CANCEL: all — he said so. Cancelled ${done.length}: ${done.map((j) => `#${j.id} "${j.title}"`).join('; ')}. (Worker jobs on GitHub are separate and untouched.)`;
+  }
+  const f = await find(a);
+  if (f.how === 'persona') return `JOB_CANCEL: refused — a persona's name alone doesn't pick a job. Nothing cancelled. Which one?\n${await listText()}`;
+  if (!f.jobs.length) return `JOB_CANCEL "${a}": nothing running matched. Nothing cancelled.\n${await listText()}`;
+  if (f.jobs.length > 1) return `JOB_CANCEL "${a}": that matches ${f.jobs.length} running jobs, so I cancelled NONE. Ask him which one (say its id):\n${f.jobs.map(jobLine).join('\n')}`;
+  const j = cancel(f.jobs[0].id);
+  if (!j) return `JOB_CANCEL "${a}": that job had just finished, so nothing was cancelled.`;
+  return `JOB_CANCEL: cancelled #${j.id} ${personaName(j.persona)}'s "${j.title}" (ran ${mins(j)} min): its work was killed and its temp files cleared. ${stillRunning([j.id])}`;
+}
+
+const JOB_TOOLS = ` - [JOBS] — every long job running right now (clip scans, raw edits, transcripts, research, website builds, browsing): id, who, title, step, minutes. Read it live; never guess what's running.
+ - [JOB_CANCEL: id or the job's own words] — cancel EXACTLY ONE running job, only when he tells you to. Use the id from [JOBS]. Words must match one job's title; if they match several, nothing is cancelled and you ask him which. Never cancel by a persona's name. [JOB_CANCEL: all] works only when his own message says "cancel all" or "cancel everything". The receipt names what was cancelled and what is still running: report it as it is. A new CLIP_SCAN while one runs is refused, never replaces it: tell him which is running and ask whether to cancel it.`;
 
 const live = () => Object.values(jobs).filter((j) => j.status === 'running');
 const shown = (now = Date.now()) => Object.values(jobs)
@@ -171,6 +313,7 @@ function boardLine(j, now = Date.now()) {
   const title = String(j.title).slice(0, 60);
   if (j.status === 'running') return `🔧 ${who} ${title} · ${mins} min\n    ${j.percent != null ? `${BAR(j.percent)} ${j.percent}%${j.current ? ` · ${j.current}` : ''}` : 'planning'}`.slice(0, 300);
   if (j.status === 'done') return `✅ ${who} ${title} · done · ${BAR(100)} 100% · ${mins} min`;
+  if (j.status === 'cancelled') return `🛑 ${who} ${title} · cancelled · ${mins} min`;
   return `❌ ${who} ${title} · failed${j.percent != null ? ` at ${j.percent}%` : ''} · ${mins} min\n    ${String(j.reason || '').slice(0, 120)}`;
 }
 
@@ -180,7 +323,7 @@ async function forApp() {
   await load();
   return shown().map((j) => ({
     id: 'job-' + j.id, kind: 'job', persona: j.persona, personaName: personaName(j.persona), title: j.title, status: j.status,
-    step: j.doneCount || 0, progress: j.status === 'failed' ? j.reason : j.progress || '', percent: j.percent ?? null, current: j.current || '',
+    step: j.doneCount || 0, progress: j.status === 'failed' || j.status === 'cancelled' ? j.reason : j.progress || '', percent: j.percent ?? null, current: j.current || '',
     plan: j.steps.map((name, i) => ({ name, done: j.status === 'done' || i < (j.doneCount || 0) })),
     branch: null, startedAt: j.startedAt, endedAt: j.endedAt, url: null, slot: null,
   }));
@@ -245,4 +388,4 @@ async function recover() {
 // For the redeploy receipt: what persona jobs are running and will resume.
 const runningLines = () => live().map((j) => `${personaName(j.persona)}'s "${j.title}" (${j.percent != null ? j.percent + '%' : 'starting'})${willResume(j) ? ' — resumes after the restart' : ' — cannot resume, ask again'}`);
 
-module.exports = { recover, runningLines, RESUMERS, resumeOn, _setDeps: (d) => { deps = d || {}; }, start, step, note, plan, done, fail, run, forApp, load, live, shown, boardLine, percentOf, enabled, KEEP, _reset: () => { jobs = {}; seq = 0; loaded = null; saving = Promise.resolve(); }, _jobs: () => jobs, _flush: () => saving };
+module.exports = { asCancel, cancel, tag, find, listText, onCancel, signal, checkpoint, currentId, isCancel, JobCancelled, JOB_TOOLS, recover, runningLines, RESUMERS, resumeOn, _setDeps: (d) => { deps = d || {}; }, start, step, note, plan, done, fail, run, forApp, load, live, shown, boardLine, percentOf, enabled, KEEP, _reset: () => { handles.clear(); jobs = {}; seq = 0; loaded = null; saving = Promise.resolve(); }, _jobs: () => jobs, _flush: () => saving };
