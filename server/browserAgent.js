@@ -611,11 +611,20 @@ async function finish(b, status, text, log) {
   return { status, text, url, steps: log, shot };
 }
 
+// The newest email sent after `since` (the moment the run reached its "check your email"
+// screen) holding a code or a sign-in link; polls every 20 s for up to 10 min
+// (server/emailLinks.js). -> { ok, code, url } or { ok: false, text }.
+async function emailedCode(since = Date.now(), sender = '') {
+  // Options form ({ wait, pollMs, site }) is the plain any-sender search (kept from main, test-worker-honesty.js).
+  if (since && typeof since === 'object') return emailedCodeBasic(since);
+  return require('./emailLinks').waitForEmailAuth({ since, sender });
+}
+
 // What a site emailed him, from his Gmail (any sender): a numeric code or a magic
 // sign-in / verification link. Waits up to EMAIL_WAIT_MS (10 min, owner 2026-11-24) for
 // it to arrive. -> { code } | { link } | null. Pure parts: siteLogins.codeIn / linkIn.
 const EMAIL_WAIT_MS = () => Number(process.env.EMAIL_CODE_WAIT_MS) || 10 * 60e3;
-async function emailedCode({ wait = EMAIL_WAIT_MS(), pollMs = 15000, site = '' } = {}) {
+async function emailedCodeBasic({ wait = EMAIL_WAIT_MS(), pollMs = 15000, site = '' } = {}) {
   const g = require('./google');
   const { codeIn, linkIn } = require('./siteLogins');
   const from = site ? `from:${String(site).replace(/[^\w.-]/g, '')} ` : '';
@@ -679,6 +688,9 @@ async function browseTag(persona, arg, { ownerText = '' } = {}) {
   });
 }
 
+// The site a page is on, as a Gmail from: term (example.com from https://app.example.com/x).
+function siteOf(url) { try { const h = new URL(url).hostname.split('.'); return h.length >= 2 ? h.slice(-2).join('.') : ''; } catch { return ''; } }
+
 // A "done" that isn't: the brain said success false, or (when it didn't say) its own
 // result reads as blocked / not created. -> status 'failed' so no board shows done.
 const BLOCKED = /\b(blocked|could ?n[o']t|cannot|can't|unable to|no account (?:has been|was|exists|yet)|no (?:api )?key (?:exists|was|has)|not (?:been )?(?:created|completed|finished|successful)|(?:did|does|do) not (?:finish|complete|succeed|work)|failed|stuck at|stopped at)\b/i;
@@ -707,15 +719,19 @@ async function browseRun(persona, name, arg, { ownerText = '', onStep = null, on
   // (owner, 2026-11-22: "it's supposed to be automatic").
   const logins = require('./siteLogins');
   if ((r.status !== 'done' || r.success === false) && logins.wantsEmailCode(r.text)) {
-    const got = await emailedCode().catch(() => null);
-    if (got) {
-      const secrets2 = got.code ? { CODE: got.code } : { LINK: got.link };
-      const how = got.code ? 'Type {{CODE}} into the code box and continue.' : 'Go to {{LINK}} (a goto action with url {{LINK}}) and continue.';
-      const r2 = await runTask({ persona, personaName: name, ownerText: 'yes', brain, secrets: secrets2, allow: CONSENT, onStep, onPlan: plans, plan: last.plan, planStep: last.at,
-        task: `You are partway through this task and the page asked for what was emailed: ${got.code ? 'the code' : 'a sign-in link'} is in your hands. ${how} The task: ${String(arg || '').trim()}` });
-      r2.steps = [...r.steps, `(fetched the emailed ${got.code ? 'code' : 'link'} from his Gmail)`, ...r2.steps];
+    const reached = Date.now(); // the email must be newer than this screen
+    const got = await emailedCode(reached, siteOf(r.url)).catch((e) => ({ ok: false, text: `couldn't search his Gmail: ${e.message}` }));
+    const L = require('./emailLinks');
+    if (got.ok && (got.code || got.url)) {
+      // Same persona = same browser session, which is what a magic link needs.
+      const how = got.code
+        ? `Type {{CODE}} into the code box and continue.`
+        : `Open this sign-in link in this same browser with a goto action, exactly: ${got.url} — then continue (it is the link from his email; it only works in this session).`;
+      const r2 = await runTask({ persona, personaName: name, ownerText: 'yes', brain, secrets: got.code ? { CODE: got.code } : {}, allow: CONSENT, onStep, onPlan: plans, plan: last.plan, planStep: last.at,
+        task: `You are partway through this task and the page asked for the emailed ${got.code ? 'code' : 'sign-in link'}. ${how} The task: ${String(arg || '').trim()}` });
+      r2.steps = [...r.steps, `(fetched the emailed ${got.code ? 'code' : 'link'} from his Gmail${got.subject ? `: "${got.subject}"` : ''})`, ...r2.steps];
       r = r2;
-    } else { r.text += ' (no code or sign-in link turned up in his Gmail within 10 minutes)'; r.success = false; }
+    } else { r.text = `${r.text} (${(got && got.text) || L.NOT_ARRIVED})`; r.success = false; }
   }
   r = settleResult(r);
   const head = { done: 'BROWSE — finished', failed: 'BROWSE — did NOT finish', ask: 'BROWSE — paused, needs Mr. Burrus', stopped: 'BROWSE — stopped' }[r.status];

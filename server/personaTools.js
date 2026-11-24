@@ -111,7 +111,15 @@ async function activeProject() {
 async function readTag({ name, arg }, persona) {
   switch (name) {
     case 'READ_EMAIL':
-      return g.gmailList(arg ? { q: arg } : {});
+    {
+      const list = await g.gmailList(arg ? { q: arg } : {});
+      // A search that finds something also reads the newest match in full, links and all
+      // (the list is only a subject and a 150-character snippet).
+      const id = arg && (String(list).match(/\[id:([\w-]+)\]/) || [])[1];
+      if (!id) return list;
+      const full = await g.gmailRead(id).catch((e) => `(couldn't read it: ${e.message})`);
+      return `${list}\n\nNEWEST MATCH, READ IN FULL:\n${full}`;
+    }
     case 'READ_EMAIL_ID':
       return g.gmailRead(arg);
     case 'READ_CALENDAR': {
