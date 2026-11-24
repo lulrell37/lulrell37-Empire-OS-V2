@@ -1501,4 +1501,4 @@ const runAraTurn = (userText, deliver) => runPersonaTurn('ara', userText, delive
 
 module.exports = {
   weatherBlock,
-  recallDays, runPersonaTurn, runAraTurn, gatherContext, contextBlock, applyEffects, runInjections };
+  recallDays, runPersonaTurn, runAraTurn, gatherContext, contextBlock, applyEffects, runInjections, findTags };

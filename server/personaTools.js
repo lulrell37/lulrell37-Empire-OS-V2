@@ -637,6 +637,9 @@ async function runPending(id) {
       text = await require('./autoFix').mergeFix(pl.pr);
     } else if (row.kind === 'redeploy') {
       text = await require('./redeploy').requestRedeploy(row.persona);
+    } else if (row.kind === 'worker_tag') {
+      // A code worker's tag (server/workerTools.js) he has now tapped Confirm on.
+      text = await require('./workerTools').runConfirmed(pl);
     } else if (String(row.kind).startsWith('talon_')) {
       // T.A.L.O.N. on his order (server/talonCommands.js) — a live-account trade
       // action or the switch to live.

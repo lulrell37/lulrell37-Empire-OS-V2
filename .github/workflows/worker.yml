@@ -44,6 +44,9 @@ jobs:
         run: |
           t=$(jq -r '.client_payload.files_token // ""' "$GITHUB_EVENT_PATH")
           if [ -n "$t" ]; then echo "::add-mask::$t"; echo "WORKER_FILES_TOKEN=$t" >> "$GITHUB_ENV"; fi
+          # J.A.R.V.I.S.'s command tags (server/workerTools.js): the token is masked and never in the issue.
+          t=$(jq -r '.client_payload.tools_token // ""' "$GITHUB_EVENT_PATH")
+          if [ -n "$t" ]; then echo "::add-mask::$t"; echo "WORKER_TOOLS_TOKEN=$t" >> "$GITHUB_ENV"; fi
       - name: Tools (ffmpeg, ImageMagick; Chrome is on the runner already)
         run: |
           sudo apt-get update -qq >/dev/null 2>&1 || true
@@ -81,6 +84,17 @@ jobs:
             echo "BIG JOBS: you have about 2 h 45 min in this run (run $LEG of up to $MAX_LEGS). Work in steps and commit after each finished step. If the whole job can't fit, stop at a clean point with everything committed and make the FIRST line of your report CONTINUE, then exactly what's left: a fresh run on this branch picks up from your commits and .worker-plan.md. Runs left after this one: $((MAX_LEGS - LEG))."
             echo "TOOLS on this runner: Bash, Python 3, Node 20 (server/node_modules has ws for the DevTools protocol), google-chrome (headless: --dump-dom, --screenshot, or --remote-debugging-port for a real browser session), ffmpeg, ImageMagick (magick/convert), gh CLI with write access to this repo, curl. You can Read images (screenshots) to check visual work. Large media (images, video, anything over ~1 MB) NEVER goes in the repo: put it in a GitHub release (gh release create <tag> / gh release upload <tag> files --clobber) and reference the release download URL; the server only downloads server/ from GitHub, so anything the server must serve lives under server/."
             if [ -n "$WORKER_FILES_TOKEN" ]; then echo "HIS GOOGLE DRIVE: the Drive files named in the task download through his server: curl -fsSL -H \"x-worker-token: \$WORKER_FILES_TOKEN\" \"\$EMPIRE_URL/worker-files/<drive file id>\" -o <file> (Google Docs/Sheets/Slides come as PDF; ?format=text for plain text). Never print the token."; fi
+            if [ -n "$WORKER_TOOLS_TOKEN" ]; then
+              echo "HIS TOOLS (you are J.A.R.V.I.S. with no limits): every command tag he uses on Telegram runs from your shell: node scripts/jarvis-tool.js '[TAG: args]' (or pipe the tag text on stdin for long text; several tags in one call are fine). It prints the receipts. The URL and token are already in your environment (EMPIRE_URL, WORKER, WORKER_TOOLS_TOKEN): never print or commit the token. Main families, one example each:"
+              echo "  notes and Drive: node scripts/jarvis-tool.js '[SAVE_NOTE: Title | content]'  (also READ_NOTE, APPEND_NOTE, LIST_NOTES, SEARCH_DRIVE, READ_FILE_ID)"
+              echo "  web search: node scripts/jarvis-tool.js '[SEARCH_WEB: gold price today]'  (also DEEP_RESEARCH)"
+              echo "  transcripts: node scripts/jarvis-tool.js '[TRANSCRIBE: https://youtu.be/...]'"
+              echo "  relay to a persona: node scripts/jarvis-tool.js '[RELAY_TO: scribe | write a 40-word bio for Empire Digital]'"
+              echo "  memory: node scripts/jarvis-tool.js '[MEMORY_QUERY: what did we decide about pricing]'"
+              echo "  HUD and status: node scripts/jarvis-tool.js '[READ_HUD]'  ·  '[WORKER_STATUS]'  ·  '[BUILD_STATUS]'  ·  '[HEALTH_CHECK]'"
+              echo "  clips and edits: node scripts/jarvis-tool.js '[CLIP_SCAN: link | focus]' is R.O.G.U.E.'s; as yourself use '[RAW_EDIT: drive link | notes]' or '[RELAY_TO: rogue | ...]'"
+              echo "Anything that acts in the world (sending email, posting or sending media, buying, deleting, trading, merging, shipping, redeploying) does NOT run: it creates a Confirm card on his phone and the receipt says it is waiting on his tap. Say so in your report; never claim it happened."
+            fi
             echo "Your final message is your report to Mr. Burrus (he reads it on Telegram): first line DONE, PARTLY DONE, FAILED or CONTINUE; then what you did, the proof (test output, sources, links), anything unfinished or that needs his decision. Short and plain."
             if [ -s /tmp/earlier.md ]; then echo; echo "THIS IS RUN $LEG: earlier runs already did part of it (their commits are on this branch). Their reports:"; cat /tmp/earlier.md | head -c 15000; echo; echo "Carry on from where they stopped; don't redo finished steps."; fi
             echo

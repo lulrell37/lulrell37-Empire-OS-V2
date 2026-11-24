@@ -230,6 +230,7 @@ async function launch(w) {
   }
   release();
   ctrls.delete(w.id);
+  require('./workerTools').revoke(w.id).catch(() => {}); // its tool token ends with it
   if (out.status === 'failed') logFailure(w, out.result); // every failed worker, whichever way it failed
   update(w, { status: out.status, result: String(out.result || '').slice(0, 20000), branch: out.branch || w.branch, pushed: out.pushed || '', endedAt: Date.now(), progress: out.status === 'done' ? 'Finished' : out.status === 'needs_you' ? 'Needs Mr. Burrus' : out.status === 'stopped' ? 'Stopped' : 'Failed', ...(out.status === 'done' ? { percent: 100, current: '' } : {}) });
   report(w);
@@ -299,9 +300,11 @@ async function fileGrant(token, id) {
 }
 async function dispatch(w, base, branch, leg) {
   const files_token = (w.leg ? null : await grantFiles(w).catch((e) => { console.error(`workers failed: #${w.id} file grant: ${e.message}`); return ''; })) || w.filesToken || '';
+  // Same for J.A.R.V.I.S.'s command tags (server/workerTools.js): one token per worker, kept across runs.
+  const tools_token = w.toolsToken || await require('./workerTools').grantTools(w).catch((e) => { console.error(`workers failed: #${w.id} tools grant: ${e.message}`); return ''; });
   const server_url = (() => { try { return require('./redeploy').publicUrl() || ''; } catch { return ''; } })();
-  await d().gh(`${base}/dispatches`, { method: 'POST', body: { event_type: 'worker-run', client_payload: { worker: w.id, issue: w.issue, branch, title: w.title.slice(0, 60), leg, max_legs: MAX_LEGS(), server_url, files_token } } });
-  update(w, { dispatchedAt: Date.now(), leg, filesToken: files_token || undefined });
+  await d().gh(`${base}/dispatches`, { method: 'POST', body: { event_type: 'worker-run', client_payload: { worker: w.id, issue: w.issue, branch, title: w.title.slice(0, 60), leg, max_legs: MAX_LEGS(), server_url, files_token, tools_token } } });
+  update(w, { dispatchedAt: Date.now(), leg, filesToken: files_token || undefined, toolsToken: tools_token || undefined });
 }
 
 // A code worker on its own GitHub runner (.github/workflows/worker.yml).
