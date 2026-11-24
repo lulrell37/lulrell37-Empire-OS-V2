@@ -72,7 +72,7 @@ function linkIn(text) {
   return links.find((l) => /verif|confirm|magic|sign[-_]?in|log[-_]?in|auth|token|activate|callback/i.test(l) && !/unsubscribe|privacy|terms/i.test(l)) || null;
 }
 function codeIn(text) { return require('./emailLinks').extractCode(text); }
-const wantsEmailCode = (text) => /e-?mail|inbox|sent (a|the) (code|link)|check your email/i.test(String(text || '')) && /code|verif|link|magic|sign[ -]?in/i.test(String(text || ''));
+const wantsEmailCode = (text) => /e-?mail|inbox|sent (a|the) (code|link)|check your email|magic[ -]link|(sign|log)[ -]?in link/i.test(String(text || '')) && /code|verif|link|magic|sign[ -]?in/i.test(String(text || ''));
 async function emailCode(site, since = Date.now() - 60000) {
   const got = await require('./emailLinks').waitForEmailAuth({ since, sender: SENDERS[site].replace(/^from:\(|\)$/g, '') }).catch(() => null);
   return got && got.ok && got.code ? got.code : null; // codes only: this login types it

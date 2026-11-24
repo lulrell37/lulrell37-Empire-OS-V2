@@ -421,20 +421,60 @@ function approves(ownerText) { const t = String(ownerText || ''); return YES.tes
 
 // The brain's reply -> one action, or a reason it's unusable.
 // `baseUrl` is the current page, so a relative goto ("/watch?v=…") resolves against it.
-const ACTION_KEYS = ['action', 'type', 'next', 'step', 'next_action', 'nextAction'];
+const ACTION_KEYS = ['action', 'type', 'next', 'step', 'next_action', 'nextAction', 'tool', 'command', 'act'];
+const ACTION_NAMES = ['goto', 'click', 'type', 'select', 'press', 'scroll', 'back', 'wait', 'done', 'ask', 'navigate', 'open', 'visit', 'input', 'fill', 'finish', 'finished', 'sleep', 'ask_user', 'request_info', 'ask_for_info', 'ask_human'];
+// The field a one-key shape like {"ask":"which email?"} or {"click":7} puts its value in.
+const PRIMARY = { goto: 'url', navigate: 'url', open: 'url', visit: 'url', click: 'id', ask: 'question', ask_user: 'question', request_info: 'question', ask_for_info: 'question', ask_human: 'question', done: 'result', finish: 'result', finished: 'result', press: 'key', scroll: 'direction', select: 'id' };
+// The first {...} in the text that parses, string-aware (a fenced block, prose around it,
+// or two objects in one reply all work; the old greedy first-{-to-last-} match didn't).
+function firstJson(raw) {
+  const t = String(raw || '');
+  for (let i = t.indexOf('{'); i !== -1; i = t.indexOf('{', i + 1)) {
+    let depth = 0, str = false, esc = false;
+    for (let k = i; k < t.length; k++) {
+      const c = t[k];
+      if (str) { if (esc) esc = false; else if (c === '\\') esc = true; else if (c === '"') str = false; continue; }
+      if (c === '"') str = true;
+      else if (c === '{') depth++;
+      else if (c === '}' && --depth === 0) { try { const v = JSON.parse(t.slice(i, k + 1)); if (v && typeof v === 'object') return { j: v, text: t.slice(i, k + 1) }; } catch {} break; }
+    }
+  }
+  return null;
+}
+// One value that might name the action -> { type, ...fields }, or null.
+function fromValue(v, outer) {
+  if (Array.isArray(v)) v = v.find((x) => x && (typeof x === 'string' || typeof x === 'object'));
+  if (typeof v === 'string' && v.trim()) return { type: v.trim() };
+  if (!v || typeof v !== 'object') return null;
+  for (const k of ['type', 'action', 'name', 'kind', 'tool', 'act', 'command']) {
+    const x = v[k];
+    if (typeof x === 'string' && x.trim()) return { ...v, type: x.trim() };
+    if (x && typeof x === 'object' && !Array.isArray(x)) { const inner = fromValue(x); if (inner) return { ...v, ...inner }; }
+  }
+  // {"ask":"..."} / {"click":7} / {"wait":true} / {"ask":{"question":"..."}}
+  for (const k of Object.keys(v)) {
+    if (!ACTION_NAMES.includes(k.toLowerCase())) continue;
+    const x = v[k], key = k.toLowerCase();
+    if (x && typeof x === 'object' && !Array.isArray(x)) return { ...v, ...x, type: key };
+    const f = PRIMARY[key];
+    return { ...v, type: key, ...(f && x !== true && x !== false && x != null && v[f] == null ? { [f]: x } : {}) };
+  }
+  return null;
+}
 function parseAction(raw, baseUrl = '') {
-  const m = String(raw || '').match(/\{[\s\S]*\}/);
-  if (!m) return { error: 'no JSON in the reply' };
-  let j; try { j = JSON.parse(m[0]); } catch { return { error: 'the JSON did not parse' }; }
-  if (!j || typeof j !== 'object' || Array.isArray(j)) return { error: 'the reply was not a JSON object' };
+  const found = firstJson(raw);
+  if (!found) return { error: /\{/.test(String(raw || '')) ? 'the JSON did not parse' : 'no JSON in the reply' };
+  const j = found.j, m = [found.text];
+  if (Array.isArray(j)) return { error: 'the reply was not a JSON object' };
   // The brain doesn't always nest it: {"action":"scroll"}, {"action":"click","id":7},
-  // {"type":"click",...}, {"next":{"type":"goto",...}} all mean the same step.
+  // {"type":"click",...}, {"next":{"type":"goto",...}}, {"action":{"ask":"..."}},
+  // {"ask":"..."} all mean the same step.
   let a = j;
   for (const k of ACTION_KEYS) {
-    const v = j[k];
-    if (typeof v === 'string' && v.trim()) { a = { ...j, type: v.trim() }; break; }
-    if (v && typeof v === 'object' && !Array.isArray(v)) { a = { ...j, ...v, type: v.type || v.action || (typeof j.type === 'string' ? j.type : '') }; break; }
+    const f = fromValue(j[k]);
+    if (f) { a = { ...j, ...f }; break; }
   }
+  if (a === j) { const f = fromValue(j); if (f) a = f; }
   let t = String(a.type || '').toLowerCase().trim();
   // A bare url (no action named) is a goto.
   if (!t && typeof (a.url || a.href) === 'string') t = 'goto';
@@ -443,6 +483,10 @@ function parseAction(raw, baseUrl = '') {
   if (['navigate', 'open', 'visit'].includes(t)) t = 'goto';
   if (t === 'input' || t === 'fill') t = 'type';
   if (t === 'finish' || t === 'finished') t = 'done';
+  if (t === 'sleep') t = 'wait';
+  if (['ask_user', 'request_info', 'ask_for_info', 'ask_human'].includes(t)) t = 'ask';
+  if (t === 'ask') { const q = a.question ?? a.message ?? a.prompt ?? a.text ?? a.info ?? a.reason; if (q != null) a = { ...a, question: String(q) }; }
+  if (t === 'done' && a.result == null) { const r = a.answer ?? a.summary ?? a.text ?? a.message ?? a.reason; if (r != null) a = { ...a, result: String(r) }; }
   a = { ...a, type: t };
   if (t === 'goto') {
     const u = String(a.url || a.href || '').trim();
@@ -540,6 +584,26 @@ function planTracker(onPlan, startPlan = null, startStep = 0) {
   };
 }
 
+// Waiting is not progress: 3 waits in a row on a page that hasn't changed and the brain
+// is told to take its next planned step instead; if it waits again anyway, the run ends
+// failed with that reason (worker 65 sat 15 min on "wait", 2026-11-24).
+const MAX_IDLE_WAITS = 3;
+function waitGuard() {
+  let n = 0, sig = null;
+  return {
+    // Call with the page the brain is looking at and the action it chose.
+    // -> 'ok' | 'nudge' (don't wait, take the next step) | 'stop'
+    see(pageSig, type) {
+      if (type !== 'wait') { n = 0; sig = null; return 'ok'; }
+      if (sig !== pageSig) { n = 0; sig = pageSig; }
+      n++;
+      if (n <= MAX_IDLE_WAITS) return 'ok';
+      return n === MAX_IDLE_WAITS + 1 ? 'nudge' : 'stop';
+    },
+  };
+}
+const pageSig = (p) => `${p.url}|${p.title}|${String(p.text || '').slice(0, 600)}|${(p.elements || []).length}`;
+
 // One task. `brain(system, prompt)` returns text (claudeText in production).
 // Returns { status: 'done'|'ask'|'stopped', text, url, steps, shot }.
 // allow: clicks that would normally stop to ask (consent buttons on a sign-in
@@ -558,13 +622,15 @@ async function runTask({ persona, personaName = persona, task, ownerText = '', b
   b.pending = null;
   const approvedText = pending && approves(ownerText) ? pending.action : null;
   const plan = planTracker(onPlan, startPlan, startStep);
+  const guard = waitGuard();
+  let nudge = '';
   try {
     let fails = 0;
     for (let step = 1; step <= MAX_STEPS; step++) {
       if (Date.now() - started > MAX_MS) return finish(b, 'stopped', `ran out of time after ${step - 1} steps`, log);
       const page = await snapshot(b).catch(() => ({ url: 'about:blank', title: '', elements: [], text: '', scroll: 0, height: 0 }));
       const history = log.length ? log.map((l, i) => `${i + 1}. ${l}`).join('\n') : '(none yet — start)';
-      const prompt = `TASK: ${task}${plan.prompt()}${pending ? `\n\nEARLIER IN THIS TASK you stopped to ask him: "${pending.question}". His reply: "${String(ownerText).slice(0, 500)}". ${approvedText ? `He APPROVED that action — you may do exactly that, nothing more.` : `That is NOT an approval to act — do not take that action; continue only with what doesn't need it, or ask again.`}` : ''}\n\nSTEPS SO FAR:\n${history}\n\nTHE PAGE NOW (step ${step} of ${MAX_STEPS}):\n${pageText(page)}`;
+      const prompt = `TASK: ${task}${plan.prompt()}${pending ? `\n\nEARLIER IN THIS TASK you stopped to ask him: "${pending.question}". His reply: "${String(ownerText).slice(0, 500)}". ${approvedText ? `He APPROVED that action — you may do exactly that, nothing more.` : `That is NOT an approval to act — do not take that action; continue only with what doesn't need it, or ask again.`}` : ''}\n\nSTEPS SO FAR:\n${history}\n\nTHE PAGE NOW (step ${step} of ${MAX_STEPS}):\n${pageText(page)}${nudge}`;
       const raw = await brain(AGENT_SYSTEM(personaName, !!onPlan), prompt);
       let a = parseAction(raw, page.url);
       if (a.error) {
@@ -576,6 +642,10 @@ async function runTask({ persona, personaName = persona, task, ownerText = '', b
       }
       if (!a.error) plan.note(a);
       if (a.error) { if (++fails >= 3) return finish(b, 'stopped', `the brain kept giving unusable steps (${a.error})`, log); log.push(`(unusable reply: ${a.error})`); continue; }
+      const g = guard.see(pageSig(page), a.type);
+      if (g === 'stop') return finish(b, 'stopped', `waited ${MAX_IDLE_WAITS + 1}+ times in a row and the page never changed (${page.url}); nothing more to do here`, log);
+      if (g === 'nudge') { log.push(`(waited ${MAX_IDLE_WAITS} times and the page did not change — told to take its next planned step)`); nudge = `\n\nYOU HAVE WAITED ${MAX_IDLE_WAITS} TIMES AND THE PAGE HAS NOT CHANGED. Do NOT wait again. Take the next step of your plan, try another way, or finish with done {success:false, reason}, or ask {question} if you need information.`; continue; }
+      if (a.type !== 'wait') nudge = '';
       if (a.type === 'done') { const f = await finish(b, 'done', String(a.result), log); f.success = doneSuccess(a); f.reason = a.reason ? String(a.reason) : ''; return f; }
       if (a.type === 'ask') { b.pending = { question: String(a.question), action: String(a.question) }; return finish(b, 'ask', String(a.question), log); }
       // Code-level gate on world-changing clicks / Enter.
@@ -747,4 +817,4 @@ const BROWSE_TOOLS = ` - [BROWSE: the task, in full] — your own computer: a re
 
 module.exports = {
   closeBrowser: close,
-  readJar, saveJar, loadJar, planTracker, AGENT_SYSTEM, browseRun, settleResult, fillSecrets, doneSuccess, emailedCode, browserKeyTag, ensureSqlite, BROWSE_PERSONAS, runTask, browseTag, BROWSE_TOOLS, close, browserFor, snapshot, click, type, press, screenshot, unzip, chromePath, parseAction, isCommit, approves, enabled };
+  readJar, saveJar, loadJar, planTracker, AGENT_SYSTEM, browseRun, settleResult, fillSecrets, doneSuccess, emailedCode, browserKeyTag, ensureSqlite, BROWSE_PERSONAS, runTask, browseTag, BROWSE_TOOLS, close, browserFor, snapshot, click, type, press, screenshot, unzip, chromePath, parseAction, waitGuard, MAX_IDLE_WAITS, firstJson, isCommit, approves, enabled };

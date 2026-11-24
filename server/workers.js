@@ -267,9 +267,9 @@ async function runBrowse(w) {
   // Stopped for information (a sign-in, an account email, a code…): A.R.A. looks
   // in his email and notes first, and it carries on with what she finds. He hears
   // about it only if she can't find it (owner, 2026-11-22).
-  for (let tries = 0; r.status === 'ask' && tries < 2 && d().find && require('./araFinds').asksForInfo(r.text); tries++) {
+  for (let tries = 0; r.status === 'ask' && tries < 2 && d().find && require('./araFinds').asksForInfo(r.result || r.text); tries++) {
     update(w, { progress: 'Getting what it needs from A.R.A. (his email and notes)' });
-    const got = await d().find(r.text, { task: w.task, site: r.url || '' }).catch(() => null);
+    const got = await d().find(r.result || r.text, { task: w.task, site: r.url || '' }).catch(() => null);
     if (!got) break;
     const shown = got.secret ? '{{INFO}} (type exactly that; it is filled in for you)' : `"${got.value}" (also available as {{INFO}})`;
     r = await d().browse(`worker-${w.id}`, `J.A.R.V.I.S.'s worker`, `${w.task}\n\n[A.R.A. FOUND WHAT YOU STOPPED FOR — ${got.what}: ${shown}. Carry on with the task from where the browser is.]`, { ownerText: '', onStep, onPlan, secrets: { INFO: got.value } });
