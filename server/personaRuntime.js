@@ -485,6 +485,14 @@ function faithBlock(personaId) {
   return `[FAITH: the Empire is built on Christian faith — God, through Jesus Christ, is its true foundation, and every business and plan here ultimately serves that. Hold this quietly as part of who you are; let it shape your integrity, hope and wisdom without turning replies into sermons or working scripture in unless the moment or Mr. Burrus's own words call for it.${handoff}]`;
 }
 
+// A.R.A.'s tool lines, shared by her own turns and by relays to her: the tags her
+// code paths already accept (runLookups: TRANSCRIBE for everyone, AUTO_CLIP / RAW_EDIT
+// for rogue, ara, jarvis) have to be in her prompt or she says she can't.
+function araTools() {
+  return ARA_TOOLS + '\n' + require('./browserAgent').BROWSE_TOOLS + '\n' + require('./transcribe').TRANSCRIBE_TOOLS
+    + '\n' + require('./autoClip').AUTO_CLIP_TOOLS + '\n' + require('./rawEdit').RAW_EDIT_TOOLS;
+}
+
 function systemPrompt(ctx, gs, custom, mem) {
   return [
     custom ? `${custom}\n\n${TG_FRAME}` : ARA_IDENTITY,
@@ -494,7 +502,7 @@ function systemPrompt(ctx, gs, custom, mem) {
     CONTINUITY,
     mem,
     memoryLine(),
-    ARA_TOOLS + '\n' + require('./browserAgent').BROWSE_TOOLS + '\n' + require('./openThreads').OPEN_THREADS_TOOLS + '\n' + require('./ownerProfile').SET_RULE_TOOLS + '\n' + require('./moneyWatch').MONEY_TOOLS + '\n' + require('./siteDesk').SITE_TOOLS,
+    araTools() + '\n' + require('./openThreads').OPEN_THREADS_TOOLS + '\n' + require('./ownerProfile').SET_RULE_TOOLS + '\n' + require('./moneyWatch').MONEY_TOOLS + '\n' + require('./siteDesk').SITE_TOOLS,
     googleLine(gs),
     `[THE EMPIRE — you run the team. When Mr. Burrus tells you to DO something that's another persona's job, send it to whoever owns it with [RELAY_TO: id | the full instruction, every detail he gave] — he never has to name them. WHO OWNS WHAT: ${ARA_ROUTE}. Everyday things you have your own tags for (notes, tasks, calendar, email, reminders, expenses, the HUD, research, images) you just do yourself. A question or an opinion you answer yourself, unless he names someone or it needs their live tools (where his trades stand → T.A.L.O.N.; how something in the app's code works → J.A.R.V.I.S.). Several jobs for several people → several RELAY_TO tags in the same reply. Report what they actually did from their receipts. This overrides any hand-off instruction elsewhere in your prompt.\n${rosterLines()}\n]`,
     faithBlock('ara'),
@@ -996,7 +1004,7 @@ async function relayToPersona(id, message, { from = 'ara', convo = '', depth = 1
     OBEY,
     require('./personas').INITIATIVE,
     emotionFor(id),
-    id === 'ara' ? ARA_TOOLS + '\n' + require('./browserAgent').BROWSE_TOOLS : genericTools(id),
+    id === 'ara' ? araTools() : genericTools(id),
     id === 'jarvis' ? await empireOsBrief() : '',
     id === 'talon' ? RELAY_TOOLS.replace(HAND_TRADES, TALON_HAND_TRADES) : RELAY_TOOLS,
     googleLine(gs),
@@ -1507,5 +1515,5 @@ async function runPersonaTurn(personaId, userText, deliver, { reply: given, resu
 const runAraTurn = (userText, deliver) => runPersonaTurn('ara', userText, deliver);
 
 module.exports = {
-  weatherBlock,
+  weatherBlock, araTools, systemPrompt,
   recallDays, runPersonaTurn, runAraTurn, gatherContext, contextBlock, applyEffects, runInjections };
