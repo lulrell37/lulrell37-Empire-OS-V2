@@ -224,7 +224,7 @@ async function learnStyleInner(argIn, job = NOJOB) {
         const gaps = words.slice(1).map((w, j) => w.start - words[j].end).filter((g) => g > 0);
         const look = await lookAtImages(frames, `Three frames from one ${profile ? `of the ${profile} reference videos` : 'of his edited short videos'}. Describe the EDITING STYLE only, in 4-6 short lines: captions (on/off, position, size, font feel, colors, how many words at a time), framing (tight/wide, centered), zooms or punch-ins, on-screen titles or graphics, color grade, anything else distinctive. No guesses about what is said.`);
         seen.push({ url: u, secs: Math.round(total), wps: words.length && total ? (words.length / total).toFixed(2) : '?', pause: gaps.length ? (gaps.reduce((x, y) => x + y, 0) / gaps.length).toFixed(2) : '?', look });
-      } catch (e) { seen.push({ url: u, error: e.message.slice(0, 120) }); }
+      } catch (e) { if (jobs.isCancel(e)) throw e; seen.push({ url: u, error: e.message.slice(0, 120) }); }
     }
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   const ok = seen.filter((x) => !x.error);
@@ -273,7 +273,7 @@ ${styleText(prof)}${notes ? `\nHis notes for this video: ${notes}` : ''}${songs.
 
 // Live progress (server/jobProgress.js): each edit / style learn is one tracked job.
 const jobs = require('./jobProgress');
-const NOJOB = { step() {}, note() {} };
+const NOJOB = { step() {}, note() {}, onCancel() {}, checkpoint() {} };
 const EDIT_STEPS = ['Download footage', 'Transcribe', 'Plan the cut', 'Render', 'Upload'];
 const editOne = (link, notes = '', profile = '') => jobs.run('rogue', `Raw edit: ${String(link).replace(/^https?:\/\/(www\.)?/, '').slice(0, 45)}`, EDIT_STEPS, (job) => editOneInner(link, notes, job, profile), { kind: 'raw_edit', args: { link, notes, profile }, to: 'rogue' });
 
@@ -294,6 +294,7 @@ async function editOneInner(link, notes = '', job = NOJOB, profile = '') {
   const meta = path.join(dir, 'state.json');
   const words_f = path.join(dir, 'words.json');
   let ok = false;
+  if (job.onCancel) job.onCancel(() => fs.rmSync(dir, { recursive: true, force: true })); // a cancelled edit leaves nothing to resume
   try {
     let src = path.join(dir, 'raw'), name;
     job.step('Download footage');
@@ -353,6 +354,7 @@ async function editOneInner(link, notes = '', job = NOJOB, profile = '') {
     const notesOut = [];
     try { await run(['-hide_banner', '-loglevel', 'error', '-y', ...inputs, '-filter_complex', `${v};${aud}${mix}`, '-map', '[v]', '-map', '[a]', ...enc, out]); }
     catch (e) {
+      job.checkpoint();
       notesOut.push(`the styled render failed (${e.message.slice(-120)}), so this is the clean cut without graphics`);
       await run(['-hide_banner', '-loglevel', 'error', '-y', '-i', src, '-filter_complex', `${videoChain(segs.map((s) => ({ ...s, zoom: false })), size)}[v];${aud}`, '-map', '[v]', '-map', '[voice]', ...enc, out]);
     }
@@ -390,11 +392,11 @@ async function sendAra(text, media = []) {
 // Boot resume (server/jobProgress.js): rerun one cut-off edit / style learn with its saved arguments.
 async function resumeEdit({ link, notes = '', profile = '' }) {
   try { const r = await editOne(link, notes, profile); await sendAra(`🎬 **R.O.G.U.E. → A.R.A.** Edit ready (resumed after the restart):\n   ${r.summary}`, r.media); }
-  catch (e) { console.error(`raw edit failed: ${e.message}`); await sendAra(`🎬 R.O.G.U.E.'s resumed edit didn't work: ${e.message}`); }
+  catch (e) { if (jobs.isCancel(e)) return; console.error(`raw edit failed: ${e.message}`); await sendAra(`🎬 R.O.G.U.E.'s resumed edit didn't work: ${e.message}`); }
 }
 async function resumeStyleLearn({ arg }) {
   try { await sendAra(`🎬 **R.O.G.U.E. → A.R.A.** Style learn finished (resumed after the restart):\n${String(await learnStyle(arg)).slice(0, 3500)}`); }
-  catch (e) { console.error(`raw edit failed: style learn: ${e.message}`); await sendAra(`🎬 R.O.G.U.E.'s resumed style learn didn't work: ${e.message}`); }
+  catch (e) { if (jobs.isCancel(e)) return; console.error(`raw edit failed: style learn: ${e.message}`); await sendAra(`🎬 R.O.G.U.E.'s resumed style learn didn't work: ${e.message}`); }
 }
 function editBatch(arg) {
   if (!enabled()) throw new Error('the editor is switched off (RAW_EDIT=off)');
@@ -423,6 +425,7 @@ function editBatch(arg) {
         const r = await editOne(job.l, notes, profile);
         await send(`🎬 **R.O.G.U.E. → A.R.A.** Edit ready${tag}:\n   ${r.summary}`, r.media);
       } catch (e) {
+        if (jobs.isCancel(e)) { console.warn('raw edit cancelled by him'); continue; }
         console.error(`raw edit failed: ${e.message}`);
         await send(`🎬 R.O.G.U.E.'s edit${tag} didn't work: ${e.message}`);
       } finally { active--; }

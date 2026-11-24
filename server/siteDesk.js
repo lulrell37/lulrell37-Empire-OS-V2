@@ -424,7 +424,7 @@ async function buildOne(s, { force = false } = {}) {
     const r = await buildFound(s, biz, { force }, jid);
     jobs.done(jid, r.built || '');
     return r;
-  } catch (e) { jobs.fail(jid, e); throw e; }
+  } catch (e0) { const e = jobs.asCancel(jid, e0); jobs.fail(jid, e); throw e; }
 }
 
 async function buildFound(s, biz, { force = false } = {}, jid = null) {
@@ -484,6 +484,7 @@ async function tick({ force = false } = {}) {
     if (waiting >= MAX_WAITING) return { skipped: `${waiting} sites are waiting on his review` };
     return await buildOne(s, { force });
   } catch (e) {
+    if (require('./jobProgress').isCancel(e)) return { skipped: 'cancelled by him' };
     console.error('site desk failed:', e.message);
     return { error: e.message };
   } finally {

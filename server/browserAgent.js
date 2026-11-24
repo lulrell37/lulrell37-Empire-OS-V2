@@ -636,14 +636,19 @@ async function browseTag(persona, arg, { ownerText = '' } = {}) {
   // goes through browseRun itself and is tracked as a worker, not twice.
   const jobs = require('./jobProgress');
   const task = String(arg || '').trim();
-  return jobs.run(persona, `Browse: ${task.slice(0, 50)}`, [], (job) => browseRun(persona, NAMES()[persona] || persona, arg, {
+  return jobs.run(persona, `Browse: ${task.slice(0, 50)}`, [], (job) => {
+    // Cancelled: close this persona's Chrome (unless another browse / sign-in of theirs is using it).
+    job.onCancel(() => { if (!jobs.live().some((x) => x.persona === persona && x.id !== job.id && /^(Browse|Sign in)/.test(x.title))) close(persona); });
+    return browseRun(persona, NAMES()[persona] || persona, arg, {
     ownerText,
-    onStep: (n, line) => job.note(`step ${n}: ${line}`),
+    onStep: (n, line) => { job.checkpoint(); job.note(`step ${n}: ${line}`); },
     onPlan: (names, at) => job.plan(names, Math.max(0, at - 1)),
   }).then((r) => {
+    job.checkpoint();
     if (r.status === 'stopped') throw new Error(String(r.result || 'the browser stopped').slice(0, 200));
     return r;
-  }));
+  });
+  });
 }
 
 // One browser task, consent banners and emailed codes handled. Also what a worker
@@ -681,4 +686,5 @@ const BROWSE_TOOLS = ` - [BROWSE: the task, in full] — your own computer: a re
  - [BROWSER_KEY: Steel API key or wss:// URL] — switch your browser to a hosted one (Steel) that gets past Cloudflare checks; saved on the server, no Replit secret needed.`;
 
 module.exports = {
+  closeBrowser: close,
   readJar, saveJar, loadJar, planTracker, AGENT_SYSTEM, browseRun, browserKeyTag, ensureSqlite, BROWSE_PERSONAS, runTask, browseTag, BROWSE_TOOLS, close, browserFor, snapshot, click, type, press, screenshot, unzip, chromePath, parseAction, isCommit, approves, enabled };

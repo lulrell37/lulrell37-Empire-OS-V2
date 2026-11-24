@@ -33,6 +33,8 @@ const MAX_SEC = (parseFloat(process.env.CLIP_SCAN_MAX_MIN) || 180) * 60;
 const TRANSCRIPT_CHARS = 350000;
 
 let running = false;
+let runningJob = null; // { token, id } of the scan holding the lock
+
 
 // Checkpoints (owner, 2026-11-23: a restart must not cost a scan its download and
 // transcript). Work happens in a directory keyed by the video, outside $TMPDIR's
@@ -364,6 +366,7 @@ async function transcribeVideo(src, dir, opts) {
     // duration); Whisper rejects it (audio_too_short) and that aborted the whole scan. Offsets keep the chunk index.
     const len = await duration(path.join(dir, chunks[i])).catch(() => 0);
     if (len < MIN_CHUNK_SEC) { console.warn(`clip scan: skipping ${chunks[i]}, only ${len.toFixed(2)}s of audio`); continue; }
+    require('./jobProgress').checkpoint(); // cancelled: stop between chunks
     const segs = await transcribeSegments(fs.readFileSync(path.join(dir, chunks[i])), chunks[i], opts);
     for (const s of segs) all.push({ start: s.start + i * CHUNK_SEC, end: s.end + i * CHUNK_SEC, text: s.text });
   }
@@ -435,10 +438,19 @@ function cutVertical(src, start, end, dest) {
 // the upload cap; bigger ones are Drive links only).
 async function clipScan(url, focus = '', { onProgress = () => {}, title = '' } = {}) {
   if (!enabled()) throw new Error('clip scan is switched off (CLIP_SCAN=off)');
-  if (running) throw new Error('a clip scan is already running — one at a time; wait for it to finish');
+  if (running) {
+    // Never cancels the running one (owner: nothing cancels unless he names it): refuse and say which.
+    const J = require('./jobProgress');
+    const j = runningJob && J.live().find((x) => x.id === runningJob.id);
+    const e = new Error(j ? `a clip scan is already running — job #${j.id} "${j.title}" (${Math.max(0, Math.round((Date.now() - j.startedAt) / 60000))} min in, ${j.current || j.progress || 'starting'}). One at a time and nothing was cancelled. Ask him whether to cancel that one ([JOB_CANCEL: ${j.id}]) or wait for it.` : 'a clip scan is already running — one at a time; nothing was cancelled. Wait for it to finish, or see [JOBS].');
+    e.busy = true;
+    throw e;
+  }
   const kind = linkKind(url);
   if (!kind) throw new Error('needs a Google Drive link or a YouTube URL (youtube.com/watch, youtu.be, youtube.com/shorts)');
   running = true;
+  const token = {};
+  runningJob = { token, id: null };
   pruneJobDirs();
   const dir = path.join(JOBS_DIR, jobKey(url, focus));
   fs.mkdirSync(dir, { recursive: true });
@@ -451,10 +463,15 @@ async function clipScan(url, focus = '', { onProgress = () => {}, title = '' } =
   for (const f of fs.readdirSync(dir)) if (/^(cand|section)\d+\./.test(f) || /^a\d+\.mp3$/.test(f) || /^chat/.test(f) || /\.(part|ytdl)$/.test(f)) fs.rmSync(ck(f), { recursive: true, force: true });
   let chatP = null;
   let ok = false;
+  let cancelledErr = null;
   // Live progress (server/jobProgress.js): auto clips pass their own title.
   const jobs = require('./jobProgress');
   const jid = jobs.start('rogue', title || `Clip scan: ${String(url).replace(/^https?:\/\/(www\.)?/, '').slice(0, 45)}`, ['Download audio', 'Transcribe', 'Pick moments', 'Download sections', 'Render each clip', 'Upload'],
     { kind: 'clip_scan', args: { url: String(url).trim(), focus: String(focus || ''), title }, to: 'rogue' });
+  runningJob.id = jid;
+  // Cancelled: the lock opens and the working files go at once (its children are SIGKILLed by jobProgress).
+  const release = () => { if (runningJob && runningJob.token === token) { running = false; runningJob = null; } };
+  if (jid) jobs.onCancel(jid, () => { release(); if (chatP && chatP.stop) chatP.stop(); fs.rmSync(dir, { recursive: true, force: true }); });
   try {
     let src = path.join(dir, 'source');
     let name;
@@ -550,6 +567,7 @@ async function clipScan(url, focus = '', { onProgress = () => {}, title = '' } =
             const words = segments.filter((x) => x.end > c.start && x.start < c.end).map((x) => x.text.trim()).join(' ');
             judgements[i] = await judge.judgeCandidate(file, from, c, words, dir, `cand${i + 1}`);
           } catch (e) {
+            if (jobs.isCancel(e)) throw e;
             failed = `${failed ? failed + '; ' : ''}${e.message.slice(0, 80)}`;
             if (/no vision/.test(e.message)) failed = 'stop: ' + failed;
           }
@@ -601,6 +619,7 @@ async function clipScan(url, focus = '', { onProgress = () => {}, title = '' } =
             context: segments.filter((s) => s.end > p.start - 20 && s.start < p.end).map((s) => s.text.trim()).join(' ') });
           look = `${LAYOUT_WORDS[r.layout] || r.layout}${r.captions ? ', captions' : ''}${p.hook ? ', hook' : ''}${r.notes.length ? ` (${r.notes.join('; ')})` : ''}`;
         } catch (e) {
+          jobs.checkpoint(jid);
           await cutVertical(clipSrc, cs, ce, out);
           look = `plain crop (the styled render failed: ${e.message.slice(0, 120)})`;
         }
@@ -612,20 +631,25 @@ async function clipScan(url, focus = '', { onProgress = () => {}, title = '' } =
         saveState({ clips: Object.assign(state.clips || {}, { [i]: { range, line: lines[lines.length - 1] } }) });
         if (size <= TG_VIDEO_MAX) media.push({ name: 'SEND_VIDEO', buffer: fs.readFileSync(out), filename: `clip${i + 1}.mp4`, caption: `${i + 1}. ${p.hook || range} — ${p.reason}`.slice(0, 1000) });
       } catch (e) {
+        if (jobs.isCancel(e)) throw e;
         lines.push(`${i + 1}. ${range} — ${p.reason}\n   ⚠️ couldn't render this one: ${e.message.slice(0, 160)}`);
       }
     }
     const head = `CLIP SCAN — "${base}" (${mmss(total)}), ${picks.length} moment${picks.length === 1 ? '' : 's'}${focus ? ` for "${focus}"` : ''}, best first. Picked from ${sig.used.length ? `${sig.used.join(', ')} + the transcript` : 'the transcript alone'}${sigNotes.length ? ` (${sigNotes.join('; ')})` : ''}. Each is a finished 9:16 clip (layout to the shot, word-by-word captions, hook on top), uploaded to his Drive:`;
     const out = { text: `${head}\n${lines.join('\n')}\nEach can still go through [EDIT_CLIP: <its link> | brief] for captions, music or S.E.L.E.N.E.'s dress-up.`, media };
+    jobs.checkpoint(jid); // a cancel that landed during the last render still stops the result
     jobs.done(jid, `${picks.length} moment(s)`);
     ok = true;
     return out;
-  } catch (e) {
+  } catch (e0) {
+    const e = jobs.asCancel(jid, e0);
+    cancelledErr = e;
     jobs.fail(jid, e);
     throw e;
   } finally {
-    running = false;
+    release();
     if (chatP && chatP.stop) chatP.stop();
+    if (jid && jobs.isCancel(cancelledErr)) fs.rmSync(dir, { recursive: true, force: true });
     // Done: nothing to resume. A failure keeps the checkpoints (the same link sent
     // again, or the boot resume, picks them up); pruneJobDirs clears them after 2 days.
     if (ok) fs.rmSync(dir, { recursive: true, force: true });
@@ -644,6 +668,12 @@ function scanInBackground(url, focus, opts = {}) {
     }
     await require('./pushSender').pushAlert('clip-scan', 'R.O.G.U.E. found your clips', text.split('\n')[0], {}).catch(() => {});
   }).catch(async (e) => {
+    if (require('./jobProgress').isCancel(e)) return console.warn('clip scan cancelled by him');
+    if (e.busy) { // refused, not failed: tell him which scan holds the slot
+      const telegram = require('./telegram'); const ara = telegram.botFor('ara');
+      if (ara && ara.isConfigured()) await ara.sendMessage(telegram.OWNER_ID, `🎬 Not started: ${e.message}`, { remember: true }).catch(() => {});
+      return;
+    }
     console.error('clip-scan failed:', e.message);
     const telegram = require('./telegram');
     const ara = telegram.botFor('ara');

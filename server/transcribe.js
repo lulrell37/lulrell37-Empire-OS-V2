@@ -46,6 +46,9 @@ async function transcribeLink(url, { save = true, persona = 'ara' } = {}) {
   // Live progress (server/jobProgress.js).
   const jobs = require('./jobProgress');
   const jid = jobs.start(persona, `Transcribe: ${link.replace(/^https?:\/\/(www\.)?/, '').slice(0, 45)}`, ['Download', 'Transcribe', 'Save to Drive'], save ? { kind: 'transcribe', args: { url: link, persona }, to: persona } : null);
+  let released = false;
+  const release = () => { if (!released) { released = true; running--; } };
+  if (jid) jobs.onCancel(jid, () => { release(); fs.rmSync(dir, { recursive: true, force: true }); });
   try {
     let src = path.join(dir, 'source');
     let name;
@@ -70,11 +73,12 @@ async function transcribeLink(url, { save = true, persona = 'ara' } = {}) {
     }
     jobs.done(jid, title);
     return { title, kind, total, segments, text: body, note };
-  } catch (e) {
+  } catch (e0) {
+    const e = jobs.asCancel(jid, e0);
     jobs.fail(jid, e);
     throw e;
   } finally {
-    running--;
+    release();
     fs.rmSync(dir, { recursive: true, force: true });
   }
 }
@@ -104,6 +108,7 @@ function transcribeInBackground(url, persona = 'ara') {
     const saved = r.note && !r.note.error ? `Saved to Drive as "Transcript — ${r.title}"${r.note.link ? `: ${r.note.link}` : ''}` : '⚠️ Not saved to Drive';
     await bot.sendMessage(telegram.OWNER_ID, `📝 Transcript — "${r.title}" (${SOURCE_NAME[r.kind]}, ${clip.mmss(r.total)})\n${saved}\n\n${r.text.slice(0, 20000)}${r.text.length > 20000 ? '\n…(the rest is in the note)' : ''}`, { remember: true });
   }).catch(async (e) => {
+    if (require('./jobProgress').isCancel(e)) return console.warn('transcribe cancelled by him');
     console.error('transcribe failed:', e.message);
     const telegram = require('./telegram');
     const bot = telegram.botFor('ara');
