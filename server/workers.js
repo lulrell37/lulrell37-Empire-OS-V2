@@ -231,10 +231,32 @@ async function launch(w) {
   release();
   ctrls.delete(w.id);
   require('./workerTools').revoke(w.id).catch(() => {}); // its tool token ends with it
+  if (w.kind === 'code') out = codeStatus(out);
   if (out.status === 'failed') logFailure(w, out.result); // every failed worker, whichever way it failed
-  update(w, { status: out.status, result: String(out.result || '').slice(0, 20000), branch: out.branch || w.branch, pushed: out.pushed || '', endedAt: Date.now(), progress: out.status === 'done' ? 'Finished' : out.status === 'needs_you' ? 'Needs Mr. Burrus' : out.status === 'stopped' ? 'Stopped' : 'Failed', ...(out.status === 'done' ? { percent: 100, current: '' } : {}) });
+  update(w, { status: out.status, result: String(out.result || '').slice(0, 20000), branch: out.branch || w.branch, pushed: out.pushed || '', endedAt: Date.now(), partial: !!out.partial, progress: out.status === 'done' ? 'Finished' : out.partial ? 'Partly done — needs Mr. Burrus' : out.status === 'needs_you' ? 'Needs Mr. Burrus' : out.status === 'stopped' ? 'Stopped' : 'Failed', ...(out.status === 'done' ? { percent: 100, current: '' } : {}) });
   report(w);
   pump();
+}
+
+const BLOCKED = /\b(blocked|could ?n[o']t|cannot|can't|unable to|no account (?:has been|was|exists|yet)|no (?:api )?key (?:exists|was|has)|not (?:been )?(?:created|completed|finished|successful)|(?:did|does|do) not (?:finish|complete|succeed|work)|failed|stuck at|stopped at)\b/i;
+const WAITING = /\b(verif\w*|e-?mail|inbox|code|sign[ -]?in|log[ -]?in|captcha|phone|text message|sms|approv\w*|needs? (?:you|mr|him)|waiting (?:on|for))\b/i;
+// What a finished browse run really is: done | needs_you | failed.
+function browseStatus(r) {
+  if (r.status === 'ask') return 'needs_you';
+  if (r.status !== 'done') return 'failed';
+  const text = `${r.reason || ''} ${r.text || ''}`;
+  const unfilled = /\{\{\s*\w+\s*\}\}/.test(String(r.text || ''));
+  const notDone = r.success === false || (r.success !== true && BLOCKED.test(String(r.text || ''))) || unfilled;
+  if (!notDone) return 'done';
+  return !unfilled && WAITING.test(text) && /\b(waiting|needs? (?:you|mr|him)|ask|verification|captcha|code)\b/i.test(text) ? 'needs_you' : 'failed';
+}
+// A code worker's report that says it didn't finish: FAILED -> failed, PARTLY DONE -> needs_you (partial, still shippable).
+function codeStatus(out) {
+  if (out.status !== 'done') return out;
+  const first = String(out.result || '').trim();
+  if (/^FAILED\b/i.test(first)) return { ...out, status: 'failed' };
+  if (/^PARTLY DONE\b/i.test(first)) return { ...out, status: 'needs_you', partial: true };
+  return out;
 }
 
 async function runBrowse(w) {
@@ -253,7 +275,9 @@ async function runBrowse(w) {
     const shown = got.secret ? '{{INFO}} (type exactly that; it is filled in for you)' : `"${got.value}" (also available as {{INFO}})`;
     r = await d().browse(`worker-${w.id}`, `J.A.R.V.I.S.'s worker`, `${w.task}\n\n[A.R.A. FOUND WHAT YOU STOPPED FOR — ${got.what}: ${shown}. Carry on with the task from where the browser is.]`, { ownerText: '', onStep, onPlan, secrets: { INFO: got.value } });
   }
-  const status = r.status === 'done' ? 'done' : r.status === 'ask' ? 'needs_you' : 'failed';
+  // Explicit verdict first (the brain's done {success, reason}), then the wording of
+  // the result: a "done" that says it was blocked is never done (worker 57, 2026-11-24).
+  const status = browseStatus(r);
   let saved = '';
   if (w.note && r.result && status === 'done') {
     saved = await d().saveNote(w.note, `# ${w.note}\n_Collected by J.A.R.V.I.S.'s worker #${w.id}, ${new Date().toLocaleString('en-US', { timeZone: 'America/New_York' })} ET._\n\n${r.result}`)
@@ -381,9 +405,9 @@ function defaultReport(w) {
   {
     const mins = Math.max(1, Math.round(((w.endedAt || Date.now()) - (w.startedAt || w.createdAt)) / 60000));
     const icon = { done: '✅', needs_you: '✋', failed: '❌' }[w.status] || '•';
-    const head = { done: 'finished', needs_you: 'stopped — it needs you', failed: 'FAILED' }[w.status] || w.status;
+    const head = w.partial ? 'PARTLY DONE — needs you' : ({ done: 'finished', needs_you: 'stopped — it needs you', failed: 'FAILED' }[w.status] || w.status);
     const links = [w.pushed ? `Branch: ${w.pushed}` : (w.branch && w.kind === 'code' ? `Branch: ${w.branch} (nothing pushed)` : ''), w.issueUrl ? `Full report: ${w.issueUrl}` : ''].filter(Boolean).join('\n');
-    const text = `${icon} Worker ${w.slot || '?'} of 3 ${head} — "${w.title}" (${w.kind}, ${mins} min)\n\n${String(w.result || '(no report)').slice(0, 3000)}${links ? `\n\n${links}` : ''}${w.kind === 'code' && w.status === 'done' && w.pushed && /pushed/.test(w.pushed) ? '\n\nSay "push" to J.A.R.V.I.S. to ship it.' : ''}`;
+    const text = `${icon} Worker ${w.slot || '?'} of 3 ${head} — "${w.title}" (${w.kind}, ${mins} min)\n\n${String(w.result || '(no report)').slice(0, 3000)}${links ? `\n\n${links}` : ''}${w.kind === 'code' && (w.status === 'done' || w.partial) && w.pushed && /pushed/.test(w.pushed) ? '\n\nSay "push" to J.A.R.V.I.S. to ship it.' : ''}`;
     return voiceThenText(w, text);
   }
 }
@@ -409,10 +433,10 @@ function spokenReport(w) {
   const body = clean(String(w.result || '').replace(/^\s*(?:DONE|PARTLY DONE|FAILED|CONTINUE)\b[:.\-—\s]*/i, ''));
   const sentences = (body.match(/[^.!?]+[.!?]+(?=\s|$)|[^.!?]+$/g) || []).map((x) => x.trim()).filter((x) => x.length > 3);
   const outcome = { done: 'is done', failed: 'failed', needs_you: 'needs you', stopped: 'was stopped' }[w.status] || w.status;
-  const partly = w.status === 'done' && /^\s*PARTLY DONE/i.test(String(w.result || ''));
+  const partly = (w.status === 'done' || w.partial) && /^\s*PARTLY DONE/i.test(String(w.result || ''));
   const ask = w.status === 'failed' ? 'Tell me if you want it tried again.'
     : w.status === 'needs_you' ? 'It is waiting on you.'
-    : w.kind === 'code' && w.status === 'done' && w.pushed && /pushed/.test(w.pushed) ? 'Say push to ship it.' : '';
+    : w.kind === 'code' && (w.status === 'done' || w.partial) && w.pushed && /pushed/.test(w.pushed) ? 'Say push to ship it.' : '';
   const head = `Worker ${w.slot || ''}${w.slot ? ', ' : ' '}${clean(w.title)}, ${partly ? 'is partly done' : outcome}.`.replace(/\s+/g, ' ');
   let out = head;
   const room = VOICE_MAX - head.length - (ask ? ask.length + 1 : 0) - 1;
@@ -639,7 +663,7 @@ const NO_APK = /^(server\/|docs\/|site\/|scripts\/canva-site\/)|\.md$|^\.github\
 async function ship(ref) {
   await load();
   const want = String(ref || 'all').trim().toLowerCase();
-  const done = Object.values(list).filter((w) => w.kind === 'code' && w.status === 'done' && w.branch && !w.shipped && !/no commits/i.test(w.pushed || ''));
+  const done = Object.values(list).filter((w) => w.kind === 'code' && (w.status === 'done' || w.partial) && w.branch && !w.shipped && !/no commits/i.test(w.pushed || ''));
   const pick = want === 'all' || !want ? done : done.filter((w) => w.id === want.replace(/^#/, '') || w.branch === want || String(w.title).toLowerCase().includes(want));
   // Not a worker's: any other branch on GitHub ships the same way (pushing code is his job).
   if (!pick.length && want !== 'all' && /^[\w./-]+$/.test(String(ref).trim())) {
@@ -693,4 +717,4 @@ const WORKER_TOOLS = ` - [WORKER_START: code|browse | short title | the full tas
 // Persona jobs (jobProgress.js) share this one board: load the workers, then update it.
 async function kick() { await load(); boardKick(); }
 
-module.exports = { spokenReport, VOICE_MAX, kick, start, stop, ship, driveIdsIn, fileGrant, MAX_LEGS, recover, statusText, forApp, tag, WORKER_TOOLS, enabled, _setDeps: (x) => { deps = x; list = null; board = undefined; boardLast = 0; }, _list: () => list, _boardText: () => boardText(), logFailure, FAIL_KEY, _tgBoardDeps: tgBoardDeps, parsePlan, percentOf, progressLabel, readPlanComment, PLAN_FILE };
+module.exports = { spokenReport, VOICE_MAX, kick, start, stop, ship, driveIdsIn, fileGrant, MAX_LEGS, recover, statusText, forApp, tag, WORKER_TOOLS, enabled, _setDeps: (x) => { deps = x; list = null; board = undefined; boardLast = 0; }, _list: () => list, _boardText: () => boardText(), logFailure, browseStatus, codeStatus, FAIL_KEY, _tgBoardDeps: tgBoardDeps, parsePlan, percentOf, progressLabel, readPlanComment, PLAN_FILE };
