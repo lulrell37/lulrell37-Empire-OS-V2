@@ -67,10 +67,15 @@ async function exportCookies(site) {
 // message from that site in the last 15 min, its first 6-8 digit code. (pure part: codeIn)
 const SENDERS = { youtube: 'from:(google.com OR accounts.google.com)', instagram: 'from:(instagram.com OR mail.instagram.com)' };
 function codeIn(text) { const m = String(text || '').match(/(?<![\d#])(\d{6,8})(?!\d)/); return m ? m[1] : null; }
-const wantsEmailCode = (text) => /e-?mail|inbox|sent (a|the) code|check your email/i.test(String(text || '')) && /code|verif/i.test(String(text || ''));
+// A magic sign-in / verification link in an email: the first https link that looks like one.
+function linkIn(text) {
+  const links = [...String(text || '').matchAll(/https?:\/\/[^\s<>")\]]+/g)].map((m) => m[0].replace(/[.,;]+$/, ''));
+  return links.find((l) => /verif|confirm|magic|sign[-_]?in|log[-_]?in|auth|token|activate|callback/i.test(l) && !/unsubscribe|privacy|terms/i.test(l)) || null;
+}
+const wantsEmailCode = (text) => /e-?mail|inbox|sent (a|the) code|check your email/i.test(String(text || '')) && /code|verif|link|magic/i.test(String(text || ''));
 async function emailCode(site) {
   const g = require('./google');
-  for (let i = 0; i < 6; i++) { // the email can take a minute
+  for (let i = 0; i < 40; i++) { // the email can take a few minutes (10 min)
     const list = await g.gmailList({ q: `${SENDERS[site]} newer_than:1h`, max: 3 }).catch(() => '');
     const id = (String(list).match(/\[id:([\w-]+)\]/) || [])[1];
     if (id) { const c = codeIn((await g.gmailRead(id).catch(() => '')).split('\n').slice(4).join('\n')); if (c) return c; }
@@ -118,7 +123,7 @@ async function signInInner(site, jid) {
         brain: (sys, prompt) => claudeText(sys, prompt, { maxTokens: 700 }),
       });
       if (r2.status !== 'done') return { ok: false, text: r2.text, shot: r2.shot };
-    } else return { ok: false, text: `${r.text} (A.R.A. didn't find the code in his email within 90 seconds)`, shot: r.shot };
+    } else return { ok: false, text: `${r.text} (A.R.A. didn't find the code in his email within 10 minutes)`, shot: r.shot };
   } else if (r.status !== 'done') return { ok: false, text: r.text, shot: r.shot };
   jobs.step(jid, 'Save the cookies');
   const n = await exportCookies(site);
@@ -166,4 +171,4 @@ async function tag(arg) {
 
 const LOGIN_TOOLS = ` - [SITE_LOGIN: youtube|instagram] — sign your browser in to that site with the account saved on the server, so R.O.G.U.E.'s downloads, transcripts and style learning get past the bot check. It also runs by itself whenever a login expires; he's told only when it can't be done (a code or phone approval only he can give). Report only what the result says.`;
 
-module.exports = { codeIn, wantsEmailCode, toNetscape, cookieFor, ensureLogin, signIn, tag, hasAccount, LOGIN_TOOLS, SITES, ALLOW };
+module.exports = { codeIn, linkIn, wantsEmailCode, toNetscape, cookieFor, ensureLogin, signIn, tag, hasAccount, LOGIN_TOOLS, SITES, ALLOW };
