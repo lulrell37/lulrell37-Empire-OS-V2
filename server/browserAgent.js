@@ -608,7 +608,7 @@ const pageSig = (p) => `${p.url}|${p.title}|${String(p.text || '').slice(0, 600)
 // Returns { status: 'done'|'ask'|'stopped', text, url, steps, shot }.
 // allow: clicks that would normally stop to ask (consent buttons on a sign-in
 // he already authorized) and go through instead.
-async function runTask({ persona, personaName = persona, task, ownerText = '', brain, secrets = {}, allow = null, onStep = null, onPlan = null, plan: startPlan = null, planStep: startStep = 0 }) {
+async function runTask({ persona, personaName = persona, task, ownerText = '', brain, secrets = {}, allow = null, onStep = null, onPlan = null, plan: startPlan = null, planStep: startStep = 0, signal = null, noMail = false }) {
   if (!enabled()) throw new Error('the browser is switched off (BROWSE=off)');
   const b = await browserFor(persona);
   if (b.busy) throw new Error(`${personaName} is already using the browser — one task at a time`);
@@ -627,11 +627,13 @@ async function runTask({ persona, personaName = persona, task, ownerText = '', b
   try {
     let fails = 0;
     for (let step = 1; step <= MAX_STEPS; step++) {
+      if (signal && signal.aborted) return finish(b, 'stopped', `stopped on request after ${step - 1} steps`, log);
       if (Date.now() - started > MAX_MS) return finish(b, 'stopped', `ran out of time after ${step - 1} steps`, log);
       const page = await snapshot(b).catch(() => ({ url: 'about:blank', title: '', elements: [], text: '', scroll: 0, height: 0 }));
       const history = log.length ? log.map((l, i) => `${i + 1}. ${l}`).join('\n') : '(none yet — start)';
       const prompt = `TASK: ${task}${plan.prompt()}${pending ? `\n\nEARLIER IN THIS TASK you stopped to ask him: "${pending.question}". His reply: "${String(ownerText).slice(0, 500)}". ${approvedText ? `He APPROVED that action — you may do exactly that, nothing more.` : `That is NOT an approval to act — do not take that action; continue only with what doesn't need it, or ask again.`}` : ''}\n\nSTEPS SO FAR:\n${history}\n\nTHE PAGE NOW (step ${step} of ${MAX_STEPS}):\n${pageText(page)}${nudge}`;
       const raw = await brain(AGENT_SYSTEM(personaName, !!onPlan), prompt);
+      if (signal && signal.aborted) return finish(b, 'stopped', `stopped on request after ${step - 1} steps`, log);
       let a = parseAction(raw, page.url);
       if (a.error) {
         // One corrective re-ask before it counts against the stop limit.
@@ -646,6 +648,12 @@ async function runTask({ persona, personaName = persona, task, ownerText = '', b
       if (g === 'stop') return finish(b, 'stopped', `waited ${MAX_IDLE_WAITS + 1}+ times in a row and the page never changed (${page.url}); nothing more to do here`, log);
       if (g === 'nudge') { log.push(`(waited ${MAX_IDLE_WAITS} times and the page did not change — told to take its next planned step)`); nudge = `\n\nYOU HAVE WAITED ${MAX_IDLE_WAITS} TIMES AND THE PAGE HAS NOT CHANGED. Do NOT wait again. Take the next step of your plan, try another way, or finish with done {success:false, reason}, or ask {question} if you need information.`; continue; }
       if (a.type !== 'wait') nudge = '';
+      // A worker never opens his Gmail itself: email contents come through A.R.A.
+      if (noMail && a.type === 'goto' && isMailUrl(a.url)) {
+        log.push(`(refused: ${a.url} — a worker never signs in to Gmail; ask for the email's contents and A.R.A. fetches them)`);
+        nudge = `\n\nYOU MAY NOT OPEN GMAIL OR SIGN IN TO GOOGLE MAIL. Need something from his email (a code, a link, an address)? Use ask {question} saying exactly what you need; A.R.A. reads his email and brings it back.`;
+        continue;
+      }
       if (a.type === 'done') { const f = await finish(b, 'done', String(a.result), log); f.success = doneSuccess(a); f.reason = a.reason ? String(a.reason) : ''; return f; }
       if (a.type === 'ask') { b.pending = { question: String(a.question), action: String(a.question) }; return finish(b, 'ask', String(a.question), log); }
       // Code-level gate on world-changing clicks / Enter.
@@ -675,6 +683,8 @@ async function runTask({ persona, personaName = persona, task, ownerText = '', b
   }
 }
 
+const isMailUrl = (u) => { try { const h = new URL(u).hostname; const p = new URL(u); return /(^|\.)mail\.google\.com$|(^|\.)gmail\.com$|(^|\.)inbox\.google\.com$/i.test(h) || (/^accounts\.google\.com$/i.test(h) && /service=mail|mail\.google\.com/i.test(p.search)); } catch { return false; } };
+
 async function finish(b, status, text, log) {
   const url = await ev(b, 'location.href').catch(() => '');
   const shot = await screenshot(b).catch(() => null);
@@ -684,10 +694,10 @@ async function finish(b, status, text, log) {
 // The newest email sent after `since` (the moment the run reached its "check your email"
 // screen) holding a code or a sign-in link; polls every 20 s for up to 10 min
 // (server/emailLinks.js). -> { ok, code, url } or { ok: false, text }.
-async function emailedCode(since = Date.now(), sender = '', timeoutMs) {
+async function emailedCode(since = Date.now(), sender = '', timeoutMs, signal) {
   // Options form ({ wait, pollMs, site }) is the plain any-sender search (kept from main, test-worker-honesty.js).
   if (since && typeof since === 'object') return emailedCodeBasic(since);
-  return require('./emailLinks').waitForEmailAuth({ since, sender, ...(timeoutMs ? { timeoutMs } : {}) });
+  return require('./emailLinks').waitForEmailAuth({ since, sender, signal, ...(timeoutMs ? { timeoutMs } : {}) });
 }
 
 // A sign-in / verification link a site emailed (Stytch, Groq, magic links): only an email
@@ -787,7 +797,7 @@ function settleResult(r) {
 
 // One browser task, consent banners and emailed codes handled. Also what a worker
 // (server/workers.js) runs, on its own browser profile.
-async function browseRun(persona, name, arg, { ownerText = '', onStep = null, onPlan = null, secrets = {} } = {}) {
+async function browseRun(persona, name, arg, { ownerText = '', onStep = null, onPlan = null, secrets = {}, signal = null, noMail = false } = {}) {
   // A worker's plan carries over into the emailed-code run below.
   let last = { plan: null, at: 0 };
   const plans = onPlan && ((names, at) => { last = { plan: names, at }; onPlan(names, at); });
@@ -795,14 +805,15 @@ async function browseRun(persona, name, arg, { ownerText = '', onStep = null, on
   const brain = (sys, prompt) => claudeText(sys, prompt, { maxTokens: 700 });
   // Cookie / consent banners are not acts in the world: let them through (Canva's
   // banner ignores Reject all, 2026-11-22).
-  let r = await runTask({ persona, personaName: name, task: String(arg || '').trim(), ownerText, brain, secrets, allow: CONSENT, onStep, onPlan: plans });
+  let r = await runTask({ persona, personaName: name, task: String(arg || '').trim(), ownerText, brain, secrets, allow: CONSENT, onStep, onPlan: plans, signal, noMail });
   // A site emailed a code: it's in his Gmail, so fetch it and carry on without him
   // (owner, 2026-11-22: "it's supposed to be automatic").
   const logins = require('./siteLogins');
-  if ((r.status !== 'done' || r.success === false) && (logins.wantsEmailCode(r.text) || logins.wantsEmailLink(r.text))) {
+  if (signal && signal.aborted) close(persona);
+  else if ((r.status !== 'done' || r.success === false) && (logins.wantsEmailCode(r.text) || logins.wantsEmailLink(r.text))) {
     const reached = Date.now() - LINK_SLACK_MS; // the email must be newer than this screen
     const linkOnly = logins.wantsEmailLink(r.text) && !/\b(code|otp|passcode)\b/i.test(r.text || '');
-    const got = await (linkOnly ? emailedLink(reached, siteOf(r.url)) : emailedCode(reached, siteOf(r.url)))
+    const got = await (linkOnly ? emailedLink(reached, siteOf(r.url), { signal }) : emailedCode(reached, siteOf(r.url), undefined, signal))
       .catch((e) => ({ ok: false, text: `couldn't search his Gmail: ${e.message}` }));
     const L = require('./emailLinks');
     if (got.ok && (got.code || got.url)) {
@@ -811,12 +822,13 @@ async function browseRun(persona, name, arg, { ownerText = '', onStep = null, on
       const how = got.code
         ? `Type {{CODE}} into the code box and continue.`
         : `Open the sign-in link in this same browser with a goto action whose url is exactly {{LINK}} — then continue (it is the link from his email; it only works in this session).`;
-      const r2 = await runTask({ persona, personaName: name, ownerText: 'yes', brain, secrets: got.code ? { CODE: got.code } : { LINK: got.url }, allow: CONSENT, onStep, onPlan: plans, plan: last.plan, planStep: last.at,
+      const r2 = await runTask({ persona, personaName: name, ownerText: 'yes', brain, secrets: got.code ? { CODE: got.code } : { LINK: got.url }, allow: CONSENT, onStep, onPlan: plans, signal, noMail, plan: last.plan, planStep: last.at,
         task: `You are partway through this task and the page asked for the emailed ${got.code ? 'code' : 'sign-in link'}. ${how} The task: ${String(arg || '').trim()}` });
       r2.steps = [...r.steps, `(fetched the emailed ${got.code ? 'code' : 'link'} from his Gmail${got.subject ? `: "${got.subject}"` : ''})`, ...r2.steps];
       r = r2;
     } else { r.text = `${r.text} (${(got && got.text) || L.NOT_ARRIVED})`; r.success = false; }
   }
+  if (signal && signal.aborted) { close(persona); r = { ...r, status: 'stopped', text: `stopped on request. ${r.text || ''}`.trim() }; }
   r = settleResult(r);
   const head = { done: 'BROWSE — finished', failed: 'BROWSE — did NOT finish', ask: 'BROWSE — paused, needs Mr. Burrus', stopped: 'BROWSE — stopped' }[r.status];
   const text = `${head} (${r.steps.length} step${r.steps.length === 1 ? '' : 's'}, last page ${r.url || 'none'}):\n${r.text}\n\nSTEPS:\n${r.steps.map((s, i) => `${i + 1}. ${s}`).join('\n') || '(none)'}` +

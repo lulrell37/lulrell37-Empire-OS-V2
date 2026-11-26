@@ -201,6 +201,55 @@ function fakeGitHub() {
   await sleep(20);
   assert.match(await W.tag('WORKER_STOP', '1'), /stopping/);
 
+
+  // ── Stop reaches the browser; info stops go to A.R.A.; parallel starts get their own ids (2026-11-26) ──
+  settings.workers = '{}';
+  let seenSignal = null; const stoppedTold = [];
+  W._setDeps({ gh: gh.call, repo: () => ({ owner: 'o', repo: 'r' }), slot: async () => () => {}, tell: async (t) => stoppedTold.push(t), saveNote: async () => {}, onDone: () => null,
+    browse: (persona, name, task, opts) => new Promise((resolve) => {
+      seenSignal = opts.signal;
+      assert.ok(opts.signal && typeof opts.signal.addEventListener === 'function', 'the worker passes its AbortSignal into browse');
+      assert.strictEqual(opts.noMail, true, 'a worker is told never to open Gmail');
+      opts.signal.addEventListener('abort', () => resolve({ status: 'stopped', text: 'stopped on request', result: 'stopped on request' }), { once: true });
+    }) });
+  await W.tag('WORKER_START', 'browse | stoppable | keep browsing');
+  await sleep(30);
+  const sw = Object.values(W._list()).find((x) => x.title === 'stoppable');
+  assert.strictEqual(sw.status, 'running');
+  assert.match(await W.tag('WORKER_STOP', String(sw.id)), /stopping/);
+  await sleep(40);
+  assert.ok(seenSignal.aborted, 'stop aborts the signal browse got');
+  assert.strictEqual(W._list()[sw.id].status, 'stopped', 'the stopped worker reports stopped');
+
+  // A real browseRun loop ends within one step of the abort, and a Gmail wait ends at once.
+  const EL = require('../emailLinks');
+  const ac = new AbortController();
+  const waiting = EL.waitForEmailAuth({ sender: 'x.com', signal: ac.signal, pollMs: 60000, timeoutMs: 600000, deps: { list: async () => [], read: async () => null } });
+  setTimeout(() => ac.abort(), 20);
+  const t0 = Date.now();
+  const got = await waiting;
+  assert.ok(!got.ok && got.stopped && Date.now() - t0 < 1000, 'the Gmail poll ends on stop');
+
+  // Any ask about information goes to A.R.A.; only his OK to act stays his.
+  const AF = require('../araFinds');
+  for (const q of ['Google shows accounts.google.com sign in, which account should I use?', 'I need the email address for the account', 'What is the invite link?', 'Please provide his phone number for the form', 'I need what the Gmail inbox says'])
+    assert.ok(AF.asksForInfo(q), `info ask: ${q}`);
+  for (const q of ["I'm about to click \"Send\". Go ahead?", 'Should I delete the account? Approve?', "I'm about to click \"Connect\" on Stripe. Go ahead?"])
+    assert.ok(!AF.asksForInfo(q), `his OK: ${q}`);
+
+  // Three [WORKER_START] tags in one reply -> three workers, three different receipts.
+  settings.workers = '{}'; settings.workers_seq = '200';
+  const started = [];
+  W._setDeps({ gh: gh.call, repo: () => ({ owner: 'o', repo: 'r' }), slot: async () => () => {}, tell: async () => {}, saveNote: async () => {}, onDone: () => null,
+    browse: async (persona, name, task) => { started.push(task); return new Promise(() => {}); } });
+  const rt = require('../personaRuntime');
+  const receipts = await rt.runInjections('[WORKER_START: browse | one | task alpha] [WORKER_START: browse | two | task beta] [WORKER_START: browse | three | task gamma]', 'jarvis', { asked: 'do all three' });
+  const titles = Object.values(W._list()).map((x) => x.title).sort();
+  assert.deepStrictEqual(titles, ['one', 'three', 'two'], 'every tag started its own worker');
+  assert.strictEqual(new Set(Object.keys(W._list())).size, 3, 'three distinct ids');
+  for (const t of ['one', 'two', 'three']) assert.match(receipts, new RegExp(`"${t}"`), `receipt for ${t}`);
+  assert.strictEqual((receipts.match(/WORKER_START: ✓/g) || []).length, 3, 'three receipts');
+
   // ── Live Telegram board + real percent from each worker's plan ──
   // Code workers run on GitHub, so their plan arrives as a <!-- worker-plan --> issue comment.
   const GAP = 40;
