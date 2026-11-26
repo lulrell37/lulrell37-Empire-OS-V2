@@ -357,6 +357,7 @@ ${SHARED_OPS}
  T.A.L.O.N. — TRADING:
  - T.A.L.O.N. trades gold and Bitcoin ON HIS OWN, from the server, app open or not — he places, manages and closes his own orders on whichever account he's on whenever auto-trade is ON. Never tell Mr. Burrus T.A.L.O.N. can't place trades himself; he does. The TRADING line in LIVE CONTEXT says whether he's running and what his last scan did.
  - [TALON_RUN] — make him scan gold and Bitcoin right now instead of waiting for his next cycle. He decides and, if the setup is there, places the trade himself; you get back what he decided (or why he couldn't) before you answer. Use it when Mr. Burrus says "have T.A.L.O.N. trade", "is he trading?", "run a scan" and the like.
+${require('./talonSwitch').SWITCH_TOOLS}
  - T.A.L.O.N.'S ACCOUNT — [TRADE_ACCOUNT: demo] takes him off live yourself, at once and with no Confirm; [TRADE_ACCOUNT: live] puts him on real money and waits for Mr. Burrus's Confirm tap. Emit the tag rather than relaying this, and report its receipt word for word, including any positions left open on live. It hasn't happened unless the tag ran.
  - ORDERS FOR T.A.L.O.N. — enter a trade, close one or all, move a stop (or to break-even), move a target: pass it to him with [RELAY_TO: talon | the exact order with every number Mr. Burrus gave]. He executes it (on the live account Mr. Burrus gets a Confirm button), and you report his receipts. [TRADE_POSITIONS] shows you the open positions yourself; [TRADE_STATS: XAUUSD | 30] breaks his closed trades down (by kind, side, session, daily trend, exit) so you can see where a market loses; [QUICK_LOG] shows his 5m quick-scalp desk (what it's seeing, every time it fired and why it did or didn't trade); [NASDAQ_DESK] shows his Nasdaq 100 desk (1m VWAP / 50 EMA / opening-range triggers, same account as gold and Bitcoin). [TRADE_CHART: XAUUSD or BTCUSD | 1H] sends him T.A.L.O.N.'s marked-up chart (5m, 15m, 1H, 4H or 1D); to explain what's on it, relay to T.A.L.O.N.
  - [TALON_UPDATE] — ask him for a market update right now: his read on gold and Bitcoin, where he predicts each goes next, and how our open positions look. Use it when Mr. Burrus asks "how's the market", "how are our trades", "what's T.A.L.O.N. think" and the like. He also sends you one on his own a few times a day — those show up in this chat as "T.A.L.O.N. → A.R.A.".
@@ -429,6 +430,7 @@ PERSONA_EXTRA_TOOLS.talon = ` ${TRADING_KNOWLEDGE}
  - [NASDAQ_DESK] — your Nasdaq 100 desk (his order, 2026-11-20; runs on whichever account you are on, live included when live trading is armed): 1-minute triggers from the day-trading bots in the reel he sent — a close across VWAP, across the 50 EMA, or out of the first 15 minutes' range; above = buy, below = sell. Stop past the trigger, sized to lose $50 at most, 2R target, one position at a time, flat by 3:58 PM ET, done for the day at +$200 or after 3 losses. Runs itself every minute 9:30-4 ET while auto-trade is on, no AI calls. This shows today's tally and every trigger with what happened.
  - [TRADE_STATS: XAUUSD | 30] — where the money goes on a market (XAUUSD, BTCUSD or ALL; days back, default 30): your closed trades by kind (paired / lone / quick / add-on / re-entry / news / manual), side, session, with or against the 1D at entry, how they exited, per setup, and the worst 5. Run it before you answer anything about why a market is losing or what to change; quote its numbers, don't guess.
  ON MR. BURRUS'S ORDERS — he's the boss of the desk; when he (or A.R.A. for him) tells you to do one of these, do it, even if your playbook wouldn't (say so in a line if you disagree):
+${require('./talonSwitch').SWITCH_TOOLS}
  - [TRADE_POSITIONS] — every open position with its id, stop, target and P/L. Read it first when he refers to "the gold trade", "the swing", "everything".
  - [TRADE_ENTER: XAUUSD or BTCUSD | buy or sell | stop price | target price] — a market order, 0.02 (gold: sized so it can't lose more than $40 at its stop, so 0.01 for a $20-$40 stop; a gold stop past $40 is refused). A stop is required; the main stop rule's minimum (gold $10 / Bitcoin 0.8% and 1.2× the 1H ATR) still applies and widens a tighter one. If he gave no stop or target, [TRADE_SCAN] first and set them off structure.
  - [TRADE_CLOSE: position id, or XAUUSD / BTCUSD (add buy/sell/scalp/swing to narrow it), or all]
@@ -501,6 +503,7 @@ function systemPrompt(ctx, gs, custom, mem) {
     custom ? `${custom}\n\n${TG_FRAME}` : ARA_IDENTITY,
     genderLine('ara'),
     OBEY,
+    require('./switches').SWITCH_TOOLS,
     EMOTION,
     CONTINUITY,
     mem,
@@ -528,6 +531,7 @@ function personaSystemPrompt(personaId, ctx, gs, custom, mem) {
     custom ? `${custom}\n\n${TG_FRAME}` : `${personaTgIdentity(personaId)}\n\nYou are talking to Mr. Burrus over Telegram (text), away from the Empire OS app — keep replies tight and mobile-readable. Reply directly to what he just said; no status-briefing preamble. There is a live context block below — read from it, don't invent numbers.`,
     custom ? genderLine(personaId) : '', // the built-in identity already carries it
     OBEY,
+    require('./switches').SWITCH_TOOLS,
     require('./personas').INITIATIVE,
     emotionFor(personaId),
     CONTINUITY,
@@ -714,6 +718,14 @@ async function runInjections(text, persona = 'ara', { convo = '', depth = 0, sin
           return await require('./workers').tag(name, arg);
         }
         catch (e) { console.error(`workers failed: ${name}: ${e.message}`); return `${name} failed: ${e.message}`; }
+      }
+      if (['SWITCH_OFF', 'SWITCH_ON', 'SWITCHES'].includes(name)) {
+        try { return await require('./switches').tag(name, arg, { asked, persona }); }
+        catch (e) { console.error(`switches failed: ${e.message}`); return `${name} failed: ${e.message}`; }
+      }
+      if (['TRADING_OFF', 'TRADING_ON', 'TRADING_STATUS'].includes(name)) {
+        try { return await require('./talonSwitch').tag(name, persona, { asked: depth > 1 ? '' : asked }); }
+        catch (e) { console.error(`talon switch failed: ${e.message}`); return `${name} failed: ${e.message}`; }
       }
       if (name === 'GROQ_KEY' && arg && ['jarvis', 'ara'].includes(persona)) {
         try { return (await require('./llm').saveGroqKey(arg)).text; }
@@ -1029,6 +1041,7 @@ async function relayToPersona(id, message, { from = 'ara', convo = '', depth = 1
     await relaySystem(id, from),
     await require('./ownerProfile').profileBlock(id).catch(() => ''),
     OBEY,
+    require('./switches').SWITCH_TOOLS,
     require('./personas').INITIATIVE,
     emotionFor(id),
     id === 'ara' ? araTools() : genericTools(id),

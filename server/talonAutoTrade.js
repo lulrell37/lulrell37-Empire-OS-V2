@@ -52,6 +52,19 @@ async function tick({ force = false } = {}) {
   if (busy) return { skipped: 'a cycle is already running' };
   busy = true;
   try {
+    // Switched off by him: no new trades, but positions still open keep being looked
+    // after (missing stops put back, swing to break-even, close alerts, the watch).
+    if (await require('./talonSwitch').isHalted()) {
+      await tlFollowAccount().catch(() => {});
+      if (!tlStatus().connected) await tlConnect().catch(() => {});
+      if (tlStatus().connected) {
+        const rec = await reconcileOpenTrades().catch((e) => ({ error: e.message }));
+        if (rec?.error) systemFault('trade journal check', rec.error === 'positions' ? 'couldn\'t read open positions from TradeLocker' : rec.error);
+        else systemOk('trade journal check');
+        await watchTick({ marketOpen: fxOpen() }).catch((e) => console.error('talon-watch failed —', e.message));
+      }
+      return { skipped: 'T.A.L.O.N. is switched OFF by Mr. Burrus (no new trades; open ones are still managed; he says start to turn him back on)' };
+    }
     if ((await getSetting('auto_trade', '0')) !== '1') return { skipped: 'auto-trade is OFF (Settings › Trading)' };
     const due = force || await dueNow();
     if (due) await setSetting('talon_last_cycle_at', String(Date.now()));

@@ -168,11 +168,14 @@ MONEY|<YYYY-MM-DD>|<one line>
     }
 
     // A.T.L.A.S. reads every brief for her stock desk (throttled in there).
-    require('./atlasInvest').onWireBrief(brief).catch((e) => console.error('newswire->atlas failed', e.message));
+    // Each reader runs only while he has it switched on (server/switches.js).
+    const sw = require('./switches');
+    const ifOn = (key, fn) => sw.isOn(key).catch(() => true).then((on) => on && fn());
+    ifOn('stock_desk', () => require('./atlasInvest').onWireBrief(brief)).catch((e) => console.error('newswire->atlas failed', e.message));
     // W.O.K.E. reads it for what's behind it.
-    require('./wokeRead').onWireBrief(brief).catch((e) => console.error('newswire->woke failed', e.message));
+    ifOn('woke_read', () => require('./wokeRead').onWireBrief(brief)).catch((e) => console.error('newswire->woke failed', e.message));
     // H.A.V.E.N. reads it for anything that touches his health.
-    require('./havenHealth').onWireBrief(brief).catch((e) => console.error('haven health failed:', e.message));
+    ifOn('haven_health', () => require('./havenHealth').onWireBrief(brief)).catch((e) => console.error('haven health failed:', e.message));
 
     if (impacts.length) await newsTradeHandoff(impacts).catch((e) => console.error('newswire: hand-off failed', e.message));
     return { ok: true, headlines: headlines.length, impacts: impacts.length };

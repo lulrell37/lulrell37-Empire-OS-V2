@@ -2,6 +2,12 @@ require('dotenv').config();
 require('./serverLog').install(); // keeps recent log lines + failed AI calls for [SERVER_LOGS] / [AI_ERRORS] / GET /diag
 const express = require('express');
 const cron = require('node-cron');
+// Every scheduled loop runs behind his spoken on/off switch (server/switches.js):
+// switched off, the run is skipped until he says to turn it back on.
+const schedule = (key, spec, fn, opts) => cron.schedule(spec, async () => {
+  if (!(await require('./switches').isOn(key).catch(() => true))) return;
+  return fn();
+}, opts);
 const db = require('./db');
 const auth = require('./auth');
 const { runNudgeCycle } = require('./pushSender');
@@ -176,7 +182,7 @@ db.init()
 function startAutoClipCron() {
   if (String(process.env.AUTO_CLIP || '').toLowerCase() === 'off') return console.log('auto clip cron disabled (AUTO_CLIP=off)');
   const autoClip = require('./autoClip');
-  cron.schedule('*/20 * * * *', () => autoClip.tick().catch((e) => console.error('auto clip failed:', e.message)));
+  schedule('auto_clip', '*/20 * * * *', () => autoClip.tick().catch((e) => console.error('auto clip failed:', e.message)));
   console.log('auto clip cron scheduled (every 20m)');
 }
 
@@ -184,7 +190,7 @@ function startAutoClipCron() {
 function startSiteDeskCron() {
   if (String(process.env.SITE_DESK || '').toLowerCase() === 'off') return console.log('site desk cron disabled (SITE_DESK=off)');
   const desk = require('./siteDesk');
-  cron.schedule('10,40 * * * *', () => desk.tick().then((r) => r && !r.skipped && console.log('site desk:', JSON.stringify(r))).catch((e) => console.error('site desk failed:', e.message)));
+  schedule('site_desk', '10,40 * * * *', () => desk.tick().then((r) => r && !r.skipped && console.log('site desk:', JSON.stringify(r))).catch((e) => console.error('site desk failed:', e.message)));
   console.log('site desk cron scheduled (every 30m, 9 AM-6 PM ET)');
 }
 
@@ -192,7 +198,7 @@ function startSiteDeskCron() {
 function startOpenThreadsCron() {
   if (String(process.env.OPEN_THREADS || '').toLowerCase() === 'off') return console.log('open threads cron disabled (OPEN_THREADS=off)');
   const ot = require('./openThreads');
-  cron.schedule('15 */3 * * *', () => ot.tick().catch((e) => console.error('open threads failed:', e.message)));
+  schedule('open_threads', '15 */3 * * *', () => ot.tick().catch((e) => console.error('open threads failed:', e.message)));
   console.log('open threads cron scheduled (every 3h)');
 }
 
@@ -200,7 +206,7 @@ function startOpenThreadsCron() {
 function startOwnerProfileCron() {
   if (String(process.env.OWNER_PROFILE || '').toLowerCase() === 'off') return console.log('owner profile cron disabled (OWNER_PROFILE=off)');
   const op = require('./ownerProfile');
-  cron.schedule('45 */6 * * *', () => op.tick().catch((e) => console.error('owner profile failed:', e.message)));
+  schedule('owner_profile', '45 */6 * * *', () => op.tick().catch((e) => console.error('owner profile failed:', e.message)));
   console.log('owner profile cron scheduled (every 6h)');
 }
 
@@ -208,7 +214,7 @@ function startOwnerProfileCron() {
 function startDayNudgeCron() {
   if (String(process.env.DAY_NUDGE || '').toLowerCase() === 'off') return console.log('day nudge cron disabled (DAY_NUDGE=off)');
   const dn = require('./dayNudge');
-  cron.schedule('0 11,15,19 * * *', () => dn.tick().catch((e) => console.error('day nudge failed:', e.message)), { timezone: 'America/New_York' });
+  schedule('day_nudge', '0 11,15,19 * * *', () => dn.tick().catch((e) => console.error('day nudge failed:', e.message)), { timezone: 'America/New_York' });
   console.log('day nudge cron scheduled (11 AM, 3 PM, 7 PM ET)');
 }
 
@@ -216,15 +222,15 @@ function startDayNudgeCron() {
 function startMoneyWatchCron() {
   if (String(process.env.MONEY_WATCH || '').toLowerCase() === 'off') return console.log('money watch cron disabled (MONEY_WATCH=off)');
   const mw = require('./moneyWatch');
-  cron.schedule('30 */2 * * *', () => mw.tick().catch((e) => console.error('money watch failed:', e.message)));
-  cron.schedule('45 21 * * *', () => mw.dailyReport().catch((e) => console.error('money watch failed:', e.message)), { timezone: 'America/New_York' });
-  cron.schedule('50 21 * * *', () => mw.monthReport().catch((e) => console.error('money watch failed:', e.message)), { timezone: 'America/New_York' });
+  schedule('money_watch', '30 */2 * * *', () => mw.tick().catch((e) => console.error('money watch failed:', e.message)));
+  schedule('money_watch', '45 21 * * *', () => mw.dailyReport().catch((e) => console.error('money watch failed:', e.message)), { timezone: 'America/New_York' });
+  schedule('money_watch', '50 21 * * *', () => mw.monthReport().catch((e) => console.error('money watch failed:', e.message)), { timezone: 'America/New_York' });
   console.log('money watch cron scheduled (every 2h, day report 9:45 PM ET)');
 }
 
 function startNudgeCron() {
   if (process.env.NUDGES === 'off') return console.log('nudge cron disabled (NUDGES=off)');
-  cron.schedule('*/30 * * * *', () => {
+  schedule('nudges', '*/30 * * * *', () => {
     runNudgeCycle()
       .then((r) => { if (r.sent.length) console.log('nudges sent:', r.sent.join(', ')); })
       .catch((e) => console.error('nudge cycle failed:', e.message));
@@ -236,7 +242,7 @@ function startNudgeCron() {
 function startReminderCron() {
   if (process.env.REMINDERS === 'off') return console.log('reminder cron disabled (REMINDERS=off)');
   const reminders = require('./reminders');
-  cron.schedule('* * * * *', () => reminders.tick().catch((e) => console.error('reminder cron failed:', e.message)));
+  schedule('reminders', '* * * * *', () => reminders.tick().catch((e) => console.error('reminder cron failed:', e.message)));
   console.log('reminder cron scheduled (every minute)');
 }
 
@@ -245,7 +251,7 @@ function startReminderCron() {
 function startDailyBriefingCron() {
   if (process.env.DAILY_BRIEFING === 'off') return console.log('daily briefing cron disabled (DAILY_BRIEFING=off)');
   if (!process.env.ANTHROPIC_API_KEY) return console.log('daily briefing cron off (no ANTHROPIC_API_KEY)');
-  cron.schedule('10 5 * * *', () => {
+  schedule('daily_briefing', '10 5 * * *', () => {
     runDailyBriefing()
       .then((r) => console.log('daily briefing:', JSON.stringify(r)))
       .catch((e) => console.error('daily briefing failed:', e.message));
@@ -261,7 +267,7 @@ function startDailyBriefingCron() {
 function startMorningBriefCron() {
   if (process.env.MORNING_BRIEF === 'off') return console.log('morning brief cron disabled (MORNING_BRIEF=off)');
   if (!telegram.botFor('ara') || !telegram.botFor('ara').isConfigured()) return console.log("morning brief cron off (A.R.A.'s Telegram bot not configured)");
-  cron.schedule('0 6 * * *', () => {
+  schedule('morning_brief', '0 6 * * *', () => {
     morningBrief.runMorningBrief()
       .then((r) => console.log('morning brief:', JSON.stringify(r)))
       .catch((e) => console.error('morning brief failed:', e.message));
@@ -275,7 +281,7 @@ function startMorningBriefCron() {
 function startWordReminderCron() {
   if (process.env.WORD_REMINDER === 'off') return console.log('word reminder cron disabled (WORD_REMINDER=off)');
   if (!telegram.botFor('ara') || !telegram.botFor('ara').isConfigured()) return console.log("word reminder cron off (A.R.A.'s Telegram bot not configured)");
-  cron.schedule('0 9,12,15,18,21 * * *', () => {
+  schedule('word_reminder', '0 9,12,15,18,21 * * *', () => {
     morningBrief.runWordReminder()
       .then((r) => console.log('word reminder:', JSON.stringify(r)))
       .catch((e) => console.error('word reminder failed:', e.message));
@@ -292,7 +298,7 @@ function startWordReminderCron() {
 function startCouncilCron() {
   if (process.env.COUNCIL !== 'on') return console.log('council cron disabled (set COUNCIL=on to enable)');
   if (!process.env.ANTHROPIC_API_KEY) return console.log('council cron off (no ANTHROPIC_API_KEY)');
-  cron.schedule('0 5 * * *', () => {
+  schedule('council', '0 5 * * *', () => {
     runCouncilMeeting()
       .then((r) => console.log('council meeting:', JSON.stringify(r)))
       .catch((e) => { console.error('council meeting failed:', e.message); endCouncilLive(e.message).catch(() => {}); });
@@ -308,7 +314,7 @@ function startScoutSignalCron() {
   if (process.env.SCOUT_CRON !== 'on') return console.log('scout signal cron disabled (set SCOUT_CRON=on to enable)');
   if (!process.env.ANTHROPIC_API_KEY) return console.log('scout signal cron off (no ANTHROPIC_API_KEY)');
   const mins = Math.min(55, Math.max(10, parseInt(process.env.SCOUT_INTERVAL_MIN || '30', 10) || 30));
-  cron.schedule(`*/${mins} * * * *`, () => {
+  schedule('scout_signals', `*/${mins} * * * *`, () => {
     runScoutSignalCycle()
       .then((r) => console.log('scout signal cycle:', JSON.stringify(r)))
       .catch((e) => console.error('scout signal cycle failed:', e.message));
@@ -329,7 +335,7 @@ function startScoutSignalCron() {
 function startBuildPollCron() {
   if (process.env.BUILD_POLL === 'off') return console.log('build poll cron disabled (BUILD_POLL=off)');
   if (!require('./buildAgent').configured()) return console.log('build poll cron off (no GITHUB_TOKEN) — J.A.R.V.I.S. saves build specs as notes instead');
-  cron.schedule('*/3 * * * *', () => require('./buildAgent').pollAndNotify().catch((e) => console.error('build poll failed:', e.message)));
+  schedule('build_poll', '*/3 * * * *', () => require('./buildAgent').pollAndNotify().catch((e) => console.error('build poll failed:', e.message)));
   console.log('build poll cron scheduled (every 3m)');
 }
 
@@ -338,12 +344,12 @@ function startTalonAutoTradeCron() {
   if (!talonAutoTrade.cronEnabled()) return console.log('T.A.L.O.N. auto-trade cron off (no Claude subscription, ANTHROPIC_API_KEY or XAI_API_KEY)');
   talonAutoTrade.enableOnce().catch((e) => console.error('talon switch-on failed:', e.message));
   // T.A.L.O.N.'s Nasdaq desk: 1m triggers, every minute 9:30-4 ET weekdays (server/talonNasdaq.js).
-  if (process.env.TALON_NASDAQ !== 'off') cron.schedule('5 * 9-15 * * 1-5', () => require('./talonNasdaq').tick().catch((e) => console.error('talon nasdaq failed:', e.message)), { timezone: 'America/New_York' });
+  if (process.env.TALON_NASDAQ !== 'off') schedule('nasdaq', '5 * 9-15 * * 1-5', () => require('./talonNasdaq').tick().catch((e) => console.error('talon nasdaq failed:', e.message)), { timezone: 'America/New_York' });
   cron.schedule('20 */5 * * * *', () => talonAutoTrade.tick().catch((e) => console.error('talon auto-trade cron failed:', e.message)));
   console.log('T.A.L.O.N. auto-trade cron scheduled (every 5m, scans on each auto_trade_interval_min candle close)');
   // Nightly trading recap from A.R.A. on Telegram. TRADE_RECAP=off to stop.
   if (process.env.TRADE_RECAP !== 'off') {
-    cron.schedule('0 21 * * *', () => {
+    schedule('trade_recap', '0 21 * * *', () => {
       require('./talonAlerts').runDailyRecap()
         .then((r) => console.log('trade recap:', JSON.stringify(r)))
         .catch((e) => console.error('trade recap failed:', e.message));
@@ -353,7 +359,7 @@ function startTalonAutoTradeCron() {
   // positions). TALON_UPDATES=off to stop; TALON_UPDATE_HOURS=9,12,15,18 (ET, on the half hour).
   if (process.env.TALON_UPDATES !== 'off') {
     const hours = (process.env.TALON_UPDATE_HOURS || '9,12,15,18').replace(/[^0-9,]/g, '') || '9,12,15,18';
-    cron.schedule(`30 ${hours} * * *`, () => {
+    schedule('talon_updates', `30 ${hours} * * *`, () => {
       require('./talonUpdate').runMarketUpdate()
         .then((r) => console.log('talon market update:', JSON.stringify(r)))
         .catch((e) => console.error('talon market update failed:', e.message));
@@ -368,11 +374,11 @@ function startTalonAutoTradeCron() {
 function startNewsWireCron() {
   if (process.env.NEWS_WIRE === 'off') return console.log('W.I.R.E. news desk cron disabled (NEWS_WIRE=off)');
   if (!process.env.ANTHROPIC_API_KEY) return console.log('W.I.R.E. news desk cron off (no ANTHROPIC_API_KEY)');
-  cron.schedule('*/10 * * * *', () => newsWire.tick().catch((e) => console.error('news wire cron failed:', e.message)));
+  schedule('news_wire', '*/10 * * * *', () => newsWire.tick().catch((e) => console.error('news wire cron failed:', e.message)));
   // 8:30 AM ET data desk (CPI, jobs, claims…) -> gold trade via T.A.L.O.N.
   // Retries until the numbers are out. ECON_DESK=off to stop.
   if (process.env.ECON_DESK !== 'off') {
-    cron.schedule('32,36,42,50 8 * * 1-5', () => {
+    schedule('econ_desk', '32,36,42,50 8 * * 1-5', () => {
       newsWire.runEconDesk()
         .then((r) => console.log('econ desk:', JSON.stringify(r)))
         .catch((e) => console.error('econ desk failed:', e.message));
@@ -382,7 +388,7 @@ function startNewsWireCron() {
   // Breaking watch: every few minutes, around the clock (server/newsWire.js).
   if (process.env.BREAKING_WATCH !== 'off') {
     const every = newsWire.everyMin();
-    cron.schedule(`*/${every} * * * *`, () => newsWire.breakingWatch()
+    schedule('breaking_watch', `*/${every} * * * *`, () => newsWire.breakingWatch()
       .then((r) => { if (r && r.sent) console.log('breaking watch: sent —', r.headline.slice(0, 100)); })
       .catch((e) => console.error('breaking watch failed:', e.message)));
     console.log(`W.I.R.E. breaking watch scheduled (every ${every}m)`);
@@ -396,7 +402,7 @@ function startNewsWireCron() {
 function startScoutOutreachCron() {
   if (process.env.SCOUT_OUTREACH === 'off') return console.log('S.C.O.U.T. outreach cron disabled (SCOUT_OUTREACH=off)');
   if (!process.env.ANTHROPIC_API_KEY) return console.log('S.C.O.U.T. outreach cron off (no ANTHROPIC_API_KEY)');
-  cron.schedule('*/5 * * * *', () => scoutOutreach.tick().catch((e) => console.error('scout outreach cron failed:', e.message)));
+  schedule('scout_outreach', '*/5 * * * *', () => scoutOutreach.tick().catch((e) => console.error('scout outreach cron failed:', e.message)));
   console.log('S.C.O.U.T. outreach cron scheduled (every 5m, self-paced to auto_scout_interval_min)');
 }
 
@@ -410,9 +416,9 @@ function startAtlasInvestCron() {
   const desk = require('./atlasInvest');
   const ET = { timezone: 'America/New_York' };
   const run = (trigger) => () => desk.runDesk({ trigger }).then((r) => console.log(`stock desk (${trigger}):`, r.text ? 'sent' : JSON.stringify(r))).catch((e) => console.error('stock desk failed:', e.message));
-  cron.schedule('5 9 * * 1-5', run('morning'), ET);
-  cron.schedule('30 11,13,15 * * 1-5', run('midday'), ET);
-  cron.schedule('*/15 9-16 * * 1-5', () => desk.watchPicks().catch((e) => console.error('stock watch failed:', e.message)), ET);
+  schedule('stock_desk', '5 9 * * 1-5', run('morning'), ET);
+  schedule('stock_desk', '30 11,13,15 * * 1-5', run('midday'), ET);
+  schedule('stock_desk', '*/15 9-16 * * 1-5', () => desk.watchPicks().catch((e) => console.error('stock watch failed:', e.message)), ET);
   console.log('A.T.L.A.S. stock desk cron scheduled (09:05, 11:30, 13:30, 15:30 ET weekdays, watch every 15m)');
 }
 
@@ -420,7 +426,7 @@ function startAtlasInvestCron() {
 // every 30 min, 8 AM-10 PM ET, on her own bot. STEPH_QUIZ=off stops it.
 function startStephanieQuizCron() {
   if (process.env.STEPH_QUIZ === 'off') return console.log('Stephanie quiz cron disabled (STEPH_QUIZ=off)');
-  cron.schedule('0,30 8-21 * * *', () => require('./stephanieQuiz').tick()
+  schedule('stephanie_quiz', '0,30 8-21 * * *', () => require('./stephanieQuiz').tick()
     .then((r) => { if (r && r.sent) console.log('stephanie quiz: sent, level', r.level); })
     .catch((e) => console.error('stephanie quiz failed:', e.message)), { timezone: 'America/New_York' });
   console.log('Stephanie quiz cron scheduled (every 30m, 8 AM-10 PM ET)');
@@ -429,7 +435,7 @@ function startStephanieQuizCron() {
 // S.E.L.E.N.E.'s Instagram watch (server/seleneTrends.js). SELENE_TRENDS=off stops it.
 function startSeleneTrendsCron() {
   if (process.env.SELENE_TRENDS === 'off') return console.log('S.E.L.E.N.E. Instagram watch cron disabled (SELENE_TRENDS=off)');
-  cron.schedule('0 7 * * 1,4', () => require('./seleneTrends').runInstagramWatch().then((r) => console.log('instagram watch:', r.text ? 'sent' : JSON.stringify(r))).catch((e) => console.error('instagram watch failed:', e.message)), { timezone: 'America/New_York' });
+  schedule('instagram_watch', '0 7 * * 1,4', () => require('./seleneTrends').runInstagramWatch().then((r) => console.log('instagram watch:', r.text ? 'sent' : JSON.stringify(r))).catch((e) => console.error('instagram watch failed:', e.message)), { timezone: 'America/New_York' });
   console.log('S.E.L.E.N.E. Instagram watch cron scheduled (07:00 ET Mon + Thu)');
 }
 
@@ -437,7 +443,7 @@ function startSeleneTrendsCron() {
 function startWokeXCron() {
   if (process.env.WOKE_X === 'off') return console.log('W.O.K.E. X stories cron disabled (WOKE_X=off)');
   if (!process.env.XAI_API_KEY) return console.log('W.O.K.E. X stories cron off (no XAI_API_KEY)');
-  cron.schedule('0 8,12,16,20 * * *', () => require('./wokeRead').runXStories().then((r) => console.log('woke x stories:', r.text ? 'sent' : JSON.stringify(r))).catch((e) => console.error('woke x stories failed:', e.message)), { timezone: 'America/New_York' });
+  schedule('woke_x', '0 8,12,16,20 * * *', () => require('./wokeRead').runXStories().then((r) => console.log('woke x stories:', r.text ? 'sent' : JSON.stringify(r))).catch((e) => console.error('woke x stories failed:', e.message)), { timezone: 'America/New_York' });
   console.log('W.O.K.E. X stories cron scheduled (08:00, 12:00, 16:00, 20:00 ET)');
 }
 
@@ -445,14 +451,14 @@ function startWokeXCron() {
 // retries: one successful run a Monday, so a failed call doesn't cost him the week.
 function startMondayScriptsCron() {
   if (process.env.MONDAY_SCRIPTS === 'off') return console.log('S.C.R.I.B.E. Monday scripts cron disabled (MONDAY_SCRIPTS=off)');
-  cron.schedule('0 8,10,12,14 * * 1', () => require('./scribeMonday').runMondayScripts().then((r) => console.log('monday scripts:', JSON.stringify(r))).catch((e) => console.error('monday scripts failed:', e.message)), { timezone: 'America/New_York' });
+  schedule('monday_scripts', '0 8,10,12,14 * * 1', () => require('./scribeMonday').runMondayScripts().then((r) => console.log('monday scripts:', JSON.stringify(r))).catch((e) => console.error('monday scripts failed:', e.message)), { timezone: 'America/New_York' });
   console.log('S.C.R.I.B.E. Monday scripts cron scheduled (08:00 ET Mondays, retries to 14:00)');
 }
 
 // The sentinel — anything that breaks or switches off tells him (server/sentinel.js).
 function startSentinelCron() {
   if (process.env.SENTINEL === 'off') return console.log('sentinel disabled (SENTINEL=off)');
-  cron.schedule('*/10 * * * *', () => require('./sentinel').safeTick());
+  schedule('sentinel', '*/10 * * * *', () => require('./sentinel').safeTick());
   setTimeout(() => require('./sentinel').tick().catch((e) => console.error('sentinel tick error:', e.message)), 90000);
   console.log('sentinel scheduled (every 10m)');
 }
@@ -460,7 +466,7 @@ function startSentinelCron() {
 function startAutoAtlasCron() {
   if (process.env.AUTO_ATLAS === 'off') return console.log('A.T.L.A.S. auto-review cron disabled (AUTO_ATLAS=off)');
   if (!process.env.ANTHROPIC_API_KEY) return console.log('A.T.L.A.S. auto-review cron off (no ANTHROPIC_API_KEY)');
-  cron.schedule('*/30 * * * *', () => autoAtlas.tick().catch((e) => console.error('auto-atlas cron failed:', e.message)));
+  schedule('auto_atlas', '*/30 * * * *', () => autoAtlas.tick().catch((e) => console.error('auto-atlas cron failed:', e.message)));
   console.log('A.T.L.A.S. auto-review cron scheduled (every 30m, self-paced to auto_atlas_interval_hours)');
 }
 

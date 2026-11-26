@@ -333,7 +333,10 @@ const roundPx = (m, v) => +Number(v).toFixed(m?.pricePrecision ?? 2);
 // `limitPrice`: a resting limit order at that price (GTC) instead of a market
 // order — quick scalps wait back at the pullback zone rather than buying the
 // confirmation bar's close. Cancel with tlCancelOrder; tlOrderState says when it fills.
-async function tlPlaceOrder({ symbol = 'XAUUSD', side, qty = MAX_QTY, stopLoss, takeProfit, minStop = true, limitPrice = null, maxQty = null }) {
+async function tlPlaceOrder({ symbol = 'XAUUSD', side, qty = MAX_QTY, stopLoss, takeProfit, minStop = true, limitPrice = null, maxQty = null, manual = false }) {
+  // Switched off by him ([TRADING_OFF], server/talonSwitch.js): no automatic order of
+  // any kind until he says start. Only an order he gave by hand goes through.
+  if (!manual && await require('./talonSwitch').isHalted()) throw new Error('T.A.L.O.N. is switched OFF by Mr. Burrus — no automatic trades until he says start');
   await tlFollowAccount();
   await ensureAccount();
   // The last gate before real money, for every path into here. If the setting

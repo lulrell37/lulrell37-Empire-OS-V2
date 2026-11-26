@@ -80,7 +80,7 @@ const isLive = () => tl.tlStatus().env === 'live';
 
 async function enter({ symbol, side, stop, target }) {
   if (isLive() && (await getSetting('talon_live', '0')) !== '1') throw new Error('this is the LIVE account and live trading isn\'t armed');
-  const r = await tl.tlPlaceOrder({ symbol, side, stopLoss: stop, takeProfit: target });
+  const r = await tl.tlPlaceOrder({ symbol, side, stopLoss: stop, takeProfit: target, manual: true });
   const q = await tl.tlQuote(symbol).catch(() => null);
   const entry = num(side === 'buy' ? q?.ask : q?.bid) ?? num(q?.mid);
   await recordTradeOpen({ symbol, side, qty: r.qty, entry, stopLoss: r.stopLoss, takeProfit: r.takeProfit,
