@@ -788,7 +788,7 @@ async function tag(name, arg) {
 // or on his next "go". Code-driven workers (auto-fix, feature requests, A.R.A.
 // finds) don't use the tag and aren't gated.
 const SYSTEM_TURN = /^\[(SENT ON YOUR OWN|The server restarted|REDEPLOY|WAKE|OUT OF BAND|A\.R\.A\. FOUND)/i;
-const GO = /\b(go( ahead| for it)?|do (it|that|this|both|all)|yes|yeah|yep|yup|sure|ok(ay)?|approved?|proceed|start (it|that|on it|the worker)|run (it|with it)|fix (it|that|them|this)|build (it|that)|make it so|ship it|let'?s (do|go|try)|sounds good|send (it|that) to a worker|put (a |the )?(worker|bot)s? on|get (a |the )?(worker|bot)s? on|hand it (off|to a worker))\b/i;
+const GO = /\b(go( ahead| for it)?|do (it|that|this|both|all)|yes|yeah|yep|yup|sure|ok(ay)?|approved?|proceed|start (it|that|on it|the worker)|run (it|with it)|fix (it|that|them|this)|build (it|that)|make it so|ship it|(let'?s|let us|lets)\s+(do|go|try|run|start|fix|build|use|make|just)|(we|you) can (do|try) (that|it|this)|try (that|it|this) (way|again)|sounds good|send (it|that) to a worker|put (a |the )?(worker|bot)s? on|get (a |the )?(worker|bot)s? on|hand it (off|to a worker))\b/i;
 const ORDER = /^(please\s+)?(make|create|set ?up|build|write|draft|design|get|find|research|sign (me )?up|register|open|start|run|fix|update|change|add|put|prepare|handle|finish|redo|retry|try|rebuild|install|connect|look into|check|compare|transcribe|clip|edit|scan|send)\b/i;
 const QUESTION = /^(why|what|how|when|where|who|which|is|are|was|were|did|does|do|has|have|should|would)\b|\?\s*$/i;
 function ownerGo(text) {
@@ -806,6 +806,8 @@ const AGAIN = /\b(?:try|retry|redo|run|do|give)\b[^.?!\n]{0,60}\b(?:again|anothe
 function goWords(t) {
   if (!t) return false;
   if (GO.test(t)) return true;
+  // A retry or agreement anywhere in a short, non-question message ("new code, try groq again").
+  if (t.length <= 200 && !/\?\s*$/.test(t) && !QUESTION.test(t.replace(LEAD_IN, '')) && AGAIN.test(t)) return true;
   let first = t.split(/(?<=[.!?\n])\s+/).map((x) => x.replace(LEAD_IN, '').trim()).find(Boolean) || '';
   first = first.replace(HAND_OVER, '');
   if (/^(can|could|will|would) you\b/i.test(first) && ORDER.test(first.replace(/^(can|could|will|would) you\s+(please\s+)?/i, ''))) return true;
