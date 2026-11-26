@@ -80,13 +80,26 @@ function extractCode(text) {
   return null;
 }
 
+// Gmail search for a site's sign-in email. A site's mail often comes from its auth vendor
+// (Groq -> Stytch), not its own domain, so from:(groq.com) alone misses it: also take the
+// known auth senders and anything mentioning the site's name with sign-in words.
+const AUTH_VENDORS = 'stytch.com OR stytch.dev OR clerk.dev OR clerk.com OR auth0.com OR workos.com OR magic.link OR firebaseapp.com OR supabase.io OR supabase.co';
+const AUTH_WORDS = 'code OR verification OR verify OR "sign in" OR "log in" OR login OR confirm OR magic OR "sign-in"';
+function authQuery(sender) {
+  const s = String(sender || '').replace(/^from:\(|\)$/g, '').trim();
+  if (!s) return `(${AUTH_WORDS})`;
+  const name = (s.split(/\s+OR\s+/)[0] || '').replace(/^.*@/, '').split('.')[0].replace(/[^\w-]/g, '');
+  const byName = name.length >= 3 ? ` OR (${name} (${AUTH_WORDS}))` : '';
+  return `(from:(${s}) OR (from:(${AUTH_VENDORS}) (${AUTH_WORDS}))${byName})`;
+}
+
 // Newest email only: poll Gmail until one from the site, sent after `since`, holds a code or link.
 // deps.list(q) -> [ids newest first]; deps.read(id) -> { id, from, subject, text, urls, internalDate }.
 async function waitForEmailAuth({ sender, since = Date.now(), timeoutMs = WAIT_MS, pollMs = POLL_MS, deps, signal = null, sleep = (ms) => new Promise((r) => { const t = setTimeout(done, ms); function done() { clearTimeout(t); if (signal) signal.removeEventListener('abort', done); r(); } if (signal) signal.addEventListener('abort', done, { once: true }); }), now = Date.now } = {}) {
   const g = deps || defaultDeps();
   const start = now();
   const after = Math.max(0, Math.floor(since / 1000) - 5);
-  const q = `${sender ? `from:(${sender}) ` : '(code OR verification OR verify OR "sign in" OR "log in" OR login OR confirm OR magic) '}after:${after}`;
+  const q = `${authQuery(sender)} after:${after}`;
   const tried = new Set();
   for (;;) {
     if (signal && signal.aborted) return { ok: false, text: 'stopped on request', stopped: true };
@@ -117,4 +130,4 @@ function defaultDeps() {
 // A value that is still a template placeholder is never a real answer.
 const isPlaceholder = (v) => /^\s*\{\{\s*\w+\s*\}\}\s*$/.test(String(v || ''));
 
-module.exports = { htmlToText, extractLinks, pickAuthLink, extractCode, decodeB64Url, waitForEmailAuth, isPlaceholder, NOT_ARRIVED, POLL_MS, WAIT_MS };
+module.exports = { authQuery, htmlToText, extractLinks, pickAuthLink, extractCode, decodeB64Url, waitForEmailAuth, isPlaceholder, NOT_ARRIVED, POLL_MS, WAIT_MS };

@@ -16,7 +16,24 @@ const links = L.extractLinks(body);
 assert.match(L.pickAuthLink(links), /stytch\.com\/v1\/magic_links\/redirect\?public_token=pk&token=tk/);
 assert.strictEqual(L.pickAuthLink(L.extractLinks('[Help](https://help.groq.com/a) [Unsubscribe](https://groq.com/unsubscribe)')), null);
 
+// A 'done' that only says a link was emailed still goes to the emailed-link path.
+assert.ok(B.needsEmailed({ status: 'done', text: 'a sign-in link was emailed to lulrell37@gmail.com' }, logins));
+assert.ok(B.needsEmailed({ status: 'done', success: false, text: 'check your email for the link' }, logins));
+assert.ok(B.needsEmailed({ status: 'ask', text: 'Groq emailed a sign-in link' }, logins));
+assert.ok(!B.needsEmailed({ status: 'done', success: true, text: 'Account made; the sign-in link was emailed and used' }, logins));
+assert.ok(!B.needsEmailed({ status: 'done', text: 'found the pricing page' }, logins));
+assert.match(B.AGENT_SYSTEM('X'), /NEVER open Gmail, mail\.google\.com or any webmail/);
+// The Gmail query reaches a Groq / Stytch sign-in email, not only from:(groq.com).
+const q = L.authQuery('groq.com');
+assert.match(q, /from:\(groq\.com\)/); assert.match(q, /stytch\.com/); assert.match(q, /groq \(/);
+assert.match(L.authQuery(''), /sign in/);
+
 (async () => {
+  // Stytch-sent email (noreply@stytch.com, "Sign in to Groq") is found via the widened query.
+  const seen = [];
+  const sty = { list: async (qq) => { seen.push(qq); return ['s1']; }, read: async () => ({ id: 's1', from: 'Groq <noreply@stytch.com>', subject: 'Sign in to Groq', text: body, internalDate: Date.now() + 1000 }) };
+  const g = await L.waitForEmailAuth({ sender: 'groq.com', since: Date.now() - 1000, deps: sty, pollMs: 10, sleep: async () => {} });
+  assert.ok(g.ok && /stytch\.com\/v1\/magic_links/.test(g.url)); assert.match(seen[0], /stytch\.com/);
   const submit = Date.now();
   const mk = (internalDate) => ({ list: async () => ['m1'], read: async () => ({ id: 'm1', from: 'noreply@groq.com', subject: 'Your login request to Groq', text: body, internalDate }) });
   const fast = { sleep: async () => {}, pollMs: 10 };
