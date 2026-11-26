@@ -298,6 +298,15 @@ async function runBrowse(w, signal) {
     const used = /typed into[^\n]*\(a saved secret\)/.test(String(r.text || ''));
     if (used) await d().saveNote(`Login — ${w.title}`.slice(0, 90), `# Login — ${w.title}\n_Made by J.A.R.V.I.S.'s worker #${w.id}, ${new Date().toLocaleString('en-US', { timeZone: 'America/New_York' })} ET._\n\nSite: ${(/last page (\S+?)\)?:/.exec(String(r.text || '')) || [])[1] || '?'}\nPassword: ${made}\n`).catch((e) => console.error(`workers failed: #${w.id} saving the new password: ${e.message}`));
   }
+  // A Groq API key in the result is saved straight to the server and masked in the report.
+  let keyNote = '';
+  const L = require('./llm');
+  if (L.GROQ_KEY_RE && L.GROQ_KEY_RE.test(`${r.text || ''}`)) {
+    const k = await L.saveGroqKey(r.text).catch((e) => ({ ok: false, text: `GROQ_KEY failed: ${e.message}` }));
+    if (!k.ok) console.error(`workers failed: #${w.id} saving the Groq key: ${k.text}`);
+    keyNote = `\n(${k.text})`;
+    r = { ...r, text: String(r.text).replace(new RegExp(L.GROQ_KEY_RE.source, 'g'), (x) => `${x.slice(0, 8)}…`), result: String(r.result || '').replace(new RegExp(L.GROQ_KEY_RE.source, 'g'), (x) => `${x.slice(0, 8)}…`) };
+  }
   if (signal && signal.aborted) return { status: 'stopped', result: `stopped on request. ${String(r.text || '').slice(0, 2000)}`.trim() };
   // Explicit verdict first (the brain's done {success, reason}), then the wording of
   // the result: a "done" that says it was blocked is never done (worker 57, 2026-11-24).
@@ -307,7 +316,7 @@ async function runBrowse(w, signal) {
     saved = await d().saveNote(w.note, `# ${w.note}\n_Collected by J.A.R.V.I.S.'s worker #${w.id}, ${new Date().toLocaleString('en-US', { timeZone: 'America/New_York' })} ET._\n\n${r.result}`)
       .then(() => `\n(Saved to his Drive as "${w.note}".)`).catch((e) => `\n(Couldn't save the Drive note "${w.note}": ${e.message})`);
   }
-  return { status, result: `${r.text}${saved}` };
+  return { status, result: `${r.text}${saved}${keyNote}` };
 }
 
 const sleepFor = (ms, signal) => new Promise((r) => {

@@ -47,7 +47,44 @@ const PROVIDERS = {
   },
 };
 
+// The app's microphone (transcribeAudio in src/services/aiService.js) posts OpenAI's
+// whisper-1 here. Groq hosts the same Whisper for free, so that one request goes to
+// Groq first (model swapped to whisper-large-v3-turbo inside the multipart body) and
+// only falls through to OpenAI when Groq has no key, refuses or times out — no APK
+// needed (owner, 2026-11-26: "replace whisper with groq so I can talk again").
+const GROQ_STT = 'https://api.groq.com/openai/v1/audio/transcriptions';
+function swapModel(buf) {
+  const s = buf.toString('latin1');
+  const out = s.replace(/(name="model"\r\n(?:[^\r\n]*\r\n)*\r\n)whisper-1(\r\n)/, '$1whisper-large-v3-turbo$2');
+  return out === s ? null : Buffer.from(out, 'latin1');
+}
+async function groqFirst(req, res) {
+  const key = process.env.GROQ_API_KEY || String(await require('../syncStore').getSetting('groq_api_key', '').catch(() => '') || '').trim();
+  const body = await readBody(req);
+  if (key && body.length <= 25 * 1024 * 1024) {
+    const swapped = swapModel(body);
+    if (swapped) {
+      try {
+        const g = await fetch(GROQ_STT, { method: 'POST', headers: { authorization: `Bearer ${key}`, 'content-type': req.get('content-type') }, body: swapped, signal: AbortSignal.timeout(60000) });
+        const text = await g.text();
+        if (g.ok) {
+          serverLog.recordAi({ provider: 'groq', method: 'POST', path: 'v1/audio/transcriptions', ok: true, status: 200, bytes: body.length, ms: 0 });
+          try { require('../transcribeUsage').record({ provider: 'groq', fallback: false, why: '', job: 'app voice', bytes: body.length, sec: 0 }); } catch {}
+          return res.status(200).set('content-type', 'application/json').send(text);
+        }
+        console.warn(`ai proxy: groq ${g.status} on app voice, falling back to OpenAI: ${text.replace(/\s+/g, ' ').slice(0, 200)}`);
+      } catch (e) { console.warn(`ai proxy: groq failed on app voice, falling back to OpenAI: ${e.message}`); }
+    }
+  }
+  return body; // the caller sends it on to OpenAI
+}
+
 r.all('/:provider/*', async (req, res) => {
+  let sttBody = null;
+  if (req.params.provider === 'openai' && req.method === 'POST' && req.params[0] === 'v1/audio/transcriptions') {
+    sttBody = await groqFirst(req, res);
+    if (res.headersSent) return;
+  }
   const p = PROVIDERS[req.params.provider];
   if (!p) return res.status(404).json({ error: 'unknown provider: ' + req.params.provider });
   const key = process.env[p.envKey];
@@ -79,7 +116,7 @@ r.all('/:provider/*', async (req, res) => {
   // stream on it and then, for Claude, read it again with readBody — any body
   // over ~64 KB (every real app turn) never finished, so Claude calls hung until
   // the edge answered 408 / "Internal server error".
-  let body = hasBody && !holdBody ? Readable.toWeb(req) : undefined;
+  let body = sttBody || (hasBody && !holdBody ? Readable.toWeb(req) : undefined);
   const t0 = Date.now();
   let stopKeepAlive = () => {};
   const rec = { provider: req.params.provider, method: req.method, path: upstreamPath, ua: req.get('user-agent') || '', bytes: Number(req.get('content-length')) || null };
@@ -299,4 +336,5 @@ async function trySubscription(raw, req, res) {
   }
 }
 
+r._swapModel = swapModel;
 module.exports = r;

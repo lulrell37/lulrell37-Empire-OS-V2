@@ -715,6 +715,10 @@ async function runInjections(text, persona = 'ara', { convo = '', depth = 0, sin
         }
         catch (e) { console.error(`workers failed: ${name}: ${e.message}`); return `${name} failed: ${e.message}`; }
       }
+      if (name === 'GROQ_KEY' && arg && ['jarvis', 'ara'].includes(persona)) {
+        try { return (await require('./llm').saveGroqKey(arg)).text; }
+        catch (e) { console.error(`groq key failed: ${e.message}`); return `GROQ_KEY failed: ${e.message}`; }
+      }
       if (name === 'BROWSER_KEY' && arg && persona === 'jarvis') {
         try { return await require('./browserAgent').browserKeyTag(arg); }
         catch (e) { return `BROWSER_KEY failed: ${e.message}`; }

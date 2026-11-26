@@ -853,6 +853,7 @@ async function browseRun(persona, name, arg, { ownerText = '', onStep = null, on
 }
 
 const BROWSE_TOOLS = ` - [BROWSE: the task, in full] — your own computer: a real Chrome in the cloud that you drive like a person (open sites, search, read, click, fill in forms), with your own saved logins. For anything with no direct tool: looking someone up on LinkedIn, checking a supplier's prices, reading a site, filling a form. The result comes back to you this turn and he gets a screenshot. Sign-ups go through on their own (make the password yourself and save it with [SAVE_NOTE]), and a code a site emails is fetched from his Gmail automatically. It stops and asks only before anything else that acts in the world (sending, posting, connecting, buying, booking, deleting): put that question to him, and when he answers run [BROWSE] again with the same task — his reply is what approves it. A minute or several. One per turn. Report only what it found.
+ - [GROQ_KEY: gsk_…] — save a Groq API key on the server (checked with Groq first): all transcription then runs on Groq's free Whisper. A browse worker that ends with a gsk_ key saves it by itself.
  - [BROWSER_KEY: Steel API key or wss:// URL] — switch your browser to a hosted one (Steel) that gets past Cloudflare checks; saved on the server, no Replit secret needed.`;
 
 module.exports = {

@@ -258,6 +258,18 @@ const GROQ_MAX_BYTES = 25 * 1024 * 1024;
 const GROQ_TIMEOUT_MS = 120000;
 let groqPausedUntil = 0;  // after a 429 Groq is skipped until its Retry-After (rate limits are per minute / hour / day)
 
+// A Groq key handed over by a worker or J.A.R.V.I.S. ([GROQ_KEY: gsk_…]): checked against
+// Groq's /models, saved to app_settings.groq_api_key, never echoed back in full.
+const GROQ_KEY_RE = /\bgsk_[A-Za-z0-9]{20,}\b/;
+async function saveGroqKey(text) {
+  const m = GROQ_KEY_RE.exec(String(text || ''));
+  if (!m) return { ok: false, text: 'GROQ_KEY: no Groq key (gsk_…) in that' };
+  const r = await fetch('https://api.groq.com/openai/v1/models', { headers: { authorization: `Bearer ${m[0]}` }, signal: AbortSignal.timeout(15000) }).catch((e) => ({ ok: false, status: e.message }));
+  if (!r.ok) return { ok: false, text: `GROQ_KEY: Groq refused that key (${r.status}) — not saved` };
+  await require('./syncStore').setSetting('groq_api_key', m[0]);
+  groqPausedUntil = 0;
+  return { ok: true, key: m[0], text: `GROQ_KEY: ✓ saved (${m[0].slice(0, 8)}…) — transcription (Telegram voice notes, the app's mic, clips) now goes to Groq first, OpenAI only as the backup` };
+}
 async function groqKey() {
   if (process.env.GROQ_API_KEY) return process.env.GROQ_API_KEY;
   try { return String(await require('./syncStore').getSetting('groq_api_key', '') || '').trim(); } catch { return ''; }
@@ -356,4 +368,4 @@ async function transcribeWords(buffer, filename = 'clip.mp3', { prompt = '', job
     .filter((w) => w.word && Number.isFinite(w.start) && !bad.some((s) => w.start >= s.start - 0.05 && w.end <= s.end + 0.05));
 }
 
-module.exports = { stt, GROQ_URL, GROQ_MODEL, GROQ_MAX_BYTES, _resetGroqPause: () => { groqPausedUntil = 0; }, transcribeWords, CLAUDE_MODEL, keyFor, WEB_SEARCH_TOOL, claudeText, creditStatus, subscriptionStatus, openaiCompatText, geminiText, chatAs, webResearch, xSearch, transcribe, transcribeSegments, fixNames };
+module.exports = { saveGroqKey, GROQ_KEY_RE, stt, GROQ_URL, GROQ_MODEL, GROQ_MAX_BYTES, _resetGroqPause: () => { groqPausedUntil = 0; }, transcribeWords, CLAUDE_MODEL, keyFor, WEB_SEARCH_TOOL, claudeText, creditStatus, subscriptionStatus, openaiCompatText, geminiText, chatAs, webResearch, xSearch, transcribe, transcribeSegments, fixNames };
