@@ -122,7 +122,7 @@ llm.chatAs = async () => '';
   llm.xSearch = async () => { xCalls++; return '{"breaking": false}'; };
   llm.keyFor = (p) => (p === 'xai' ? 'xai-test' : realKey(p));
   const nw = require('../newsWire');
-  assert.strictEqual(nw.everyMin(), 15);
+  assert.strictEqual(nw.everyMin(), 30);
   await nw.breakingWatch({ onDemand: true }).catch(() => {});
   assert.strictEqual(xCalls, 1, 'on demand uses Grok');
   llm.xSearch = realX; llm.keyFor = realKey;

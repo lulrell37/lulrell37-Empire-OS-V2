@@ -497,7 +497,7 @@ function araTools() {
     + '\n' + require('./autoClip').AUTO_CLIP_TOOLS + '\n' + require('./rawEdit').RAW_EDIT_TOOLS + '\n' + NEWS_NOW_TOOL;
 }
 const NEWS_NOW_TOOL = ` - [NEWS_NOW] — have W.I.R.E. pull a fresh news brief right now (a few minutes; it goes to him in full on its own, so you add one line at most).
- - [BREAKING_NOW] — when he asks about breaking news ("anything breaking?", "what's happening right now", "is something going on in DC?"): W.I.R.E. checks X and the web live (Grok) for anything in the last hour. Use it only when he asks; the automatic watch runs on its own every 15 min.`;
+ - [BREAKING_NOW] — when he asks about breaking news ("anything breaking?", "what's happening right now", "is something going on in DC?"): W.I.R.E. checks X and the web live (Grok) for anything in the last hour. Use it only when he asks; the automatic watch runs on its own every 30 min.`;
 
 function systemPrompt(ctx, gs, custom, mem) {
   return [
