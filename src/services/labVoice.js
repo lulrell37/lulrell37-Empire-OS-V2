@@ -8,7 +8,7 @@
 // a voice id, A.R.A.'s Grok voice for her, native TTS as the last resort — all
 // at the voice-speed setting.
 import{Audio}from 'expo-av';
-import{speakNames}from './voiceCues';
+import{speakNames,noWhisper}from './voiceCues';
 import*as Speech from 'expo-speech';
 import*as FileSystem from 'expo-file-system';
 import{transcribeAudio,textToSpeech}from './aiService';
@@ -113,6 +113,7 @@ function playUri(uri,signal){
 
 // A.R.A.'s Grok voice: deliver this exact text in her voice -> WAV file uri.
 async function grokVoiceUri(text,signal){
+  text=noWhisper(text); // A.R.A. never whispers (owner, 2026-11-26)
   const keys=await loadKeys();
   if(!keys?.grok)return null;
   return new Promise((resolve)=>{

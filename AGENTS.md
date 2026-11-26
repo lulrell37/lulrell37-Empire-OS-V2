@@ -134,6 +134,8 @@ and Telegram (`synthesizeAraVoice` in `server/araVoice.js`) back on it. Keep
 `ARA_VOICE` / `ARA_SCRIPT` in sync between `src/services/voiceCues.js` and
 `server/araVoice.js`.
 
+**A.R.A. never whispers** (owner, 2026-11-26: "the voice cues she has still has whisper, remove it"): `[whispers]` is gone from `ARA_SCRIPT` (both copies) and the morning brief's script, which now say never whisper; `noWhisper` (`server/araVoice.js`, mirrored in `src/services/voiceCues.js`) strips any whispering cue from her text right before her voice is made (`voiceNote`, her Grok voice, the app's `textToSpeech` and `grokVoiceUri`). Other personas keep the cue.
+
 **Owner's voice switch:** `[ARA_VOICE_ENGINE: elevenlabs|grok]` writes the same synced `app_settings.ara_voice` as Settings › AI › A.R.A.'s Voice. `voiceToggleAllowed` (`server/personas.js`, `src/personas/personas.js`, keep in sync) lets it through only for J.A.R.V.I.S., on a message Mr. Burrus sent him directly that mentions her voice: only the owner's own turn passes `ownerText`, so relays, the council and the loops can't.
 
 ## Backend (`server/`)

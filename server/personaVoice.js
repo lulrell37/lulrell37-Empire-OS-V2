@@ -14,7 +14,7 @@
 // uses the bundled ffmpeg-static binary (same as araVoice.js).
 const { spawn } = require('child_process');
 const ffmpegPath = require('ffmpeg-static');
-const { ARA_VOICE, ARA_SCRIPT, synthesizeAraVoice, araLongHint, ARA_LONG_CHARS } = require('./araVoice');
+const { ARA_VOICE, ARA_SCRIPT, synthesizeAraVoice, araLongHint, ARA_LONG_CHARS, noWhisper } = require('./araVoice');
 const { personaVoiceId } = require('./personas');
 
 const { isFlat, stripCues, speakNames } = require('./voiceCues');
@@ -267,10 +267,11 @@ async function voiceNote(personaId, replyText, { userText = '', scripted = false
   if (personaId === 'ara') {
     // The old voice, exactly as it was — one try, no backup voice.
     if ((await require('./syncStore').getSetting('ara_voice', 'elevenlabs').catch(() => 'elevenlabs')) === 'grok') {
-      const ogg = await synthesizeAraVoice(text, { userText });
+      const ogg = await synthesizeAraVoice(noWhisper(text), { userText });
       return ogg ? { ogg } : { ogg: null, error: 'grok voice failed' };
     }
     if (!scripted) text = speakNames(await araScript(text, userText, { relay })).replace(/\[(?:breathy|breathily)\]\s*/gi, ''); // not in her voice, though the shared EMOTION block offers it
+    text = noWhisper(text); // she never whispers (owner, 2026-11-26)
   }
   let error;
   try {

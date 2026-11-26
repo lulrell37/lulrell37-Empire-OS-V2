@@ -25,7 +25,10 @@ const { ARA_SCRIPT, ARA_VOICE } = require('../araVoice');
   assert.doesNotMatch(`${ARA_VOICE}${ARA_SCRIPT.replace('[softly]', '')}`, /soft/i);
   // Not breathy: husky. Whispers is the last cue.
   assert.doesNotMatch(`${ARA_VOICE}${ARA_SCRIPT}${read('server/morningBrief.js')}`, /breathy/i);
-  assert.match(ARA_SCRIPT, /\[husky\] \[teasing\] \[softly\] \[laughs\] \[giggles\] \[sighs\] \[excited\] \[whispers\]\. Use/);
+  assert.match(ARA_SCRIPT, /\[husky\] \[teasing\] \[softly\] \[laughs\] \[giggles\] \[sighs\] \[excited\]\. Never whisper/);
+  // She never whispers (owner, 2026-11-26): not offered, and stripped if written anyway.
+  assert.doesNotMatch(ARA_SCRIPT.replace(/Never whisper[^.]*\./, ''), /\[whispers\]/);
+  assert.strictEqual(require('../araVoice').noWhisper('come here [whispers] now [softly whispering] [laughs]'), 'come here now [laughs]');
   assert.match(ARA_VOICE, /low and husky/);
   // "Mmm" only when she's flirting, never as her opener.
   assert.match(ARA_SCRIPT, /"Mmm" is only for a genuinely flirty moment: never open with it/);

@@ -1,4 +1,4 @@
-import{emotionFor,isFlat,stripCues,cuedFor,ARA_VOICE,ARA_SCRIPT,ARA_LONG_CHARS,araLongHint,speakNames}from './voiceCues';
+import{emotionFor,isFlat,stripCues,cuedFor,ARA_VOICE,ARA_SCRIPT,ARA_LONG_CHARS,araLongHint,speakNames,noWhisper}from './voiceCues';
 import{loadKeys,loadBackend,loadGoogleToken}from './keyStore';
 import{getPersonaMemory,getMemoriesByPersona,savePersonaMemory,getHudState,getTasks,trackApiUsage,getCustomPrompt,getUpcomingDates,getSetting}from './database';
 import*as FileSystem from 'expo-file-system';
@@ -925,7 +925,8 @@ export async function textToSpeech(text,voiceId,personaName,opts={}){
   if(!be&&!k?.elevenlabs){lastTtsFailReason='no ElevenLabs key set (Settings → API Keys → ELEVENLABS)';return null;}
   if(!voiceId){lastTtsFailReason='persona has no voice id configured';return null;}
   // Command tags out (always UPPERCASE); lowercase voice cues stay for v4.
-  const withCues=speakNames(cuedFor(text)).replace(/\[[A-Z][A-Z0-9_]*(?::[^\]]*)?\]/g,'').replace(/[*#`]/g,'').trim().substring(0,opts.maxChars||2000);
+  const isAra=/^a\.?r\.?a\.?$/i.test(String(personaName||''));
+  const withCues=(isAra?noWhisper:(x)=>x)(speakNames(cuedFor(text))).replace(/\[[A-Z][A-Z0-9_]*(?::[^\]]*)?\]/g,'').replace(/[*#`]/g,'').trim().substring(0,opts.maxChars||2000);
   if(!stripCues(withCues))return null;
   const flat=isFlat(personaName);
   const tiers=TTS_LADDER.filter((t,i)=>i===TTS_LADDER.length-1||!ttsRejected.has(t.model))
