@@ -289,9 +289,13 @@ async function runBrowse(w, signal) {
   // A password a new account needs is made here and saved to his Drive after.
   let made = '';
   if (r.status === 'ask' && !onlyHim(r.result || r.text) && !(signal && signal.aborted)) {
+    // The phone line: J.A.R.V.I.S. answers his worker first (he can pull in A.R.A. or others).
+    update(w, { progress: 'Asking J.A.R.V.I.S.' });
+    const said = await (d().askJarvis || require('./workerTools').askJarvis)(w.id, String(r.result || r.text).slice(0, 800)).catch(() => '');
+    const jarvis = said && !/NEEDS_HIM:/.test(said) ? `\n${said.slice(0, 2000)}\n` : '';
     update(w, { progress: 'Working it out without him' });
     made = require('crypto').randomBytes(12).toString('base64').replace(/[+/=]/g, '').slice(0, 14) + '!7a';
-    r = await d().browse(`worker-${w.id}`, `J.A.R.V.I.S.'s worker`, `${w.task}\n\n[YOU STOPPED TO ASK: "${String(r.result || r.text).slice(0, 400)}". Mr. Burrus is not asked for this — nobody on the team had it, so decide it yourself and carry on from where the browser is: a new password → type {{NEWPASS}} (it is made and saved for him); a choice between options → take the sensible default for his business; a sign-in method → "Continue with Google" or email; anything else → find another way on the page. Stop with "ask" again ONLY for something truly only he has: a code texted to his phone, an approval on his phone, his ID or payment card, or his OK before sending, posting, buying or deleting.]`,
+    r = await d().browse(`worker-${w.id}`, `J.A.R.V.I.S.'s worker`, `${w.task}\n${jarvis}\n[YOU STOPPED TO ASK: "${String(r.result || r.text).slice(0, 400)}". Mr. Burrus is not asked for this — ${jarvis ? 'J.A.R.V.I.S. answered above; use it' : 'nobody on the team had it, so decide it yourself'} and carry on from where the browser is: a new password → type {{NEWPASS}} (it is made and saved for him); a choice between options → take the sensible default for his business; a sign-in method → "Continue with Google" or email; anything else → find another way on the page. Stop with "ask" again ONLY for something truly only he has: a code texted to his phone, an approval on his phone, his ID or payment card, or his OK before sending, posting, buying or deleting.]`,
       { ownerText: '', onStep, onPlan, signal, noMail: true, secrets: { NEWPASS: made } });
   }
   if (made) {
@@ -496,6 +500,24 @@ async function voiceThenText(w, text) {
     } finally { clearTimeout(timer); }
   }
   return d().tell(text);
+}
+
+async function get(id) { await load(); return list[String(id).replace(/^#/, '')] || null; }
+
+// [WORKER_MESSAGE: slot | text] — the phone line to a running code worker: it lands in
+// its inbox (workerTools.sendToWorker), which the worker reads between steps.
+async function message(arg) {
+  await load();
+  const i = String(arg || '').indexOf('|');
+  if (i < 0) return 'give the worker and the message: [WORKER_MESSAGE: 2 | use the Google sign-in instead]';
+  const ref = arg.slice(0, i).replace(/^#|worker/gi, '').trim();
+  const text = arg.slice(i + 1).trim();
+  const w = running().find((x) => String(x.slot) === ref) || list[ref];
+  if (!w) return `no worker ${ref} running`;
+  if (w.status !== 'running' && w.status !== 'queued') return `worker ${w.slot || ref} isn't running (${w.status}) — start a new one instead`;
+  if (w.kind !== 'code') return `worker ${w.slot} is a browse worker; those can't take messages mid-run — stop it and start it again with the change`;
+  await require('./workerTools').sendToWorker(w.id, text);
+  return `✓ sent to worker ${w.slot || '?'} ("${w.title}"); it reads its messages between steps and follows them.`;
 }
 
 async function stop(id) {
@@ -734,6 +756,7 @@ async function ship(ref) {
 async function tag(name, arg) {
   if (name === 'WORKER_STATUS') return `WORKERS:\n${await statusText()}`;
   if (name === 'WORKER_STOP') return `WORKER_STOP: ${await stop(String(arg || '').trim())}`;
+  if (name === 'WORKER_MESSAGE') return `WORKER_MESSAGE: ${await message(arg)}`;
   if (name === 'WORKER_SHIP') return `WORKER_SHIP: ${await ship(arg)}`;
   const p = String(arg || '').split('|').map((x) => x.trim());
   let [kind, title, task, note] = p;
@@ -785,10 +808,10 @@ async function startGate(arg, { asked = '', depth = 0 } = {}) {
     text: `WORKER_START: NOT STARTED — his message wasn't a go-ahead, so no worker is running. Tell him in plain words what you think the problem is (with the evidence) and how you'd go about it, then ask if he wants a worker on it. It starts when he taps Start on the card or says go.` };
 }
 
-const WORKER_TOOLS = ` - [WORKER_START: code|browse | short title | the full task, self-contained | Drive note title (browse only, optional)] — hand a task to a worker of your own so you stay free to talk to him. code = its own Claude Code on its own GitHub runner (not the server), on a worker/ branch cut from main: it commits, the job pushes that branch only, never main; good for any general job (code, research, checks, writing), big ones included: a code worker has Chrome, ffmpeg, ImageMagick and Python, keeps large media in GitHub releases, and a job too big for one run (about 3 h) carries on in up to 3 runs on the same branch by itself. Put any Google Drive file it needs in the task as its link (drive.google.com/file/d/…, docs.google.com/…) or "drive: <id>": the worker downloads it through the server, however big. browse = a browser task on the server, its result saved to that Drive note; one browse at a time. Every browser shares the same saved logins, so a site you or A.R.A. are signed in to works for a worker too. A file in his Google Drive is read with your Drive tags ([READ_NOTE], [SEARCH_DRIVE], [READ_FILE_ID]), not a browse worker. HARD CAP: 3 workers running at once, total; the rest wait in line. Call them by their slot, "worker 1, 2 or 3", never by a running count; [WORKER_STOP: 2] stops the one in slot 2. A browse worker stuck on information (a sign-in, an account email, a code) gets it from A.R.A., who searches his email and notes, and carries on; only what nobody can supply comes to him, from you. Each one's progress shows live on his notification strip, and its report goes straight to him on your bot when it ends (you'll see it in this chat), so you don't need to relay it; if he asks, read [WORKER_STATUS]. A code worker's work ships when he says push / ship / merge: [WORKER_SHIP: id] (or all, or any branch name) — the server merges it into main and redeploys if server code changed; never merge by hand. Use them for EVERY task, whatever its length (his standing order, 2026-11-22), so you are always free to talk to him — but only once you and he agree on the problem and the plan: when he reports a problem or asks why, first tell him what you think is wrong (with evidence) and how you'd fix it, and ask; [WORKER_START] on anything but his clear go becomes a Start card and starts nothing. Only straight answers and seconds-long lookups stay with you.
+const WORKER_TOOLS = ` - [WORKER_START: code|browse | short title | the full task, self-contained | Drive note title (browse only, optional)] — hand a task to a worker of your own so you stay free to talk to him. code = its own Claude Code on its own GitHub runner (not the server), on a worker/ branch cut from main: it commits, the job pushes that branch only, never main; good for any general job (code, research, checks, writing), big ones included: a code worker has Chrome, ffmpeg, ImageMagick and Python, keeps large media in GitHub releases, and a job too big for one run (about 3 h) carries on in up to 3 runs on the same branch by itself. Put any Google Drive file it needs in the task as its link (drive.google.com/file/d/…, docs.google.com/…) or "drive: <id>": the worker downloads it through the server, however big. browse = a browser task on the server, its result saved to that Drive note; one browse at a time. Every browser shares the same saved logins, so a site you or A.R.A. are signed in to works for a worker too. A file in his Google Drive is read with your Drive tags ([READ_NOTE], [SEARCH_DRIVE], [READ_FILE_ID]), not a browse worker. HARD CAP: 3 workers running at once, total; the rest wait in line. Call them by their slot, "worker 1, 2 or 3", never by a running count; [WORKER_STOP: 2] stops the one in slot 2. [WORKER_MESSAGE: 2 | the message] talks to the code worker in slot 2 while it runs (a correction, an answer, a change of plan); it reads it between steps. Your workers also call you mid-job with questions: they reach you here as "ONE OF YOUR OWN WORKERS IS ASKING" — answer so they keep going. A browse worker stuck on information (a sign-in, an account email, a code) gets it from A.R.A., who searches his email and notes, and carries on; only what nobody can supply comes to him, from you. Each one's progress shows live on his notification strip, and its report goes straight to him on your bot when it ends (you'll see it in this chat), so you don't need to relay it; if he asks, read [WORKER_STATUS]. A code worker's work ships when he says push / ship / merge: [WORKER_SHIP: id] (or all, or any branch name) — the server merges it into main and redeploys if server code changed; never merge by hand. Use them for EVERY task, whatever its length (his standing order, 2026-11-22), so you are always free to talk to him — but only once you and he agree on the problem and the plan: when he reports a problem or asks why, first tell him what you think is wrong (with evidence) and how you'd fix it, and ask; [WORKER_START] on anything but his clear go becomes a Start card and starts nothing. Only straight answers and seconds-long lookups stay with you.
  - [WORKER_STATUS] — every worker: running, waiting, done, with its current step and GitHub link. [WORKER_STOP: id] — stop one (a GitHub run is cancelled).`;
 
 // Persona jobs (jobProgress.js) share this one board: load the workers, then update it.
 async function kick() { await load(); boardKick(); }
 
-module.exports = { onlyHim, ownerGo, startGate, spokenReport, VOICE_MAX, kick, start, stop, ship, driveIdsIn, fileGrant, MAX_LEGS, recover, statusText, forApp, tag, WORKER_TOOLS, enabled, _setDeps: (x) => { deps = x; list = null; board = undefined; boardLast = 0; }, _list: () => list, _boardText: () => boardText(), logFailure, browseStatus, codeStatus, FAIL_KEY, _tgBoardDeps: tgBoardDeps, parsePlan, percentOf, progressLabel, readPlanComment, PLAN_FILE };
+module.exports = { get, message, onlyHim, ownerGo, startGate, spokenReport, VOICE_MAX, kick, start, stop, ship, driveIdsIn, fileGrant, MAX_LEGS, recover, statusText, forApp, tag, WORKER_TOOLS, enabled, _setDeps: (x) => { deps = x; list = null; board = undefined; boardLast = 0; }, _list: () => list, _boardText: () => boardText(), logFailure, browseStatus, codeStatus, FAIL_KEY, _tgBoardDeps: tgBoardDeps, parsePlan, percentOf, progressLabel, readPlanComment, PLAN_FILE };

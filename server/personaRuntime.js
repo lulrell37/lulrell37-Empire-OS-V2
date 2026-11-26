@@ -710,7 +710,7 @@ async function runInjections(text, persona = 'ara', { convo = '', depth = 0, sin
         try { return await require('./workers').tag(name, arg); }
         catch (e) { console.error(`workers failed: ${name}: ${e.message}`); return `${name} failed: ${e.message}`; }
       }
-      if (['WORKER_START', 'WORKER_STATUS', 'WORKER_STOP'].includes(name) && persona === 'jarvis') {
+      if (['WORKER_START', 'WORKER_STATUS', 'WORKER_STOP', 'WORKER_MESSAGE'].includes(name) && persona === 'jarvis') {
         try {
           if (name === 'WORKER_START') {
             const g = await require('./workers').startGate(arg, { asked, depth });
@@ -1588,4 +1588,4 @@ const runAraTurn = (userText, deliver) => runPersonaTurn('ara', userText, delive
 
 module.exports = {
   weatherBlock, newsBlock, araTools, systemPrompt,
-  recallDays, runPersonaTurn, runAraTurn, gatherContext, contextBlock, applyEffects, runInjections, findTags };
+  recallDays, runPersonaTurn, runAraTurn, gatherContext, contextBlock, applyEffects, runInjections, findTags, relayToPersona };

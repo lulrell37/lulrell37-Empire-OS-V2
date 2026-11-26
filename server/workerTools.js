@@ -106,6 +106,10 @@ async function run(id, text) {
   const confirms = [];
   const direct = [];
   for (const t of tags) {
+    // The phone line (owner, 2026-11-26): a worker asks J.A.R.V.I.S. mid-job, or reads
+    // what he sent it, instead of guessing or stopping for Mr. Burrus.
+    if (t.name === 'ASK_JARVIS') { out.push(await askJarvis(id, t.arg).catch((e) => `ASK_JARVIS failed: ${e.message}. Carry on with your best judgment.`)); continue; }
+    if (t.name === 'WORKER_INBOX') { out.push(await readInbox(id).catch((e) => `WORKER_INBOX failed: ${e.message}`)); continue; }
     if (GATED.has(t.name)) {
       try {
         const c = await propose(id, t);
@@ -134,6 +138,56 @@ async function run(id, text) {
   }
   await logCall(id, tags, `${direct.length} ran, ${confirms.length} waiting on a tap`);
   return out.join('\n\n') || '(nothing to report)';
+}
+
+// --- The phone line between J.A.R.V.I.S. and his workers --------------------------
+// A worker's question goes to J.A.R.V.I.S.'s front desk (his plain model with all his
+// tags, not the engine, so he's never tied up); he answers from what he knows, his
+// tools, or by pulling in A.R.A. / another persona ([RELAY_TO], KEEP MOVING). Only
+// what nobody on the team can give reaches Mr. Burrus. The exchange is posted in the
+// Empire group and saved in J.A.R.V.I.S.'s memory like any relay.
+const ASK_TIMEOUT_MS = 4 * 60e3;
+async function askJarvis(id, question, { relay = null } = {}) {
+  const q = String(question || '').trim();
+  if (!q) return 'ASK_JARVIS: give the question, e.g. [ASK_JARVIS: which email should the Groq account use?]';
+  const w = (await workerRow(id)) || {};
+  const who = `worker ${w.slot || '?'} of 3 ("${w.title || `#${id}`}")`;
+  const post = (from, text) => require('./groupChat').post(from, text).catch(() => {});
+  post('jarvis', `🔧 ${who} → J.A.R.V.I.S.: ${q.slice(0, 400)}`);
+  const msg = `[ONE OF YOUR OWN WORKERS — ${who} — IS ASKING YOU MID-JOB. You and your workers are one J.A.R.V.I.S.; answer it so it can carry on. Its task: ${String(w.task || '').slice(0, 1500)}]\n\nIts question: ${q}\n\nAnswer it directly and specifically. If the answer is in his email, notes or calendar, get it from A.R.A. with [RELAY_TO: ara | …]; if another persona owns it, ask them. Decide ordinary choices yourself (names, settings, defaults) the way he'd want. Only if it truly needs Mr. Burrus (a code texted to his phone, a phone approval, his ID or card, his OK to send / post / buy / delete) say exactly NEEDS_HIM: and what — never for anything else.`;
+  const ask = relay || ((m) => (d().runtime || require('./personaRuntime')).relayToPersona('jarvis', m, { from: 'jarvis', depth: 1, chain: ['jarvis'] }));
+  const answer = await Promise.race([
+    ask(msg),
+    new Promise((_, rej) => setTimeout(() => rej(new Error('J.A.R.V.I.S. took over 4 minutes')), ASK_TIMEOUT_MS)),
+  ]);
+  const text = String(answer || '').trim() || '(no answer)';
+  post('jarvis', `🔧 J.A.R.V.I.S. → ${who}: ${text.slice(0, 600)}`);
+  return `J.A.R.V.I.S. ANSWERS:\n${text}\n\n(Carry on with this. If it says NEEDS_HIM, finish everything else first, then end your report with that one question.)`;
+}
+
+async function workerRow(id) {
+  try { return (d().workers || require('./workers')).get(id); } catch { return null; }
+}
+
+// Messages J.A.R.V.I.S. sent a running worker ([WORKER_MESSAGE] in workers.js), unread first.
+const INBOX = 'worker_inbox';
+async function readInbox(id) {
+  let all = {};
+  try { all = JSON.parse(await sync().getSetting(INBOX, '{}')) || {}; } catch { all = {}; }
+  const box = all[id] || [];
+  const unread = box.filter((m) => !m.read);
+  if (!unread.length) return 'WORKER_INBOX: nothing new from J.A.R.V.I.S.';
+  for (const m of box) m.read = true;
+  all[id] = box.slice(-20);
+  await sync().setSetting(INBOX, JSON.stringify(all));
+  return `WORKER_INBOX — from J.A.R.V.I.S. (follow it; it overrides the original task where they differ):\n${unread.map((m) => `• ${new Date(m.at).toLocaleTimeString('en-US', { timeZone: 'America/New_York' })} ET: ${m.text}`).join('\n')}`;
+}
+async function sendToWorker(id, text) {
+  let all = {};
+  try { all = JSON.parse(await sync().getSetting(INBOX, '{}')) || {}; } catch { all = {}; }
+  (all[id] = all[id] || []).push({ at: Date.now(), text: String(text).slice(0, 4000), read: false });
+  all[id] = all[id].slice(-20);
+  await sync().setSetting(INBOX, JSON.stringify(all));
 }
 
 // His tap on a worker_tag card (called from runPending in personaTools.js).
@@ -172,4 +226,4 @@ async function handler(req, res) {
   }
 }
 
-module.exports = { grantTools, toolGrant, revoke, run, runConfirmed, handler, GATED, SELF_CONFIRMED, tagText, _setDeps: (x) => { deps = x; } };
+module.exports = { askJarvis, readInbox, sendToWorker, grantTools, toolGrant, revoke, run, runConfirmed, handler, GATED, SELF_CONFIRMED, tagText, _setDeps: (x) => { deps = x; } };
