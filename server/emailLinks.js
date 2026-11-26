@@ -82,13 +82,14 @@ function extractCode(text) {
 
 // Newest email only: poll Gmail until one from the site, sent after `since`, holds a code or link.
 // deps.list(q) -> [ids newest first]; deps.read(id) -> { id, from, subject, text, urls, internalDate }.
-async function waitForEmailAuth({ sender, since = Date.now(), timeoutMs = WAIT_MS, pollMs = POLL_MS, deps, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), now = Date.now } = {}) {
+async function waitForEmailAuth({ sender, since = Date.now(), timeoutMs = WAIT_MS, pollMs = POLL_MS, deps, signal = null, sleep = (ms) => new Promise((r) => { const t = setTimeout(done, ms); function done() { clearTimeout(t); if (signal) signal.removeEventListener('abort', done); r(); } if (signal) signal.addEventListener('abort', done, { once: true }); }), now = Date.now } = {}) {
   const g = deps || defaultDeps();
   const start = now();
   const after = Math.max(0, Math.floor(since / 1000) - 5);
   const q = `${sender ? `from:(${sender}) ` : '(code OR verification OR verify OR "sign in" OR "log in" OR login OR confirm OR magic) '}after:${after}`;
   const tried = new Set();
   for (;;) {
+    if (signal && signal.aborted) return { ok: false, text: 'stopped on request', stopped: true };
     const ids = await g.list(q).catch(() => []);
     const id = ids[0]; // newest only — older links have expired
     if (id && !tried.has(id)) {

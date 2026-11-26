@@ -15,7 +15,10 @@ const enabled = () => process.env.ARA_FINDS !== 'off';
 // A stop that asks for information (not for his OK to act).
 const NEEDS_INFO = /sign[ -]?in|log[ -]?in|password|passcode|e-?mail address|which (e-?mail|account)|account (email|name|number)|username|user name|verification|verify|code|link|confirm your (email|identity)|order (number|id)|booking reference|credentials/i;
 const NEEDS_OK = /\b(approve|ok to|okay to|go ahead|permission|should i (send|post|buy|book|pay|delete|submit|connect))\b/i;
-const asksForInfo = (q) => NEEDS_INFO.test(String(q || '')) && !NEEDS_OK.test(String(q || ''));
+// Widened (owner, 2026-11-26, worker 71 stopped as needs-him on a Google sign-in page): anything about
+// information, a login, an email, a code or a link goes to A.R.A. first; only his OK to act does not.
+const NEEDS_INFO_WIDE = /e-?mail|gmail|inbox|google|account|sign[ -]?up|register|phone|number|address|token|key|otp|2fa|two[ -]?factor|magic|invite|access|which|what (is|are|'s)|provide|need(s)? (the|your|his|a)|tell me|information|details?/i;
+const asksForInfo = (q) => (NEEDS_INFO.test(String(q || '')) || NEEDS_INFO_WIDE.test(String(q || ''))) && !NEEDS_OK.test(String(q || ''));
 
 const parseJson = (t) => { try { return JSON.parse(String(t).replace(/^[^{]*/, '').replace(/[^}]*$/, '')); } catch { return null; } };
 

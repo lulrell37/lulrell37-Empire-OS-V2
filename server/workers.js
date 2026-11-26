@@ -117,11 +117,15 @@ function save() {
 }
 
 let seq = 0;
+let seqLoad = null;
+// Parallel starts (three [WORKER_START] tags in one reply run under Promise.all) must each get
+// their own id: the counter is loaded once and bumped with no await in between.
 async function nextId() {
-  if (!seq) seq = Number(await getSetting('workers_seq', 0)) || 0;
+  if (!seq) { seqLoad = seqLoad || getSetting('workers_seq', 0).then((v) => Number(v) || 0); const base = await seqLoad; seqLoad = null; seq = Math.max(seq, base); }
   seq = Math.max(seq, ...Object.keys(list).map(Number).filter(Number.isFinite)) + 1;
-  await setSetting('workers_seq', String(seq));
-  return String(seq);
+  const id = String(seq);
+  await setSetting('workers_seq', id);
+  return id;
 }
 const running = () => Object.values(list).filter((w) => w.status === 'running');
 const queued = () => Object.values(list).filter((w) => w.status === 'queued').sort((a, b) => a.createdAt - b.createdAt);
@@ -223,7 +227,7 @@ async function launch(w) {
       update(w, { progress: 'Waiting for room on the server' });
       release = await d().slot({ signal: ctrl.signal });
       update(w, { progress: 'Starting' });
-      out = await runBrowse(w);
+      out = await runBrowse(w, ctrl.signal);
     } else out = await runCode(w, ctrl.signal);
   } catch (e) {
     out = { status: ctrl.signal.aborted ? 'stopped' : 'failed', result: e.message };
@@ -258,22 +262,23 @@ function codeStatus(out) {
   return out;
 }
 
-async function runBrowse(w) {
+async function runBrowse(w, signal) {
   const onStep = (n, line) => update(w, { step: n, progress: line.slice(0, 140) });
   // The brain's plan and the plan step it's on: the ones before it are done.
   const onPlan = (names, at) => update(w, planPatch(w, names.map((name, i) => ({ name, done: i < at - 1 }))));
   if (DRIVE_LINK.test(w.task)) return { status: 'failed', result: `refused: ${DRIVE_REFUSAL}` };
-  let r = await d().browse(`worker-${w.id}`, `J.A.R.V.I.S.'s worker`, w.task, { ownerText: '', onStep, onPlan });
+  let r = await d().browse(`worker-${w.id}`, `J.A.R.V.I.S.'s worker`, w.task, { ownerText: '', onStep, onPlan, signal, noMail: true });
   // Stopped for information (a sign-in, an account email, a code…): A.R.A. looks
   // in his email and notes first, and it carries on with what she finds. He hears
   // about it only if she can't find it (owner, 2026-11-22).
-  for (let tries = 0; r.status === 'ask' && tries < 2 && d().find && require('./araFinds').asksForInfo(r.result || r.text); tries++) {
+  for (let tries = 0; r.status === 'ask' && tries < 2 && d().find && require('./araFinds').asksForInfo(r.result || r.text) && !(signal && signal.aborted); tries++) {
     update(w, { progress: 'Getting what it needs from A.R.A. (his email and notes)' });
     const got = await d().find(r.result || r.text, { task: w.task, site: r.url || '' }).catch(() => null);
     if (!got) break;
     const shown = got.kind === 'link' ? '{{LINK}} (use it as the goto url exactly; it is filled in for you, same browser)' : got.secret ? '{{INFO}} (type exactly that; it is filled in for you)' : `"${got.value}" (also available as {{INFO}})`;
-    r = await d().browse(`worker-${w.id}`, `J.A.R.V.I.S.'s worker`, `${w.task}\n\n[A.R.A. FOUND WHAT YOU STOPPED FOR — ${got.what}: ${shown}. Carry on with the task from where the browser is.]`, { ownerText: '', onStep, onPlan, secrets: got.kind === 'link' ? { LINK: got.value, INFO: got.value } : { INFO: got.value } });
+    r = await d().browse(`worker-${w.id}`, `J.A.R.V.I.S.'s worker`, `${w.task}\n\n[A.R.A. FOUND WHAT YOU STOPPED FOR — ${got.what}: ${shown}. Carry on with the task from where the browser is.]`, { ownerText: '', onStep, onPlan, signal, noMail: true, secrets: got.kind === 'link' ? { LINK: got.value, INFO: got.value } : { INFO: got.value } });
   }
+  if (signal && signal.aborted) return { status: 'stopped', result: `stopped on request. ${String(r.text || '').slice(0, 2000)}`.trim() };
   // Explicit verdict first (the brain's done {success, reason}), then the wording of
   // the result: a "done" that says it was blocked is never done (worker 57, 2026-11-24).
   const status = browseStatus(r);
