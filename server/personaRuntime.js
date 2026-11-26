@@ -496,7 +496,8 @@ function araTools() {
   return ARA_TOOLS + '\n' + require('./browserAgent').BROWSE_TOOLS + '\n' + require('./transcribe').TRANSCRIBE_TOOLS
     + '\n' + require('./autoClip').AUTO_CLIP_TOOLS + '\n' + require('./rawEdit').RAW_EDIT_TOOLS + '\n' + NEWS_NOW_TOOL;
 }
-const NEWS_NOW_TOOL = ` - [NEWS_NOW] — have W.I.R.E. pull a fresh news brief right now (a few minutes; it goes to him in full on its own, so you add one line at most).`;
+const NEWS_NOW_TOOL = ` - [NEWS_NOW] — have W.I.R.E. pull a fresh news brief right now (a few minutes; it goes to him in full on its own, so you add one line at most).
+ - [BREAKING_NOW] — when he asks about breaking news ("anything breaking?", "what's happening right now", "is something going on in DC?"): W.I.R.E. checks X and the web live (Grok) for anything in the last hour. Use it only when he asks; the automatic watch runs on its own every 15 min.`;
 
 function systemPrompt(ctx, gs, custom, mem) {
   return [
@@ -763,6 +764,14 @@ async function runInjections(text, persona = 'ara', { convo = '', depth = 0, sin
         return `MONDAY SCRIPTS: ${r.count} written and filed, and he's been told they came in (don't paste or read them): ${(r.titles || []).join(' | ')}`;
       }
       if (require('./stephanieQuiz').QUIZ_TAGS.has(name) && persona === 'stephanie') return `${name}: ${await require('./stephanieQuiz').quizTag(name, arg, depth === 0 ? asked : '')}`;
+      if (name === 'BREAKING_NOW' && ['ara', 'wire'].includes(persona)) {
+        // Grok's live X + web search, only because he asked (server/newsWire.js).
+        const r = await require('./newsWire').breakingWatch({ onDemand: true }).catch((e) => ({ error: e.message }));
+        if (r.error) return `BREAKING_NOW failed: ${r.error}. Answer from W.I.R.E.'s latest brief and say how old it is.`;
+        if (r.sent) return `BREAKING_NOW (${r.via}): NEW — ${r.headline}. ${r.detail} (${r.source}). The 🚨 alert already went to him; a full brief follows. Answer him in a few lines.`;
+        if (r.headline) return `BREAKING_NOW (${r.via}): the latest is ${r.headline}. ${r.detail} (${r.source}) — already alerted earlier.`;
+        return `BREAKING_NOW (${r.via}): nothing confirmed has broken in the last hour (checked X and the web). Say so plainly.`;
+      }
       if (name === 'NEWS_NOW' && ['ara', 'wire'].includes(persona)) {
         const r = await require('./newsWire').refreshNewsBrief({ force: true, trigger: 'manual' });
         if (r && r.ok) return `NEWS_NOW: ✓ W.I.R.E. pulled a fresh brief and it already went to him in full from A.R.A.'s bot — don't paste it; answer his question from it in a few lines.\n${await newsBlock({ fresh: true })}`;

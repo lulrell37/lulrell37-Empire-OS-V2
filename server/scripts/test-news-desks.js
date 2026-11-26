@@ -112,3 +112,19 @@ llm.chatAs = async () => '';
   console.log('all news-desk tests passed');
   process.exit(0);
 })().catch((e) => { console.error(e); process.exit(1); });
+
+// Grok only when he asks (owner, 2026-11-26): the scheduled watch never calls xSearch.
+(async () => {
+  const assert = require('assert');
+  const llm = require('../llm');
+  const realX = llm.xSearch; const realKey = llm.keyFor;
+  let xCalls = 0;
+  llm.xSearch = async () => { xCalls++; return '{"breaking": false}'; };
+  llm.keyFor = (p) => (p === 'xai' ? 'xai-test' : realKey(p));
+  const nw = require('../newsWire');
+  assert.strictEqual(nw.everyMin(), 15);
+  await nw.breakingWatch({ onDemand: true }).catch(() => {});
+  assert.strictEqual(xCalls, 1, 'on demand uses Grok');
+  llm.xSearch = realX; llm.keyFor = realKey;
+  console.log('✓ scheduled breaking watch is Claude-only, Grok on request');
+})().catch((e) => { console.error(e); process.exit(1); });
