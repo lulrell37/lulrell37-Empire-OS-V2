@@ -1513,6 +1513,35 @@ async function runPersonaTurn(personaId, userText, deliver, { reply: given, resu
     owed = unsent();
   }
 
+  // His two follow-through rules (server/followThrough.js): a persona that says it'll
+  // check something does it now (or comes back by itself), and nobody asks him for
+  // what the team can get. One round each, then the reply is rewritten from receipts.
+  const ft = require('./followThrough');
+  if (ft.enabled()) {
+    const extraRound = async (note) => {
+      messages.push({ role: 'assistant', content: reply });
+      messages.push({ role: 'user', content: note });
+      const fix = await brain(messages);
+      replies.push(fix);
+      const inj = await runInjections(fix, persona, { convo, sink, asked: userText });
+      if (inj) {
+        looked.push(inj);
+        messages.push({ role: 'assistant', content: fix });
+        messages.push({ role: 'user', content: `[tool results — these receipts are what really happened:]\n\n${inj}\n\n[Now give Mr. Burrus your reply: the answer itself, from what really happened. No tags.]` });
+        reply = await brain(messages);
+        replies.push(reply);
+      } else reply = fix;
+    };
+    const asked = ft.asksOwner(stripCues(stripTags(reply)));
+    if (asked) await extraRound(ft.ASK_ROUND(asked)).catch((e) => console.error(`follow through failed: ask round: ${e.message}`));
+    const said = ft.promisedCheck(stripCues(stripTags(reply)));
+    if (said) {
+      await extraRound(ft.CHECK_ROUND(said)).catch((e) => console.error(`follow through failed: check round: ${e.message}`));
+      const still = ft.promisedCheck(stripCues(stripTags(reply)));
+      if (still) ft.scheduleFollowUp(persona, still, userText);
+    }
+  }
+
   // Side-effect tags fire once, from anywhere across the rounds (deduped).
   const fx = await applyEffects(replies.join('\n'), deliver, persona, { ownerText: userText })
     .catch((e) => ({ notes: [], warnings: [`actions failed: ${e.message}`], confirms: [] }));
