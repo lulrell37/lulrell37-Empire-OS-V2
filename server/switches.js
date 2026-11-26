@@ -1,6 +1,6 @@
 // Every loop has a spoken on/off switch (owner, 2026-11-26: "everything should have a
 // verbal on or off switch if I say"). Each desk, cron and fan-out has a name here;
-// [SWITCH_OFF: name] / [SWITCH_ON: name] (any persona, on his own message only) flip
+// [SWITCH_OFF: name] / [SWITCH_ON: name] (A.R.A. and J.A.R.V.I.S. only, on his own message) flip
 // app_settings `switch_<key>` and the loop checks isOn(key) before every run
 // (`schedule` in index.js, the W.I.R.E. fan-out in newsWire.js). It stays where he put
 // it, restarts included, until he says otherwise. T.A.L.O.N.'s trading switch is the
@@ -83,8 +83,11 @@ async function set(keys, on, { by = '' } = {}) {
   return done;
 }
 
+// Only A.R.A. and J.A.R.V.I.S. flip switches (owner, 2026-11-26); everyone else passes it to her.
+const SWITCHERS = new Set(['ara', 'jarvis']);
 async function tag(name, arg, { asked = '', persona = '' } = {}) {
   if (name === 'SWITCHES') return list();
+  if (!SWITCHERS.has(persona)) return `${name}: only A.R.A. and J.A.R.V.I.S. switch things on or off. Pass it on: [RELAY_TO: ara | Mr. Burrus says: ${String(asked || arg).slice(0, 200)}]. Nothing changed.`;
   const on = name === 'SWITCH_ON';
   if (!String(asked || '').trim() || SYSTEM_TURN.test(String(asked))) return `${name} refused: only Mr. Burrus's own words switch things ${on ? 'on' : 'off'}. Nothing changed.`;
   const keys = match(arg);
@@ -104,4 +107,6 @@ async function list() {
 const SWITCH_TOOLS = ` - [SWITCH_OFF: what he named] / [SWITCH_ON: what he named] — every loop and desk has a spoken on/off switch (his rule, 2026-11-26): when Mr. Burrus says "stop the stock picks", "turn off the quiz", "switch the breaking news back on", "turn everything off", emit it with his words (e.g. [SWITCH_OFF: stock picks], [SWITCH_OFF: all]). It stays where he puts it, restarts included. Only on his own message. It hasn't happened unless the tag ran — report its receipt.
  - [SWITCHES] — what's switched off right now, and every switch there is.`;
 
-module.exports = { SWITCHES, isOn, match, tag, list, set, SWITCH_TOOLS, _setDeps: (x) => { deps = x; } };
+const SWITCH_ASK = ` - ON / OFF: only A.R.A. and J.A.R.V.I.S. switch things on or off. When Mr. Burrus tells you to stop or start something, pass his words on with [RELAY_TO: ara | Mr. Burrus says: <his exact words>] and tell him you've handed it to her. [SWITCHES] shows what's off.`;
+
+module.exports = { SWITCHERS, SWITCH_ASK, SWITCHES, isOn, match, tag, list, set, SWITCH_TOOLS, _setDeps: (x) => { deps = x; } };

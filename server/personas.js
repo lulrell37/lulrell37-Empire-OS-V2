@@ -211,6 +211,7 @@ const TASK = /\b(do (it|this|that)|make|create|set ?up|build|write|draft|design|
 const TRADE_ORDER = /\b(close|exit|enter|buy|sell|long|short|move (the |my |his )?(stop|sl|tp|target)|stop to|break ?even|take profit|go live|switch (to|him to) (live|demo)|live account|demo account)\b/i;
 // A.R.A. runs the team: she sends anything to whoever owns it without him
 // naming them (`from` === 'ara'). Everyone else keeps the gate.
+const SWITCH_WORDS = /\b(stop|pause|halt|resume|start|restart|shut (it |\w+ )?(off|down)|turn (it |them |\w+ )?(on|off)|switch (it |them |\w+ )?(on|off)|back on|unpause)\b/;
 const CAL_MAIL = /\b(calendar|schedule|scheduled|event|meeting|appointment|email|e-mail|emails|inbox|gmail|mail)\b/;
 // Which voice A.R.A. uses, ElevenLabs or Grok: J.A.R.V.I.S. only, and only on a message
 // Mr. Burrus sent him directly. A relay, the council or an autonomous loop has no
@@ -268,6 +269,7 @@ function relayAllowed(userText, id, from, relayText) {
   if (TASK.test(said)) return true;
   if (id === 'talon' && TRADE_ORDER.test(said)) return true;
   if (id === 'ara' && CAL_MAIL.test(said)) return true; // calendar + email are hers alone
+  if (id === 'ara' && SWITCH_WORDS.test(said)) return true; // only she and J.A.R.V.I.S. switch things on / off
   if (NAMES_FOR(id).some((n) => n.length > 2 && new RegExp(`\\b${n}\\b`).test(said))) return true;
   return HANDOFF_ASK.test(said);
 }

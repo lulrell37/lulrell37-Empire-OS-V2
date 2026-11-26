@@ -6,7 +6,7 @@
 // the synced `auto_trade` toggle stayed on, and his next cycle traded. W.I.R.E.'s news
 // trades didn't check `auto_trade` at all.
 //
-// [TRADING_OFF] (T.A.L.O.N., A.R.A.; anyone may stop him) sets `talon_halt` = 1 and
+// [TRADING_OFF] (A.R.A. and J.A.R.V.I.S. only, owner 2026-11-26; T.A.L.O.N. relays it to her) sets `talon_halt` = 1 and
 // `auto_trade` = 0 and cancels his resting quick-scalp limits. While halted,
 // tlPlaceOrder refuses every automatic order: setups, add-ons, quick scalps,
 // re-entries, news trades and the Nasdaq desk. Only an order he gives by hand
@@ -57,7 +57,7 @@ async function on() {
 
 // The tag, from runInjections. asked = his own message this turn ('' for loops / wake-ups).
 async function tag(name, persona, { asked = '' } = {}) {
-  if (!['talon', 'ara'].includes(persona)) return `${name}: T.A.L.O.N.'s switch is his and A.R.A.'s — [RELAY_TO: ara | ...].`;
+  if (!['ara', 'jarvis'].includes(persona) && name !== 'TRADING_STATUS') return `${name}: only A.R.A. and J.A.R.V.I.S. switch T.A.L.O.N. on or off — [RELAY_TO: ara | Mr. Burrus says: ${String(asked || '').slice(0, 200)}]. Nothing changed.`;
   if (name === 'TRADING_OFF') return off({ by: persona, why: asked });
   if (name === 'TRADING_ON') {
     if (/^\[(SENT ON YOUR OWN|The server restarted)/.test(String(asked || '')) || !ownerStarts(asked)) {

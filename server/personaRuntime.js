@@ -430,7 +430,7 @@ PERSONA_EXTRA_TOOLS.talon = ` ${TRADING_KNOWLEDGE}
  - [NASDAQ_DESK] — your Nasdaq 100 desk (his order, 2026-11-20; runs on whichever account you are on, live included when live trading is armed): 1-minute triggers from the day-trading bots in the reel he sent — a close across VWAP, across the 50 EMA, or out of the first 15 minutes' range; above = buy, below = sell. Stop past the trigger, sized to lose $50 at most, 2R target, one position at a time, flat by 3:58 PM ET, done for the day at +$200 or after 3 losses. Runs itself every minute 9:30-4 ET while auto-trade is on, no AI calls. This shows today's tally and every trigger with what happened.
  - [TRADE_STATS: XAUUSD | 30] — where the money goes on a market (XAUUSD, BTCUSD or ALL; days back, default 30): your closed trades by kind (paired / lone / quick / add-on / re-entry / news / manual), side, session, with or against the 1D at entry, how they exited, per setup, and the worst 5. Run it before you answer anything about why a market is losing or what to change; quote its numbers, don't guess.
  ON MR. BURRUS'S ORDERS — he's the boss of the desk; when he (or A.R.A. for him) tells you to do one of these, do it, even if your playbook wouldn't (say so in a line if you disagree):
-${require('./talonSwitch').SWITCH_TOOLS}
+ - ON / OFF: only A.R.A. and J.A.R.V.I.S. switch you on or off. If Mr. Burrus tells you to stop or start trading, pass it on with [RELAY_TO: ara | Mr. Burrus says: <his exact words>] and say you've handed it to her — never claim you've stopped yourself.
  - [TRADE_POSITIONS] — every open position with its id, stop, target and P/L. Read it first when he refers to "the gold trade", "the swing", "everything".
  - [TRADE_ENTER: XAUUSD or BTCUSD | buy or sell | stop price | target price] — a market order, 0.02 (gold: sized so it can't lose more than $40 at its stop, so 0.01 for a $20-$40 stop; a gold stop past $40 is refused). A stop is required; the main stop rule's minimum (gold $10 / Bitcoin 0.8% and 1.2× the 1H ATR) still applies and widens a tighter one. If he gave no stop or target, [TRADE_SCAN] first and set them off structure.
  - [TRADE_CLOSE: position id, or XAUUSD / BTCUSD (add buy/sell/scalp/swing to narrow it), or all]
@@ -532,7 +532,7 @@ function personaSystemPrompt(personaId, ctx, gs, custom, mem) {
     custom ? `${custom}\n\n${TG_FRAME}` : `${personaTgIdentity(personaId)}\n\nYou are talking to Mr. Burrus over Telegram (text), away from the Empire OS app — keep replies tight and mobile-readable. Reply directly to what he just said; no status-briefing preamble. There is a live context block below — read from it, don't invent numbers.`,
     custom ? genderLine(personaId) : '', // the built-in identity already carries it
     OBEY,
-    require('./switches').SWITCH_TOOLS,
+    personaId === 'jarvis' ? require('./switches').SWITCH_TOOLS + '\n' + require('./talonSwitch').SWITCH_TOOLS : ((personaId === 'ara') ? require('./switches').SWITCH_TOOLS : require('./switches').SWITCH_ASK),
     require('./personas').INITIATIVE,
     emotionFor(personaId),
     CONTINUITY,
@@ -1050,7 +1050,7 @@ async function relayToPersona(id, message, { from = 'ara', convo = '', depth = 1
     await relaySystem(id, from),
     await require('./ownerProfile').profileBlock(id).catch(() => ''),
     OBEY,
-    require('./switches').SWITCH_TOOLS,
+    id === 'jarvis' ? require('./switches').SWITCH_TOOLS + '\n' + require('./talonSwitch').SWITCH_TOOLS : ((id === 'ara') ? require('./switches').SWITCH_TOOLS : require('./switches').SWITCH_ASK),
     require('./personas').INITIATIVE,
     emotionFor(id),
     id === 'ara' ? araTools() : genericTools(id),

@@ -17,12 +17,14 @@ ts._setDeps({ ...fake, cancelQuickLimits: async () => { cancelled++; return 2; }
   assert.deepStrictEqual(sw.match('flux capacitor'), []);
 
   // Off and back on, only on his words.
-  assert.match(await sw.tag('SWITCH_OFF', 'stock picks', { asked: '' }), /refused/);
-  assert.match(await sw.tag('SWITCH_OFF', 'stock picks', { asked: '[SENT ON YOUR OWN, 3 PM] x' }), /refused/);
-  assert.match(await sw.tag('SWITCH_OFF', 'stock picks', { asked: 'stop the stock picks' }), /✓ OFF/);
+  assert.match(await sw.tag('SWITCH_OFF', 'stock picks', { asked: 'stop the stock picks', persona: 'atlas' }), /only A\.R\.A\. and J\.A\.R\.V\.I\.S\./);
+  assert.strictEqual(await sw.isOn('stock_desk'), true);
+  assert.match(await sw.tag('SWITCH_OFF', 'stock picks', { asked: '', persona: 'ara' }), /refused/);
+  assert.match(await sw.tag('SWITCH_OFF', 'stock picks', { asked: '[SENT ON YOUR OWN, 3 PM] x', persona: 'ara' }), /refused/);
+  assert.match(await sw.tag('SWITCH_OFF', 'stock picks', { asked: 'stop the stock picks', persona: 'jarvis' }), /✓ OFF/);
   assert.strictEqual(await sw.isOn('stock_desk'), false);
   assert.match(await sw.list(), /OFF now: A\.T\.L\.A\.S\.'s stock picks/);
-  assert.match(await sw.tag('SWITCH_ON', 'stock picks', { asked: 'turn the stock picks back on' }), /✓ ON/);
+  assert.match(await sw.tag('SWITCH_ON', 'stock picks', { asked: 'turn the stock picks back on', persona: 'ara' }), /✓ ON/);
   assert.strictEqual(await sw.isOn('stock_desk'), true);
 
   // T.A.L.O.N.: stop sticks until he says start.
@@ -30,16 +32,17 @@ ts._setDeps({ ...fake, cancelQuickLimits: async () => { cancelled++; return 2; }
   assert.strictEqual(await ts.isHalted(), true);
   assert.strictEqual(store.auto_trade, '0');
   assert.strictEqual(cancelled, 1, 'resting limits cancelled');
-  assert.match(await ts.tag('TRADING_ON', 'talon', { asked: '' }), /refused/);
-  assert.match(await ts.tag('TRADING_ON', 'talon', { asked: 'how is gold doing?' }), /refused/);
+  assert.match(await ts.tag('TRADING_ON', 'jarvis', { asked: '' }), /refused/);
+  assert.match(await ts.tag('TRADING_ON', 'ara', { asked: 'how is gold doing?' }), /refused/);
+  assert.match(await ts.tag('TRADING_OFF', 'talon', { asked: 'stop trading' }), /only A\.R\.A\. and J\.A\.R\.V\.I\.S\./);
   assert.match(await ts.tag('TRADING_ON', 'ara', { asked: "don't start trading yet" }), /refused/);
   assert.strictEqual(await ts.isHalted(), true);
   assert.strictEqual(await sw.isOn('trading'), false);
-  assert.match(await sw.tag('SWITCH_ON', 'trading', { asked: 'turn the quiz on' }), /refused/);
+  assert.match(await sw.tag('SWITCH_ON', 'trading', { asked: 'turn the quiz on', persona: 'ara' }), /refused/);
   assert.match(await ts.tag('TRADING_ON', 'ara', { asked: 'ok start trading again' }), /back ON/);
   assert.strictEqual(await ts.isHalted(), false);
   assert.strictEqual(store.auto_trade, '1');
-  assert.match(await ts.tag('TRADING_OFF', 'wire', { asked: 'stop' }), /T\.A\.L\.O\.N\.'s switch is his and A\.R\.A\.'s/);
+  assert.match(await ts.tag('TRADING_OFF', 'wire', { asked: 'stop' }), /only A\.R\.A\. and J\.A\.R\.V\.I\.S\./);
 
   // While halted, every automatic order is refused at tlPlaceOrder; a hand order passes the gate.
   await ts.off({ by: 'ara' });
