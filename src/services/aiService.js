@@ -102,7 +102,7 @@ async function buildSys(personaId,persona,convo=[]){
   let sys=customPrompt||persona.system;
   sys+=`\n\n[RESPONSE STYLE: Reply directly to what Mr. Burrus just said. Do not open with a status briefing, HUD summary, morning-routine readout, or any unprompted overview unless he explicitly asks for one. Skip "here is where things stand" preambles — answer the message and stop.]`;
   sys+=`\n\n${OBEY_BLOCK}`;
-  {const{INITIATIVE}=await import('../personas/personas');sys+=`\n\n${INITIATIVE}`;}
+  {const{INITIATIVE,ARA_TEAM_TONE}=await import('../personas/personas');sys+=`\n\n${INITIATIVE}`;if(personaId==='ara')sys+=`\n\n${ARA_TEAM_TONE}`;}
   try{const{getSetting}=await import('./database');const prof=profileFor(String((await getSetting('owner_profile',''))||'').trim(),personaId);if(prof)sys+=`\n\n[HOW MR. BURRUS WORKS — learned from his conversations with the whole team; follow it without being told again. If he contradicts a line, he wins and the profile updates:\n${prof}\n]`;}catch(e){}
   sys+=`\n\n${emotionFor(personaId)}`;
   // A.R.A. always has his calendar in front of her, so "what time is the party?" is

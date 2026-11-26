@@ -232,3 +232,13 @@ assert.strictEqual(parseStories('NONE of the accounts agree\nSTORIES: ["A"]').st
 
 console.log('desks: all checks passed');
 process.exit(0);
+
+// A.R.A. is professional with the team, unchanged with him (owner, 2026-11-26); both copies match.
+{
+  const fs = require('fs'); const path = require('path'); const assert = require('assert');
+  const line = (f, re) => (fs.readFileSync(path.join(__dirname, '..', '..', f), 'utf8').match(re) || [])[1];
+  const a = line('server/personas.js', /const ARA_TEAM_TONE = "(.*)";\n/), b = line('src/personas/personas.js', /export const ARA_TEAM_TONE="(.*)";\n/);
+  assert.ok(a && a === b, 'ARA_TEAM_TONE drifted between server/personas.js and src/personas/personas.js');
+  assert.match(a, /Talking to Mr\. Burrus himself, you stay exactly as you are/);
+  console.log('ara team tone: ok');
+}

@@ -534,6 +534,7 @@ function personaSystemPrompt(personaId, ctx, gs, custom, mem) {
     OBEY,
     personaId === 'jarvis' ? require('./switches').SWITCH_TOOLS + '\n' + require('./talonSwitch').SWITCH_TOOLS : ((personaId === 'ara') ? require('./switches').SWITCH_TOOLS : require('./switches').SWITCH_ASK),
     require('./personas').INITIATIVE,
+    personaId === 'ara' ? require('./personas').ARA_TEAM_TONE : '',
     emotionFor(personaId),
     CONTINUITY,
     mem,
@@ -1048,7 +1049,8 @@ ${SHARED_OPS}
 function talkingTo(id, from, message = '') {
   const fromName = (ROSTER[from] && ROSTER[from].name) || 'a teammate';
   if (require('./groupChat').hisWords(message)) return `[WHO YOU'RE TALKING TO — ${fromName} is passing on Mr. Burrus's own question to you (in the team's group chat or for him). Answer HIM directly — "you" is Mr. Burrus — not ${fromName}.]`;
-  return `[WHO YOU'RE TALKING TO — this message is from ${fromName}, your teammate, not from Mr. Burrus. Answer ${fromName}: talk to them by name the way one teammate talks to another ("Got it, ${fromName}…"), "you" means ${fromName}, and Mr. Burrus is "Mr. Burrus" or "he", never "sir" and never "you". Don't greet him or report to him in this reply. He can read the team's group chat, so it should read as you two working it out. His order passed through them is still his order, so do it the same.]`;
+  const pro = id === 'ara' ? ' Keep it professional: no flirting, no pet names, no emotion cues with a teammate.' : '';
+  return `${pro ? `[${pro.trim()}] ` : ''}[WHO YOU'RE TALKING TO — this message is from ${fromName}, your teammate, not from Mr. Burrus. Answer ${fromName}: talk to them by name the way one teammate talks to another ("Got it, ${fromName}…"), "you" means ${fromName}, and Mr. Burrus is "Mr. Burrus" or "he", never "sir" and never "you". Don't greet him or report to him in this reply. He can read the team's group chat, so it should read as you two working it out. His order passed through them is still his order, so do it the same.]`;
 }
 
 async function relayToPersona(id, message, { from = 'ara', convo = '', depth = 1, sink = null, asked = '', chain = [] } = {}) {
@@ -1063,6 +1065,7 @@ async function relayToPersona(id, message, { from = 'ara', convo = '', depth = 1
     OBEY,
     id === 'jarvis' ? require('./switches').SWITCH_TOOLS + '\n' + require('./talonSwitch').SWITCH_TOOLS : ((id === 'ara') ? require('./switches').SWITCH_TOOLS : require('./switches').SWITCH_ASK),
     require('./personas').INITIATIVE,
+    id === 'ara' ? require('./personas').ARA_TEAM_TONE : '',
     emotionFor(id),
     id === 'ara' ? araTools() : genericTools(id),
     id === 'jarvis' ? await empireOsBrief() : '',
