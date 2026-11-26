@@ -16,15 +16,41 @@ const nameOf = (sym) => NAMES[sym] ? `${NAMES[sym]} (${sym})` : sym;
 const money = (n) => (n == null ? '—' : `${n < 0 ? '-' : '+'}$${Math.abs(Number(n)).toFixed(2)}`);
 const px = (n) => (n == null || n === '' ? '—' : String(n));
 
+// Whose message A.R.A. is passing on: opts.from, else the persona named on its first
+// line ("🩺 H.A.V.E.N. → A.R.A.", "📈 T.A.L.O.N. just opened…"); null when it's hers.
+function passedFrom(text, from) {
+  if (from) return from === 'ara' ? null : from;
+  const { relayFrom } = require('./personaVoice');
+  const who = relayFrom(String(text || '').replace(/\*\*/g, ''), true);
+  if (!who) return null;
+  const id = require('./personas').resolvePersonaId(who);
+  return id && id !== 'ara' ? id : null;
+}
+// Whatever a persona passes to him through A.R.A. also goes into that persona's own
+// Telegram history (owner, 2026-11-26: "whatever a persona passes they should have
+// memory of it if I wanted to continue with them 1 on 1"), so in his private chat with
+// them "tell me more about that" lands.
+async function passedOn(id, text) {
+  if (!id) return;
+  const when = new Date().toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'short', hour: 'numeric', minute: '2-digit' });
+  await require('./db').query('INSERT INTO tg_messages (persona, role, content, ts) VALUES ($1, $2, $3, $4)',
+    [id, 'assistant', `[YOU SENT THIS TO MR. BURRUS THROUGH A.R.A., ${when} ET — it's yours, not a reply to him here; if he brings it up in this chat, carry on from it]\n${String(text).slice(0, 6000)}`, Date.now()])
+    .catch((e) => console.error(`tg ${id} history save failed:`, e.message));
+}
+
 async function sendFromAra(text, spoken = text, opts = {}) {
   const telegram = require('./telegram');
   const ara = telegram.botFor('ara');
   if (!ara || !ara.isConfigured()) return false;
+  const { from, ...sendOpts } = opts || {};
+  opts = sendOpts;
+  const owner = passedFrom(text, from);
   // Same as a reply to him: she says it, then the text (with the exact numbers).
   const { ogg } = await require('./personaVoice').voiceNote('ara', String(spoken).replace(/\*\*/g, ''), { relay: true })
     .catch((e) => { console.error('trade alert voice failed:', e.message); return { ogg: null }; });
   if (ogg) await ara.sendVoice(telegram.OWNER_ID, ogg).catch((e) => console.error('trade alert sendVoice failed:', e.message));
   await ara.sendMessage(telegram.OWNER_ID, text, opts);
+  await passedOn(owner, text);
   return true;
 }
 
@@ -122,4 +148,4 @@ async function runDailyRecap() {
   return { sent, opened: opened.length, closed: closed.length, open: open.length };
 }
 
-module.exports = { sendFromAra, araNote: notify, tradeOpened, limitPlaced, limitEnded, addedOn, tradeClosed, tradeLost, orderRejected, runDailyRecap };
+module.exports = { sendFromAra, passedFrom, passedOn, araNote: notify, tradeOpened, limitPlaced, limitEnded, addedOn, tradeClosed, tradeLost, orderRejected, runDailyRecap };

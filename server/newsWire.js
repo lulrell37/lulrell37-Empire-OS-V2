@@ -176,6 +176,8 @@ MONEY|<YYYY-MM-DD>|<one line>
     ifOn('woke_read', () => require('./wokeRead').onWireBrief(brief)).catch((e) => console.error('newswire->woke failed', e.message));
     // H.A.V.E.N. reads it for anything that touches his health.
     ifOn('haven_health', () => require('./havenHealth').onWireBrief(brief)).catch((e) => console.error('haven health failed:', e.message));
+    // A.I.S.H.A. breaks down the politics in it, in plain English.
+    ifOn('aisha_politics', () => require('./aishaPolitics').onWireBrief(brief)).catch((e) => console.error('aisha politics failed:', e.message));
 
     if (impacts.length) await newsTradeHandoff(impacts).catch((e) => console.error('newswire: hand-off failed', e.message));
     return { ok: true, headlines: headlines.length, impacts: impacts.length };

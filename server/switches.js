@@ -24,6 +24,7 @@ const SWITCHES = {
   woke_read: ['W.O.K.E.\'s reads of the news', 'woke reads woke read'],
   woke_x: ['W.O.K.E.\'s X stories', 'x stories twitter woke x'],
   haven_health: ['H.A.V.E.N.\'s health news', 'haven health news health alerts'],
+  aisha_politics: ['A.I.S.H.A.\'s politics breakdowns', 'aisha politics political breakdown politics news'],
   stock_desk: ['A.T.L.A.S.\'s stock picks', 'atlas stocks stock picks stock desk'],
   auto_atlas: ['A.T.L.A.S.\'s money review', 'atlas review money review auto atlas'],
   money_watch: ['A.T.L.A.S.\'s money watch (Gmail money in/out and the daily report)', 'money watch money report spending'],

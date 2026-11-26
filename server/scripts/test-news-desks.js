@@ -103,6 +103,25 @@ llm.chatAs = async () => '';
   assert.strictEqual(sent.length, 1);
   console.log('✓ haven health watch');
 
+  // --- A.I.S.H.A.'s politics breakdown -----------------------------------------
+  const aisha = require('../aishaPolitics');
+  sent.length = 0;
+  assert.deepStrictEqual(await aisha.onWireBrief('Markets up.', { ask: async () => 'NOTHING' }), { quiet: true });
+  const pol = 'STORIES:\nSenate shutdown vote\n---\n**Senate shutdown vote**\n- What happened: The Senate failed to pass funding.\n- What it means for you: federal offices near you may close.';
+  const a1 = await aisha.onWireBrief('…senate…', { ask: async () => pol });
+  assert.ok(a1.sent);
+  assert.ok(/A\.I\.S\.H\.A\. → A\.R\.A\./.test(sent[0].text) && /shutdown/.test(sent[0].text));
+  assert.ok((await aisha.onWireBrief('…senate…', { ask: async () => pol })).repeat);
+  assert.strictEqual(sent.length, 1);
+  // Whatever a persona passes through A.R.A. lands in its own chat history.
+  const { passedFrom } = require('../talonAlerts');
+  assert.strictEqual(passedFrom('⚖️ **A.I.S.H.A. → A.R.A. — the politics**'), 'aisha');
+  assert.strictEqual(passedFrom('🩺 **H.A.V.E.N. → A.R.A. — health**'), 'haven');
+  assert.strictEqual(passedFrom('📈 **T.A.L.O.N. just opened a trade**'), 'talon');
+  assert.strictEqual(passedFrom('Good morning, Mr. Burrus.'), null);
+  assert.strictEqual(passedFrom('anything', 'woke'), 'woke');
+  console.log('✓ aisha politics breakdown');
+
   // --- W.I.R.E. breaking watch ------------------------------------------------
   const wire = require('../newsWire');
   assert.deepStrictEqual(wire.parseBreaking('{"breaking": false}'), { breaking: false });

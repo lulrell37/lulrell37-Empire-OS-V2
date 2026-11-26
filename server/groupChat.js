@@ -117,14 +117,17 @@ async function relayAsked(from, to, message) {
 // The exchange also goes into the answering persona's own Telegram history, so
 // in his private chat with them later they remember what they said in the group.
 // (The asking persona's turn already keeps the answer it got.)
-function groupLine(from, to, message, answer, ts = Date.now()) {
+function groupLine(from, to, message, answer, ts = Date.now(), inGroup = true) {
   const when = new Date(ts).toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'short', hour: 'numeric', minute: '2-digit' });
   const fromName = (ROSTER[from] && ROSTER[from].name) || from;
-  return `[IN THE EMPIRE GROUP CHAT, ${when} ET — ${fromName} asked you this in front of Mr. Burrus, not in this chat]\n${fromName}: ${String(message).slice(0, 3000)}\nYou answered: ${String(answer).slice(0, 5000)}`;
+  const where = inGroup ? `IN THE EMPIRE GROUP CHAT, ${when} ET — ${fromName} asked you this in front of Mr. Burrus` : `A HAND-OFF, ${when} ET — ${fromName} asked you this for Mr. Burrus`;
+  return `[${where}, not in this chat]\n${fromName}: ${String(message).slice(0, 3000)}\nYou answered: ${String(answer).slice(0, 5000)}`;
 }
+// Saved with or without the group (owner, 2026-11-26: "whatever a persona passes they
+// should have memory of it if I wanted to continue with them 1 on 1").
 async function remember(from, to, message, answer) {
-  if (!(await group())) return;
-  await require('./db').query('INSERT INTO tg_messages (persona, role, content, ts) VALUES ($1, $2, $3, $4)', [to, 'assistant', groupLine(from, to, message, answer), Date.now()])
+  const inGroup = !!(await group().catch(() => null));
+  await require('./db').query('INSERT INTO tg_messages (persona, role, content, ts) VALUES ($1, $2, $3, $4)', [to, 'assistant', groupLine(from, to, message, answer, Date.now(), inGroup), Date.now()])
     .catch((e) => console.error('group chat history save failed:', e.message));
 }
 // A hand-off that passes on his own words to the persona he named ("Mr. Burrus asks
