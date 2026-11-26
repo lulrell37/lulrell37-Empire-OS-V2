@@ -515,6 +515,7 @@ function systemPrompt(ctx, gs, custom, mem) {
     faithBlock('ara'),
     `[LIVE CONTEXT:\n${contextBlock(ctx, { trading: true })}\n]`,
     `[THE CURRENT MOMENT — right now it is ${momentET()} (America/New_York); Mr. Burrus is in Waldorf, MD. This is authoritative; the chat history and memory may be hours or days old, so don't assume it's still the same day.]`,
+    require('./holidays').holidayLine(),
   ].filter(Boolean).join('\n\n');
 }
 
@@ -546,6 +547,7 @@ function personaSystemPrompt(personaId, ctx, gs, custom, mem) {
     accountFact(personaId, ctx),
     `[LIVE CONTEXT:\n${contextBlock(ctx)}\n]`,
     `[THE CURRENT MOMENT — right now it is ${momentET()} (America/New_York); Mr. Burrus is in Waldorf, MD. This is authoritative; chat history and memory may be hours or days old.]`,
+    require('./holidays').holidayLine(),
   ].filter(Boolean).join('\n\n');
 }
 
@@ -1075,6 +1077,7 @@ async function relayToPersona(id, message, { from = 'ara', convo = '', depth = 1
     ctx ? `[EMPIRE CONTEXT:\n${contextBlock(ctx, { trading: id === 'ara' })}\n]` : '',
     convo ? `[THE CONVERSATION YOU'RE BEING PULLED INTO — Mr. Burrus and ${(ROSTER[from] && ROSTER[from].name) || from}, most recent last:\n${convo}\n]` : '',
     `[THE CURRENT MOMENT — ${momentET()} (America/New_York).]`,
+    require('./holidays').holidayLine(),
     talkingTo(id, from, message),
   ].filter(Boolean).join('\n\n');
   const messages = [{ role: 'user', content: message }];

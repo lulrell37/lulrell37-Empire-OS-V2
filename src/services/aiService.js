@@ -301,6 +301,8 @@ ${personaId==='ara'?` EMAIL: [READ_EMAIL] | [SEND_EMAIL: to | subject | body] (M
   if(parts.length){
     sys+=`\n\n[MEMORY — what you know about the topic at hand, plus anything pinned and the last few exchanges. Reference naturally; never claim you don't remember. If something specific isn't here, emit [MEMORY_QUERY: your precise question] before replying:\n${parts.join('\n\n').substring(0,40000)}\n]`;
   }
+  // Holidays (owner, 2026-11-26: "all personas should know holidays").
+  try{const{holidayLine}=await import('./holidays');sys+=`\n\n${holidayLine()}`;}catch(e){}
   // Keep this LAST so it's the most recent thing the model reads before replying.
   sys+=`\n\n[THE CURRENT MOMENT — right now it is ${timeStr} ${tz}, and Mr. Burrus is in Waldorf, MD. This is authoritative. The chat history and the memory above may be hours, days, or weeks old — do NOT assume it is still the same day or time of day as the last message. Every reply should be grounded in the date and time stated here. If more than a few hours have clearly passed since the last exchange, greet the new moment accordingly (a fresh morning, a new day) rather than continuing as if no time passed.]`;
   return{sys,cacheAt};
