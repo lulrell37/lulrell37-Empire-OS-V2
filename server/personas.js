@@ -328,10 +328,10 @@ const INITIATIVE = "[HIS NAME — Mr. Burrus's name is Tarell Burrus (owner, 202
 // "Relaying the fix to Atlas now", with no [RELAY_TO] behind it: which personas a
 // reply says it's handing something to. Names count only as written for a persona
 // (A.T.L.A.S., ATLAS, Atlas), never lowercase words ("pen", "hook"); offers and
-// negatives ("want me to ask Atlas?", "no need to tell Talon") don't count. Keep the
+// negatives ("want me to ask Atlas?", "no need to tell Talon", "neither you nor Ara"), descriptions ("should go to her", "Ara could handle") and past events don't count: only a first-person promise (I'll relay, passing this to, let me check with, Let Atlas know) with the name as its target in the same clause does. Keep the
 // server and app copies the same.
-const HANDOFF_VERB=/\b(relay\w*|pass\w*|hand\w*|send\w*|sent|forward\w*|loop\w*|tell\w*|told|let\w*|ping\w*|flag\w*|check\w* (with|in with)|ask\w*|bring\w*|brought|get\w* (with|to)|have|having|routing|route\w*|giv\w*|push\w*|notif\w*|updat\w*|correct\w*)\b/i;
-const HANDOFF_NOT=/\b(not|never|no need|won'?t|can'?t|cannot|didn'?t|don'?t|want me to|should i|shall i|if you|would you|do you want|whether)\b|n't\b/i;
+const HANDOFF_VERB=/(?:\b(?:I'll|I will|I'm going to|I am going to|I'm gonna|let me|I'm|I am|we'll|we will|we're)\s+(?:\w+\s+){0,2}?(?:(?:relay(?:ing)?|pass(?:ing)?|hand(?:ing)?|send(?:ing)?|forward(?:ing)?|loop(?:ing)?|tell(?:ing)?|ping(?:ing)?|flag(?:ing)?|check(?:ing)? (?:with|in with)|ask(?:ing)?|bring(?:ing)?|get(?:ting)? (?:with|to)|rout(?:e|ing)|giv(?:e|ing)|push(?:ing)?|notify(?:ing)?|updat(?:e|ing)|let(?:ting)?))\b)|^\W*(?:(?:(?:relay(?:ing)?|pass(?:ing)?|hand(?:ing)?|send(?:ing)?|forward(?:ing)?|loop(?:ing)?|tell(?:ing)?|ping(?:ing)?|flag(?:ing)?|check(?:ing)? (?:with|in with)|ask(?:ing)?|bring(?:ing)?|get(?:ting)? (?:with|to)|rout(?:e|ing)|giv(?:e|ing)|push(?:ing)?|notify(?:ing)?|updat(?:e|ing)|let(?:ting)?))|let)\b/i;
+const HANDOFF_NOT=/\b(not|never|neither|nor|without|no need|won'?t|can'?t|cannot|didn'?t|don'?t|want me to|should i|shall i|if|when|unless|whether|would you|do you want|should|could|would|might|may|must|has to|have to|need to|needs to|already|just)\b|n't\b/i;
 function promisedHandoffs(text,names,self){
   let s=String(text||'');
   for(const [id,name] of Object.entries(names)){
@@ -346,7 +346,7 @@ function promisedHandoffs(text,names,self){
     while((m=re.exec(sentence))){
       const id=m[1];
       if(id===self)continue;
-      const before=sentence.slice(0,m.index).replace(/@@\w+@@/g,'them');
+      const before=sentence.slice(0,m.index).replace(/@@\w+@@/g,'them').split(/[;:\u2014]| - | but /i).pop();
       if(HANDOFF_VERB.test(before)&&!HANDOFF_NOT.test(before))out.add(id);
     }
   }
