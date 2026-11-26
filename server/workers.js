@@ -716,10 +716,51 @@ async function tag(name, arg) {
   return `WORKER_START: ✓ ${on ? `worker ${on.slot} of 3` : 'a worker'} (${w.kind}) "${w.title}" ${on ? 'is working on it now' : `is in line (all 3 slots busy)`}${w.kind === 'code' ? ', on its own GitHub runner' : ''}. Its progress shows on his notification strip; its report goes straight to him on your bot when it's done (you'll see it in this chat).`;
 }
 
-const WORKER_TOOLS = ` - [WORKER_START: code|browse | short title | the full task, self-contained | Drive note title (browse only, optional)] — hand a task to a worker of your own so you stay free to talk to him. code = its own Claude Code on its own GitHub runner (not the server), on a worker/ branch cut from main: it commits, the job pushes that branch only, never main; good for any general job (code, research, checks, writing), big ones included: a code worker has Chrome, ffmpeg, ImageMagick and Python, keeps large media in GitHub releases, and a job too big for one run (about 3 h) carries on in up to 3 runs on the same branch by itself. Put any Google Drive file it needs in the task as its link (drive.google.com/file/d/…, docs.google.com/…) or "drive: <id>": the worker downloads it through the server, however big. browse = a browser task on the server, its result saved to that Drive note; one browse at a time. Every browser shares the same saved logins, so a site you or A.R.A. are signed in to works for a worker too. A file in his Google Drive is read with your Drive tags ([READ_NOTE], [SEARCH_DRIVE], [READ_FILE_ID]), not a browse worker. HARD CAP: 3 workers running at once, total; the rest wait in line. Call them by their slot, "worker 1, 2 or 3", never by a running count; [WORKER_STOP: 2] stops the one in slot 2. A browse worker stuck on information (a sign-in, an account email, a code) gets it from A.R.A., who searches his email and notes, and carries on; only what nobody can supply comes to him, from you. Each one's progress shows live on his notification strip, and its report goes straight to him on your bot when it ends (you'll see it in this chat), so you don't need to relay it; if he asks, read [WORKER_STATUS]. A code worker's work ships when he says push / ship / merge: [WORKER_SHIP: id] (or all, or any branch name) — the server merges it into main and redeploys if server code changed; never merge by hand. Use them for EVERY task, whatever its length (his standing order, 2026-11-22), so you are always free to talk to him. Only straight answers and seconds-long lookups stay with you.
+// No worker starts before he and J.A.R.V.I.S. agree on the problem and the plan
+// (owner, 2026-11-26: "instead of talking to find what we can do, Jarvis jumps and
+// puts a worker on it when we didn't agree what the problem was"). [WORKER_START]
+// runs at once only on his own message that is a clear go: "go", "do it", "yes",
+// "fix it", "put a worker on it", or an order that starts with a verb ("make me…",
+// "build…", "sign me up for…"). A problem report or a question ("X keeps failing",
+// "why did…") starts nothing: J.A.R.V.I.S. tells him what he thinks is wrong and
+// how he'd fix it, and the task waits on a Start card (tg_pending `worker_start`)
+// or on his next "go". Code-driven workers (auto-fix, feature requests, A.R.A.
+// finds) don't use the tag and aren't gated.
+const SYSTEM_TURN = /^\[(SENT ON YOUR OWN|The server restarted|REDEPLOY|WAKE|OUT OF BAND|A\.R\.A\. FOUND)/i;
+const GO = /\b(go( ahead| for it)?|do (it|that|this|both|all)|yes|yeah|yep|yup|sure|ok(ay)?|approved?|proceed|start (it|that|on it|the worker)|run (it|with it)|fix (it|that|them|this)|build (it|that)|make it so|ship it|let'?s (do|go|try)|sounds good|send (it|that) to a worker|put (a |the )?(worker|bot)s? on|get (a |the )?(worker|bot)s? on|hand it (off|to a worker))\b/i;
+const ORDER = /^(please\s+)?(make|create|set ?up|build|write|draft|design|get|find|research|sign (me )?up|register|open|start|run|fix|update|change|add|put|prepare|handle|finish|redo|retry|try|rebuild|install|connect|look into|check|compare|transcribe|clip|edit|scan|send)\b/i;
+const QUESTION = /^(why|what|how|when|where|who|which|is|are|was|were|did|does|do|has|have|should|would)\b|\?\s*$/i;
+function ownerGo(text) {
+  const t = String(text || '').replace(/^\[HE IS REPLYING TO[^\]]*\]\s*/i, '').trim();
+  if (!t || SYSTEM_TURN.test(t)) return false;
+  return goWords(t.replace(/^\[[^\]]{0,40}\]\s*/, '')); // a "[Mon 3:00 PM]" stamp in front
+}
+function goWords(t) {
+  if (!t) return false;
+  if (GO.test(t)) return true;
+  const first = t.split(/(?<=[.!?\n])\s+/)[0];
+  if (/^(can|could|will|would) you\b/i.test(first) && ORDER.test(first.replace(/^(can|could|will|would) you\s+/i, ''))) return true;
+  if (QUESTION.test(first)) return false;
+  return ORDER.test(first);
+}
+async function startGate(arg, { asked = '', depth = 0 } = {}) {
+  if (depth === 0 && ownerGo(asked)) return { run: true };
+  const p = String(arg || '').split('|').map((x) => x.trim());
+  const title = (p[1] || p[2] || 'a task').slice(0, 80);
+  const q = (d().query || require('./db').query);
+  const id = require('./syncStore').newId().slice(0, 12);
+  const label = `Start worker: ${title}?`;
+  const detail = `${String(p[2] || arg).slice(0, 1200)}\n\nJ.A.R.V.I.S. wants a ${p[0] === 'browse' ? 'browse' : 'code'} worker on this. Nothing starts until you tap Confirm (or tell him "go").`;
+  await q('INSERT INTO tg_pending (id, persona, kind, label, detail, payload, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7)',
+    [id, 'jarvis', 'worker_start', label, detail, JSON.stringify({ arg }), Date.now()]);
+  return { run: false, confirm: { id, label, detail },
+    text: `WORKER_START: NOT STARTED — his message wasn't a go-ahead, so no worker is running. Tell him in plain words what you think the problem is (with the evidence) and how you'd go about it, then ask if he wants a worker on it. It starts when he taps Start on the card or says go.` };
+}
+
+const WORKER_TOOLS = ` - [WORKER_START: code|browse | short title | the full task, self-contained | Drive note title (browse only, optional)] — hand a task to a worker of your own so you stay free to talk to him. code = its own Claude Code on its own GitHub runner (not the server), on a worker/ branch cut from main: it commits, the job pushes that branch only, never main; good for any general job (code, research, checks, writing), big ones included: a code worker has Chrome, ffmpeg, ImageMagick and Python, keeps large media in GitHub releases, and a job too big for one run (about 3 h) carries on in up to 3 runs on the same branch by itself. Put any Google Drive file it needs in the task as its link (drive.google.com/file/d/…, docs.google.com/…) or "drive: <id>": the worker downloads it through the server, however big. browse = a browser task on the server, its result saved to that Drive note; one browse at a time. Every browser shares the same saved logins, so a site you or A.R.A. are signed in to works for a worker too. A file in his Google Drive is read with your Drive tags ([READ_NOTE], [SEARCH_DRIVE], [READ_FILE_ID]), not a browse worker. HARD CAP: 3 workers running at once, total; the rest wait in line. Call them by their slot, "worker 1, 2 or 3", never by a running count; [WORKER_STOP: 2] stops the one in slot 2. A browse worker stuck on information (a sign-in, an account email, a code) gets it from A.R.A., who searches his email and notes, and carries on; only what nobody can supply comes to him, from you. Each one's progress shows live on his notification strip, and its report goes straight to him on your bot when it ends (you'll see it in this chat), so you don't need to relay it; if he asks, read [WORKER_STATUS]. A code worker's work ships when he says push / ship / merge: [WORKER_SHIP: id] (or all, or any branch name) — the server merges it into main and redeploys if server code changed; never merge by hand. Use them for EVERY task, whatever its length (his standing order, 2026-11-22), so you are always free to talk to him — but only once you and he agree on the problem and the plan: when he reports a problem or asks why, first tell him what you think is wrong (with evidence) and how you'd fix it, and ask; [WORKER_START] on anything but his clear go becomes a Start card and starts nothing. Only straight answers and seconds-long lookups stay with you.
  - [WORKER_STATUS] — every worker: running, waiting, done, with its current step and GitHub link. [WORKER_STOP: id] — stop one (a GitHub run is cancelled).`;
 
 // Persona jobs (jobProgress.js) share this one board: load the workers, then update it.
 async function kick() { await load(); boardKick(); }
 
-module.exports = { spokenReport, VOICE_MAX, kick, start, stop, ship, driveIdsIn, fileGrant, MAX_LEGS, recover, statusText, forApp, tag, WORKER_TOOLS, enabled, _setDeps: (x) => { deps = x; list = null; board = undefined; boardLast = 0; }, _list: () => list, _boardText: () => boardText(), logFailure, browseStatus, codeStatus, FAIL_KEY, _tgBoardDeps: tgBoardDeps, parsePlan, percentOf, progressLabel, readPlanComment, PLAN_FILE };
+module.exports = { ownerGo, startGate, spokenReport, VOICE_MAX, kick, start, stop, ship, driveIdsIn, fileGrant, MAX_LEGS, recover, statusText, forApp, tag, WORKER_TOOLS, enabled, _setDeps: (x) => { deps = x; list = null; board = undefined; boardLast = 0; }, _list: () => list, _boardText: () => boardText(), logFailure, browseStatus, codeStatus, FAIL_KEY, _tgBoardDeps: tgBoardDeps, parsePlan, percentOf, progressLabel, readPlanComment, PLAN_FILE };

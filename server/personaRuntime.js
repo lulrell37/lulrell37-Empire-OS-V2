@@ -705,7 +705,13 @@ async function runInjections(text, persona = 'ara', { convo = '', depth = 0, sin
         catch (e) { console.error(`workers failed: ${name}: ${e.message}`); return `${name} failed: ${e.message}`; }
       }
       if (['WORKER_START', 'WORKER_STATUS', 'WORKER_STOP'].includes(name) && persona === 'jarvis') {
-        try { return await require('./workers').tag(name, arg); }
+        try {
+          if (name === 'WORKER_START') {
+            const g = await require('./workers').startGate(arg, { asked, depth });
+            if (!g.run) { if (sink && sink.confirms) sink.confirms.push(g.confirm); return g.text; }
+          }
+          return await require('./workers').tag(name, arg);
+        }
         catch (e) { console.error(`workers failed: ${name}: ${e.message}`); return `${name} failed: ${e.message}`; }
       }
       if (name === 'BROWSER_KEY' && arg && persona === 'jarvis') {

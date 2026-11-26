@@ -645,6 +645,9 @@ async function runPending(id) {
       text = await require('./autoFix').mergeFix(pl.pr);
     } else if (row.kind === 'redeploy') {
       text = await require('./redeploy').requestRedeploy(row.persona);
+    } else if (row.kind === 'worker_start') {
+      // A worker J.A.R.V.I.S. proposed; he tapped Start (server/workers.js startGate).
+      text = await require('./workers').tag('WORKER_START', pl.arg);
     } else if (row.kind === 'worker_tag') {
       // A code worker's tag (server/workerTools.js) he has now tapped Confirm on.
       text = await require('./workerTools').runConfirmed(pl);
