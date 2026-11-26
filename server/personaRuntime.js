@@ -233,7 +233,7 @@ function contextBlock(ctx, { trading = false } = {}) {
     const who = (p.contributions || []).map((c) => `${c.persona}: ${String(c.task || '').slice(0, 100)}`).join('; ') || 'none yet';
     L.push(`\nACTIVE CLIENT PROJECT (A.R.A. coordinating): ${p.name} — ${String(p.brief || '(no brief)').slice(0, 500)}\n  repo: ${p.repo && p.repo.owner ? `${p.repo.owner}/${p.repo.repo}` : 'not created yet'} · contributions: ${who}`);
   }
-  if (h.news_brief) {
+  if (h.news_brief && !trading) { // A.R.A. gets it with its time in newsBlock
     L.push(`\nLatest W.I.R.E. news brief${h.news_slot ? ` (${h.news_slot})` : ''}:\n${String(h.news_brief).slice(0, 700)}`);
   }
   return L.join('\n');
@@ -408,7 +408,7 @@ PERSONA_EXTRA_TOOLS.selene = ` YOUR INSTAGRAM WATCH — runs itself Mondays and 
  - [SOCIAL_NICHE: description] — his niche, which aims the trend research.
  - [MONDAY_SCRIPTS] — have S.C.R.I.B.E. write this week's 7 video scripts now.`;
 
-PERSONA_EXTRA_TOOLS.stephanie = require('./stephanieCourse').COURSE_TOOLS;
+PERSONA_EXTRA_TOOLS.stephanie = require('./stephanieCourse').COURSE_TOOLS + '\n' + require('./stephanieQuiz').QUIZ_TOOLS;
 
 PERSONA_EXTRA_TOOLS.rogue = require('./clipScan').CLIP_TOOLS + '\n' + require('./autoClip').AUTO_CLIP_TOOLS + '\n' + require('./rawEdit').RAW_EDIT_TOOLS;
 PERSONA_EXTRA_TOOLS.jarvis += '\n' + require('./autoClip').AUTO_CLIP_TOOLS + '\n' + require('./rawEdit').RAW_EDIT_TOOLS + '\n' + require('./siteLogins').LOGIN_TOOLS;
@@ -492,8 +492,9 @@ function faithBlock(personaId) {
 // for rogue, ara, jarvis) have to be in her prompt or she says she can't.
 function araTools() {
   return ARA_TOOLS + '\n' + require('./browserAgent').BROWSE_TOOLS + '\n' + require('./transcribe').TRANSCRIBE_TOOLS
-    + '\n' + require('./autoClip').AUTO_CLIP_TOOLS + '\n' + require('./rawEdit').RAW_EDIT_TOOLS;
+    + '\n' + require('./autoClip').AUTO_CLIP_TOOLS + '\n' + require('./rawEdit').RAW_EDIT_TOOLS + '\n' + NEWS_NOW_TOOL;
 }
+const NEWS_NOW_TOOL = ` - [NEWS_NOW] — have W.I.R.E. pull a fresh news brief right now (a few minutes; it goes to him in full on its own, so you add one line at most).`;
 
 function systemPrompt(ctx, gs, custom, mem) {
   return [
@@ -744,6 +745,12 @@ async function runInjections(text, persona = 'ara', { convo = '', depth = 0, sin
       if (name === 'MONDAY_SCRIPTS' && ['ara', 'scribe', 'selene'].includes(persona)) {
         const r = await require('./scribeMonday').runMondayScripts({ force: true });
         return `MONDAY SCRIPTS: ${r.count} written and filed, and he's been told they came in (don't paste or read them): ${(r.titles || []).join(' | ')}`;
+      }
+      if (require('./stephanieQuiz').QUIZ_TAGS.has(name) && persona === 'stephanie') return `${name}: ${await require('./stephanieQuiz').quizTag(name, arg, depth === 0 ? asked : '')}`;
+      if (name === 'NEWS_NOW' && ['ara', 'wire'].includes(persona)) {
+        const r = await require('./newsWire').refreshNewsBrief({ force: true, trigger: 'manual' });
+        if (r && r.ok) return `NEWS_NOW: ✓ W.I.R.E. pulled a fresh brief and it already went to him in full from A.R.A.'s bot — don't paste it; answer his question from it in a few lines.\n${await newsBlock({ fresh: true })}`;
+        return `NEWS_NOW: no fresh brief (${(r && (r.skipped || r.error)) || 'no result'}). Answer from the latest brief you have and say how old it is.`;
       }
       if (COURSE_TAGS.has(name) && (persona === 'stephanie' || (persona === 'ara' && name === 'COURSE_STATUS'))) return `${name}${arg ? ` "${arg}"` : ''}: ${await courseTag(name, arg, asked)}`;
       if (name === 'TRADE_STATS' && ['ara', 'talon', 'atlas'].includes(persona)) {
@@ -1273,6 +1280,23 @@ const calendarFresh = () => { calCache.at = 0; };
 // was answering weather questions without it, same as the calendar was).
 let wxCache = { at: 0, text: '' };
 const WX_RULE = 'Any question about the weather — now, later today, tonight, tomorrow, the weekend, rain, a jacket, an umbrella — is answered from THIS forecast, quoting its numbers and times. Never guess or answer from memory. For somewhere else, emit [WEATHER: city, ST].';
+// A.R.A. always has W.I.R.E.'s latest brief, with its age (owner, 2026-11-26: "if I
+// ask ara for an update she gets the latest from wire").
+const NEWS_STALE_MS = 60 * 60e3;
+async function newsBlock({ fresh = false } = {}) {
+  let h = {};
+  try { h = (await require('./syncStore').syncedRow('hud_state', 'singleton')) || {}; } catch (e) { return `[W.I.R.E.'S LATEST BRIEF couldn't be read (${e.message}). For news or "what's going on" questions, emit [NEWS_NOW].]`; }
+  if (!h.news_brief) return `[W.I.R.E. has no brief on file yet. For news or "what's going on" questions, emit [NEWS_NOW].]`;
+  const at = Number(h.news_updated_at) || 0;
+  const age = at ? Date.now() - at : Infinity;
+  const mins = Math.round(age / 60000);
+  const when = at ? `${new Date(at).toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'short', hour: 'numeric', minute: '2-digit' })} ET, ${mins < 90 ? `${mins} min` : `${Math.round(mins / 60)} h`} ago` : 'time unknown';
+  const rule = fresh ? '' : age > NEWS_STALE_MS
+    ? `\nThis is over an hour old. When he asks for an update, the news, or what's going on, emit [NEWS_NOW] for a fresh one first; don't present this one as current.`
+    : `\nWhen he asks for an update, the news, or what's going on, answer from this in your own words and say when W.I.R.E. last checked. Breaking news reaches him on its own from W.I.R.E.'s breaking watch.`;
+  return `[W.I.R.E.'S LATEST BRIEF (${when}):\n${String(h.news_brief).slice(0, 2500)}${rule}]`;
+}
+
 async function weatherBlock() {
   if (Date.now() - wxCache.at > 15 * 60000) {
     try { wxCache = { at: Date.now(), text: await require('./morningBrief').weatherLive() }; }
@@ -1388,11 +1412,14 @@ async function runPersonaTurn(personaId, userText, deliver, { reply: given, resu
   if (persona === 'stephanie') {
     const course = await require('./stephanieCourse').statusText().catch((e) => `(couldn't read it: ${e.message})`);
     sys = `${sys}\n\n[YOUR COURSE — live from Drive this turn:\n${course}\n]`;
+    const quiz = await require('./stephanieQuiz').quizBlock().catch(() => '');
+    if (quiz) sys = `${sys}\n\n${quiz}`;
   }
   // A.R.A. always has his calendar in front of her (owner's call, 2026-11-21: "what
   // time is the party?" was answered from chat memory because she never looked).
   if (persona === 'ara' && gs && gs.ok) sys = `${sys}\n\n${await calendarBlock()}`;
   if (persona === 'ara') sys = `${sys}\n\n${await weatherBlock()}`;
+  if (persona === 'ara') sys = `${sys}\n\n${await newsBlock()}`;
   const history = await loadHistory(persona);
   const messages = [...history, { role: 'user', content: `[${momentET()}] ${group ? `${require('./groupChat').GROUP_FRAME}\n\n` : ''}${userText}` }];
   const convo = convoLines(history, userText, persona);
@@ -1534,5 +1561,5 @@ async function runPersonaTurn(personaId, userText, deliver, { reply: given, resu
 const runAraTurn = (userText, deliver) => runPersonaTurn('ara', userText, deliver);
 
 module.exports = {
-  weatherBlock, araTools, systemPrompt,
+  weatherBlock, newsBlock, araTools, systemPrompt,
   recallDays, runPersonaTurn, runAraTurn, gatherContext, contextBlock, applyEffects, runInjections, findTags };
