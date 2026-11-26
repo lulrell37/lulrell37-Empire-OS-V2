@@ -16,6 +16,16 @@ const links = L.extractLinks(body);
 assert.match(L.pickAuthLink(links), /stytch\.com\/v1\/magic_links\/redirect\?public_token=pk&token=tk/);
 assert.strictEqual(L.pickAuthLink(L.extractLinks('[Help](https://help.groq.com/a) [Unsubscribe](https://groq.com/unsubscribe)')), null);
 
+// Worker 72 (2026-11-26): the brain ended "done" with only the email report.
+const doneTxt = 'a sign-in link was emailed to lulrell37@gmail.com';
+assert.strictEqual(B.wantsEmailStep(logins, { status: 'done', text: doneTxt }), true);
+assert.strictEqual(B.wantsEmailStep(logins, { status: 'done', success: false, text: doneTxt }), true);
+assert.strictEqual(B.wantsEmailStep(logins, { status: 'ask', text: doneTxt }), true);
+assert.strictEqual(B.wantsEmailStep(logins, { status: 'done', success: true, text: doneTxt }), false);
+assert.strictEqual(B.wantsEmailStep(logins, { status: 'done', text: 'found the price: $5' }), false);
+assert.strictEqual(B.wantsEmailStep(logins, { status: 'done', text: 'we emailed you a 6-digit code' }), true);
+assert.match(B.AGENT_SYSTEM('X'), /Never open Gmail, mail\.google\.com/);
+
 (async () => {
   const submit = Date.now();
   const mk = (internalDate) => ({ list: async () => ['m1'], read: async () => ({ id: 'm1', from: 'noreply@groq.com', subject: 'Your login request to Groq', text: body, internalDate }) });
