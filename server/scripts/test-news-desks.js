@@ -48,7 +48,7 @@ llm.chatAs = async () => '';
   assert.strictEqual(stored.questions.length, 5);
   const block = await q.quizBlock();
   assert.ok(block.includes(`${stored.questions[0].a} × ${stored.questions[0].b} = ${stored.questions[0].answer}`), 'answer key in her prompt');
-  assert.ok(/NOT graded/.test(block));
+  assert.ok(/NOT answered yet/.test(block));
   // Grading moves the level up on 5/5.
   assert.ok(/scored 5\/5/.test(await q.quizTag('QUIZ_SCORE', '5', '')));
   await q.tick({ now: et(10) });
@@ -58,7 +58,34 @@ llm.chatAs = async () => '';
   assert.ok(/paused/.test(await q.quizTag('QUIZ_OFF', '', 'stop the quizzes')));
   assert.ok((await q.tick({ now: et(11) })).skipped.includes('paused'));
   await q.quizTag('QUIZ_ON', '', 'start them again');
-  assert.ok((await q.tick({ now: et(11) })).sent);
+  // The 10 AM set is still unanswered: she reminds him of it instead of a new set.
+  const escalated = [];
+  q._setDeps({ escalate: async (text, plain) => { escalated.push({ text, plain }); } });
+  const set10 = JSON.parse(settings.steph_quiz).questions;
+  sent.length = 0;
+  for (let n = 1; n <= q.REMIND_MAX; n++) {
+    assert.deepStrictEqual(await q.tick({ now: new Date(et(10).getTime() + n * 30 * 60000) }), { reminded: n });
+    assert.deepStrictEqual(JSON.parse(settings.steph_quiz).questions, set10, 'the same set, not a new one');
+  }
+  assert.strictEqual(sent.length, q.REMIND_MAX);
+  assert.match(sent[0].text, /haven't answered the ones I sent at 10:05 AM/);
+  assert.match(sent[q.REMIND_MAX - 1].text, /Last reminder[\s\S]*goes to A\.R\.A\./);
+  assert.ok(sent.every((m) => m.text.includes(`${set10[0].a} × ${set10[0].b} = ?`)));
+  // Then A.R.A. tells him, angry; after that Stephanie waits quietly.
+  assert.deepStrictEqual(await q.tick({ now: et(12) }), { escalated: true });
+  assert.strictEqual(escalated.length, 1);
+  assert.match(escalated[0].plain, /S\.T\.E\.P\.H\.A\.N\.I\.E\. → A\.R\.A\.: Mr\. Burrus hasn't answered/);
+  assert.match(escalated[0].text, /You are ANGRY/);
+  assert.match(escalated[0].text, /^\[SENT ON YOUR OWN/);
+  assert.match((await q.tick({ now: et(13) })).skipped, /waiting on his answers/);
+  assert.strictEqual(sent.length, q.REMIND_MAX, 'quiet after A.R.A.');
+  assert.match(await q.quizBlock(), /handed it to A\.R\.A\./);
+  // He answers: the next turn is a fresh set again.
+  await q.quizTag('QUIZ_SCORE', '4', '');
+  assert.ok((await q.tick({ now: et(14) })).sent);
+  // A set left unanswered yesterday doesn't block today: a fresh one goes out.
+  settings.steph_quiz = JSON.stringify({ ...JSON.parse(settings.steph_quiz), at: et(14).getTime() - 864e5, escalated: Date.now() });
+  assert.ok((await q.tick({ now: et(9) })).sent);
   console.log('✓ stephanie drill');
 
   // --- H.A.V.E.N. -------------------------------------------------------------
