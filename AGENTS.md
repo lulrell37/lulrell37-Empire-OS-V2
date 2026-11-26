@@ -428,6 +428,16 @@ Stories that start on X get the same read: `runXStories` runs at 8 AM, noon, 4 P
 day, checks it against the reporting and sends it. `app_settings.woke_x_seen` stops
 repeats unless a story develops; nothing new stays quiet.
 
+## Breaking news as it happens, H.A.V.E.N.'s health read, A.R.A.'s updates, S.T.E.P.H.A.N.I.E.'s drill (owner, 2026-11-26)
+
+**Breaking watch** (`breakingWatch` in `server/newsWire.js`, `BREAKING_WATCH=off`): a gunman in DC reached him hours late because W.I.R.E.'s only break detector, the headline poll, runs at most once per 2-hour slot (`POLL_EVERY_HOURS`) and only 6 AM-11 PM, so anything that broke just after a slot waited up to 2 h. The watch runs every `BREAKING_EVERY_MIN` (5) min around the clock: one Grok call with live X + web search (`xSearch`, `days: 1`, 4 rounds; without `XAI_API_KEY` a web research call every 15 min) finds and judges anything confirmed in the last hour (active shooter, attack, disaster, big DMV police / lockdown / Metro events, major government or world events, market shocks). A real one goes out at once from A.R.A. (`🚨 W.I.R.E. — BREAKING` + push), then the full brief follows led by it (`refreshNewsBrief({ breaking })`), which fans out to W.O.K.E., A.T.L.A.S. and H.A.V.E.N. like every brief. Midnight-6 AM only `severity: major` gets through. `app_settings.breaking_seen` stops repeats. Failures log `breaking watch failed: …`. The 2-hourly poll is unchanged.
+
+**H.A.V.E.N. on the news** (`server/havenHealth.js`, `HAVEN_HEALTH=off`): every W.I.R.E. brief (`onWireBrief`) gets one Claude call as H.A.V.E.N. for what touches his or his family's health (outbreaks, recalls, food / drug / water safety, air quality, heat, DMV health risks, health policy or insurance that affects him). `NOTHING` stays quiet; otherwise her short take goes to him from A.R.A.'s bot as `🩺 H.A.V.E.N. → A.R.A.` and into both their memories. `app_settings.haven_health_seen` stops repeats.
+
+**A.R.A.'s updates come from W.I.R.E.** (`newsBlock` in `server/personaRuntime.js`): every A.R.A. turn carries W.I.R.E.'s latest brief (2500 chars) with when it was written; asked for an update or the news, she answers from it, and when it's over an hour old she emits `[NEWS_NOW]` (A.R.A., W.I.R.E.: `refreshNewsBrief` now, the brief goes to him in full and comes back into her turn). Her `contextBlock` no longer repeats the short copy. Telegram only; the app's NEWS panel already reads `hud_state`.
+
+**Multiplication drill** (`server/stephanieQuiz.js`, `STEPH_QUIZ=off`): every 30 min, 8 AM-10 PM ET, S.T.E.P.H.A.N.I.E.'s bot sends 5 multiplication questions, pure code (`makeQuiz`: 1-digit × 2-digit up to 2-digit × 2-digit, a step harder after a 5/5, easier after 2 or fewer). The set and its answer key are `app_settings.steph_quiz`; her prompt carries them every turn (`quizBlock`), she grades his reply with a trick for each miss and records `[QUIZ_SCORE: n]`. `[QUIZ_NOW]` / `[QUIZ_OFF]` / `[QUIZ_ON]` on his own message (`app_settings.steph_quiz_on`). `node server/scripts/test-news-desks.js` covers all four.
+
 ## Every persona acts on a task (`INITIATIVE`)
 
 It opens with HIS NAME: Tarell Burrus (owner, 2026-11-20; Lulrell/Terrell are mishearings). It doesn't change how anyone addresses him (Mr. Burrus / sir).

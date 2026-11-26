@@ -159,6 +159,7 @@ db.init()
     startSentinelCron();
     startAtlasInvestCron();
     startSeleneTrendsCron();
+    startStephanieQuizCron();
     startMondayScriptsCron();
     startWokeXCron();
     registerTelegramWebhook();
@@ -378,6 +379,14 @@ function startNewsWireCron() {
     }, { timezone: 'America/New_York' });
   }
   console.log('W.I.R.E. news desk cron scheduled (every 10m)');
+  // Breaking watch: every few minutes, around the clock (server/newsWire.js).
+  if (process.env.BREAKING_WATCH !== 'off') {
+    const every = newsWire.everyMin();
+    cron.schedule(`*/${every} * * * *`, () => newsWire.breakingWatch()
+      .then((r) => { if (r && r.sent) console.log('breaking watch: sent —', r.headline.slice(0, 100)); })
+      .catch((e) => console.error('breaking watch failed:', e.message)));
+    console.log(`W.I.R.E. breaking watch scheduled (every ${every}m)`);
+  }
 }
 
 // S.C.O.U.T. cold outreach — the outreach half of src/services/autoScout.js
@@ -405,6 +414,16 @@ function startAtlasInvestCron() {
   cron.schedule('30 11,13,15 * * 1-5', run('midday'), ET);
   cron.schedule('*/15 9-16 * * 1-5', () => desk.watchPicks().catch((e) => console.error('stock watch failed:', e.message)), ET);
   console.log('A.T.L.A.S. stock desk cron scheduled (09:05, 11:30, 13:30, 15:30 ET weekdays, watch every 15m)');
+}
+
+// S.T.E.P.H.A.N.I.E.'s multiplication drill (server/stephanieQuiz.js): 5 questions
+// every 30 min, 8 AM-10 PM ET, on her own bot. STEPH_QUIZ=off stops it.
+function startStephanieQuizCron() {
+  if (process.env.STEPH_QUIZ === 'off') return console.log('Stephanie quiz cron disabled (STEPH_QUIZ=off)');
+  cron.schedule('0,30 8-21 * * *', () => require('./stephanieQuiz').tick()
+    .then((r) => { if (r && r.sent) console.log('stephanie quiz: sent, level', r.level); })
+    .catch((e) => console.error('stephanie quiz failed:', e.message)), { timezone: 'America/New_York' });
+  console.log('Stephanie quiz cron scheduled (every 30m, 8 AM-10 PM ET)');
 }
 
 // S.E.L.E.N.E.'s Instagram watch (server/seleneTrends.js). SELENE_TRENDS=off stops it.
