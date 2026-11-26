@@ -11,7 +11,7 @@
 const { query } = require('./db');
 const { syncedRows, todayET } = require('./syncStore');
 
-const NAMES = { XAUUSD: 'Gold', BTCUSD: 'Bitcoin' };
+const NAMES = { XAUUSD: 'Gold', BTCUSD: 'Bitcoin', NAS100: 'Nasdaq 100' };
 const nameOf = (sym) => NAMES[sym] ? `${NAMES[sym]} (${sym})` : sym;
 const money = (n) => (n == null ? '—' : `${n < 0 ? '-' : '+'}$${Math.abs(Number(n)).toFixed(2)}`);
 const px = (n) => (n == null || n === '' ? '—' : String(n));
@@ -89,6 +89,9 @@ function tradeLost(t, why) {
 }
 
 function orderRejected({ symbol, side, error }) {
+  // Refused because he switched it off or it's done for the day: that's the switch
+  // working, not a rejection to alert on.
+  if (require('./talonSwitch').isBlockMessage(error)) { console.log(`talon: ${side} ${symbol} not placed — ${error}`); return; }
   notify(`⚠️ T.A.L.O.N. tried to ${side} ${nameOf(symbol)} but the order was rejected: ${String(error).slice(0, 200)}`);
 }
 

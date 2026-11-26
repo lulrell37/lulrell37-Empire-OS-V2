@@ -13,7 +13,9 @@ const { getSetting, setSetting } = require('./syncStore');
 // key: [what he'd call it, words he might use]
 const SWITCHES = {
   trading: ['T.A.L.O.N.\'s trading (all of it: setups, add-ons, quick scalps, re-entries, news trades, Nasdaq)', 'talon trading trades auto-trade autotrade'],
-  nasdaq: ['T.A.L.O.N.\'s Nasdaq desk', 'nasdaq nas100 us100 index desk'],
+  gold: ['T.A.L.O.N.\'s gold trading (XAUUSD only)', 'gold xau xauusd trading'],
+  bitcoin: ['T.A.L.O.N.\'s Bitcoin trading (BTCUSD only)', 'bitcoin btc btcusd crypto trading'],
+  nasdaq: ['T.A.L.O.N.\'s Nasdaq trading (NAS100 only)', 'nasdaq nas100 us100 index trading'],
   talon_updates: ['T.A.L.O.N.\'s market updates (9:30, 12:30, 3:30, 6:30)', 'market updates talon updates'],
   trade_recap: ['the 9 PM trading recap', 'recap trade recap nightly recap'],
   news_wire: ['W.I.R.E.\'s news briefs', 'wire news briefs news desk'],
@@ -48,8 +50,11 @@ const SWITCHES = {
 let deps = null;
 const d = () => deps || { getSetting, setSetting };
 
+// One market of T.A.L.O.N.'s (server/talonSwitch.js talon_halt_markets).
+const MARKET_KEYS = { gold: 'XAUUSD', bitcoin: 'BTCUSD', nasdaq: 'NAS100' };
 async function isOn(key) {
   if (key === 'trading') return !(await require('./talonSwitch').isHalted());
+  if (MARKET_KEYS[key]) return !(await require('./talonSwitch').marketHalted(MARKET_KEYS[key]));
   try { return String(await d().getSetting(`switch_${key}`, 'on')) !== 'off'; } catch { return true; } // unreadable → run
 }
 
@@ -66,6 +71,8 @@ function match(phrase) {
     const score = words.filter((w) => hay.includes(w.replace(/\./g, ''))).length / Math.max(words.length, 1);
     if (score > bestScore) { best = [k]; bestScore = score; } else if (score === bestScore && score > 0) best.push(k);
   }
+  // "Talon" alone is all of his trading, not one market of it.
+  if (best.length > 1 && best.includes('trading') && !require('./talonSwitch').marketsIn(p).length) return ['trading'];
   return bestScore >= 0.5 ? best : [];
 }
 
@@ -77,6 +84,9 @@ async function set(keys, on, { by = '' } = {}) {
     if (k === 'trading') {
       const t = require('./talonSwitch');
       if (on) await t.on(); else await t.off({ by });
+    } else if (MARKET_KEYS[k]) {
+      const t = require('./talonSwitch');
+      if (on) await t.marketOn([MARKET_KEYS[k]]); else await t.marketOff([MARKET_KEYS[k]], { by });
     } else await d().setSetting(`switch_${k}`, on ? 'on' : 'off');
     done.push(SWITCHES[k][0]);
   }
@@ -93,7 +103,7 @@ async function tag(name, arg, { asked = '', persona = '' } = {}) {
   const keys = match(arg);
   if (!keys.length) return `${name}: no switch called "${arg}". ${list()}`;
   if (keys.length > 3 && !/^(all|everything)/i.test(String(arg).trim())) return `${name}: "${arg}" could be ${keys.map((k) => SWITCHES[k][0]).join('; ')} — ask him which.`;
-  if (on && keys.includes('trading') && !require('./talonSwitch').ownerStarts(asked)) return 'SWITCH_ON refused for T.A.L.O.N.\'s trading: only his own "start trading" / "turn Talon back on" does that. Nothing changed.';
+  if (on && keys.some((k) => k === 'trading' || MARKET_KEYS[k]) && !require('./talonSwitch').ownerStarts(asked)) return 'SWITCH_ON refused for T.A.L.O.N.\'s trading: only his own "start trading" / "turn Talon back on" does that. Nothing changed.';
   const done = await set(keys, on, { by: persona });
   return `${name}: ✓ ${on ? 'ON' : 'OFF'} — ${done.join('; ')}. ${on ? 'It runs again from its next turn.' : 'It stays off, restarts included, until he says to turn it back on.'}`;
 }

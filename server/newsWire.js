@@ -123,7 +123,7 @@ DMV|<YYYY-MM-DD>|<one line>
 MONEY|<YYYY-MM-DD>|<one line>
 ===MARKETIMPACT===
 <SYMBOL>|<buy or sell>|<time horizon>|<high|med|low>|<YYYY-MM-DD the news came out>|<one-line thesis>
-(only instruments the account trades — XAUUSD XAGUSD EURUSD GBPUSD USDJPY GBPJPY AUDUSD BTCUSD indices crude; leave the section empty if nothing qualifies; mark 'high' ONLY when you would put money on it)`;
+(only instruments the account trades — XAUUSD XAGUSD EURUSD GBPUSD USDJPY GBPJPY AUDUSD BTCUSD NAS100 (the Nasdaq 100, write it exactly NAS100) other indices crude; leave the section empty if nothing qualifies; mark 'high' ONLY when you would put money on it)`;
 
     const today = todayET();
     let brief = '', headlines = [], impacts = [], stale = [];
@@ -290,8 +290,11 @@ Reply ONLY with JSON: {"breaking": true|false, "key": "short story slug", "headl
 // --- News -> T.A.L.O.N. trade hand-off (demo account only) ---
 async function newsTradeHandoff(impacts) {
   // T.A.L.O.N. only trades gold and Bitcoin, news calls included.
-  const highs = impacts.filter((i) => /^high/.test(i.confidence) && SYMBOLS.includes(i.symbol));
+  const offMarkets = await require('./talonSwitch').haltedMarkets().catch(() => ({}));
+  const highs = impacts.filter((i) => /^high/.test(i.confidence) && SYMBOLS.includes(i.symbol) && !offMarkets[i.symbol]);
   if (!highs.length) return;
+  const blockedNow = await require('./talonSwitch').blocked().catch(() => '');
+  if (blockedNow) { console.log(`newswire: news trades skipped — ${blockedNow}`); return; }
   if ((await getSetting('news_wire_trades', '1')) !== '1') {
     console.log('newswire: high-confidence calls but news trades are off —', highs.map((i) => `${i.side} ${i.symbol}`).join(', '));
     return;

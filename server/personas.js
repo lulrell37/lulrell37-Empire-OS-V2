@@ -131,7 +131,7 @@ const ROSTER = {
   talon: {
     name: 'T.A.L.O.N.', role: 'Trader', api: 'anthropic', model: CLAUDE,
     voiceId: 'IKne3meq5aSn9XLyUdCD',
-    blurb: 'The Empire\'s trading desk — trades gold (XAUUSD) and Bitcoin (BTCUSD) only, on a fixed top-down playbook, 0.02 lot (gold sized to its stop: at most $40 lost per position), every trade entered once. Every trade he takes is reported to Mr. Burrus by A.R.A.',
+    blurb: 'The Empire\'s trading desk — trades gold (XAUUSD), Bitcoin (BTCUSD) and the Nasdaq 100 (NAS100) only, on one fixed top-down playbook, every position sized to its stop so it loses at most $40 there, every trade entered once, done for the day after two losing trades. Every trade he takes is reported to Mr. Burrus by A.R.A.',
   },
   haven: {
     name: 'H.A.V.E.N.', role: 'Doctor & Wellness', api: 'anthropic', model: CLAUDE,

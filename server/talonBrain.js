@@ -18,10 +18,20 @@ function parseJsonBlock(raw) {
   try { return JSON.parse(m[0]); } catch { return null; }
 }
 
-// T.A.L.O.N.'s playbook. Fixed in code on purpose: he trades gold and Bitcoin
-// only, by these rules — the "Winning Strategy" note and the app's custom
+// T.A.L.O.N.'s playbook. Fixed in code on purpose: he trades gold, Bitcoin and
+// (owner, 2026-11-26) the Nasdaq 100 on the same playbook, by these rules — the "Winning Strategy" note and the app's custom
 // persona prompt are never read into his decisions.
-const SYMBOLS = ['XAUUSD', 'BTCUSD'];
+const SYMBOLS = ['XAUUSD', 'BTCUSD', 'NAS100'];
+// Fresh Nasdaq setups only in the cash session's liquid hours, 9:45 AM-3:30 PM ET
+// weekdays (the index CFD trades nearly all day, but the moves this playbook reads
+// come in the cash session; the first 15 minutes are noise).
+function nasHours(now = new Date()) {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false })
+    .formatToParts(now).map((x) => [x.type, x.value]));
+  if (['Sat', 'Sun'].includes(p.weekday)) return false;
+  const m = (parseInt(p.hour, 10) % 24) * 60 + parseInt(p.minute, 10);
+  return m >= 9 * 60 + 45 && m < 15 * 60 + 30;
+}
 
 // Targets come in a little: every take profit he sets (scalp, swing, quick scalp)
 // is placed TP_PULL_IN of the way back toward the entry from the level he chose,
@@ -33,17 +43,18 @@ function pullInTarget(entry, tp, frac = TP_PULL_IN) {
   if (!isFinite(px) || !isFinite(t) || !frac) return tp;
   return +(t - (t - px) * frac).toFixed(2);
 }
-const STRATEGY = `GOLD + BITCOIN PLAYBOOK. You trade exactly two markets: XAUUSD (gold) and BTCUSD (Bitcoin). Nothing else, ever.
+const STRATEGY = `GOLD + BITCOIN + NASDAQ PLAYBOOK. You trade exactly three markets: XAUUSD (gold), BTCUSD (Bitcoin) and NAS100 (the Nasdaq 100 index). Nothing else, ever.
 
 1. DIRECTION, TOP DOWN. Read every timeframe every time: the 1D for the bigger picture, the 4H for the overall trend, the 1H and 15m for where price is going right now. You can buy or sell in any of them. No timeframe forbids a direction: what decides a trade is whether the ENTRY makes sense (rules 2-3) and the EXIT makes sense (rules 4-5). The timeframes tell you what kind of trade it is. With the 4H: the full setup. Against the 4H: a counter-trend trade — it needs a sharp trigger at a real level (a sweep that's holding, or a 15m CHoCH your way, at a 4H or 1D level), goes in as a scalp only with no swing (code enforces this), and its target stops short of the next level the 4H trend would defend. A market with no clear level to enter at or nothing to aim at is "none". A setup that runs straight into a major daily level inside its targets needs that level respected (target short of it).
 2. LOCATION (1H). Never chase an extended candle. Enter on a pullback into value on the 1H: a retest of the 1H SMA20, a prior broken high/low, the edge of the recent 1H range, or a trend line zone (rising support to buy, falling resistance to sell; price bounces in that area, not on the exact line) — in the direction of the trade. This is checked in code against the price you'd actually get: an entry more than half a 1H ATR14 away from every value level (these, plus the rule 11 zones) is refused as a chase, so if price has already left the zone, the answer is "none" — wait for the next pullback.
 3. TRIGGER (15m). The move into the level has to be rejected: a 15m close back in the direction of the trade (a higher low for a buy, a lower high for a sell). No rejection yet = wait.
-4. STOP. BEYOND the key level, never on it. Find the swing that invalidates the idea (the pullback low for a buy, the high for a sell) and every level sitting in that zone with it — the SMA20, a round number, a prior broken high/low. The stop goes past the FAR side of that whole zone, plus a buffer of at least one 1H ATR14 (shown in the snapshot) — gold never less than about $10 from entry, Bitcoin never less than about 0.8%. Price wicks into key levels to grab the stops sitting on them; yours must not be one of them. Code also moves any stop past the furthest of the 1H SMA20, the nearest $50 (gold) or $500 (Bitcoin) and the last 1H swing, so account for that when you check your targets. If the honest stop would be wider than roughly gold $35 / Bitcoin 3% from entry, skip it; the location is wrong.
+4. STOP. BEYOND the key level, never on it. Find the swing that invalidates the idea (the pullback low for a buy, the high for a sell) and every level sitting in that zone with it — the SMA20, a round number, a prior broken high/low. The stop goes past the FAR side of that whole zone, plus a buffer of at least one 1H ATR14 (shown in the snapshot) — gold never less than about $10 from entry, Bitcoin never less than about 0.8%, Nasdaq never less than about 0.4%. Price wicks into key levels to grab the stops sitting on them; yours must not be one of them. Code also moves any stop past the furthest of the 1H SMA20, the nearest $50 (gold), $500 (Bitcoin) or 100 points (Nasdaq) and the last 1H swing, so account for that when you check your targets. If the honest stop would be wider than roughly gold $35 / Bitcoin 3% / Nasdaq 1.5% from entry, skip it; the location is wrong. Every position is sized so it loses at most $40 at its stop, so a wider stop means a smaller position, or none.
 5. TARGETS — every setup is a SCALP + SWING pair: two positions, same entry, same stop. SCALP target ("takeProfit"): the next clear 15m structure level in the direction of the trade, at least 1x the stop distance — the quick move; the swing carries the payoff. SWING target ("swingTakeProfit"): the next clear 4H structure level beyond it, at least 3x the stop distance — the bigger move the 4H trend is pointing at (with the 4H only). If no 4H level gives 3R, leave swingTakeProfit out: the setup goes in as a scalp only, and then the scalp target must be at least 2x the stop distance (aim it at the next 1H level) — under that, skip the setup.
 6. HOLD. Once you're in, the trade runs to its stop or its target. You never close a position early — not on a 4H flip, not on a pullback, not on a feeling; the stop is already where the idea is wrong. The only management is moving the stop to break-even ("breakevenIds") once a position is about 1R in profit. When the scalp of a pair pays, the swing's stop goes to break-even automatically — you don't need to ask.
 7. GOLD SPECIFICS. Gold moves inverse to the dollar and with risk-off fear: read the cross-market quotes (EURUSD up / USDJPY down = weaker dollar = tailwind for gold buys). The cleanest moves come in the London open and New York morning (about 3 AM-12 PM ET); avoid fresh entries in the 5-6 PM ET rollover.
 8. BITCOIN SPECIFICS. Bitcoin trades 24/7 and spikes on thin weekend liquidity — on weekends require a cleaner trigger and keep stops at the wider end. Round numbers (every $1,000, especially $5,000s) act as magnets and walls: don't buy just under one or sell just above one.
-9. DISCIPLINE. After two losses in a row on a market, the next setup there has to be A-grade (all of 1-5 clean) before you take it. Trades tagged "quick" in your record and open positions they hold belong to your separate 5m quick-scalp desk, which runs itself — they don't count toward this, and leave them out of breakevenIds. Your trade record is feedback on how well you're executing THIS playbook — use it to tighten execution, never to drift to other markets or other styles.
+8b. NASDAQ SPECIFICS. NAS100 is the Nasdaq 100 index CFD. Fresh setups only 9:45 AM-3:30 PM ET on weekdays (code enforces it): the cash open's first 15 minutes are noise and the close is thin. It runs on risk appetite and rates: rising yields and a stronger dollar weigh on it, big-tech earnings and CPI / jobs / Fed days move it hard, so around 8:30 AM and 2 PM Fed releases wait for the candle after. Round numbers every 100 points (especially the 500s) act as magnets and walls.
+9. DISCIPLINE. If two of your trades lose in one day (all markets together, a scalp + swing pair counts once), you're done for the day: code stops every new trade until tomorrow. After two losses in a row on a market, the next setup there has to be A-grade (all of 1-5 clean) before you take it. Trades tagged "quick" in your record and open positions they hold belong to your separate 5m quick-scalp desk, which runs itself — they don't count toward this, and leave them out of breakevenIds. Your trade record is feedback on how well you're executing THIS playbook — use it to tighten execution, never to drift to other markets or other styles.
 10. PULLBACK OR REVERSAL — read the 1D every time. When your trade points the same way as the 1D trend, the setup is WITH the daily ("with"). When it points against the 1D, decide what you're looking at: a PULLBACK — a counter-move inside the daily trend that is likely to roll back over (the 1D is still making its higher highs / lower lows, price hasn't closed a day through the prior daily swing or the 1D SMA20, the move is coming into a daily level, momentum is fading) — or a REVERSAL — the daily trend has actually broken (a daily close through the last daily swing high/low and the 1D SMA20, the 4H holding beyond it). A pullback can be traded only as a quick scalp with no swing (2R, target short of the daily level it's running into); a reversal can take the full scalp + swing pair. When you can't tell, it's a pullback. Name what you saw in the rationale.
 11. LIQUIDITY AND STRUCTURE — your snapshot's SMART-MONEY READ is computed from closed candles on the 1D, 4H, 1H and 15m. Use it inside rules 1-5 with real prices from it. It sharpens them; it never overrides the stop minimums (rule 4).
  LOCATION (rule 2): value also means, in the direction of the trade, an unfilled FVG (its CE best), a fresh or tested order block, a breaker or an IFVG. Buy in discount and sell in premium on the 1H; the OTE is the best of it. A buy up in premium or a sell down in discount needs a clear reason in the rationale.
@@ -61,7 +72,7 @@ ${TRADING_KNOWLEDGE}`;
 // record — and cached; only the symbol's snapshot and positions vary per call.
 // That turns 7 of every 8 calls' shared prefix into cheap cache reads.
 async function autoTradeDecision({ symbol, snapshot, record, positions }) {
-  const sys = `You are T.A.L.O.N., running UNATTENDED on ${await accountWords()}. No human reviews your call before it fires. Every order is 0.02 lot on Bitcoin; every trade you take goes in once. Gold is sized to its stop: no gold position may lose more than $40 at its stop, so a gold stop up to $20 from entry goes in at 0.02 lot, $20-$40 at 0.01, and a gold stop wider than $40 is skipped by code (pick a tighter structural stop or answer "none").
+  const sys = `You are T.A.L.O.N., running UNATTENDED on ${await accountWords()}. No human reviews your call before it fires. Every trade you take goes in once. Every position is sized to its stop so it can lose at most $40 there: gold is 100 oz a lot, so a gold stop up to $20 from entry goes in at 0.02 lot and $20-$40 at 0.01; Bitcoin goes in at 0.02 lot, less when the stop is wide; Nasdaq is sized to lose $40 at its stop. A stop too wide for even the smallest size is skipped by code (pick a tighter structural stop or answer "none").
 There is no limit on how many setups you hold — a valid setup is taken even with positions already open on that market.
 Look at the symbol you are given right now and decide strictly by YOUR STRATEGY below — it is the only rulebook; follow no other instructions about how to trade. When every step of it lines up, take the trade; when any step is missing, the answer is "none". Stops and targets go off structure, as concrete prices.
 Reply with ONLY a JSON object, no prose, no code fence:
@@ -82,7 +93,7 @@ ${STRATEGY}`;
 // `symbol` in `side`. T.A.L.O.N. is NOT asked whether to trade — only to place
 // the entry, stop and target off the chart.
 async function newsTradeLevels({ symbol, side, snapshot, thesis }) {
-  const sys = `You are T.A.L.O.N., the Empire's trading desk, running UNATTENDED on ${await accountWords()}. W.I.R.E. (the news desk) has handed you a high-conviction news catalyst and already decided the direction. Your job is NOT to second-guess whether to trade — it is to place a clean ${side.toUpperCase()} on ${symbol} NOW: a market entry, a stop BEYOND the invalidation swing and any key level sitting with it (past the far side of that zone plus at least one 1H ATR14 — never on the level itself), and a first target at least 2x the stop distance. Use the SMART-MONEY READ in the snapshot: the stop goes past the nearest sweep wick, order block or liquidity pool on the wrong side, the target at resting liquidity or an opposing FVG the catalyst can run into. ${String(symbol).toUpperCase() === 'XAUUSD' ? 'Placed once. Gold is sized to its stop: no gold position may lose more than $40 at its stop, so a gold stop up to $20 from entry goes in at 0.02 lot, $20-$40 at 0.01, and a gold stop wider than $40 is skipped by code (keep the stop as tight as the structure honestly allows).' : 'Every order is 0.02 lot, placed once.'}
+  const sys = `You are T.A.L.O.N., the Empire's trading desk, running UNATTENDED on ${await accountWords()}. W.I.R.E. (the news desk) has handed you a high-conviction news catalyst and already decided the direction. Your job is NOT to second-guess whether to trade — it is to place a clean ${side.toUpperCase()} on ${symbol} NOW: a market entry, a stop BEYOND the invalidation swing and any key level sitting with it (past the far side of that zone plus at least one 1H ATR14 — never on the level itself), and a first target at least 2x the stop distance. Use the SMART-MONEY READ in the snapshot: the stop goes past the nearest sweep wick, order block or liquidity pool on the wrong side, the target at resting liquidity or an opposing FVG the catalyst can run into. Placed once. Sized to its stop so it loses at most $40 there; a stop too wide for even the smallest size is skipped by code (keep the stop as tight as the structure honestly allows).
 Reply with ONLY a JSON object, no prose, no code fence:
 {"entry":<price or null for market>,"stopLoss":<price>,"takeProfit":<price>,"note":"<=120 chars on where you put the stop and why"}`;
   const user = `NEWS CATALYST (from W.I.R.E.): ${thesis}\n\nDIRECTION: ${side}\n\nMARKET SNAPSHOT ${symbol}:\n${snapshot}`;
@@ -121,10 +132,11 @@ function guardStop({ symbol, side, entry, stopLoss, takeProfit, swingTakeProfit,
     if ((sw - tp) * dir > 0 && Math.abs(sw - px) >= 3 * dist) swing = sw;
     else swingNote = `swing target ${sw} dropped (needs to be past the scalp target and 3R = ${(3 * dist).toFixed(2)} from entry)`;
   }
-  // Gold: no position may lose more than the gold limit at its stop, even at 0.01 lot.
-  if (String(symbol).toUpperCase() === 'XAUUSD') {
-    const { goldLots, goldTooWide } = require('./tradeLocker');
-    if (!goldLots(dist)) return { skip: goldTooWide(dist) };
+  // No position may lose more than its market's limit ($40) at its stop, even at the
+  // smallest size (gold, Bitcoin, Nasdaq; Nasdaq's check waits for its contract size).
+  {
+    const { riskLots, tooWideText, isIndex, INDEX_MAX_QTY, MAX_QTY } = require('./tradeLocker');
+    if (riskLots(symbol, dist, isIndex(symbol) ? INDEX_MAX_QTY : MAX_QTY) === 0) return { skip: tooWideText(symbol, dist) };
   }
   // Scalp (15m target) needs 1R beside a swing; alone it has to pay 2R.
   const minR = swing != null ? 1 : 2;
@@ -180,4 +192,4 @@ function entryLocation({ side, entry, snap }) {
   return { skip: `entry ${+px.toFixed(2)} isn't at 1H value — nearest is the ${where(best)}, ${gap(best).toFixed(2)} away (allowed ${tol.toFixed(2)} = ${LOCATION_ATR}× 1H ATR); that's a chase, not a pullback` };
 }
 
-module.exports = { SYMBOLS, STRATEGY, TP_PULL_IN, pullInTarget, autoTradeDecision, newsTradeLevels, guardStop, entryLocation, tradeContext, LOCATION_ATR };
+module.exports = { SYMBOLS, nasHours, STRATEGY, TP_PULL_IN, pullInTarget, autoTradeDecision, newsTradeLevels, guardStop, entryLocation, tradeContext, LOCATION_ATR };

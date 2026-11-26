@@ -34,7 +34,10 @@ const TARGET_R = 2;
 const KEY = 'talon_nasdaq';
 const SETUP = 'nasdaq';
 
-function enabled() { return String(process.env.TALON_NASDAQ || '').toLowerCase() !== 'off'; }
+// Retired (owner, 2026-11-26: "stop trading Nasdaq … put the same strategy we already
+// use"): Nasdaq trades on the gold/Bitcoin playbook now (talonBrain.js SYMBOLS).
+// TALON_NASDAQ=on brings this 1m desk back.
+function enabled() { return String(process.env.TALON_NASDAQ || '').toLowerCase() === 'on'; }
 
 function etParts(ms = Date.now()) {
   const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false })
@@ -252,6 +255,7 @@ async function contractSize(sym) {
 }
 
 async function statusText() {
+  if (!enabled()) return 'The 1-minute Nasdaq desk is retired (2026-11-26). Nasdaq (NAS100) now trades on the same playbook as gold and Bitcoin: 1H location, 15m trigger, scalp + swing, sized so a position loses at most $40 at its stop, fresh setups 9:45 AM-3:30 PM ET. [TRADE_STATS: NAS100 | 30] shows how it is doing.';
   const s = await load();
   const t = dayTally(await require('./tradeJournal').allTrades().catch(() => []));
   const log = (s.log || []).filter((x) => etDay(x.at) === etDay()).slice(-8).map((x) => `- ${new Date(x.at).toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit' })} ${x.side} on ${x.trigger}: ${x.what}`);

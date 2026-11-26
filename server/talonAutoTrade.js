@@ -6,7 +6,7 @@
 // process instead of a memory-only session that resets on every cold app open).
 const { getSetting, setSetting, saveMemory } = require('./syncStore');
 const { tlStatus, tlConnect, tlFollowAccount, tlActiveEnv, tlSnapshot, tlFormatSnapshot, tlPlaceOrder, tlModifyPosition, tlPositions, tlInstrumentsById, tlQuote, MAX_QTY, entryCopies } = require('./tradeLocker');
-const { autoTradeDecision, guardStop, entryLocation, tradeContext, SYMBOLS } = require('./talonBrain');
+const { autoTradeDecision, guardStop, entryLocation, tradeContext, SYMBOLS, nasHours } = require('./talonBrain');
 const { reconcileOpenTrades, formatTradeRecord, recordTradeOpen, allTrades, sharedTargets, TRADER_ID } = require('./tradeJournal');
 const { orderRejected, araNote, tradeOpened, addedOn } = require('./talonAlerts');
 const { pushAlert } = require('./pushSender');
@@ -104,6 +104,13 @@ async function tick({ force = false } = {}) {
     if (rec?.error) systemFault('trade journal check', rec.error === 'positions' ? 'couldn\'t read open positions from TradeLocker' : rec.error);
     else systemOk('trade journal check');
     const marketOpen = fxOpen();
+    // Two losing trades today → done for the day (owner, 2026-11-26): open trades are
+    // still managed and watched, nothing new goes in until tomorrow.
+    const ds = await require('./talonSwitch').checkDayStop().catch((e) => { console.error('talon-autotrade failed: day stop check —', e.message); return { stopped: false }; });
+    if (ds.stopped) {
+      await watchTick({ marketOpen }).catch((e) => console.error('talon-watch failed —', e.message));
+      return { skipped: `done for the day — ${ds.count} losing trades today (back tomorrow, or he says start trading)` };
+    }
     // A setup stopped out by a sweep gets one re-entry at the better price (server/talonReentry.js).
     await reentry.reentryTick({ marketOpen, openPairs, maxPairs }).then(() => systemOk('re-entry pass'))
       .catch((e) => { console.error('talon-reentry failed —', e.message); systemFault('re-entry pass', e.message); });
@@ -117,9 +124,12 @@ async function tick({ force = false } = {}) {
       .catch((e) => { console.error('talon-quick failed —', e.message); systemFault('quick-scalp pass', e.message); });
     if (!due) return { skipped: 'not due yet' };
 
-    // Gold and Bitcoin only — the app's auto_trade_symbols setting is ignored.
-    const syms = SYMBOLS.filter((sym) => marketOpen || CRYPTO.test(sym));
-    if (!syms.length) return { skipped: 'markets closed' };
+    // Gold, Bitcoin and the Nasdaq 100 only — the app's auto_trade_symbols setting is
+    // ignored. Nasdaq takes fresh setups only in the cash session (nasHours); a market
+    // he switched off ([TRADING_OFF: bitcoin]) isn't scanned at all.
+    const offMarkets = await require('./talonSwitch').haltedMarkets().catch(() => ({}));
+    const syms = SYMBOLS.filter((sym) => !offMarkets[sym] && (sym === 'NAS100' ? nasHours() : (marketOpen || CRYPTO.test(sym))));
+    if (!syms.length) return { skipped: Object.keys(offMarkets).length ? 'markets closed or switched off' : 'markets closed' };
 
     const positions = await tlPositions().catch(() => []);
     const idToSym = await tlInstrumentsById().catch(() => ({}));
@@ -250,7 +260,7 @@ async function liveArmed() { return (await getSetting('talon_live', '0')) === '1
 // counts only while its scalp is open — once the scalp pays, the swing riding
 // on alone frees the slot. Lone scalps (no swing), news trades and add-ons
 // don't count.
-const MAX_PAIRS = { XAUUSD: 1, BTCUSD: 2 };
+const MAX_PAIRS = { XAUUSD: 1, BTCUSD: 2, NAS100: 1 };
 const maxPairs = (sym) => MAX_PAIRS[sym] ?? 2;
 async function openPairs(sym) {
   const keys = new Set();
@@ -294,6 +304,7 @@ async function addOnEntries(marketOpen) {
     if (!base.length || !base.some((t) => t.status === 'open' && t.position_id)) continue;
     const t0 = base[0], sym = t0.symbol;
     if (!marketOpen && !CRYPTO.test(sym)) continue;
+    if (await require('./talonSwitch').marketHalted(sym).catch(() => false)) continue; // he switched this market off
     const dir = t0.side === 'buy' ? 1 : -1;
     const entry = Number(t0.entry_fill ?? t0.entry_ref), stop = Number(t0.stop_loss);
     const target = base.map((t) => Number(t.take_profit)).filter(isFinite).sort((a, b) => (b - a) * dir)[0];
@@ -329,7 +340,7 @@ async function addOnEntries(marketOpen) {
       addedOn({ symbol: sym, side: s.side, qty: s.qty, copies: 1, step, entry: price, stopLoss: addStop, earlyTarget: early, takeProfit: early });
     } catch (e) {
       // Past the gold loss limit is a skip, not a broker rejection.
-      if (e.goldTooWide) { console.log(`talon-autotrade: ${sym} add-on ${step} skipped — ${e.message}`); continue; }
+      if (e.tooWide || e.goldTooWide || e.halted) { console.log(`talon-autotrade: ${sym} add-on ${step} skipped — ${e.message}`); continue; }
       console.error(`talon-autotrade: ${sym} add-on ${step} failed —`, e.message); orderRejected({ symbol: sym, side: `${t0.side} (add-on ${step})`, error: e.message });
     }
   }

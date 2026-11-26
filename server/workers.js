@@ -267,36 +267,46 @@ function codeStatus(out) {
   return out;
 }
 
+const ASK_ROUNDS = 6; // stops one browse worker works through before he hears
+const FIND_MAX = 4;   // A.R.A. lookups per worker
 async function runBrowse(w, signal) {
   const onStep = (n, line) => update(w, { step: n, progress: line.slice(0, 140) });
   // The brain's plan and the plan step it's on: the ones before it are done.
   const onPlan = (names, at) => update(w, planPatch(w, names.map((name, i) => ({ name, done: i < at - 1 }))));
   if (DRIVE_LINK.test(w.task)) return { status: 'failed', result: `refused: ${DRIVE_REFUSAL}` };
   let r = await d().browse(`worker-${w.id}`, `J.A.R.V.I.S.'s worker`, w.task, { ownerText: '', onStep, onPlan, signal, noMail: true });
-  // Stopped for information (a sign-in, an account email, a code…): A.R.A. looks
-  // in his email and notes first, and it carries on with what she finds. He hears
-  // about it only if she can't find it (owner, 2026-11-22).
-  for (let tries = 0; r.status === 'ask' && tries < 2 && d().find && require('./araFinds').asksForInfo(r.result || r.text) && !(signal && signal.aborted); tries++) {
-    update(w, { progress: 'Getting what it needs from A.R.A. (his email and notes)' });
-    const got = await d().find(r.result || r.text, { task: w.task, site: r.url || '' }).catch(() => null);
-    if (!got) break;
-    const shown = got.kind === 'link' ? '{{LINK}} (use it as the goto url exactly; it is filled in for you, same browser)' : got.secret ? '{{INFO}} (type exactly that; it is filled in for you)' : `"${got.value}" (also available as {{INFO}})`;
-    r = await d().browse(`worker-${w.id}`, `J.A.R.V.I.S.'s worker`, `${w.task}\n\n[A.R.A. FOUND WHAT YOU STOPPED FOR — ${got.what}: ${shown}. Carry on with the task from where the browser is.]`, { ownerText: '', onStep, onPlan, signal, noMail: true, secrets: got.kind === 'link' ? { LINK: got.value, INFO: got.value } : { INFO: got.value } });
-  }
-  // Still stopped, and A.R.A. had nothing: unless it's something only he can give (a
-  // texted code, a phone approval, his ID or card, his OK to act), the worker decides
-  // it itself and carries on (owner, 2026-11-26: "don't come to me unless you need me").
-  // A password a new account needs is made here and saved to his Drive after.
+  // Stopped for something (a sign-in, an account email, a code, a fresh link…):
+  // A.R.A. looks in his email and notes first and it carries on with what she finds
+  // (owner, 2026-11-22). Nothing she can find → J.A.R.V.I.S. answers his worker, or it
+  // decides it itself (owner, 2026-11-26: "don't come to me unless you need me"). Every
+  // new stop goes round again, so a second "get me the newest email" goes to her, not
+  // him (it used to reach him once her two tries were used, 2026-11-26). He hears only
+  // what only he has (onlyHim), or after ASK_ROUNDS stops in one job.
   let made = '';
-  if (r.status === 'ask' && !onlyHim(r.result || r.text) && !(signal && signal.aborted)) {
+  let finds = 0, decides = 0;
+  const browseOn = (extra, secrets) => d().browse(`worker-${w.id}`, `J.A.R.V.I.S.'s worker`, `${w.task}${extra}`, { ownerText: '', onStep, onPlan, signal, noMail: true, secrets });
+  for (let round = 0; round < ASK_ROUNDS && r.status === 'ask' && !(signal && signal.aborted); round++) {
+    const q = String(r.result || r.text);
+    if (onlyHim(q)) break;
+    if (finds < FIND_MAX && d().find && require('./araFinds').asksForInfo(q)) {
+      finds++;
+      update(w, { progress: 'Getting what it needs from A.R.A. (his email and notes)' });
+      const got = await d().find(q, { task: w.task, site: r.url || '' }).catch(() => null);
+      if (got) {
+        const shown = got.kind === 'link' ? '{{LINK}} (use it as the goto url exactly; it is filled in for you, same browser)' : got.secret ? '{{INFO}} (type exactly that; it is filled in for you)' : `"${got.value}" (also available as {{INFO}})`;
+        r = await browseOn(`\n\n[A.R.A. FOUND WHAT YOU STOPPED FOR — ${got.what}: ${shown}. Carry on with the task from where the browser is.]`, got.kind === 'link' ? { LINK: got.value, INFO: got.value } : { INFO: got.value });
+        continue;
+      }
+    }
+    if (decides >= 2) break;
+    decides++;
     // The phone line: J.A.R.V.I.S. answers his worker first (he can pull in A.R.A. or others).
     update(w, { progress: 'Asking J.A.R.V.I.S.' });
-    const said = await (d().askJarvis || require('./workerTools').askJarvis)(w.id, String(r.result || r.text).slice(0, 800)).catch(() => '');
+    const said = await (d().askJarvis || require('./workerTools').askJarvis)(w.id, q.slice(0, 800)).catch(() => '');
     const jarvis = said && !/NEEDS_HIM:/.test(said) ? `\n${said.slice(0, 2000)}\n` : '';
     update(w, { progress: 'Working it out without him' });
-    made = require('crypto').randomBytes(12).toString('base64').replace(/[+/=]/g, '').slice(0, 14) + '!7a';
-    r = await d().browse(`worker-${w.id}`, `J.A.R.V.I.S.'s worker`, `${w.task}\n${jarvis}\n[YOU STOPPED TO ASK: "${String(r.result || r.text).slice(0, 400)}". Mr. Burrus is not asked for this — ${jarvis ? 'J.A.R.V.I.S. answered above; use it' : 'nobody on the team had it, so decide it yourself'} and carry on from where the browser is: a new password → type {{NEWPASS}} (it is made and saved for him); a choice between options → take the sensible default for his business; a sign-in method → "Continue with Google" or email; anything else → find another way on the page. Stop with "ask" again ONLY for something truly only he has: a code texted to his phone, an approval on his phone, his ID or payment card, or his OK before sending, posting, buying or deleting.]`,
-      { ownerText: '', onStep, onPlan, signal, noMail: true, secrets: { NEWPASS: made } });
+    made = made || require('crypto').randomBytes(12).toString('base64').replace(/[+/=]/g, '').slice(0, 14) + '!7a';
+    r = await browseOn(`\n${jarvis}\n[YOU STOPPED TO ASK: "${q.slice(0, 400)}". Mr. Burrus is not asked for this — ${jarvis ? 'J.A.R.V.I.S. answered above; use it' : 'nobody on the team had it, so decide it yourself'} and carry on from where the browser is: a new password → type {{NEWPASS}} (it is made and saved for him); a choice between options → take the sensible default for his business; a sign-in method → "Continue with Google" or email; a code or sign-in link from his email → request it on the page and ask for it again (A.R.A. fetches the newest one); anything else → find another way on the page. Stop with "ask" again ONLY for something truly only he has: a code texted to his phone, an approval on his phone, his ID or payment card, or his OK before sending, posting, buying or deleting.]`, { NEWPASS: made });
   }
   if (made) {
     const used = /typed into[^\n]*\(a saved secret\)/.test(String(r.text || ''));
@@ -786,13 +796,21 @@ function ownerGo(text) {
   if (!t || SYSTEM_TURN.test(t)) return false;
   return goWords(t.replace(/^\[[^\]]{0,40}\]\s*/, '')); // a "[Mon 3:00 PM]" stamp in front
 }
+// His way into an order (owner, 2026-11-26: "try the sign up again" got Start cards
+// when it came as "Jarvis, try…" / "tell him to try…"): a name or filler in front, or
+// handing it to the worker, is still his order.
+const LEAD_IN = /^(?:(?:hey|yo|ok(?:ay)?|alright|all right|so|now|and|but|then|well|please|sir|jarvis|j\.a\.r\.v\.i\.s\.?)(?:[\s,.!:-]+|$))+/i;
+const HAND_OVER = /^(?:i (?:want|need) (?:you|him|them|the workers?|a worker|your workers?) to|tell (?:him|them|the workers?|jarvis|your workers?) to|have (?:him|them|the workers?|a worker|your workers?|jarvis)|let (?:him|them|the workers?)|get (?:him|them|the workers?) to|go ahead and|just)\s+/i;
+// "try … again", "retry", "one more time": a retry of something already agreed.
+const AGAIN = /\b(?:try|retry|redo|run|do|give)\b[^.?!\n]{0,60}\b(?:again|another (?:go|shot|try))\b|\bretry\b|\bone more (?:try|time|shot)\b/i;
 function goWords(t) {
   if (!t) return false;
   if (GO.test(t)) return true;
-  const first = t.split(/(?<=[.!?\n])\s+/)[0];
-  if (/^(can|could|will|would) you\b/i.test(first) && ORDER.test(first.replace(/^(can|could|will|would) you\s+/i, ''))) return true;
+  let first = t.split(/(?<=[.!?\n])\s+/).map((x) => x.replace(LEAD_IN, '').trim()).find(Boolean) || '';
+  first = first.replace(HAND_OVER, '');
+  if (/^(can|could|will|would) you\b/i.test(first) && ORDER.test(first.replace(/^(can|could|will|would) you\s+(please\s+)?/i, ''))) return true;
   if (QUESTION.test(first)) return false;
-  return ORDER.test(first);
+  return AGAIN.test(first) || ORDER.test(first);
 }
 async function startGate(arg, { asked = '', depth = 0 } = {}) {
   if (depth === 0 && ownerGo(asked)) return { run: true };

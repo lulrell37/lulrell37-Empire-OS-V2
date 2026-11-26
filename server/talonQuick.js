@@ -305,7 +305,10 @@ async function quickTick({ marketOpen }) {
   await manage(mine.filter((t) => t.status === 'open')).catch((e) => console.error('talon-quick: manage failed —', e.message));
   const pending = await pendingTick().catch((e) => { console.error('talon-quick: pending check failed —', e.message); return []; });
   const out = {};
-  for (const sym of SYMBOLS) {
+  const offMarkets = await require('./talonSwitch').haltedMarkets().catch(() => ({}));
+  // Gold and Bitcoin only: the 5m quick desk was never built for the Nasdaq.
+  for (const sym of SYMBOLS.filter((x) => x !== 'NAS100')) {
+    if (offMarkets[sym]) { out[sym] = 'switched off by Mr. Burrus'; continue; }
     const resting = pending.find((p) => p.sym === sym);
     const why = (resting ? `a quick limit ${resting.side} @ ${resting.limit} is waiting to fill` : null)
       || (mine.some((t) => t.status === 'open' && t.symbol === sym) ? 'a quick scalp is already open' : null)

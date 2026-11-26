@@ -184,6 +184,18 @@ function fakeGitHub() {
   assert.strictEqual(lcalls[0].persona, lcalls[1].persona, 'same browser profile');
   assert.strictEqual(lcalls[1].secrets.LINK, 'https://console.groq.com/authenticate?token=zz');
   assert.ok(!lcalls[1].task.includes('token=zz'), 'the URL never reaches the task text');
+  // The link failed and it asks for a fresh one: that goes to A.R.A. again, not to him
+  // (2026-11-26: the third stop of the Groq sign-up reached him).
+  settings.workers = '{}';
+  const rcalls = []; let rfinds = 0;
+  W._setDeps({ gh: gh.call, repo: () => ({ owner: 'o', repo: 'r' }), slot: async () => () => {}, tell: async (t) => told.push(t), saveNote: async () => {}, onDone: () => null, askJarvis: async () => 'J.A.R.V.I.S. ANSWERS: request a fresh link on the page.',
+    browse: async (persona, name, task, o) => { rcalls.push(task); return rcalls.length < 4 ? { status: 'ask', text: 'BROWSE — paused\nCould you have A.R.A. pull the newest Groq sign-in email and give me the magic link?', result: '', url: 'https://console.groq.com/login' } : { status: 'done', text: 'BROWSE — finished', result: 'Signed in.' }; },
+    find: async () => { rfinds++; return { what: 'the newest sign-in link', value: `https://console.groq.com/authenticate?token=${rfinds}`, secret: true, kind: 'link' }; } });
+  const toldBefore = told.length;
+  await W.tag('WORKER_START', 'browse | Groq | sign up');
+  await sleep(80);
+  assert.strictEqual(rfinds, 3, 'every fresh-link stop went to A.R.A.');
+  assert.ok(!told.slice(toldBefore).some((t) => /it needs you/.test(t)), 'he was never asked');
   // A.R.A. can't find it → J.A.R.V.I.S. (not A.R.A.) tells him it needs him.
   settings.workers = '{}';
   W._setDeps({ gh: gh.call, repo: () => ({ owner: 'o', repo: 'r' }), slot: async () => () => {}, tell: async (t) => told.push(t), saveNote: async () => {}, onDone: () => null,

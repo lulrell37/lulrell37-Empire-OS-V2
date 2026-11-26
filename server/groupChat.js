@@ -125,18 +125,25 @@ async function remember(from, to, message, answer) {
   await require('./db').query('INSERT INTO tg_messages (persona, role, content, ts) VALUES ($1, $2, $3, $4)', [to, 'assistant', groupLine(from, to, message, answer), Date.now()])
     .catch((e) => console.error('group chat history save failed:', e.message));
 }
+// A hand-off that passes on his own words to the persona he named ("Mr. Burrus asks
+// you: …"): that answer is to him. Any other hand-off is teammate to teammate.
+const HIS_WORDS = /^\s*\[?\s*(mr\.? burrus|he|tarell)\s+(asks|asked|says|said|wants to know|is asking|wrote)\b/i;
+const hisWords = (message) => HIS_WORDS.test(String(message || ''));
 async function relayAnswered(to, answer, { from, message } = {}) {
   if (from && message) await remember(from, to, message, answer);
   // Their words and receipts, without the note meant only for the asking persona.
   const shown = String(answer || '').replace(/\n*\([^()]*ran no actions[^]*$/, '').trim();
-  return post(to, shown).catch(() => false);
+  // Labeled like the ask ("→ A.R.A.: …"), so the group reads as them talking to each
+  // other, not to him (owner, 2026-11-26).
+  const fromName = from && ROSTER[from] && !hisWords(message) ? ROSTER[from].name : '';
+  return post(to, fromName && shown ? `→ ${fromName}: ${shown}` : shown).catch(() => false);
 }
 
 // What his message in the group needs A.R.A. to do.
 const GROUP_FRAME = `[THE EMPIRE GROUP CHAT — he wrote this in the Telegram group with the team, not in your private chat. Everyone sees the hand-offs here: each [RELAY_TO] you make, and their answer, is posted in the group from that persona's own bot (or yours with their name). So:
- - He names someone ("Selene, what do you think") → [RELAY_TO] them with his full message; your own reply is one short line at most, or nothing more than what adds to theirs.
- - He says everyone / the council / the team / all of you → [RELAY_TO] each persona who has something real to add (any of them; you pick), one tag each. They answer one at a time and each sees the ones before, so they build on each other. Then give the bottom line in a few sentences.
+ - He names someone ("Selene, what do you think") → [RELAY_TO: selene | Mr. Burrus asks you: <his full message>] (start it exactly "Mr. Burrus asks you:" so they answer him, not you); your own reply is one short line at most, or nothing more than what adds to theirs.
+ - He says everyone / the council / the team / all of you → [RELAY_TO: id | Mr. Burrus asks you: <his message>] for each persona who has something real to add (any of them; you pick), one tag each. They answer one at a time and each sees the ones before, so they build on each other. Then give the bottom line in a few sentences.
  - He names no one → answer it yourself, and bring in whoever should weigh in.
 Don't repeat what they said; they've already said it in the group.]`;
 
-module.exports = { groupLine, group, setGroup, isGroupChat, post, voice, voiceText, voiceFor, voiceIdle, DEFAULT_VOICE_ID, relayAsked, relayAnswered, GROUP_FRAME };
+module.exports = { hisWords, groupLine, group, setGroup, isGroupChat, post, voice, voiceText, voiceFor, voiceIdle, DEFAULT_VOICE_ID, relayAsked, relayAnswered, GROUP_FRAME };

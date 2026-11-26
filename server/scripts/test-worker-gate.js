@@ -12,6 +12,9 @@ const no = [
 ];
 for (const t of go) assert.strictEqual(workers.ownerGo(t), true, `should be a go: ${t}`);
 for (const t of no) assert.strictEqual(workers.ownerGo(t), false, `should not be a go: ${t}`);
+// Owner, 2026-11-26: "try the sign up again" said any way he says it starts at once.
+for (const t of ['Jarvis, try the sign up again', 'tell him to try the sign up again', 'have the worker try again', 'Alright Jarvis. Try the sign up again', 'give the groq signup another shot', 'okay so try it one more time']) assert.strictEqual(workers.ownerGo(t), true, `should be a go: ${t}`);
+for (const t of ['why did it try again?', 'Jarvis why is the sign up failing', 'so what happened with the sign up']) assert.strictEqual(workers.ownerGo(t), false, `should not be a go: ${t}`);
 
 (async () => {
   const rows = [];

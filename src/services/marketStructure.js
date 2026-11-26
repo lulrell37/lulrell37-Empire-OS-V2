@@ -349,9 +349,9 @@ function keyLevels({ symbol, daily = [], m15 = [], price, now = Date.now() }) {
 
 // --- the stop's danger zone ------------------------------------------------------
 
-const ZONE_ROUND = { XAUUSD: 50, BTCUSD: 500 };
+const ZONE_ROUND = { XAUUSD: 50, BTCUSD: 500, NAS100: 100 };
 const ZONE_BUFFER = 0.2; // × 1H ATR past the zone's far side
-const STOP_CEILING = { XAUUSD: () => 35, BTCUSD: (px) => px * 0.03 };
+const STOP_CEILING = { XAUUSD: () => 35, BTCUSD: (px) => px * 0.03, NAS100: (px) => px * 0.015 };
 
 // Where a main-rule stop has to be to clear the danger zone: the furthest of the 1H
 // SMA20, the round number nearest entry and the last 1H swing, whichever of them are

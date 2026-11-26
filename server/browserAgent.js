@@ -553,7 +553,16 @@ function doneSuccess(a) {
 }
 async function doAction(b, a, last, secrets = {}) {
   switch (a.type) {
-    case 'goto': { const url = fillSecrets(a.url, secrets); await b.cdp.send('Page.navigate', { url }, b.session); await settle(b); return `opened ${url === a.url ? a.url : '(a link found in his email)'}`; }
+    case 'goto': {
+      const url = fillSecrets(a.url, secrets);
+      // Page.navigate doesn't throw when the page fails to load; it returns errorText.
+      // Ignored, a failed load read as "opened" and a worker re-opened a one-time
+      // Groq sign-in link 7 times on a blank page (2026-11-26).
+      const nav = await b.cdp.send('Page.navigate', { url }, b.session);
+      if (nav && nav.errorText) throw new Error(`the page didn't load (${nav.errorText}). A one-time sign-in link that fails like this is usually used up or expired: request a fresh one instead of opening it again`);
+      await settle(b);
+      return `opened ${url === a.url ? a.url : '(a link found in his email)'}`;
+    }
     case 'click': { const c = await click(b, a.id); await settle(b, 5000); return `clicked [${a.id}] "${c.text}"`; }
     case 'type': { const real = fillSecrets(a.text, secrets); const c = await type(b, a.id, real); return `typed into [${a.id}] "${c.text}"${real !== a.text ? ' (a saved secret)' : ''}`; }
     case 'select': return `[${a.id}]: ${await selectOption(b, a.id, fillSecrets(a.option, secrets))}`;
@@ -668,7 +677,7 @@ async function runTask({ persona, personaName = persona, task, ownerText = '', b
         }
       }
       try {
-        if (!browsers.has(persona)) { const nb = await browserFor(persona); Object.assign(b, nb, { busy: true }); log.push('(the browser had crashed — restarted it)'); }
+        if (!browsers.has(persona)) { const nb = await browserFor(persona); Object.assign(b, nb, { busy: true }); log.push('(the browser had crashed — restarted it, on a blank page. A one-time sign-in link or code used before the crash is probably spent: get a fresh one rather than reopening it)'); }
         const did = await doAction(b, a, undefined, secrets);
         log.push(`${did}${a.why ? ` — ${a.why}` : ''}`);
         fails = 0;

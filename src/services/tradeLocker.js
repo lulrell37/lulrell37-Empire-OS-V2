@@ -357,10 +357,13 @@ export async function tlPlaceOrder({symbol='XAUUSD',side,qty=MAX_QTY,stopLoss,ta
   }
   // Gold: no position may lose more than $40 at its stop (100 oz a lot, so this
   // order's loss is stop distance × qty × 100). Same limit as server/tradeLocker.js.
-  if(String(symbol).toUpperCase()==='XAUUSD'){
-    if(!(isFinite(entry)&&entry))throw new Error('no gold price to size the order against, so no order was placed');
-    const loss=Math.abs(entry-Number(stopLoss))*q*100;
-    if(loss>GOLD_MAX_LOSS+1e-6)throw new Error(`the gold stop is ${Math.abs(entry-Number(stopLoss)).toFixed(2)} from entry: that's $${loss.toFixed(2)} at ${q} lot, over the $${GOLD_MAX_LOSS} gold limit, so no order was placed`);
+  // Bitcoin too (owner, 2026-11-26): one coin a lot, the same $40 limit.
+  const perLot={XAUUSD:100,BTCUSD:1}[String(symbol).toUpperCase()];
+  if(perLot){
+    const mk=perLot===100?'gold':'Bitcoin';
+    if(!(isFinite(entry)&&entry))throw new Error(`no ${mk} price to size the order against, so no order was placed`);
+    const loss=Math.abs(entry-Number(stopLoss))*q*perLot;
+    if(loss>GOLD_MAX_LOSS+1e-6)throw new Error(`the ${mk} stop is ${Math.abs(entry-Number(stopLoss)).toFixed(2)} from entry: that's $${loss.toFixed(2)} at ${q} lot, over the $${GOLD_MAX_LOSS} limit, so no order was placed`);
   }
   // On the instrument's own price precision, so the broker doesn't drop an off-tick stop.
   const px=v=>+Number(v).toFixed(m.pricePrecision??2);

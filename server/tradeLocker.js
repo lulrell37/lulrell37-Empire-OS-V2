@@ -24,24 +24,62 @@ const entryCopies = (sym) => COPIES_BY_SYMBOL[String(sym).toUpperCase()] ?? ENTR
 // The main stop rule's minimum, applied to every order except quick scalps and
 // add-ons (his setups, W.I.R.E.'s news trades, anything else): the stop sits at least gold $10 /
 // Bitcoin 0.8% (anything else 0.4%) and 1.2x the 1H ATR14 from entry.
-const STOP_FLOOR = { XAUUSD: () => 10, BTCUSD: (px) => px * 0.008 };
-// Gold is sized to its stop: no gold position may lose more than GOLD_MAX_LOSS
-// dollars at its stop. XAUUSD is 100 oz a lot, so 0.01 lot = $1 per $1 of stop.
-// The lot is the most that fits, in 0.01 steps, under MAX_QTY: a stop up to $20
-// goes in at 0.02, $20-$40 at 0.01, wider is skipped (goldLots → 0). Every gold
-// order: setups, swings, re-entries, news trades, quick scalps, add-ons, his own.
+const STOP_FLOOR = { XAUUSD: () => 10, BTCUSD: (px) => px * 0.008, NAS100: (px) => px * 0.004 };
+// Every market is sized to its stop (owner, 2026-11-18 for gold; Bitcoin and Nasdaq,
+// 2026-11-26: "the same thing we did for gold to lose less, apply that to Bitcoin and
+// Nasdaq"): no position may lose more than its market's MAX_LOSS dollars at its stop.
+// Loss = stop distance × lots × $ per 1.0 move per lot (gold 100 oz a lot; Bitcoin and
+// Nasdaq from the instrument's contract size). Gold and Bitcoin take the most that fits
+// in 0.01 steps under MAX_QTY (gold: a stop up to $20 goes in at 0.02, $20-$40 at 0.01,
+// wider is skipped); Nasdaq's lots are much smaller per point, so it is sized UP to the
+// limit (up to INDEX_MAX_QTY). Every order: setups, swings, re-entries, news trades,
+// quick scalps, add-ons, his own.
 const GOLD_MAX_LOSS = Number(process.env.GOLD_MAX_LOSS) || 40;
+const MAX_LOSS = { XAUUSD: GOLD_MAX_LOSS, BTCUSD: Number(process.env.BTC_MAX_LOSS) || 40, NAS100: Number(process.env.NAS_MAX_LOSS) || 40 };
 const GOLD_OZ_PER_LOT = 100;
 const isIndex = (symbol) => /^(NAS|US100|USTEC|NDX|NQ)/i.test(String(symbol || ''));
 const INDEX_MAX_QTY = Number(process.env.INDEX_MAX_QTY || 10);
 const isGold = (symbol) => String(symbol || '').toUpperCase() === 'XAUUSD';
-function goldLots(stopDist, cap = MAX_QTY) {
+const isBtc = (symbol) => /^BTC/i.test(String(symbol || ''));
+// The account may call the Nasdaq 100 NAS100, US100, USTEC…: T.A.L.O.N. always says NAS100.
+const canonical = (name) => (isIndex(name) && /100|USTEC/i.test(String(name)) ? 'NAS100' : String(name || '').toUpperCase());
+const MARKET_NAME = { XAUUSD: 'gold', BTCUSD: 'Bitcoin', NAS100: 'Nasdaq' };
+const maxLossFor = (symbol) => MAX_LOSS[canonical(symbol)] ?? GOLD_MAX_LOSS;
+const sizedMarket = (symbol) => isGold(symbol) || isBtc(symbol) || isIndex(symbol);
+// $ per 1.0 price move per 1.0 lot. Gold is fixed; Bitcoin / Nasdaq come from the
+// instrument (BTC_CONTRACT_SIZE / NAS_CONTRACT_SIZE override). Bitcoin falls back to
+// 1 (one coin a lot), Nasdaq has no fallback: unknown → no trade, and it says so.
+const contractCache = {};
+const CONTRACT_SANE = { BTCUSD: [0.001, 10], NAS100: [0.01, 100] };
+function contractKnown(symbol) {
+  const sym = canonical(symbol);
+  if (sym === 'XAUUSD') return GOLD_OZ_PER_LOT;
+  const env = Number(process.env[sym === 'BTCUSD' ? 'BTC_CONTRACT_SIZE' : 'NAS_CONTRACT_SIZE']);
+  if (env > 0) return env;
+  return contractCache[sym] || (sym === 'BTCUSD' ? 1 : 0);
+}
+async function tlContractSize(symbol) {
+  const sym = canonical(symbol);
+  if (sym === 'XAUUSD' || contractCache[sym] || Number(process.env[sym === 'BTCUSD' ? 'BTC_CONTRACT_SIZE' : 'NAS_CONTRACT_SIZE']) > 0) return contractKnown(sym);
+  const d = await tlInstrumentDetails(symbol).catch(() => null);
+  const n = Number(d && (d.contractSize ?? d.lotSize ?? d.contractMultiplier));
+  const [lo, hi] = CONTRACT_SANE[sym] || [0, Infinity];
+  if (n >= lo && n <= hi) contractCache[sym] = n;
+  else if (d) console.error(`tradelocker failed: ${sym} contract size ${isFinite(n) ? n : 'missing'} looks wrong, ${sym === 'BTCUSD' ? 'using 1' : 'so Nasdaq can\'t be sized'}`);
+  return contractKnown(sym);
+}
+// Lots that lose at most the market's limit at this stop, capped at `cap`.
+// null = the contract size isn't known (no check possible yet).
+function riskLots(symbol, stopDist, cap = MAX_QTY, contract = contractKnown(symbol)) {
   const d = Math.abs(Number(stopDist));
   if (!(d > 0)) return 0;
-  const fit = Math.floor((GOLD_MAX_LOSS / (d * GOLD_OZ_PER_LOT)) * 100 + 1e-9) / 100;
+  if (!(contract > 0)) return null;
+  const fit = Math.floor((maxLossFor(symbol) / (d * contract)) * 100 + 1e-9) / 100;
   return Math.min(cap, +fit.toFixed(2));
 }
-const goldTooWide = (stopDist) => `the gold stop is ${Math.abs(Number(stopDist)).toFixed(2)} from entry: even 0.01 lot would lose more than the $${GOLD_MAX_LOSS} gold limit, so it was skipped`;
+function goldLots(stopDist, cap = MAX_QTY) { return riskLots('XAUUSD', stopDist, cap, GOLD_OZ_PER_LOT); }
+const tooWideText = (symbol, stopDist) => `the ${MARKET_NAME[canonical(symbol)] || canonical(symbol)} stop is ${Math.abs(Number(stopDist)).toFixed(2)} from entry: even 0.01 lot would lose more than the $${maxLossFor(symbol)} ${MARKET_NAME[canonical(symbol)] || ''} limit, so it was skipped`.replace(/  +/g, ' ');
+const goldTooWide = (stopDist) => tooWideText('XAUUSD', stopDist);
 const minStopDist = (symbol, px, atr1h = 0) => Math.max((STOP_FLOOR[String(symbol).toUpperCase()] || ((p) => p * 0.004))(Number(px)), 1.2 * (Number(atr1h) || 0));
 async function tlAtr1H(symbol) { return summarizeBars(await tlHistory(String(symbol).toUpperCase(), '1H', 60))?.atr14 || 0; }
 
@@ -235,17 +273,19 @@ async function tlListInstruments() {
 async function tlInstrumentsById() {
   const list = await loadInstrumentList();
   const out = {};
-  for (const x of list) out[String(x.tradableInstrumentId)] = String(x.name);
+  for (const x of list) out[String(x.tradableInstrumentId)] = isIndex(x.name) ? canonical(x.name) : String(x.name);
   return out;
 }
 
+const NAS_NAMES = (process.env.NAS_SYMBOL ? [process.env.NAS_SYMBOL] : []).concat(['NAS100', 'US100', 'USTEC', 'NAS100USD', 'NDX100', 'NQ100', 'US100CASH', 'NAS100CASH']).map((n) => n.toUpperCase().replace(/[^A-Z0-9]/g, ''));
 async function tlInstrument(symbol = 'XAUUSD') {
   await ensureAccount();
   if (session.instruments[symbol]) return session.instruments[symbol];
   const list = await loadInstrumentList();
   const want = symbol.toUpperCase();
   const inst = list.find((x) => String(x.name).toUpperCase() === want)
-    || list.find((x) => String(x.name).toUpperCase().replace(/[^A-Z0-9]/g, '') === want.replace(/[^A-Z0-9]/g, ''));
+    || list.find((x) => String(x.name).toUpperCase().replace(/[^A-Z0-9]/g, '') === want.replace(/[^A-Z0-9]/g, ''))
+    || (want === 'NAS100' ? NAS_NAMES.map((n) => list.find((x) => String(x.name).toUpperCase().replace(/[^A-Z0-9]/g, '') === n)).find(Boolean) || list.find((x) => canonical(x.name) === 'NAS100') : null);
   if (!inst) {
     const sample = list.map((x) => x.name).slice(0, 40).join(', ');
     throw new Error(`TradeLocker: instrument ${symbol} not found on this account. Available include: ${sample}`);
@@ -336,7 +376,11 @@ const roundPx = (m, v) => +Number(v).toFixed(m?.pricePrecision ?? 2);
 async function tlPlaceOrder({ symbol = 'XAUUSD', side, qty = MAX_QTY, stopLoss, takeProfit, minStop = true, limitPrice = null, maxQty = null, manual = false }) {
   // Switched off by him ([TRADING_OFF], server/talonSwitch.js): no automatic order of
   // any kind until he says start. Only an order he gave by hand goes through.
-  if (!manual && await require('./talonSwitch').isHalted()) throw new Error('T.A.L.O.N. is switched OFF by Mr. Burrus — no automatic trades until he says start');
+  // Also one market switched off, or done for the day after two losses.
+  if (!manual) {
+    const why = await require('./talonSwitch').blocked(symbol);
+    if (why) throw Object.assign(new Error(why), { halted: true });
+  }
   await tlFollowAccount();
   await ensureAccount();
   // The last gate before real money, for every path into here. If the setting
@@ -363,7 +407,7 @@ async function tlPlaceOrder({ symbol = 'XAUUSD', side, qty = MAX_QTY, stopLoss, 
   let widenedFrom = null;
   // Where it fills: the limit, or the market now. Gold sizing needs it on every order.
   let entry = limit;
-  if (entry == null && (minStop || isGold(symbol))) {
+  if (entry == null && (minStop || sizedMarket(symbol))) {
     const qt = await tlQuote(symbol).catch(() => null);
     entry = Number(qt?.mid ?? (side === 'buy' ? qt?.ask : qt?.bid));
   }
@@ -384,18 +428,23 @@ async function tlPlaceOrder({ symbol = 'XAUUSD', side, qty = MAX_QTY, stopLoss, 
   }
   if (stopLoss != null && isFinite(Number(stopLoss))) { stopLoss = roundPx(m, stopLoss); body.stopLoss = stopLoss; body.stopLossType = 'absolute'; }
   if (takeProfit != null && isFinite(Number(takeProfit))) { takeProfit = roundPx(m, takeProfit); body.takeProfit = takeProfit; body.takeProfitType = 'absolute'; }
-  // Gold: sized to the final stop (after any widening above), or refused.
+  // Sized to the final stop (after any widening above) so it loses at most the
+  // market's limit, or refused.
   let sizedFrom = null;
-  if (isGold(symbol)) {
-    if (!(isFinite(entry) && entry)) throw new Error('no gold price to size the order against, so no order was placed');
-    const lots = goldLots(entry - Number(stopLoss), q);
-    if (!lots) throw Object.assign(new Error(goldTooWide(entry - Number(stopLoss))), { goldTooWide: true });
-    if (lots < q) { sizedFrom = q; body.qty = lots; }
+  if (sizedMarket(symbol)) {
+    if (!(isFinite(entry) && entry)) throw new Error(`no ${MARKET_NAME[canonical(symbol)] || symbol} price to size the order against, so no order was placed`);
+    const dist = entry - Number(stopLoss);
+    const contract = await tlContractSize(symbol);
+    const idx = isIndex(symbol);
+    const lots = riskLots(symbol, dist, idx ? Math.min(maxQty != null ? Number(maxQty) || INDEX_MAX_QTY : INDEX_MAX_QTY, INDEX_MAX_QTY) : q, contract);
+    if (lots == null) throw new Error(`couldn't read ${symbol}'s contract size, so it can't be sized to the $${maxLossFor(symbol)} limit and no order was placed (NAS_CONTRACT_SIZE sets it)`);
+    if (!lots) throw Object.assign(new Error(tooWideText(symbol, dist)), { goldTooWide: true, tooWide: true });
+    if (lots !== q) { sizedFrom = q; body.qty = lots; }
   }
   const j = await api(`/trade/accounts/${session.accountId}/orders`, { method: 'POST', body });
   tlBustPositions();
   if (widenedFrom != null) console.log(`tradelocker: ${symbol} ${side} stop ${widenedFrom} widened to ${stopLoss} (main stop rule)`);
-  if (sizedFrom != null) console.log(`tradelocker: ${symbol} ${side} sized ${sizedFrom} → ${body.qty} lot (stop ${Math.abs(entry - Number(stopLoss)).toFixed(2)} away, $${GOLD_MAX_LOSS} gold limit)`);
+  if (sizedFrom != null) console.log(`tradelocker: ${symbol} ${side} sized ${sizedFrom} → ${body.qty} lot (stop ${Math.abs(entry - Number(stopLoss)).toFixed(2)} away, $${maxLossFor(symbol)} limit)`);
   return { orderId: j.d?.orderId, qty: body.qty, side, symbol, stopLoss, takeProfit, widenedFrom, sizedFrom, limitPrice: limit };
 }
 
@@ -550,7 +599,7 @@ function tlFormatSnapshot(snap) {
   return L.join('\n');
 }
 
-module.exports = { tlInstrumentDetails, isIndex, goldLots, goldTooWide, GOLD_MAX_LOSS,
+module.exports = { tlInstrumentDetails, isIndex, isBtc, canonical, goldLots, goldTooWide, riskLots, tooWideText, maxLossFor, tlContractSize, contractKnown, MAX_LOSS, MARKET_NAME, INDEX_MAX_QTY, GOLD_MAX_LOSS,
   MAX_QTY, ENTRY_COPIES, entryCopies, minStopDist, tlAtr1H,
   tlConnect, tlStatus, tlAccountState, tlListInstruments, tlInstrumentsById, tlInstrument,
   tlQuote, tlHistory, tlPositions, tlOrdersHistory, tlPlaceOrder, tlClosePosition, tlModifyPosition, tlOrders, tlCancelOrder, tlOrderState,

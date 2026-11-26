@@ -130,6 +130,7 @@ async function reentryTick({ marketOpen, openPairs, maxPairs }) {
   for (const [key, w] of Object.entries(state)) {
     if (w.status !== 'watching') continue;
     if (!marketOpen && !CRYPTO.test(w.symbol)) continue;
+    if (await require('./talonSwitch').marketHalted(w.symbol).catch(() => false)) continue; // switched off: no re-entry there
     let bars, snap;
     try {
       bars = closedBars(await tlHistory(w.symbol, '15m', 40), '15m');
