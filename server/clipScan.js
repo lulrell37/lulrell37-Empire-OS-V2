@@ -526,7 +526,7 @@ async function clipScan(url, focus = '', { onProgress = () => {}, title = '' } =
     let segments = readJson(ck('transcript.json'));
     if (Array.isArray(segments) && segments.length && state.transcriptOf === path.basename(src)) onProgress('transcript already done, resuming');
     else {
-      segments = await transcribeVideo(src, audioDir, { prompt: '' });
+      segments = await transcribeVideo(src, audioDir, { prompt: '', job: /^Auto clip:/.test(title) ? 'auto clip' : 'clip scan' });
       if (!segments.length) throw new Error('no speech found in that video');
       writeJson(ck('transcript.json'), segments);
       saveState({ transcriptOf: path.basename(src) });

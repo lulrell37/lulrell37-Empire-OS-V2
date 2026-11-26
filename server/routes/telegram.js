@@ -258,7 +258,7 @@ async function handleMessages(personaId, bot, msgs) {
   } else if (voice) {
     await bot.sendChatAction(chatId, 'typing');
     try {
-      text = await transcribe(await bot.downloadFile(voice.file_id), 'voice.ogg');
+      text = await transcribe(await bot.downloadFile(voice.file_id), 'voice.ogg', { job: 'voice note' });
     } catch (e) {
       await deliver(`Couldn't make out that voice note: ${e.message}`);
       return;

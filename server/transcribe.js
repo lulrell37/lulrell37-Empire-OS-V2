@@ -61,7 +61,7 @@ async function transcribeLink(url, { save = true, persona = 'ara' } = {}) {
     const audioDir = path.join(dir, 'audio');
     fs.mkdirSync(audioDir);
     jobs.step(jid, 'Transcribe');
-    const segments = await clip.transcribeVideo(src, audioDir, { prompt: '' });
+    const segments = await clip.transcribeVideo(src, audioDir, { prompt: '', job: 'transcribe' });
     if (!segments.length) throw new Error('no speech found in that video (music or silence only)');
     const title = String(name || 'video').replace(/\.[^.]+$/, '').replace(/[\r\n|[\]]+/g, ' ').trim().slice(0, 80) || 'video';
     const body = formatTranscript(segments);
