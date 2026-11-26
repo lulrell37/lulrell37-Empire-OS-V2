@@ -88,6 +88,12 @@ app.get('/worker-files/:id', async (req, res) => {
     if (!res.headersSent) res.status(502).json({ error: e.message });
   }
 });
+// A code worker running J.A.R.V.I.S.'s command tags (server/workerTools.js): per-worker token;
+// anything that acts in the world waits for his Confirm tap.
+app.post('/worker-tools/:id', express.text({ type: '*/*', limit: '400kb' }), (req, res, next) => {
+  if (typeof req.body === 'string' && /^\s*\{/.test(req.body)) { try { req.body = JSON.parse(req.body); } catch { /* raw text */ } }
+  next();
+}, require('./workerTools').handler);
 // His own website, "Welcome to The Empire" (server/site-empire, rebuilt from his Canva design): public.
 app.use('/empire', require('./routes/empireSite').router);
 setTimeout(() => require('./routes/empireSite').prewarm(), 3 * 60e3).unref();
