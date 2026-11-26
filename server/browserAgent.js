@@ -684,11 +684,22 @@ async function finish(b, status, text, log) {
 // The newest email sent after `since` (the moment the run reached its "check your email"
 // screen) holding a code or a sign-in link; polls every 20 s for up to 10 min
 // (server/emailLinks.js). -> { ok, code, url } or { ok: false, text }.
-async function emailedCode(since = Date.now(), sender = '') {
+async function emailedCode(since = Date.now(), sender = '', timeoutMs) {
   // Options form ({ wait, pollMs, site }) is the plain any-sender search (kept from main, test-worker-honesty.js).
   if (since && typeof since === 'object') return emailedCodeBasic(since);
-  return require('./emailLinks').waitForEmailAuth({ since, sender });
+  return require('./emailLinks').waitForEmailAuth({ since, sender, ...(timeoutMs ? { timeoutMs } : {}) });
 }
+
+// A sign-in / verification link a site emailed (Stytch, Groq, magic links): only an email
+// sent after `since`, polled up to 3 min (links expire fast and are tied to the browser
+// that asked). -> { ok, url, subject } or { ok: false, text }. opts are test hooks.
+const LINK_WAIT_MS = () => Number(process.env.EMAIL_LINK_WAIT_MS) || 3 * 60e3;
+async function emailedLink(since = Date.now(), sender = '', opts = {}) {
+  const got = await require('./emailLinks').waitForEmailAuth({ since, sender, timeoutMs: LINK_WAIT_MS(), ...opts });
+  if (got.ok && !got.url) return { ok: false, text: require('./emailLinks').NOT_ARRIVED };
+  return got;
+}
+const LINK_SLACK_MS = 45000; // the email is sent when submitted, a few steps before the run stops
 
 // What a site emailed him, from his Gmail (any sender): a numeric code or a magic
 // sign-in / verification link. Waits up to EMAIL_WAIT_MS (10 min, owner 2026-11-24) for
@@ -788,16 +799,19 @@ async function browseRun(persona, name, arg, { ownerText = '', onStep = null, on
   // A site emailed a code: it's in his Gmail, so fetch it and carry on without him
   // (owner, 2026-11-22: "it's supposed to be automatic").
   const logins = require('./siteLogins');
-  if ((r.status !== 'done' || r.success === false) && logins.wantsEmailCode(r.text)) {
-    const reached = Date.now(); // the email must be newer than this screen
-    const got = await emailedCode(reached, siteOf(r.url)).catch((e) => ({ ok: false, text: `couldn't search his Gmail: ${e.message}` }));
+  if ((r.status !== 'done' || r.success === false) && (logins.wantsEmailCode(r.text) || logins.wantsEmailLink(r.text))) {
+    const reached = Date.now() - LINK_SLACK_MS; // the email must be newer than this screen
+    const linkOnly = logins.wantsEmailLink(r.text) && !/\b(code|otp|passcode)\b/i.test(r.text || '');
+    const got = await (linkOnly ? emailedLink(reached, siteOf(r.url)) : emailedCode(reached, siteOf(r.url)))
+      .catch((e) => ({ ok: false, text: `couldn't search his Gmail: ${e.message}` }));
     const L = require('./emailLinks');
     if (got.ok && (got.code || got.url)) {
-      // Same persona = same browser session, which is what a magic link needs.
+      // Same persona = same browser profile, which is what a magic link needs. The URL
+      // travels as the LINK secret so it never reaches the page-reading model.
       const how = got.code
         ? `Type {{CODE}} into the code box and continue.`
-        : `Open this sign-in link in this same browser with a goto action, exactly: ${got.url} — then continue (it is the link from his email; it only works in this session).`;
-      const r2 = await runTask({ persona, personaName: name, ownerText: 'yes', brain, secrets: got.code ? { CODE: got.code } : {}, allow: CONSENT, onStep, onPlan: plans, plan: last.plan, planStep: last.at,
+        : `Open the sign-in link in this same browser with a goto action whose url is exactly {{LINK}} — then continue (it is the link from his email; it only works in this session).`;
+      const r2 = await runTask({ persona, personaName: name, ownerText: 'yes', brain, secrets: got.code ? { CODE: got.code } : { LINK: got.url }, allow: CONSENT, onStep, onPlan: plans, plan: last.plan, planStep: last.at,
         task: `You are partway through this task and the page asked for the emailed ${got.code ? 'code' : 'sign-in link'}. ${how} The task: ${String(arg || '').trim()}` });
       r2.steps = [...r.steps, `(fetched the emailed ${got.code ? 'code' : 'link'} from his Gmail${got.subject ? `: "${got.subject}"` : ''})`, ...r2.steps];
       r = r2;
@@ -817,4 +831,4 @@ const BROWSE_TOOLS = ` - [BROWSE: the task, in full] — your own computer: a re
 
 module.exports = {
   closeBrowser: close,
-  readJar, saveJar, loadJar, planTracker, AGENT_SYSTEM, browseRun, settleResult, fillSecrets, doneSuccess, emailedCode, browserKeyTag, ensureSqlite, BROWSE_PERSONAS, runTask, browseTag, BROWSE_TOOLS, close, browserFor, snapshot, click, type, press, screenshot, unzip, chromePath, parseAction, waitGuard, MAX_IDLE_WAITS, firstJson, isCommit, approves, enabled };
+  readJar, saveJar, loadJar, planTracker, AGENT_SYSTEM, browseRun, settleResult, fillSecrets, doneSuccess, emailedCode, emailedLink, browserKeyTag, ensureSqlite, BROWSE_PERSONAS, runTask, browseTag, BROWSE_TOOLS, close, browserFor, snapshot, click, type, press, screenshot, unzip, chromePath, parseAction, waitGuard, MAX_IDLE_WAITS, firstJson, isCommit, approves, enabled };

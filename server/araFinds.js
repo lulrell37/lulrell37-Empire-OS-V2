@@ -42,7 +42,7 @@ async function findForJob(question, { task = '', site = '', since = Date.now() -
       post0('ara', `→ J.A.R.V.I.S.: the ${got.code ? 'code' : 'sign-in link'} from "${String(got.subject || '').slice(0, 80)}" is in — ${got.code ? 'sent to your worker, not shown here' : 'your worker opens it in the same browser'}.`);
       return got.code
         ? { what: 'the emailed sign-in code', value: got.code, secret: true }
-        : { what: 'the emailed sign-in link — open it with a goto in this same browser, nothing else', value: got.url, secret: false };
+        : { what: 'the emailed sign-in link — open it with a goto in this same browser, nothing else', value: got.url, secret: true, kind: 'link' };
     }
     post0('ara', `→ J.A.R.V.I.S.: ${got.text || L.NOT_ARRIVED}`);
     return null;
