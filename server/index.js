@@ -54,6 +54,7 @@ app.use('/google', auth, json, require('./routes/google'));
 app.use('/trade', auth, json, require('./routes/trade'));
 app.use('/council', auth, json, require('./routes/council'));
 app.use('/stephanie', auth, json, require('./routes/stephanie'));
+app.use('/shared', auth, json, require('./routes/shared')); // the app's copy of Telegram's switches, news, quiz and follow-through
 app.use('/jarvis', auth, json, require('./routes/jarvis'));
 app.use('/clips', auth, json, require('./routes/clips'));
 app.use('/browse', auth, json, require('./routes/browse'));

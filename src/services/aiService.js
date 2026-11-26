@@ -254,6 +254,8 @@ ${personaId==='ara'?` EMAIL: [READ_EMAIL] | [SEND_EMAIL: to | subject | body] (M
       }
     }catch{}
   }
+  // Telegram's switches, news, drill and follow-through rules, from the server (sharedDesk.js).
+  try{const{sharedContext}=await import('./sharedDesk');sys+=await sharedContext(personaId);}catch{}
   // S.T.E.P.H.A.N.I.E.'s course — the server's tracker, shared with her Telegram bot.
   if(personaId==='stephanie'){
     try{const{courseContext}=await import('./stephanieCourse');sys+=await courseContext();}catch{}

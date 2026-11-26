@@ -480,6 +480,7 @@ export function stripCommands(text){
     .replace(/\[SAVE_NOTE:[^\]]*\]/gi,'').replace(/\[OPEN_APP:[^\]]*\]/gi,'').replace(/\[OPEN_WEBPAGE:[^\]]*\]/gi,'')
     .replace(/\[READ_NOTE:[^\]]*\]/gi,'').replace(/\[ADD_REVENUE:[^\]]*\]/gi,'')
     .replace(/\[(?:COURSE_STATUS|COURSE_START|LESSON_DONE|LESSON_UNDO|COURSE_DONE|ROADMAP_CHECK|ROADMAP_UNCHECK)(?::[^\]]*)?\]/gi,'')
+    .replace(/\[(?:SWITCH_OFF|SWITCH_ON|SWITCHES|TRADING_OFF|TRADING_ON|TRADING_STATUS|BREAKING_NOW|NEWS_NOW|QUIZ_SCORE|QUIZ_OFF|QUIZ_ON|QUIZ_NOW)(?::[^\]]*)?\]/gi,'')
     .replace(/\[READ_HUD\]/gi,'').replace(/\[UPDATE_HUD:[^\]]*\]/gi,'')
     .replace(/\[UPDATE_SCORE:[^\]]*\]/gi,'').replace(/\[ROUTINE_DONE:[^\]]*\]/gi,'')
     .replace(/\[ROUTINE_ADD:[^\]]*\]/gi,'').replace(/\[ROUTINE_REMOVE:[^\]]*\]/gi,'')

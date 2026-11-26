@@ -22,6 +22,7 @@ import{reportIssue,clearIssueKey,notify}from '../services/report';
 import{logCrash}from '../services/crashLog';
 import{googleReadInjections,googleWriteCommands}from '../services/googleCommands';
 import{courseInjections}from '../services/stephanieCourse';
+import{sharedInjections,followNotes,followFinal}from '../services/sharedDesk';
 import{startClipScan,startTranscribe,runBrowse}from '../services/clipScan';
 import{scanTags}from '../services/noteCommands';
 import{allMatches}from '../matchAllFix';
@@ -1615,6 +1616,24 @@ export default function CommandScreen({navigation,route}){
         inFlight.raw=response;inFlight.rtype=Object.prototype.toString.call(response);inFlight.pid=pid;
         // Which step after the reply is running, so a crash entry names it.
         inFlight.step='tag lookups';
+        // His follow-through rules, same check as Telegram (server/followThrough.js via
+        // sharedDesk): "I'll check" gets done now, and nobody asks him for what the team
+        // can get. One more call; its tags join this reply's so the lookups below run them.
+        inFlight.step='follow-through';
+        if(!isGroup&&!myAbort.signal.aborted){
+          try{
+            const fn=await followNotes(pid,stripCommands(response)||'',text);
+            const note=[fn&&fn.ask,fn&&fn.check].filter(Boolean).join('\n\n');
+            if(note){
+              const fix=await callPersona(pid,[...hist,{role:'assistant',content:response},{role:'user',content:`${note}\n\nEmit the tags that get it now (they run before you answer him), then your reply.`}],myAbort.signal,null,{skipSave:true,maxTokens:1500});
+              if(fix&&String(fix).trim()){
+                const kept=scanTags(response).map(t=>`[${t.name}${t.arg?`: ${t.arg}`:''}]`).join('\n');
+                response=kept?`${kept}\n${fix}`:fix;
+              }
+            }
+          }catch(e){if(e?.name==='AbortError')throw e;}
+        }
+        inFlight.step='tag lookups';
         // Second-pass tools: the persona emits a lookup tag on pass 1, we gather
         // the data, then it re-answers with everything in hand. One pass only.
         const injections=[];
@@ -1731,6 +1750,11 @@ export default function CommandScreen({navigation,route}){
           const gReads=await googleReadInjections(response,pid);
           if(gReads.length){toolLabel='◇ checking Google…';injections.push(...gReads);}
         }catch(e){/* never let a Google read break the turn */}
+        // Switches, T.A.L.O.N.'s stop, news and the drill run on the server (shared with Telegram).
+        try{
+          const sr=await sharedInjections(response,pid,text);
+          if(sr.length){toolLabel='◇ checking with the server…';injections.push(...sr);}
+        }catch(e){/* never let it break the turn */}
         // S.T.E.P.H.A.N.I.E.'s course tags run on the server's tracker (shared with Telegram).
         try{
           const cr=await courseInjections(response,pid,text);
@@ -2020,6 +2044,8 @@ export default function CommandScreen({navigation,route}){
           if(owed.length)pushSystemMsg(`— ⚠️ nothing was actually sent to ${owed.map(id=>getPersona(id)?.name||id).join(' or ')} this turn, although ${p.name} says so — ask again —`);
         }
         if(display){replies.push({name:p.name,text:display});lastSpokenRef.current=display;}
+        // Still says it'll check: the server brings the answer back to him by itself (on Telegram).
+        if(display&&!isGroup)followFinal(pid,display,text).then(r=>{if(r&&r.scheduled)pushSystemMsg(`— ${p.name} will come back with the answer on Telegram in a couple of minutes —`);}).catch(()=>{});
         // A tag that fails must not cost the reply its voice: it used to throw out
         // of the turn here, before speakWithReveal, so the answer landed as one
         // silent block of text.
