@@ -245,6 +245,10 @@ async function launch(w) {
 const BLOCKED = /\b(blocked|could ?n[o']t|cannot|can't|unable to|no account (?:has been|was|exists|yet)|no (?:api )?key (?:exists|was|has)|not (?:been )?(?:created|completed|finished|successful)|(?:did|does|do) not (?:finish|complete|succeed|work)|failed|stuck at|stopped at)\b/i;
 const WAITING = /\b(verif\w*|e-?mail|inbox|code|sign[ -]?in|log[ -]?in|captcha|phone|text message|sms|approv\w*|needs? (?:you|mr|him)|waiting (?:on|for))\b/i;
 // What a finished browse run really is: done | needs_you | failed.
+// What only he can give: a code texted to his phone, an approval on his phone or an
+// authenticator, his ID / face / card, or his OK before something acts in the world.
+const ONLY_HIM = /\b(sms|text(ed)? (message|code)|texted|sent to (your|his) (phone|number)|phone number ending|on (your|his) phone|authenticator|2fa app|push notification|approve (it |the sign[ -]?in )?on|government id|photo id|selfie|face (scan|verification)|credit card|debit card|card (number|details)|payment (method|details)|billing|captcha|i'?m not a robot|(approve|ok|okay|permission|go[ -]ahead) (to|before) (send|post|buy|book|pay|delete|submit|connect|publish)|should i (send|post|buy|book|pay|delete|submit|connect|publish))\b/i;
+const onlyHim = (q) => ONLY_HIM.test(String(q || ''));
 function browseStatus(r) {
   if (r.status === 'ask') return 'needs_you';
   if (r.status !== 'done') return 'failed';
@@ -278,6 +282,21 @@ async function runBrowse(w, signal) {
     if (!got) break;
     const shown = got.kind === 'link' ? '{{LINK}} (use it as the goto url exactly; it is filled in for you, same browser)' : got.secret ? '{{INFO}} (type exactly that; it is filled in for you)' : `"${got.value}" (also available as {{INFO}})`;
     r = await d().browse(`worker-${w.id}`, `J.A.R.V.I.S.'s worker`, `${w.task}\n\n[A.R.A. FOUND WHAT YOU STOPPED FOR — ${got.what}: ${shown}. Carry on with the task from where the browser is.]`, { ownerText: '', onStep, onPlan, signal, noMail: true, secrets: got.kind === 'link' ? { LINK: got.value, INFO: got.value } : { INFO: got.value } });
+  }
+  // Still stopped, and A.R.A. had nothing: unless it's something only he can give (a
+  // texted code, a phone approval, his ID or card, his OK to act), the worker decides
+  // it itself and carries on (owner, 2026-11-26: "don't come to me unless you need me").
+  // A password a new account needs is made here and saved to his Drive after.
+  let made = '';
+  if (r.status === 'ask' && !onlyHim(r.result || r.text) && !(signal && signal.aborted)) {
+    update(w, { progress: 'Working it out without him' });
+    made = require('crypto').randomBytes(12).toString('base64').replace(/[+/=]/g, '').slice(0, 14) + '!7a';
+    r = await d().browse(`worker-${w.id}`, `J.A.R.V.I.S.'s worker`, `${w.task}\n\n[YOU STOPPED TO ASK: "${String(r.result || r.text).slice(0, 400)}". Mr. Burrus is not asked for this — nobody on the team had it, so decide it yourself and carry on from where the browser is: a new password → type {{NEWPASS}} (it is made and saved for him); a choice between options → take the sensible default for his business; a sign-in method → "Continue with Google" or email; anything else → find another way on the page. Stop with "ask" again ONLY for something truly only he has: a code texted to his phone, an approval on his phone, his ID or payment card, or his OK before sending, posting, buying or deleting.]`,
+      { ownerText: '', onStep, onPlan, signal, noMail: true, secrets: { NEWPASS: made } });
+  }
+  if (made) {
+    const used = /typed into[^\n]*\(a saved secret\)/.test(String(r.text || ''));
+    if (used) await d().saveNote(`Login — ${w.title}`.slice(0, 90), `# Login — ${w.title}\n_Made by J.A.R.V.I.S.'s worker #${w.id}, ${new Date().toLocaleString('en-US', { timeZone: 'America/New_York' })} ET._\n\nSite: ${(/last page (\S+?)\)?:/.exec(String(r.text || '')) || [])[1] || '?'}\nPassword: ${made}\n`).catch((e) => console.error(`workers failed: #${w.id} saving the new password: ${e.message}`));
   }
   if (signal && signal.aborted) return { status: 'stopped', result: `stopped on request. ${String(r.text || '').slice(0, 2000)}`.trim() };
   // Explicit verdict first (the brain's done {success, reason}), then the wording of
@@ -763,4 +782,4 @@ const WORKER_TOOLS = ` - [WORKER_START: code|browse | short title | the full tas
 // Persona jobs (jobProgress.js) share this one board: load the workers, then update it.
 async function kick() { await load(); boardKick(); }
 
-module.exports = { ownerGo, startGate, spokenReport, VOICE_MAX, kick, start, stop, ship, driveIdsIn, fileGrant, MAX_LEGS, recover, statusText, forApp, tag, WORKER_TOOLS, enabled, _setDeps: (x) => { deps = x; list = null; board = undefined; boardLast = 0; }, _list: () => list, _boardText: () => boardText(), logFailure, browseStatus, codeStatus, FAIL_KEY, _tgBoardDeps: tgBoardDeps, parsePlan, percentOf, progressLabel, readPlanComment, PLAN_FILE };
+module.exports = { onlyHim, ownerGo, startGate, spokenReport, VOICE_MAX, kick, start, stop, ship, driveIdsIn, fileGrant, MAX_LEGS, recover, statusText, forApp, tag, WORKER_TOOLS, enabled, _setDeps: (x) => { deps = x; list = null; board = undefined; boardLast = 0; }, _list: () => list, _boardText: () => boardText(), logFailure, browseStatus, codeStatus, FAIL_KEY, _tgBoardDeps: tgBoardDeps, parsePlan, percentOf, progressLabel, readPlanComment, PLAN_FILE };

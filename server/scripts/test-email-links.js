@@ -76,3 +76,20 @@ const groq = `<html><head><style>a{color:red}</style></head><body>
   assert.strictEqual(plainOnly, 'code 123456');
   console.log('email links: all checks passed');
 })().catch((e) => { console.error(e); process.exit(1); });
+
+// A Groq (Stytch) login email: the sign-in link wins over the ZIP code in the footer (2026-11-26).
+{
+  const L = require('../emailLinks');
+  const html = '<p>Click below to log in to Groq.</p><a href="https://console.groq.com/authenticate?token=abc123XYZ">Log in to Groq</a><p>This link expires in 60 minutes.</p><p>Stytch, Inc. 1 Letterman Drive, San Francisco, CA 94129</p>';
+  const t = L.htmlToText(html);
+  const url = L.pickAuthLink(L.extractLinks(t));
+  require('assert').strictEqual(url, 'https://console.groq.com/authenticate?token=abc123XYZ');
+  require('assert').strictEqual(L.extractCode(`Your login request to Groq\n${t}`, { strict: true }), null);
+  require('assert').strictEqual(L.extractCode('Your verification code is 482913', { strict: true }), '482913');
+  (async () => {
+    const got = await L.waitForEmailAuth({ sender: 'groq.com', since: 0, timeoutMs: 1, pollMs: 1, deps: { list: async () => ['m1'], read: async () => ({ id: 'm1', subject: 'Your login request to Groq', text: t, internalDate: 1e13 }) } });
+    require('assert').strictEqual(got.code, null);
+    require('assert').strictEqual(got.url, url);
+    console.log('email links: groq/stytch link beats the footer zip');
+  })();
+}

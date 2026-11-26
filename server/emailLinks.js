@@ -70,10 +70,14 @@ function pickAuthLink(links) {
 
 // A 4-8 digit code: next to the word "code" first, else a lone 6-8 digit number, else a lone
 // 4-5 digit one that isn't a year. Digits inside URLs, #ids and $amounts are skipped.
-function extractCode(text) {
+// strict: only a number labelled as a code — used when the email also has a sign-in link,
+// so a footer number (Stytch's "CA 94129" under every Groq login email, 2026-11-26)
+// is never typed as a code instead of opening the link.
+function extractCode(text, { strict = false } = {}) {
   const t = String(text || '').replace(/https?:\/\/\S+/g, ' ');
   const near = /(?:code|passcode|pin|otp)\b[^\d\n]{0,40}?(?<![\d#$.])(\d{4,8})(?![\d.]\d)/i.exec(t) || /(?<![\d#$.])(\d{4,8})(?![\d.]\d)[^\n]{0,30}?\b(?:is your|code)\b/i.exec(t);
   if (near) return near[1];
+  if (strict) return null;
   const six = /(?<![\d#$.,-])(\d{6,8})(?![\d,]|\.\d)/.exec(t);
   if (six) return six[1];
   for (const m of t.matchAll(/(?<![\d#$.,-])(\d{4,5})(?![\d,]|\.\d)/g)) if (!/^(19|20)\d\d$/.test(m[1])) return m[1];
@@ -108,8 +112,8 @@ async function waitForEmailAuth({ sender, since = Date.now(), timeoutMs = WAIT_M
     if (id && !tried.has(id)) {
       const m = await g.read(id).catch(() => null);
       if (m && (!m.internalDate || m.internalDate >= since - 5000)) {
-        const code = extractCode(`${m.subject || ''}\n${m.text || ''}`);
         const url = pickAuthLink(m.urls || extractLinks(m.text));
+        const code = extractCode(`${m.subject || ''}\n${m.text || ''}`, { strict: !!url });
         if (code || url) return { ok: true, code, url, id: m.id || id, from: m.from, subject: m.subject };
         tried.add(id); // read it, nothing usable; wait for a newer one
       }

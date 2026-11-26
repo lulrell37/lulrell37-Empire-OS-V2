@@ -28,3 +28,13 @@ for (const t of no) assert.strictEqual(workers.ownerGo(t), false, `should not be
   assert.strictEqual(g.run, false, 'a relay is never his go');
   console.log('test-worker-gate: ok');
 })().catch((e) => { console.error(e); process.exit(1); });
+
+// Only-him stops vs ones the worker settles itself.
+{
+  const w = require('../workers');
+  for (const q of ['Enter the code we texted to your phone number ending 42', 'Approve the sign-in on your phone', 'Add a credit card to continue', 'Should I submit the order?'])
+    assert.strictEqual(w.onlyHim(q), true, q);
+  for (const q of ['Which account name should I use?', 'What password should the new account have?', 'Pick a plan: Free or Dev?', 'The page asks for an organization name'])
+    assert.strictEqual(w.onlyHim(q), false, q);
+  console.log('test-worker-gate: only-him ok');
+}

@@ -725,9 +725,9 @@ async function emailedCodeBasic({ wait = EMAIL_WAIT_MS(), pollMs = 15000, site =
     const list = await g.gmailList({ q: `${from}newer_than:30m (code OR verification OR verify OR "sign in" OR "log in" OR confirm OR magic OR link)`, max: 5 }).catch(() => '');
     for (const id of [...String(list).matchAll(/\[id:([\w-]+)\]/g)].map((m) => m[1])) {
       const body = (await g.gmailRead(id).catch(() => '')).split('\n').slice(4).join('\n');
-      const c = codeIn(body);
-      if (c) return { code: c };
       const l = linkIn(body);
+      const c = require('./emailLinks').extractCode(body, { strict: !!l });
+      if (c) return { code: c };
       if (l) return { link: l };
     }
     if (Date.now() + pollMs < end) await new Promise((res) => setTimeout(res, pollMs));
@@ -828,6 +828,8 @@ async function browseRun(persona, name, arg, { ownerText = '', onStep = null, on
     const got = await (linkOnly ? emailedLink(reached, siteOf(r.url), { signal }) : emailedCode(reached, siteOf(r.url), undefined, signal))
       .catch((e) => ({ ok: false, text: `couldn't search his Gmail: ${e.message}` }));
     const L = require('./emailLinks');
+    // The page asked for a link and the email has one: open it (never a stray number as a code).
+    if (got.ok && linkOnly && got.url) got.code = null;
     if (got.ok && (got.code || got.url)) {
       // Same persona = same browser profile, which is what a magic link needs. The URL
       // travels as the LINK secret so it never reaches the page-reading model.
