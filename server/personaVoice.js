@@ -120,7 +120,10 @@ async function elevenLabsOgg(voiceId, text, { flat = false, personaId = '' } = {
 
 // Last-resort voice when the persona's own engine is down: OpenAI TTS (the
 // key is already here for Whisper). Not her voice, but he still gets a note.
-const OPENAI_FALLBACK_VOICE = { ara: 'shimmer', selene: 'nova', stephanie: 'coral', haven: 'sage', jarvis: 'onyx', aisha: 'fable' };
+const OPENAI_FALLBACK_VOICE = { ara: 'shimmer', selene: 'nova', stephanie: 'coral', haven: 'sage', jarvis: 'onyx', aisha: 'fable', rogue: 'coral', talon: 'ash', atlas: 'sage', scout: 'nova', wire: 'shimmer', sage: 'sage', woke: 'echo' };
+// Anyone else gets a backup voice that at least matches them (2026-11-26: R.O.G.U.E. fell
+// back to the neutral "alloy" and didn't sound like herself).
+const fallbackVoice = (id) => OPENAI_FALLBACK_VOICE[id] || (require('./personas').pronouns(id) === 'she/her' ? 'nova' : 'ash');
 async function openaiOgg(personaId, text) {
   const key = process.env.OPENAI_API_KEY;
   if (!key) throw new Error('OPENAI_API_KEY not set');
@@ -129,7 +132,7 @@ async function openaiOgg(personaId, text) {
     const res = await fetch('https://api.openai.com/v1/audio/speech', {
       method: 'POST',
       headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ model: 'gpt-4o-mini-tts', voice: OPENAI_FALLBACK_VOICE[personaId] || 'alloy', input: piece, response_format: 'mp3' }),
+      body: JSON.stringify({ model: 'gpt-4o-mini-tts', voice: fallbackVoice(personaId), input: piece, response_format: 'mp3' }),
       signal: AbortSignal.timeout(60000),
     });
     if (!res.ok) throw new Error(`openai tts ${res.status}: ${(await res.text()).slice(0, 160)}`);

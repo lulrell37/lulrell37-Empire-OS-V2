@@ -77,6 +77,8 @@ async function voice(personaId, text, sender, chatId) {
     const own = ROSTER[personaId] && ROSTER[personaId].voiceId;
     const r = await voiceNote(personaId, say, { scripted: personaId !== 'ara', voiceId: own ? undefined : voiceFor(personaId), noEleven: await elevenOut() });
     if (!r || !r.ogg) throw new Error(r && r.error ? r.error : 'no audio');
+    // Not in their own voice: say so in the log (the sentinel counts these), never silently.
+    if (r.fallback) console.error(`group chat failed: voice for ${personaId} wasn't their own (ElevenLabs: ${String(r.error || 'skipped').slice(0, 200)}), sent the backup voice`);
     await sender.sendVoice(chatId, r.ogg);
     return true;
   } catch (e) {
