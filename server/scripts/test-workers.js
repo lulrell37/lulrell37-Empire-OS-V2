@@ -172,6 +172,18 @@ function fakeGitHub() {
   assert.match(calls[1].task, /A\.R\.A\. FOUND WHAT YOU STOPPED FOR — the Canva account email/);
   assert.strictEqual(calls[1].secrets.INFO, 'him@example.com');
   assert.match(told[before], /✅ Worker 1 of 3 finished/, 'he only hears the result');
+  // An emailed sign-in link: same worker-<id> browser, the URL travels as the LINK secret, never in the task text.
+  settings.workers = '{}';
+  const lcalls = [];
+  W._setDeps({ gh: gh.call, repo: () => ({ owner: 'o', repo: 'r' }), slot: async () => () => {}, tell: async (t) => told.push(t), saveNote: async () => {}, onDone: () => null,
+    browse: async (persona, name, task, o) => { lcalls.push({ persona, task, secrets: o.secrets }); return lcalls.length === 1 ? { status: 'ask', text: 'BROWSE — paused\nGroq says check your email for a sign-in link.', result: '', url: 'https://console.groq.com/login' } : { status: 'done', text: 'BROWSE — finished', result: 'In.' }; },
+    find: async () => ({ what: 'the emailed sign-in link', value: 'https://console.groq.com/authenticate?token=zz', secret: true, kind: 'link' }) });
+  await W.tag('WORKER_START', 'browse | Groq | sign up');
+  await sleep(60);
+  assert.strictEqual(lcalls.length, 2);
+  assert.strictEqual(lcalls[0].persona, lcalls[1].persona, 'same browser profile');
+  assert.strictEqual(lcalls[1].secrets.LINK, 'https://console.groq.com/authenticate?token=zz');
+  assert.ok(!lcalls[1].task.includes('token=zz'), 'the URL never reaches the task text');
   // A.R.A. can't find it → J.A.R.V.I.S. (not A.R.A.) tells him it needs him.
   settings.workers = '{}';
   W._setDeps({ gh: gh.call, repo: () => ({ owner: 'o', repo: 'r' }), slot: async () => () => {}, tell: async (t) => told.push(t), saveNote: async () => {}, onDone: () => null,

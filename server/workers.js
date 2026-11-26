@@ -271,8 +271,8 @@ async function runBrowse(w) {
     update(w, { progress: 'Getting what it needs from A.R.A. (his email and notes)' });
     const got = await d().find(r.result || r.text, { task: w.task, site: r.url || '' }).catch(() => null);
     if (!got) break;
-    const shown = got.secret ? '{{INFO}} (type exactly that; it is filled in for you)' : `"${got.value}" (also available as {{INFO}})`;
-    r = await d().browse(`worker-${w.id}`, `J.A.R.V.I.S.'s worker`, `${w.task}\n\n[A.R.A. FOUND WHAT YOU STOPPED FOR — ${got.what}: ${shown}. Carry on with the task from where the browser is.]`, { ownerText: '', onStep, onPlan, secrets: { INFO: got.value } });
+    const shown = got.kind === 'link' ? '{{LINK}} (use it as the goto url exactly; it is filled in for you, same browser)' : got.secret ? '{{INFO}} (type exactly that; it is filled in for you)' : `"${got.value}" (also available as {{INFO}})`;
+    r = await d().browse(`worker-${w.id}`, `J.A.R.V.I.S.'s worker`, `${w.task}\n\n[A.R.A. FOUND WHAT YOU STOPPED FOR — ${got.what}: ${shown}. Carry on with the task from where the browser is.]`, { ownerText: '', onStep, onPlan, secrets: got.kind === 'link' ? { LINK: got.value, INFO: got.value } : { INFO: got.value } });
   }
   // Explicit verdict first (the brain's done {success, reason}), then the wording of
   // the result: a "done" that says it was blocked is never done (worker 57, 2026-11-24).

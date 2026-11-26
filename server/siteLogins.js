@@ -73,6 +73,8 @@ function linkIn(text) {
 }
 function codeIn(text) { return require('./emailLinks').extractCode(text); }
 const wantsEmailCode = (text) => /e-?mail|inbox|sent (a|the) (code|link)|check your email|magic[ -]link|(sign|log)[ -]?in link/i.test(String(text || '')) && /code|verif|link|magic|sign[ -]?in/i.test(String(text || ''));
+// A page that says a sign-in / verification / magic LINK was emailed (not a numeric code).
+const wantsEmailLink = (text) => /(magic|sign[ -]?in|log[ -]?in|verification|verify|confirmation) link|link (was |has been )?(sent|emailed)|sent (you )?(a|the) (\w+ )?link|we (sent|emailed) (you )?(a|the) link|click (on )?the link|check your (e-?mail|inbox)[^.]{0,60}link|link[^.]{0,60}(your )?(e-?mail|inbox)/i.test(String(text || ''));
 async function emailCode(site, since = Date.now() - 60000) {
   const got = await require('./emailLinks').waitForEmailAuth({ since, sender: SENDERS[site].replace(/^from:\(|\)$/g, '') }).catch(() => null);
   return got && got.ok && got.code ? got.code : null; // codes only: this login types it
@@ -166,4 +168,4 @@ async function tag(arg) {
 
 const LOGIN_TOOLS = ` - [SITE_LOGIN: youtube|instagram] — sign your browser in to that site with the account saved on the server, so R.O.G.U.E.'s downloads, transcripts and style learning get past the bot check. It also runs by itself whenever a login expires; he's told only when it can't be done (a code or phone approval only he can give). Report only what the result says.`;
 
-module.exports = { codeIn, linkIn, wantsEmailCode, toNetscape, cookieFor, ensureLogin, signIn, tag, hasAccount, LOGIN_TOOLS, SITES, ALLOW };
+module.exports = { codeIn, linkIn, wantsEmailCode, wantsEmailLink, toNetscape, cookieFor, ensureLogin, signIn, tag, hasAccount, LOGIN_TOOLS, SITES, ALLOW };
