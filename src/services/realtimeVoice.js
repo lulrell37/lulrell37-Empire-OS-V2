@@ -75,6 +75,31 @@ let listening=false;
 let lastHeard='';     // his last words on the call: the gate for writes that need his own message
 let liveTimers=[];    // live pass-offs and mood while the call runs
 
+// Her own words heard back (owner, 2026-11-27: "she's talking to herself… acting like
+// someone is saying something"): through the loudspeaker her voice reaches the mic loud
+// enough to pass the gate, Grok transcribes it as him and she answers herself. What she
+// said in the last ~20 s is kept; a "his" transcript made mostly of those words (60%+
+// of its words, 3+ words) is her echo.
+// Echo repeats her exact phrasing, so it's judged on word PAIRS: "okay add that to my
+// calendar" after her "I'll add that to your calendar" shares words but not phrasing.
+let herRecent=[]; // [{ at, pairs:Set }]
+const wordsOf=(t)=>String(t||'').toLowerCase().replace(/[^a-z0-9' ]+/g,' ').split(/\s+/).filter(Boolean);
+const pairsOf=(w)=>{const p=[];for(let i=0;i+1<w.length;i++)p.push(w[i]+' '+w[i+1]);return p;};
+function noteHerWords(text){
+  const now=Date.now();
+  herRecent=herRecent.filter(h=>now-h.at<20000);
+  herRecent.push({at:now,pairs:new Set(pairsOf(wordsOf(text)))});
+}
+function isOwnEcho(heard){
+  const p=pairsOf(wordsOf(heard));
+  if(p.length<3)return false; // 4+ words
+  const now=Date.now();
+  const mine=new Set();
+  for(const h of herRecent)if(now-h.at<20000)for(const x of h.pairs)mine.add(x);
+  if(!mine.size)return false;
+  return p.filter(x=>mine.has(x)).length/p.length>=0.6;
+}
+
 // Echo gate (owner, 2026-11-27: "it cuts her off when I haven't said anything yet"):
 // her own voice from the speaker leaks back into the mic, Grok hears it as him, and
 // cancels her answer. While she's talking, a mic chunk quieter than BARGE_RMS (her echo)
@@ -96,10 +121,18 @@ function silenceLike(b64){
 // With the call-mode player the phone cancels her echo itself, so the gate only
 // catches what's left (a much lower bar, so a quiet "wait" still cuts her off).
 const BARGE_RMS_CALL=0.02;
+// Only while her audio is really playing (not while the next piece is being made: he
+// was being gated in that pause), and once his voice gets through the gate stays open
+// HANGOVER_MS so his quieter syllables aren't cut (owner, 2026-11-27: "she's saying I'm
+// getting cut off, it's switching to listening by itself").
+const HANGOVER_MS=1500;
+let heardAt=0;
 function gateEcho(chunk){
-  const herTurn=!!sound||playing||nativePlaying;
-  if(!herTurn)return chunk;
-  return rmsOf(chunk)<(callAudio?BARGE_RMS_CALL:BARGE_RMS)?silenceLike(chunk):chunk;
+  const herAudio=!!sound||nativePlaying;
+  if(!herAudio)return chunk;
+  if(Date.now()-heardAt<HANGOVER_MS)return chunk;
+  if(rmsOf(chunk)>=(callAudio?BARGE_RMS_CALL:BARGE_RMS)){heardAt=Date.now();return chunk;}
+  return silenceLike(chunk);
 }
 
 // Her ElevenLabs voice on the live call (owner, 2026-11-27: "option 1"): Grok still
@@ -350,6 +383,16 @@ export async function startAraLive(opts={}){
         }
         case'conversation.item.input_audio_transcription.completed':{
           const t=event.content?.[0]?.transcript||event.transcript;
+          // Her own words coming back through the mic: not him. Drop it, cancel any
+          // answer Grok started to it, and keep it out of the conversation.
+          if(t&&isOwnEcho(t)){
+            if(socket.readyState===WebSocket.OPEN){
+              socket.send(JSON.stringify({type:'response.cancel'}));
+              if(event.item_id)socket.send(JSON.stringify({type:'conversation.item.delete',item_id:event.item_id}));
+            }
+            cancelAll();stopPlayback();onState?.('listening');
+            break;
+          }
           if(t){onUserText?.(fixNames(t),true);lastHeard=fixNames(t);}
           break;
         }
@@ -365,6 +408,7 @@ export async function startAraLive(opts={}){
           respTranscript+=event.delta||'';
           onAraText?.(respTranscript,false);
           if(eleven)feed(event.delta,onState);
+          if(event.delta)noteHerWords(respTranscript);
           break;
         case'response.function_call_arguments.done':{
           let args={};try{args=JSON.parse(event.arguments||'{}');}catch{}
@@ -421,7 +465,7 @@ function startLiveUpdates(socket,callStart,mood0,withMood){
         if(seen.has(a.id))continue;
         seen.add(a.id);
         if(a.ts<callStart)continue;
-        send({type:'conversation.item.create',item:{type:'message',role:'user',content:[{type:'input_text',
+        send({type:'conversation.item.create',item:{type:'message',role:'system',content:[{type:'input_text',
           text:`[SYSTEM NOTE, not Mr. Burrus speaking: this just went to him on Telegram${a.from?` (from ${a.from})`:''}. You know it now; bring it up only if it matters or he asks:]\n${String(a.content).replace(/\*\*/g,'').slice(0,3000)}`}]}});
       }
     }catch{}
