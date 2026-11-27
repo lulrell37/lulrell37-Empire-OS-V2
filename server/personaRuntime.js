@@ -1236,7 +1236,7 @@ async function tgMatches(persona, question) {
   const words = [...new Set(String(question || '').toLowerCase().match(/[a-z0-9]{4,}/g) || [])].filter((w) => !RECALL_STOP.has(w) && !MONTHS.includes(w)).slice(0, 6);
   if (!words.length) return '';
   const { rows } = await query(
-    `SELECT role, content, ts FROM tg_messages WHERE persona = $1 AND (${words.map((_, i) => `content ILIKE ${i + 2}`).join(' OR ')}) ORDER BY ts DESC LIMIT 40`,
+    `SELECT role, content, ts FROM tg_messages WHERE persona = $1 AND (${words.map((_, i) => `content ILIKE $${i + 2}`).join(' OR ')}) ORDER BY ts DESC LIMIT 40`,
     [persona, ...words.map((w) => `%${w}%`)],
   ).catch(() => ({ rows: [] }));
   if (!rows.length) return '';
@@ -1387,7 +1387,7 @@ async function weatherBlock() {
 
 async function loadHistory(persona = 'ara') {
   const { rows } = await query(
-    'SELECT role, content, ts FROM tg_messages WHERE persona = $1 ORDER BY id DESC LIMIT $2',
+    'SELECT role, content, ts FROM tg_messages WHERE persona = $1 ORDER BY ts DESC, id DESC LIMIT $2',
     [persona, HISTORY_TURNS],
   );
   // His messages carry when they were sent (the live one already does), so she

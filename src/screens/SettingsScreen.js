@@ -124,6 +124,7 @@ export default function SettingsScreen({navigation}){
       registerPushToken().catch(()=>{});
       syncGoogleTokenToBackend().catch(()=>{}); // let the server-side council read the Drive brief
       syncTradeCredsToBackend().catch(()=>{}); // so server-side T.A.L.O.N./W.I.R.E. can trade without the app open
+      import('../services/sharedChat').then(m=>m.importLocalHistory()).catch(()=>{}); // the phone's old chats into the shared thread
       // The server now owns T.A.L.O.N./S.C.O.U.T./A.T.L.A.S./W.I.R.E. — stop the
       // local loops immediately so the two never double-trade/double-email.
       stopAutoTrader();stopAutoScout();stopAutoAtlas();stopNewsWire();

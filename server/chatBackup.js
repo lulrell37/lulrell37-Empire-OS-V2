@@ -87,6 +87,20 @@ async function upload(parent, name, buf) {
   return (await res.json()).id;
 }
 
+// ET day 'YYYY-MM-DD' -> [start, end) ms.
+function dayBounds(day) {
+  const start = startOfTodayET(Date.parse(`${day}T12:00:00Z`));
+  return [start, startOfTodayET(start + 36 * 3600e3)];
+}
+
+// Past days that got messages after their file was made (the phone's imported
+// history): the next run writes those days' files again, whole.
+async function redoDays(days) {
+  const state = await readState();
+  const redo = [...new Set([...(state.redo || []), ...days])].sort();
+  await d().store.setSetting('chat_backup', JSON.stringify({ ...state, redo }));
+}
+
 async function readState() {
   try { return JSON.parse((await d().store.getSetting('chat_backup')) || '{}') || {}; } catch { return {}; }
 }
@@ -98,22 +112,34 @@ async function tick({ now = Date.now() } = {}) {
   const until = startOfTodayET(now);
   const { rows } = await d().db.query('SELECT persona, role, content, ts FROM tg_messages WHERE ts > $1 AND ts < $2 ORDER BY ts ASC, id ASC', [from, until]);
   const days = byDay(rows);
-  const order = Object.keys(days).sort().slice(0, MAX_DAYS);
+  // Days to write again, whole (imported history), before today only.
+  const today = etDay(now);
+  const redo = (state.redo || []).filter((x) => x < today);
+  for (const day of redo) {
+    if (days[day]) continue;
+    const [lo, hi] = dayBounds(day);
+    const r = await d().db.query('SELECT persona, role, content, ts FROM tg_messages WHERE ts >= $1 AND ts < $2 ORDER BY ts ASC, id ASC', [lo, hi]);
+    days[day] = byDay(r.rows)[day] || [];
+  }
+  const order = Object.keys(days).filter((x) => days[x].length).sort().slice(0, MAX_DAYS);
   // Days with only alerts still move the mark forward.
   if (!order.length) {
     const last = rows.length ? Number(rows[rows.length - 1].ts) : from;
-    if (last > from) await d().store.setSetting('chat_backup', JSON.stringify({ ...state, lastTs: last }));
+    if (last > from || redo.length) await d().store.setSetting('chat_backup', JSON.stringify({ ...state, lastTs: Math.max(last, from), redo: (state.redo || []).filter((x) => !redo.includes(x)) }));
     return { backedUp: 0 };
   }
   const parent = await folderId();
   let bytes = Number(state.bytes) || 0, count = Number(state.days) || 0, lastTs = from, lastDay = state.lastDay || '';
+  let pendingRedo = [...(state.redo || [])];
   for (const day of order) {
     const buf = pack(day, days[day]);
     await upload(parent, `Conversations ${day}.json.gz`, buf);
     bytes += buf.length; count += 1; lastDay = day;
-    lastTs = Math.max(...days[day].map((m) => m.ts));
+    lastTs = Math.max(lastTs, ...days[day].map((m) => m.ts).filter((t) => t < until));
+    lastDay = day > lastDay ? day : lastDay;
+    pendingRedo = pendingRedo.filter((x) => x !== day);
     // Saved after each day, so a failure part way keeps what's done.
-    await d().store.setSetting('chat_backup', JSON.stringify({ lastTs, lastDay, days: count, bytes, at: Date.now() }));
+    await d().store.setSetting('chat_backup', JSON.stringify({ lastTs, lastDay, days: count, bytes, redo: pendingRedo, at: Date.now() }));
   }
   return { backedUp: order.length, lastDay, more: Object.keys(days).length > order.length };
 }
@@ -147,4 +173,4 @@ async function status() {
     : 'No conversation backup has run yet.';
 }
 
-module.exports = { tick, restore, status, byDay, pack, unpack, startOfTodayET, isAlert, FOLDER, _set: (x) => { deps = x; } };
+module.exports = { redoDays, dayBounds, tick, restore, status, byDay, pack, unpack, startOfTodayET, isAlert, FOLDER, _set: (x) => { deps = x; } };

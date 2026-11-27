@@ -77,9 +77,12 @@ const SYNC_TABLES={
   hud_layout:'NEW.panel',
   hud_state:"'singleton'",
   app_settings:'NEW.key',
+  // Step 3 (owner, 2026-11-27): the last tables that lived only on the phone.
+  deep_research:'NEW.id',
+  api_usage:'lower(hex(randomblob(16)))',
 };
 // of those, the tables that don't already have an updated_at column
-const NEEDS_UPDATED_AT=new Set(['tasks','persona_memory','revenue','expenses','important_dates','business_targets','custom_prompts','persona_pics','hud_layout','app_settings']);
+const NEEDS_UPDATED_AT=new Set(['deep_research','api_usage','tasks','persona_memory','revenue','expenses','important_dates','business_targets','custom_prompts','persona_pics','hud_layout','app_settings']);
 
 export const SYNC_TABLE_NAMES=Object.keys(SYNC_TABLES);
 
@@ -115,7 +118,7 @@ async function initSync(){
     // build_jobs is keyed on a synthetic `id` (`owner/repo#issue`) that equals
     // its sync_id. Rows arriving from another device via sync insert without an
     // `id`; backfill it from sync_id so getBuildJob(id) keeps working.
-    if(t==='build_jobs'||t==='clip_jobs'||t==='watch_jobs'||t==='content_items'){
+    if(t==='build_jobs'||t==='clip_jobs'||t==='watch_jobs'||t==='content_items'||t==='deep_research'){
       await db.execAsync(`
         DROP TRIGGER IF EXISTS ${t}_id_fill;
         CREATE TRIGGER ${t}_id_fill AFTER INSERT ON ${t}
@@ -320,6 +323,17 @@ async function ensureBusinessTargets(){
 export async function saveMessage(persona,role,content,mode='direct',unread=0){
   await db.runAsync('INSERT INTO messages(persona,role,content,mode,timestamp,unread) VALUES(?,?,?,?,?,?)',[persona,role,content,mode,Date.now(),unread?1:0]);
   if(mode==='direct'&&typeof content==='string')import('./sharedChat').then(m=>m.pushMessage(persona,role,content)).catch(()=>{});
+}
+// Step 3: the phone's direct-chat history goes up to the server's shared thread once
+// (sharedChat.importLocalHistory). uploaded: 0 = not yet, 1 = on the server,
+// 2 = the server refused it (unknown persona); kept on the phone either way.
+export async function getUnuploadedMessages(limit=500){
+  await migrateColumn('messages','uploaded','INTEGER DEFAULT 0');
+  return await db.getAllAsync("SELECT id,persona,role,content,timestamp FROM messages WHERE mode='direct' AND COALESCE(uploaded,0)=0 ORDER BY id ASC LIMIT ?",[limit]);
+}
+export async function markUploaded(ids,flag=1){
+  if(!ids.length)return;
+  await db.runAsync(`UPDATE messages SET uploaded=? WHERE id IN (${ids.map(()=>'?').join(',')})`,[flag,...ids]);
 }
 export async function getMessages(persona,limit=50){return await db.getAllAsync('SELECT * FROM messages WHERE persona=? ORDER BY timestamp DESC LIMIT ?',[persona,limit]);}
 // A reply that landed while Mr. Burrus had already left that persona's orb —

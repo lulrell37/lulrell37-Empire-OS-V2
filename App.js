@@ -60,6 +60,7 @@ export default function App(){
         registerPushToken().catch(()=>{}); // no-op unless a backend is configured
         syncGoogleTokenToBackend().catch(()=>{}); // no-op unless backend + Google both linked
         syncTradeCredsToBackend().catch(()=>{}); // no-op unless backend + TradeLocker both linked
+        import('./src/services/sharedChat').then(m=>m.importLocalHistory()).catch(()=>{}); // the phone's old chats into the shared thread (step 3)
       }
       catch(e){console.warn('Init error:',e);reportError('Init error: '+e.message);}
       finally{setIsReady(true);await SplashScreen.hideAsync();}

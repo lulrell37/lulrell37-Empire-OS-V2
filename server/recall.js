@@ -40,9 +40,9 @@ async function chatMatches(persona, ws, { skipNewest = 0, limit = 6 } = {}) {
   const params = [persona, skipNewest, ...ws.map((w) => `%${w}%`)];
   const { rows } = await query(
     `SELECT id, role, content, ts FROM tg_messages WHERE persona = $1
-       AND id < COALESCE((SELECT MIN(id) FROM (SELECT id FROM tg_messages WHERE persona = $1 ORDER BY id DESC LIMIT $2) t), 9223372036854775807)
+       AND ts < COALESCE((SELECT MIN(ts) FROM (SELECT ts FROM tg_messages WHERE persona = $1 ORDER BY ts DESC, id DESC LIMIT $2) t), 9223372036854775807)
        AND (${ws.map((_, i) => `content ILIKE $${i + 3}`).join(' OR ')})
-     ORDER BY id DESC LIMIT 120`, params,
+     ORDER BY ts DESC, id DESC LIMIT 120`, params,
   ).catch(() => ({ rows: [] }));
   return rows
     .map((r) => { const c = String(r.content || '').toLowerCase(); return { ...r, hits: ws.filter((w) => c.includes(w)).length }; })
@@ -55,7 +55,7 @@ async function chatMatches(persona, ws, { skipNewest = 0, limit = 6 } = {}) {
 // The last `n` messages of his chat with this persona within `hours`.
 async function recentChat(persona, n, hours = 24) {
   if (!n) return [];
-  const { rows } = await query('SELECT role, content, ts FROM tg_messages WHERE persona = $1 AND ts > $2 ORDER BY id DESC LIMIT $3',
+  const { rows } = await query('SELECT role, content, ts FROM tg_messages WHERE persona = $1 AND ts > $2 ORDER BY ts DESC, id DESC LIMIT $3',
     [persona, Date.now() - hours * 3600e3, n]).catch(() => ({ rows: [] }));
   return rows.reverse();
 }
@@ -63,7 +63,7 @@ async function recentChat(persona, n, hours = 24) {
 // His last few messages to this persona: a short follow-up ("what about that?")
 // searches on what it follows, not on its own two words.
 async function lastAsked(persona, n = 2) {
-  const { rows } = await query("SELECT content FROM tg_messages WHERE persona = $1 AND role = 'user' ORDER BY id DESC LIMIT $2", [persona, n])
+  const { rows } = await query("SELECT content FROM tg_messages WHERE persona = $1 AND role = 'user' ORDER BY ts DESC, id DESC LIMIT $2", [persona, n])
     .catch(() => ({ rows: [] }));
   return rows.map((r) => String(r.content || '').slice(0, 400)).join('\n');
 }

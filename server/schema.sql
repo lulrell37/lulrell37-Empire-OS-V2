@@ -156,3 +156,5 @@ ALTER TABLE memories ADD COLUMN IF NOT EXISTS source_input bigint;
 ALTER TABLE memory_inputs ADD COLUMN IF NOT EXISTS extracted_at bigint;
 ALTER TABLE memory_inputs ADD COLUMN IF NOT EXISTS tries int;
 CREATE INDEX IF NOT EXISTS memory_inputs_todo_idx ON memory_inputs (id) WHERE extracted_at IS NULL;
+-- The thread is read in message-time order (old app chats are imported with their own times).
+CREATE INDEX IF NOT EXISTS tg_messages_persona_ts_idx ON tg_messages (persona, ts DESC);

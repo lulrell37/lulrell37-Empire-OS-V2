@@ -39,6 +39,39 @@ export function pushMessage(pid,role,content){
     .catch(()=>{});
 }
 
+// Step 3 (owner, 2026-11-27): everything the phone's chats ever held goes up to the
+// shared thread, each message with its own time; the server skips anything already
+// there. Runs at app start and on backend connect; picks up where it stopped.
+let importing=false;
+export async function importLocalHistory(){
+  if(importing)return{skipped:true};
+  if(!(await loadBackend()))return{skipped:'no server linked'};
+  importing=true;
+  const out={added:0,skipped:0,refused:0};
+  try{
+    const{getUnuploadedMessages,markUploaded}=await import('./database');
+    for(let round=0;round<200;round++){
+      const batch=await getUnuploadedMessages(500);
+      if(!batch.length)break;
+      const by={};
+      for(const m of batch)(by[m.persona]=by[m.persona]||[]).push(m);
+      for(const[pid,ms]of Object.entries(by)){
+        const be=await loadBackend();
+        const res=await fetch(`${be.url}/chat/${encodeURIComponent(pid)}/import`,{method:'POST',
+          headers:{Authorization:'Bearer '+be.token,'Content-Type':'application/json'},
+          body:JSON.stringify({messages:ms.map(m=>({role:m.role,content:typeof m.content==='string'?m.content:String(m.content||''),ts:Number(m.timestamp)||0}))})});
+        if(res.status===404){await markUploaded(ms.map(m=>m.id),2);out.refused+=ms.length;continue;}
+        if(!res.ok)throw new Error('server '+res.status);
+        const j=await res.json();
+        out.added+=j.added||0;out.skipped+=j.skipped||0;
+        await markUploaded(ms.map(m=>m.id),1);
+      }
+    }
+  }catch(e){out.error=e.message;}
+  finally{importing=false;}
+  return out;
+}
+
 export async function fetchAlerts(pid,limit=30){
   const j=await call(`/chat/${encodeURIComponent(pid)}/alerts?limit=${limit}`);
   return j&&Array.isArray(j.alerts)?j.alerts:null;

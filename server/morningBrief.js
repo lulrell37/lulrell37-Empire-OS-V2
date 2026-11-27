@@ -407,7 +407,7 @@ async function buildBrief() {
 async function briefMemory(text) {
   const { recall, recallBlock } = require('./recall');
   const { query } = require('./db');
-  const { rows } = await query("SELECT content FROM tg_messages WHERE persona = 'ara' AND role = 'user' AND ts > $1 ORDER BY id DESC LIMIT 12",
+  const { rows } = await query("SELECT content FROM tg_messages WHERE persona = 'ara' AND role = 'user' AND ts > $1 ORDER BY ts DESC, id DESC LIMIT 12",
     [Date.now() - 36 * 3600e3]).catch(() => ({ rows: [] }));
   const asked = rows.map((r) => String(r.content || '').slice(0, 300)).join('\n');
   const r = await recall('ara', asked || String(text).slice(0, 1500), { recent: 10, facts: 10, chats: 0, ms: 8000 });

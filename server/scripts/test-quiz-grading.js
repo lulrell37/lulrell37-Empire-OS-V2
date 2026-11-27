@@ -18,7 +18,7 @@ assert.strictEqual(q.breakdown(8, 47), '8 × 47 = 8 × 40 + 8 × 7 = 320 + 56 = 
   const block = await q.quizBlock('161, 366, 168, 228, 380');
   assert(/GRADED IN CODE/.test(block));
   assert(/8 × 47: he said 366 ✗ \(right answer 376; work it: 8 × 47 = 8 × 40 \+ 8 × 7/.test(block), block);
-  assert(/GO OVER EVERY ✗/.test(block) && /one similar problem/.test(block));
+  assert(/GO OVER EVERY ✗/.test(block) && /Don't give him any extra problems/.test(block) && !/similar problem/.test(block));
   assert(/\[QUIZ_SCORE: 3\]/.test(block));
   const saved = JSON.parse(store.steph_quiz);
   assert.strictEqual(saved.graded, 3);

@@ -15,6 +15,7 @@ let settings = {};
 const uploads = {};
 const db = { query: async (sql, p) => {
   if (/^SELECT persona, role, content, ts FROM tg_messages WHERE ts > \$1/.test(sql)) return { rows: rows.filter((r) => r.ts > p[0] && r.ts < p[1]) };
+  if (/^SELECT persona, role, content, ts FROM tg_messages WHERE ts >= \$1/.test(sql)) return { rows: rows.filter((r) => r.ts >= p[0] && r.ts < p[1]).sort((a, b) => a.ts - b.ts) };
   if (/^SELECT 1 FROM tg_messages/.test(sql)) return { rows: rows.filter((r) => r.persona === p[0] && r.role === p[1] && r.ts === p[2] && r.content === p[3]) };
   if (/^INSERT/.test(sql)) { rows.push({ id: rows.length + 1, persona: p[0], role: p[1], content: p[2], ts: p[3] }); return { rows: [] }; }
   throw new Error(`unexpected sql ${sql}`);
@@ -55,7 +56,15 @@ global.fetch = async (url, opts = {}) => {
   assert.strictEqual((await cb.tick({ now: day('2026-11-27', 13) })).backedUp, 0, 'nothing twice');
   assert(/through 2026-11-26/.test(await cb.status()));
 
-  rows.splice(0, 2); // lost
+  // An old app chat imported later: its day's file is written again, whole.
+  rows.push({ id: 99, persona: 'ara', role: 'user', content: 'from the phone, Nov 25', ts: day('2026-11-25', 15) });
+  await cb.redoDays(['2026-11-25', '2026-11-27']);
+  const re = await cb.tick({ now: day('2026-11-27', 14) });
+  assert.strictEqual(re.backedUp, 1, JSON.stringify(re));
+  assert.deepStrictEqual(cb.unpack(uploads['Conversations 2026-11-25.json.gz']).messages.map((m) => m.content), ['what time is dinner?', 'Six.', 'from the phone, Nov 25']);
+  assert.deepStrictEqual(JSON.parse(settings.chat_backup).redo, ['2026-11-27'], "today's redo waits");
+
+  rows.splice(0, 2); // lost (the two 2026-11-25 messages from the start)
   const dry = await cb.restore({ dry: true });
   assert.strictEqual(dry.added, 2);
   const back = await cb.restore();
