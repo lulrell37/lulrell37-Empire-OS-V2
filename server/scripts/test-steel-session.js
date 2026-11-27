@@ -12,7 +12,7 @@ const ba = require('../browserAgent');
     return min <= allow ? { ok: true, json: async () => ({ id: `sess-${min}` }) } : { ok: false, status: 400, json: async () => ({ error: 'timeout over plan limit' }) };
   };
   let s = await ba.steelSession('wss://connect.steel.dev?apiKey=KEY&projectId=P1');
-  assert.deepStrictEqual(s, { id: 'sess-45', key: 'KEY' });
+  assert.strictEqual(s.id, 'sess-45'); assert.strictEqual(s.key, 'KEY');
   assert.strictEqual(calls[0].body.timeout, 45 * 60000, '45 minutes, not the 5-minute default');
   assert.strictEqual(calls[0].headers['steel-api-key'], 'KEY');
   assert.strictEqual(calls[0].body.projectId, 'P1');

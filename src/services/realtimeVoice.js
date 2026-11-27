@@ -100,6 +100,24 @@ function isOwnEcho(heard){
   return p.filter(x=>mine.has(x)).length/p.length>=0.6;
 }
 
+// Soft barge-in state (see speech_started).
+const BARGE_WAIT_MS=2500;
+let suspect=false,bargeTimer=null,ignoreNext=false,ignoreResp=null;
+function herSpeaking(){return !!sound||nativePlaying||(playing&&queue.length>0);}
+function confirmBarge(onState){
+  suspect=false;clearTimeout(bargeTimer);
+  listening=true;onState?.('listening');
+  cancelAll();stopPlayback();
+}
+// Share of a (partial) transcript's word pairs that are hers; 0 for a single word.
+function echoRatio(heard){
+  const p=pairsOf(wordsOf(heard));
+  if(!p.length)return 0;
+  const now=Date.now();const mine=new Set();
+  for(const h of herRecent)if(now-h.at<20000)for(const x of h.pairs)mine.add(x);
+  return mine.size?p.filter(x=>mine.has(x)).length/p.length:0;
+}
+
 // Echo gate (owner, 2026-11-27: "it cuts her off when I haven't said anything yet"):
 // her own voice from the speaker leaks back into the mic, Grok hears it as him, and
 // cancels her answer. While she's talking, a mic chunk quieter than BARGE_RMS (her echo)
@@ -127,12 +145,19 @@ const BARGE_RMS_CALL=0.02;
 // getting cut off, it's switching to listening by itself").
 const HANGOVER_MS=1500;
 let heardAt=0;
+// Look-back: while she's talking the newest ~quarter second is held back (LOOKBACK
+// chunks, ~85 ms each); when his voice opens the gate those go up as the real sound,
+// not silence, so a soft first syllable ("um, wait") isn't lost. -> chunks to send now.
+const LOOKBACK=3;
+let held=[];
 function gateEcho(chunk){
   const herAudio=!!sound||nativePlaying;
-  if(!herAudio)return chunk;
-  if(Date.now()-heardAt<HANGOVER_MS)return chunk;
-  if(rmsOf(chunk)>=(callAudio?BARGE_RMS_CALL:BARGE_RMS)){heardAt=Date.now();return chunk;}
-  return silenceLike(chunk);
+  const open=!herAudio||Date.now()-heardAt<HANGOVER_MS;
+  if(!open&&rmsOf(chunk)>=(callAudio?BARGE_RMS_CALL:BARGE_RMS))heardAt=Date.now();
+  if(open||Date.now()-heardAt<HANGOVER_MS){const out=[...held,chunk];held=[];return out;} // his voice: the held ones go up real
+  held.push(chunk);
+  if(held.length>LOOKBACK)return [silenceLike(held.shift())]; // oldest leaves as silence, in order
+  return [];
 }
 
 // Her ElevenLabs voice on the live call (owner, 2026-11-27: "option 1"): Grok still
@@ -358,7 +383,7 @@ export async function startAraLive(opts={}){
               LiveAudioStream.init(LIVE_AUDIO_OPTS);
               LiveAudioStream.on('data',chunk=>{
                 if(ws===socket&&socket.readyState===WebSocket.OPEN){
-                  socket.send(JSON.stringify({type:'input_audio_buffer.append',audio:gateEcho(chunk)}));
+                  for(const out of gateEcho(chunk))socket.send(JSON.stringify({type:'input_audio_buffer.append',audio:out}));
                 }
               });
               LiveAudioStream.start();
@@ -371,14 +396,30 @@ export async function startAraLive(opts={}){
           break;
         // Barge-in: the instant the server's VAD hears you start talking,
         // cut her off — she is never allowed to talk over you.
+        // Barge-in. While she's talking, "someone started speaking" may be her own echo,
+        // so she keeps going until the first words show it's him (soft barge-in, owner
+        // 2026-11-27: "we still hit a listen in the middle of her talking"); not him
+        // within BARGE_WAIT_MS = noise, she carries on. When she's quiet, it's him.
         case'input_audio_buffer.speech_started':
+          if(herSpeaking()){
+            suspect=true;
+            clearTimeout(bargeTimer);
+            bargeTimer=setTimeout(()=>{suspect=false;},BARGE_WAIT_MS);
+            break;
+          }
           listening=true;onState?.('listening');
           cancelAll();
           stopPlayback();
           break;
         case'conversation.item.input_audio_transcription.updated':{
           const t=event.content?.[0]?.transcript||event.transcript;
-          if(t)onUserText?.(fixNames(t),false);
+          if(!t)break;
+          if(suspect){
+            if(echoRatio(t)>=0.6)break;          // her own words: she carries on
+            if(wordsOf(t).length>=2)confirmBarge(onState);
+            else break;
+          }
+          onUserText?.(fixNames(t),false);
           break;
         }
         case'conversation.item.input_audio_transcription.completed':{
@@ -386,17 +427,22 @@ export async function startAraLive(opts={}){
           // Her own words coming back through the mic: not him. Drop it, cancel any
           // answer Grok started to it, and keep it out of the conversation.
           if(t&&isOwnEcho(t)){
+            // Her echo: any answer Grok starts to it is cancelled and its words dropped;
+            // what she's saying now keeps playing.
             if(socket.readyState===WebSocket.OPEN){
               socket.send(JSON.stringify({type:'response.cancel'}));
               if(event.item_id)socket.send(JSON.stringify({type:'conversation.item.delete',item_id:event.item_id}));
             }
-            cancelAll();stopPlayback();onState?.('listening');
+            ignoreNext=true;suspect=false;
+            if(!herSpeaking())onState?.('listening');
             break;
           }
+          if(t&&suspect)confirmBarge(onState);
           if(t){onUserText?.(fixNames(t),true);lastHeard=fixNames(t);}
           break;
         }
         case'response.output_audio.delta':
+          if(ignoreResp)break;
           try{
             const binary=atob(event.delta);
             const bytes=new Uint8Array(binary.length);
@@ -404,7 +450,11 @@ export async function startAraLive(opts={}){
             audioChunks.push(bytes);
           }catch{}
           break;
+        case'response.created':
+          if(ignoreNext){ignoreResp=event.response?.id||'?';ignoreNext=false;}
+          break;
         case'response.output_audio_transcript.delta':
+          if(ignoreResp&&(event.response_id===ignoreResp||ignoreResp==='?'))break; // an answer to her own echo
           respTranscript+=event.delta||'';
           onAraText?.(respTranscript,false);
           if(eleven)feed(event.delta,onState);
@@ -420,6 +470,7 @@ export async function startAraLive(opts={}){
           break;
         }
         case'response.done':{
+          if(ignoreResp&&(event.response?.id===ignoreResp||ignoreResp==='?')){ignoreResp=null;audioChunks=[];break;}
           const finalText=respTranscript;
           onAraText?.(finalText,true);
           respTranscript='';
@@ -484,6 +535,7 @@ function startLiveUpdates(socket,callStart,mood0,withMood){
 export async function stopAraLive(){
   for(const t of liveTimers)clearInterval(t);
   liveTimers=[];lastHeard='';
+  suspect=false;ignoreNext=false;ignoreResp=null;clearTimeout(bargeTimer);herRecent=[];held=[];heardAt=0;
   const socket=ws;ws=null;
   if(streamStarted){try{LiveAudioStream.stop();}catch{}streamStarted=false;}
   try{LiveAudioStream.removeAllListeners?.('data');}catch{}

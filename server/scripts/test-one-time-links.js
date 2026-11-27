@@ -28,3 +28,18 @@ assert(!ba.SPENT.test('Welcome to GroqCloud'));
   await assert.rejects(() => ba._doAction(b, { type: 'goto', url: stytch }, null, {}), /already opened in this run, so it is spent/);
   console.log('one-time links ok');
 })().catch((e) => { console.error(e); process.exit(1); });
+
+// The brain re-types the old, spent link while a fresh one waits in LINK: the fresh one opens.
+(async () => {
+  const ba2 = require('../browserAgent');
+  const old = 'https://stytch.com/v1/magic_links/redirect?token=OLD1';
+  ba2.SPENT_LINKS.set(old, Date.now());
+  let navigated = null;
+  const b = { cdp: { send: async (m, p) => { if (m === 'Page.navigate') navigated = p.url; return {}; } }, session: 's' };
+  const fresh = 'https://stytch.com/v1/magic_links/redirect?token=FRESH2';
+  // settle / ev need a page; stub them through the cdp send (Runtime.evaluate).
+  b.cdp.send = async (m, p) => { if (m === 'Page.navigate') { navigated = p.url; return {}; } if (m === 'Runtime.evaluate') return { result: { value: /readyState/.test(p.expression) ? 'complete' : { u: 'https://console.groq.com/home', n: 500, t: 'Welcome to GroqCloud' } } }; return {}; };
+  await ba2._doAction(b, { type: 'goto', url: old }, null, { LINK: fresh });
+  require('assert').strictEqual(navigated, fresh, 'the fresh emailed link was opened, not the spent one');
+  console.log('stale link swapped ok');
+})().catch((e) => { console.error(e); process.exit(1); });

@@ -318,7 +318,13 @@ async function steelSession(wsUrl) {
       body: JSON.stringify({ timeout: min * 60000, ...(projectId ? { projectId } : {}) }),
     });
     const j = await r.json().catch(() => ({}));
-    if (r.ok && j.id) { console.log(`browse: Steel session for ${min} min`); return { id: j.id, key }; }
+    if (r.ok && j.id) {
+      // What Steel actually granted (a plan can cap it below what was asked).
+      const got = Number(j.timeout || j.sessionTimeout || 0) / 60000;
+      if (got && got < min) console.error(`browse failed: Steel gave a ${Math.round(got)}-minute session, not ${min} (the plan's cap): a browser job has to finish inside it`);
+      else console.log(`browse: Steel session for ${got ? Math.round(got) : min} min`);
+      return { id: j.id, key, minutes: got || min };
+    }
     last = `${r.status} ${JSON.stringify(j).slice(0, 160)}`;
   }
   throw new Error(last);
@@ -617,7 +623,11 @@ async function settleRedirects(b, ms = 20000) {
 async function doAction(b, a, last, secrets = {}) {
   switch (a.type) {
     case 'goto': {
-      const url = fillSecrets(a.url, secrets);
+      let url = fillSecrets(a.url, secrets);
+      // The brain re-typed an old link from its history instead of {{LINK}}, while the
+      // fresh emailed link waits in the secrets (2026-11-27: worker 93 never opened the
+      // new Groq link because of this): the fresh one is opened instead.
+      if (oneTimeLink(url) && spent(url) && secrets.LINK && !spent(secrets.LINK)) url = secrets.LINK;
       if (oneTimeLink(url) && spent(url)) {
         throw new Error('that one-time sign-in link was already opened in this run, so it is spent: never open it again. Read the page you are on (it may already be signed in); if it is not, go back to the sign-in page, enter the email again and send a NEW link — the newest email is then fetched and opened for you');
       }
