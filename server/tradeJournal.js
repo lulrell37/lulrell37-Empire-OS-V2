@@ -78,6 +78,18 @@ async function getStrategy() {
 // every position of one setup (all its copies and its add-ons, `addLevel` = which
 // step toward the target an add went in at); `alert: false` when the caller
 // sends one alert for the pair itself.
+// Dollars per 1.0 price move per 1.0 lot, for the P/L when the broker's own figure is
+// missing: gold 100 oz, Bitcoin / Nasdaq from the instrument, forex 100,000 units
+// (USD/JPY's yen turned into dollars at the exit price). null when it isn't known.
+function dollarsPerPoint(symbol, price) {
+  try {
+    const tl = require('./tradeLocker');
+    const c = tl.contractKnown(symbol);
+    if (!(c > 0)) return null;
+    return tl.isFx(symbol) && /^USD/i.test(String(symbol)) && Number(price) > 0 ? c / Number(price) : c;
+  } catch { return null; }
+}
+
 async function recordTradeOpen({ symbol, side, qty, entry, stopLoss, takeProfit, rationale, orderId, setup, auto, pairId, setupId, addLevel, trend, alert = true }) {
   const now = Date.now();
   const syncId = newId();
@@ -219,7 +231,11 @@ async function reconcileOpenTrades() {
       const dir = outcome === 'win' ? 1 : outcome === 'loss' ? -1 : 0;
       const histAgrees = histPl != null && (outcome === 'breakeven' || Math.sign(histPl) === dir);
       const lastAgrees = lastU != null && Math.abs(lastU) > 0.01 && (outcome === 'breakeven' || Math.sign(lastU) === dir);
+      // Worked out from the exit price before the last 5-min reading (2026-11-27: two gold
+      // trades filled at a bad 7188 were booked at -$0.64 each instead of about -$3,620).
+      const perLot = dollarsPerPoint(t.symbol, exit);
       if (histAgrees) { realized = +histPl.toFixed(2); estimated = 0; }
+      else if (perLot) { realized = +(move * (num(t.qty) || 0.01) * perLot).toFixed(2); estimated = 1; }
       else if (lastAgrees) { realized = +lastU.toFixed(2); estimated = 1; }
       else { realized = +(move * (num(t.qty) || 0.01) * 100).toFixed(2); estimated = 1; }
     } else if (histPl != null) {
@@ -238,9 +254,13 @@ async function reconcileOpenTrades() {
       const reward = t.side === 'buy' ? exit - entry : entry - exit;
       if (risk > 0) r_multiple = +(reward / risk).toFixed(2);
     }
+    // An exit more than 10% from the entry isn't a market price for these markets in a
+    // day: the broker filled it at a bad tick. Flagged so the alert says so.
+    const badFill = exit != null && entry ? Math.abs(exit / entry - 1) > 0.1 : false;
     const done = {
       ...t, status: 'closed', closed_at: now, exit_price: exit,
       realized_pl: realized, pl_estimated: estimated, outcome, r_multiple, updated_at: now,
+      ...(badFill ? { bad_fill: true } : {}),
     };
     await upsertSyncRow('trades', t.sync_id, done);
     alerts.tradeClosed(done);
@@ -483,4 +503,26 @@ async function sharedTargets({ symbol, side, entry, takeProfit, swingTakeProfit 
   return { takeProfit: tp, swingTakeProfit: sw };
 }
 
-module.exports = { snapTarget, sharedTarget, sharedTargets, TRADER_ID, STRATEGY_TITLE, allTrades, parkOpenTrades, getStrategy, recordTradeOpen, reconcileOpenTrades, tradeRecord, formatTradeRecord, tradeStats, statsParts: { kindOf, exitOf, sessionOf, dailyOf, bucket } };
+// Once, at boot: closed trades already booked off a bad fill (exit 10%+ from entry,
+// P/L estimated from an old reading) get their real P/L and the bad_fill flag, so the
+// stats and recaps show what the account actually lost (2026-11-26's two gold sells:
+// -$0.64 each on the books, about -$3,620 each on the account).
+async function fixBadFills() {
+  const done = await require('./syncStore').getSetting('trades_bad_fill_fixed', '').catch(() => 'x');
+  if (done) return { skipped: true };
+  let fixed = 0;
+  for (const t of await allTrades()) {
+    const entry = num(t.entry_fill) ?? num(t.entry_ref), exit = num(t.exit_price);
+    if (t.status !== 'closed' || t.bad_fill || !entry || exit == null || Math.abs(exit / entry - 1) <= 0.1) continue;
+    const perLot = dollarsPerPoint(t.symbol, exit);
+    const move = (t.side === 'buy' ? 1 : -1) * (exit - entry);
+    const realized = t.pl_estimated && perLot ? +(move * (num(t.qty) || 0.01) * perLot).toFixed(2) : t.realized_pl;
+    await upsertSyncRow('trades', t.sync_id, { ...t, realized_pl: realized, bad_fill: true, updated_at: Date.now() });
+    console.log(`trade journal: ${t.symbol} ${t.side} #${t.position_id} re-booked off a bad fill at ${exit}: ${t.realized_pl} -> ${realized}`);
+    fixed++;
+  }
+  await require('./syncStore').setSetting('trades_bad_fill_fixed', String(Date.now())).catch(() => {});
+  return { fixed };
+}
+
+module.exports = { fixBadFills, dollarsPerPoint, snapTarget, sharedTarget, sharedTargets, TRADER_ID, STRATEGY_TITLE, allTrades, parkOpenTrades, getStrategy, recordTradeOpen, reconcileOpenTrades, tradeRecord, formatTradeRecord, tradeStats, statsParts: { kindOf, exitOf, sessionOf, dailyOf, bucket } };

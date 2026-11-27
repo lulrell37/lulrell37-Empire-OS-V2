@@ -438,8 +438,26 @@ async function runCode(w, signal) {
 
 // The result goes straight to Mr. Burrus on J.A.R.V.I.S.'s bot (and so into
 // J.A.R.V.I.S.'s chat history): no engine turn, so he's never tied up by it.
+// A worker picked back up after a restart may already have reported before it (its
+// "done" never got saved, e.g. the database timing out in a crash loop): its report is
+// in J.A.R.V.I.S.'s chat history, so it isn't sent twice (2026-11-27: worker #91's
+// auto-fix report came again after a redeploy, hours later).
+async function alreadyReported(w) {
+  if (!w.recovered) return false;
+  const needle = w.issueUrl || `#${w.id}`;
+  const { rows } = await (d().db || require('./db')).query("SELECT 1 FROM tg_messages WHERE persona IN ('jarvis', 'ara') AND role = 'assistant' AND ts > $1 AND content LIKE $2 LIMIT 1",
+    [Number(w.startedAt || w.createdAt || 0), `%${needle}%`]);
+  return rows.length > 0;
+}
+
 function report(w) {
   if (w.status === 'stopped' && w.purpose !== 'feature') return; // a stopped build request still comes back to him
+  Promise.resolve(alreadyReported(w).catch(() => false)).then((sent) => {
+    if (!sent) return realReport(w);
+    console.log(`workers: #${w.id} already reported before the restart; not sent again`);
+  });
+}
+function realReport(w) {
   Promise.resolve(d().onDone && d().onDone(w)).then((handled) => {
     if (handled) return;
     return defaultReport(w);
@@ -548,7 +566,7 @@ async function recover() {
   await load();
   for (const w of Object.values(list)) {
     if (w.status !== 'running') continue;
-    if (w.kind === 'code' && w.issue) { update(w, { status: 'queued', progress: 'Watching it again after a server restart' }); continue; }
+    if (w.kind === 'code' && w.issue) { update(w, { status: 'queued', progress: 'Watching it again after a server restart', recovered: true }); continue; }
     if ((w.attempts || 0) >= 2) {
       const why = 'the server restarted in the middle of it twice, so it was not started a third time';
       logFailure(w, why);
@@ -832,4 +850,4 @@ const WORKER_TOOLS = ` - [WORKER_START: code|browse | short title | the full tas
 // Persona jobs (jobProgress.js) share this one board: load the workers, then update it.
 async function kick() { await load(); boardKick(); }
 
-module.exports = { get, message, onlyHim, ownerGo, startGate, spokenReport, VOICE_MAX, kick, start, stop, ship, driveIdsIn, fileGrant, MAX_LEGS, recover, statusText, forApp, tag, WORKER_TOOLS, enabled, _setDeps: (x) => { deps = x; list = null; board = undefined; boardLast = 0; }, _list: () => list, _boardText: () => boardText(), logFailure, browseStatus, codeStatus, FAIL_KEY, _tgBoardDeps: tgBoardDeps, parsePlan, percentOf, progressLabel, readPlanComment, PLAN_FILE };
+module.exports = { _report: (w) => report(w), get, message, onlyHim, ownerGo, startGate, spokenReport, VOICE_MAX, kick, start, stop, ship, driveIdsIn, fileGrant, MAX_LEGS, recover, statusText, forApp, tag, WORKER_TOOLS, enabled, _setDeps: (x) => { deps = x; list = null; board = undefined; boardLast = 0; }, _list: () => list, _boardText: () => boardText(), logFailure, browseStatus, codeStatus, FAIL_KEY, _tgBoardDeps: tgBoardDeps, parsePlan, percentOf, progressLabel, readPlanComment, PLAN_FILE };

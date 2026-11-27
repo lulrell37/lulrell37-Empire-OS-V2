@@ -103,7 +103,12 @@ function tradeClosed(t) {
   const entry = Number(t.entry_fill ?? t.entry_ref), exit = Number(t.exit_price), sl = Number(t.stop_loss), tp = Number(t.take_profit);
   const tol = Math.max(Math.abs(entry) * 3e-4, Math.abs(entry - sl) * 0.15 || 0);
   const nearAny = [sl, tp, entry].some((x) => isFinite(x) && Math.abs(exit - x) <= tol);
-  const odd = t.closed_by !== 'owner' && t.exit_price != null && isFinite(exit) && isFinite(entry) && !nearAny
+  // A fill far off the market (2026-11-27: gold closed at 7188 with gold at ~3566): the
+  // broker's price, not a trade. Said plainly, with what to ask the broker.
+  const bad = t.bad_fill || (isFinite(exit) && isFinite(entry) && entry && Math.abs(exit / entry - 1) > 0.1);
+  const odd = bad
+    ? `\n🚨 **T.A.L.O.N. → A.R.A.: that's a bad broker price, not a real fill.** It closed at ${px(t.exit_price)}, ${Math.round(Math.abs(exit / entry - 1) * 100)}% away from the entry (${px(entry)}); the market was nowhere near it. Ask the broker to reverse it: position ${t.position_id || '?'}, closed ${new Date(Number(t.closed_at) || Date.now()).toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} ET at ${px(t.exit_price)}.`
+    : t.closed_by !== 'owner' && t.exit_price != null && isFinite(exit) && isFinite(entry) && !nearAny
     ? `\n🚨 **T.A.L.O.N. → A.R.A.: I didn't close this one.** It closed at ${px(t.exit_price)}, nowhere near its stop (${px(t.stop_loss)}) or target (${px(t.take_profit)}) — a manual close, a margin stop-out or the broker. Worth a look in TradeLocker.` : '';
   notify(`${icon} **T.A.L.O.N. closed ${String(t.side).toUpperCase()} ${nameOf(t.symbol)}${kind}**${t.closed_by === 'owner' ? ' on your order' : ''} — ${word}${hit}.\n`
     + `Entry ${px(t.entry_fill ?? t.entry_ref)} → Exit ${px(t.exit_price)} · P/L ${money(t.realized_pl)}${t.pl_estimated ? ' (est.)' : ''}`

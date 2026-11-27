@@ -318,13 +318,65 @@ async function tlInstrumentDetails(symbol) {
   return j.d || {};
 }
 
+// --- impossible prices (2026-11-27) ------------------------------------------
+// On 2026-11-26 the demo feed priced gold at 5381 and then 7188 with the market at
+// ~3566; both gold sells were filled there, about $3,620 each. A price more than
+// BAD_JUMP (10%) from the last good one isn't a market move for these markets in
+// minutes: a quote like that is refused (nothing is traded, sized, closed or read on
+// it) and A.R.A. tells him once per 30 min per market. Candles with a close that far
+// off their neighbours are dropped, a wick that far off is trimmed back.
+const BAD_JUMP = Number(process.env.BAD_PRICE_JUMP) || 0.1;
+const lastGood = {}; // symbol -> { price, at }
+function cleanBars(bars, resolution) {
+  const lim = resolution === '1D' ? Math.max(BAD_JUMP, 0.25) : BAD_JUMP;
+  const out = [];
+  let dropped = 0, from = 0; // the reference restarts at a real level shift
+  for (let i = 0; i < bars.length; i++) {
+    const b = bars[i];
+    const base = out.slice(from).slice(-5).map((x) => x.c).sort((a, z) => a - z);
+    const ref = base.length ? base[Math.floor(base.length / 2)] : null;
+    const off = (v) => ref && Number(v) > 0 && Math.abs(Number(v) / ref - 1) > lim;
+    if (!ref) { out.push(b); continue; }
+    // A real move holds: the next two candles close near this one. A bad tick doesn't.
+    const holds = (v) => { const nx = bars.slice(i + 1, i + 3); return nx.length === 2 && nx.every((n) => Math.abs(Number(n.c) / Number(v) - 1) <= lim / 2); };
+    if (!(Number(b.c) > 0) || (off(b.c) && !holds(b.c))) { dropped++; continue; }
+    if (off(b.c)) { from = out.length; out.push(b); continue; } // a real level shift: kept whole
+    const x = { ...b };
+    if (off(x.o)) x.o = x.c;
+    if (off(x.h)) x.h = Math.max(x.o, x.c);
+    if (off(x.l)) x.l = Math.min(x.o, x.c);
+    if (x.h !== b.h || x.l !== b.l || x.o !== b.o) dropped++;
+    out.push(x);
+  }
+  // The first bar has nothing before it: checked against the second.
+  if (out.length > 1 && Math.abs(out[0].c / out[1].c - 1) > lim) { out.shift(); dropped++; }
+  return { bars: out, dropped };
+}
+function badQuote(symbol, mid) {
+  const g = lastGood[String(symbol).toUpperCase()];
+  if (!g || !(Number(mid) > 0) || Date.now() - g.at > 12 * 3600e3) return null;
+  const jump = Math.abs(Number(mid) / g.price - 1);
+  return jump > BAD_JUMP ? { jump, ref: g.price } : null;
+}
 async function tlQuote(symbol = 'XAUUSD') {
-  return cachedRead('q:' + symbol.toUpperCase(), 7000, async () => {
+  const sym = String(symbol).toUpperCase();
+  if (!lastGood[sym]) await tlHistory(sym, '1H', 5).catch(() => {}); // sets the reference price
+  const q = await cachedRead('q:' + sym, 7000, async () => {
     const m = await tlInstrument(symbol);
     const j = await api('/trade/quotes', { query: { routeId: m.infoRouteId, tradableInstrumentId: m.id } });
     const d = j.d || {};
     return { symbol, bid: d.bp, ask: d.ap, mid: d.bp != null && d.ap != null ? (d.bp + d.ap) / 2 : null, ts: Date.now() };
   });
+  const bad = badQuote(sym, q.mid);
+  if (bad) {
+    const name = MARKET_NAME[canonical(sym)] || sym;
+    const msg = `the broker's feed priced ${name} at ${q.mid} (${Math.round(bad.jump * 100)}% from the last good price, ${bad.ref}) — a bad price, so T.A.L.O.N. is ignoring it`;
+    console.error(`tradelocker failed: ${msg}`);
+    require('./loud').tellAra(`bad-price:${sym}`, `⚠️ ${msg[0].toUpperCase()}${msg.slice(1)}. Nothing is traded, closed or read on it. If an open trade gets filled at a price like that, ask the broker to reverse it.`).catch(() => {});
+    throw Object.assign(new Error(msg), { badPrice: true });
+  }
+  if (Number(q.mid) > 0) lastGood[sym] = { price: Number(q.mid), at: Date.now() };
+  return q;
 }
 
 async function tlHistory(symbol = 'XAUUSD', resolution = '1H', bars = 120) {
@@ -334,7 +386,16 @@ async function tlHistory(symbol = 'XAUUSD', resolution = '1H', bars = 120) {
     const to = Date.now();
     const from = to - step * Math.min(bars, 20000);
     const j = await api('/trade/history', { query: { routeId: m.infoRouteId, tradableInstrumentId: m.id, resolution, from, to } });
-    return (j.d?.barDetails || []).map((b) => ({ t: b.t, o: b.o, h: b.h, l: b.l, c: b.c, v: b.v }));
+    const raw = (j.d?.barDetails || []).map((b) => ({ t: b.t, o: b.o, h: b.h, l: b.l, c: b.c, v: b.v }));
+    const { bars: clean, dropped } = cleanBars(raw, resolution);
+    if (dropped) console.error(`tradelocker failed: ${symbol} ${resolution}: ${dropped} candle(s) with an impossible price left out`);
+    const last = clean[clean.length - 1];
+    // The reference for quotes: refreshed from clean candles every 10 min at most.
+    if (last && Number(last.c) > 0 && resolution !== '1D') {
+      const sym = String(symbol).toUpperCase(), g = lastGood[sym];
+      if (!g || Date.now() - g.at > 10 * 60e3) lastGood[sym] = { price: Number(last.c), at: Date.now() };
+    }
+    return clean;
   });
 }
 
@@ -613,7 +674,7 @@ function tlFormatSnapshot(snap) {
   return L.join('\n');
 }
 
-module.exports = { isFx, FX, FX_MAX_QTY, tlInstrumentDetails, isIndex, isBtc, canonical, goldLots, goldTooWide, riskLots, tooWideText, maxLossFor, tlContractSize, contractKnown, MAX_LOSS, MARKET_NAME, INDEX_MAX_QTY, GOLD_MAX_LOSS,
+module.exports = { cleanBars, badQuote, _lastGood: lastGood, isFx, FX, FX_MAX_QTY, tlInstrumentDetails, isIndex, isBtc, canonical, goldLots, goldTooWide, riskLots, tooWideText, maxLossFor, tlContractSize, contractKnown, MAX_LOSS, MARKET_NAME, INDEX_MAX_QTY, GOLD_MAX_LOSS,
   MAX_QTY, ENTRY_COPIES, entryCopies, minStopDist, tlAtr1H,
   tlConnect, tlStatus, tlAccountState, tlListInstruments, tlInstrumentsById, tlInstrument,
   tlQuote, tlHistory, tlPositions, tlOrdersHistory, tlPlaceOrder, tlClosePosition, tlModifyPosition, tlOrders, tlCancelOrder, tlOrderState,

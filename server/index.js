@@ -148,6 +148,7 @@ db.init()
     // A J.A.R.V.I.S. turn the restart cut off: he says so on Telegram and picks it back up.
     setTimeout(() => require('./jarvisEngine').recover().catch((e) => console.error('jarvis recover failed:', e.message)), 25000);
     setTimeout(() => require('./workers').recover().catch((e) => console.error('workers failed: recover:', e.message)), 30000);
+    setTimeout(() => require('./tradeJournal').fixBadFills().catch((e) => console.error('trade journal failed: bad-fill fix:', e.message)), 45000);
     // Persona jobs the restart cut off (clip scans, edits, transcripts, research): A.R.A. says so and each restarts once. Waits for a healthy server.
     setTimeout(() => require('./jobProgress').recover().catch((e) => console.error('jobs failed: recover:', e.message)), 60000);
     // A build a persona asked J.A.R.V.I.S. for just went live: she comes back to him with the answer.
