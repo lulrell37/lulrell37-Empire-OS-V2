@@ -6,7 +6,8 @@
 // process instead of a memory-only session that resets on every cold app open).
 const { getSetting, setSetting, saveMemory } = require('./syncStore');
 const { tlStatus, tlConnect, tlFollowAccount, tlActiveEnv, tlSnapshot, tlFormatSnapshot, tlPlaceOrder, tlModifyPosition, tlPositions, tlInstrumentsById, tlQuote, MAX_QTY, entryCopies } = require('./tradeLocker');
-const { autoTradeDecision, guardStop, entryLocation, tradeContext, SYMBOLS, nasHours } = require('./talonBrain');
+const strategies = require('./talonStrategies');
+const { autoTradeDecision, guardStop, entryLocation, tradeContext, SYMBOLS, nasHours, fxHours, FOREX } = require('./talonBrain');
 const { reconcileOpenTrades, formatTradeRecord, recordTradeOpen, allTrades, sharedTargets, TRADER_ID } = require('./tradeJournal');
 const { orderRejected, araNote, tradeOpened, addedOn } = require('./talonAlerts');
 const { pushAlert } = require('./pushSender');
@@ -122,13 +123,19 @@ async function tick({ force = false } = {}) {
     // checked on every 5m close; the brain is only called when the filter fires.
     await quick.quickTick({ marketOpen }).then(() => systemOk('quick-scalp pass'))
       .catch((e) => { console.error('talon-quick failed —', e.message); systemFault('quick-scalp pass', e.message); });
+    // Markets he put on another strategy (server/talonStrategies.js) check their own coded
+    // signal on every tick; those markets skip the playbook scan below.
+    const stratOff = await require('./talonSwitch').haltedMarkets().catch(() => ({}));
+    const stratSyms = SYMBOLS.filter((sym) => !stratOff[sym] && (sym === 'NAS100' ? nasHours() : FOREX.includes(sym) ? fxHours() : (marketOpen || CRYPTO.test(sym))));
+    await strategies.strategyTick({ syms: stratSyms, place: placeStrategyTrade }).then(() => systemOk('strategy pass'))
+      .catch((e) => { console.error('talon strategies failed —', e.message); systemFault('strategy pass', e.message); });
     if (!due) return { skipped: 'not due yet' };
 
     // Gold, Bitcoin and the Nasdaq 100 only — the app's auto_trade_symbols setting is
     // ignored. Nasdaq takes fresh setups only in the cash session (nasHours); a market
     // he switched off ([TRADING_OFF: bitcoin]) isn't scanned at all.
     const offMarkets = await require('./talonSwitch').haltedMarkets().catch(() => ({}));
-    const syms = SYMBOLS.filter((sym) => !offMarkets[sym] && (sym === 'NAS100' ? nasHours() : (marketOpen || CRYPTO.test(sym))));
+    const syms = SYMBOLS.filter((sym) => !offMarkets[sym] && (sym === 'NAS100' ? nasHours() : FOREX.includes(sym) ? fxHours() : (marketOpen || CRYPTO.test(sym))));
     if (!syms.length) return { skipped: Object.keys(offMarkets).length ? 'markets closed or switched off' : 'markets closed' };
 
     const positions = await tlPositions().catch(() => []);
@@ -140,7 +147,10 @@ async function tick({ force = false } = {}) {
     let entered = 0, closed = 0, scanned = 0, snapFails = 0, decFails = 0, orderFails = 0;
     const errs = [];
     const decisions = [];
+    const stratCfg = await strategies.choices();
     for (const sym of syms) {
+      const onStrat = strategies.activeIn(stratCfg, sym);
+      if (onStrat !== 'playbook') { decisions.push(`${sym}: on ${strategies.STRATEGIES[onStrat].name} (his choice), not the playbook`); continue; }
       let snap;
       try { snap = await tlSnapshot(sym); } catch (e) { snapFails++; errs.push(`${sym} market data: ${e.message}`); continue; }
       scanned++;
@@ -253,6 +263,36 @@ async function tick({ force = false } = {}) {
   }
 }
 
+// One trade from a coded strategy (server/talonStrategies.js): the same stop guard as a
+// setup (minimums, the danger zone, the $40 check), a 2R target off the final stop, one
+// position, one open per market from these strategies. tlPlaceOrder does the sizing and
+// every switch.
+async function placeStrategyTrade(sym, strategy, sig) {
+  const open = (await allTrades()).some((t) => t.status === 'open' && t.symbol === sym && strategies.isStrategyTrade(t));
+  if (open) return { skipped: 'a strategy trade is already open on this market' };
+  const snap = await tlSnapshot(sym);
+  const price = Number(snap.quote?.mid ?? (sig.side === 'buy' ? snap.quote?.ask : snap.quote?.bid));
+  if (!isFinite(price) || !price) return { skipped: 'no price' };
+  const dir = sig.side === 'buy' ? 1 : -1;
+  const dist0 = (price - sig.stopLoss) * dir;
+  if (!(dist0 > 0)) return { skipped: 'price already past the stop' };
+  const lv = guardStop({ symbol: sym, side: sig.side, entry: price, stopLoss: sig.stopLoss, takeProfit: price + dir * 20 * dist0, snap, pullIn: false });
+  const name = strategies.STRATEGIES[strategy].name;
+  if (lv.skip) { console.log(`talon-autotrade: ${sym} ${name} ${sig.side} skipped — ${lv.skip}`); return { skipped: lv.skip }; }
+  const { roundPrice } = require('./marketStructure');
+  const tp = roundPrice(price + dir * 2 * Math.abs(price - lv.stopLoss));
+  const why = `${name}: ${sig.why}`;
+  let s;
+  try { s = await tlPlaceOrder({ symbol: sym, side: sig.side, qty: MAX_QTY, stopLoss: lv.stopLoss, takeProfit: tp }); }
+  catch (e) { if (!e.halted) orderRejected({ symbol: sym, side: sig.side, error: e.message }); return { error: e.message }; }
+  await recordTradeOpen({ symbol: sym, side: s.side, qty: s.qty, entry: price, stopLoss: s.stopLoss ?? lv.stopLoss, takeProfit: s.takeProfit ?? tp,
+    rationale: why, orderId: s.orderId, setup: `strat:${strategy}`, auto: true, setupId: `${sym}-${Date.now()}-${strategy}`, alert: false }).catch(() => {});
+  tradeOpened({ symbol: sym, side: s.side, qty: s.qty, entry: price, stopLoss: s.stopLoss ?? lv.stopLoss, takeProfit: s.takeProfit ?? tp, rationale: why, setup: 'strategy' });
+  await saveMemory(TRADER_ID, `[auto-trade, ${name}] opened ${s.side} ${sym} @ ~${price} — ${sig.why}`).catch(() => {});
+  console.log(`talon-autotrade: ${sym} ${name} ${s.side.toUpperCase()} ${s.qty} @ ~${price} · SL ${s.stopLoss ?? lv.stopLoss} TP ${s.takeProfit ?? tp}`);
+  return { entered: true };
+}
+
 async function liveArmed() { return (await getSetting('talon_live', '0')) === '1'; }
 
 // At most MAX_PAIRS[symbol] scalp + swing pairs open per market at once
@@ -260,7 +300,7 @@ async function liveArmed() { return (await getSetting('talon_live', '0')) === '1
 // counts only while its scalp is open — once the scalp pays, the swing riding
 // on alone frees the slot. Lone scalps (no swing), news trades and add-ons
 // don't count.
-const MAX_PAIRS = { XAUUSD: 1, BTCUSD: 2, NAS100: 1 };
+const MAX_PAIRS = { XAUUSD: 1, BTCUSD: 2, NAS100: 1, EURUSD: 1, GBPUSD: 1, USDJPY: 1 };
 const maxPairs = (sym) => MAX_PAIRS[sym] ?? 2;
 async function openPairs(sym) {
   const keys = new Set();
@@ -296,7 +336,7 @@ const addPeak = new Map(); // setup key -> best price seen (in its direction)
 const addTrough = new Map(); // setup key -> deepest pullback price since that best price
 async function addOnEntries(marketOpen) {
   // Quick scalps never get add-ons — they're in and out on the 5m.
-  const mine = (await allTrades()).filter((t) => t.auto && t.setup !== 'quick');
+  const mine = (await allTrades()).filter((t) => t.auto && t.setup !== 'quick' && !strategies.isStrategyTrade(t));
   const groups = {};
   for (const t of mine) { const k = t.setup_id || t.pair_id || t.sync_id; (groups[k] || (groups[k] = [])).push(t); }
   for (const [key, g] of Object.entries(groups)) {
@@ -323,14 +363,14 @@ async function addOnEntries(marketOpen) {
     const step = Math.floor(((peak - entry) * dir) / r + 1e-9);
     const done = Math.max(0, addTried.get(key) || 0, ...g.filter((t) => t.setup === 'add').map((t) => Number(t.add_level) || 0));
     if (step < 1 || step <= done) continue;
-    const addStop = +(entry + dir * (step - 1) * r).toFixed(2);
+    const addStop = require('./marketStructure').roundPrice(entry + dir * (step - 1) * r);
     if ((peak - trough) * dir < ADD_PULLBACK_R * r) continue; // no pullback yet
     if ((trough - addStop) * dir < ADD_ROOM_R * r) continue; // pulled back too deep — not this one
     if ((price - trough) * dir < ADD_RESUME_R * r) continue; // still pulling back, not headed to TP yet
     if ((peak - price) * dir <= 0) continue; // back at the high — the pullback entry is gone
     if ((target - price) * dir < r) continue;
     addTried.set(key, step);
-    const early = +(price + dir * r).toFixed(2);
+    const early = require('./marketStructure').roundPrice(price + dir * r);
     try {
       // Its own stop (one step behind), not the main rule's minimum.
       const s = await tlPlaceOrder({ symbol: sym, side: t0.side, qty: MAX_QTY, stopLoss: addStop, takeProfit: early, minStop: false });

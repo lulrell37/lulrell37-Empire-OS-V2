@@ -230,6 +230,18 @@ assert.strictEqual(parseStories('NONE of the accounts agree\nSTORIES: ["A"]').st
   assert.strictEqual(styleFor({ area: 'My life movie scenes', type: 'movie scene' }), null);
 }
 
+// S.A.G.E. researches deep every time (owner, 2026-11-27), on Telegram and in the app.
+{
+  const assert = require('assert');
+  const fs = require('fs'), path = require('path');
+  const rt = fs.readFileSync(path.join(__dirname, '..', 'personaRuntime.js'), 'utf8');
+  assert(/name === 'SEARCH_WEB' && arg && persona === 'sage'[\s\S]{0,200}deepResearchNow\(arg, 'sage'\)/.test(rt), "her [SEARCH_WEB] runs deep research");
+  assert(/PERSONA_EXTRA_TOOLS\.sage[\s\S]{0,200}YOU ALWAYS RESEARCH DEEP/.test(rt));
+  const app = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'screens', 'CommandScreen.js'), 'utf8');
+  assert(/pid==='sage'[\s\S]{0,120}startDeepResearch\(sw\[0\],pid\)/.test(app), 'the app starts deep research for her lookups');
+  console.log('✓ S.A.G.E. always researches deep');
+}
+
 console.log('desks: all checks passed');
 process.exit(0);
 

@@ -4,10 +4,15 @@ const express = require('express');
 const cron = require('node-cron');
 // Every scheduled loop runs behind his spoken on/off switch (server/switches.js):
 // switched off, the run is skipped until he says to turn it back on.
+// Each slot runs once (claimSlot): a second server process, or a stalled one firing
+// late, finds the slot taken and skips; a database it can't reach means skip too,
+// never run blind (2026-11-27: two quiz sets at once during the crash loop).
 const schedule = (key, spec, fn, opts) => cron.schedule(spec, async () => {
   if (!(await require('./switches').isOn(key).catch(() => true))) return;
+  if (!(await claimSlot(`${key}|${spec}`))) return;
   return fn();
 }, opts);
+const { claimSlot } = require('./cronClaims');
 const db = require('./db');
 const auth = require('./auth');
 const { runNudgeCycle } = require('./pushSender');
@@ -374,7 +379,7 @@ function startTalonAutoTradeCron() {
   // T.A.L.O.N.'s old Nasdaq desk (1m triggers, server/talonNasdaq.js): retired 2026-11-26,
   // Nasdaq now trades on the gold/Bitcoin playbook. TALON_NASDAQ=on brings the desk back.
   if (process.env.TALON_NASDAQ === 'on') schedule('nasdaq', '5 * 9-15 * * 1-5', () => require('./talonNasdaq').tick().catch((e) => console.error('talon nasdaq failed:', e.message)), { timezone: 'America/New_York' });
-  cron.schedule('20 */5 * * * *', () => talonAutoTrade.tick().catch((e) => console.error('talon auto-trade cron failed:', e.message)));
+  cron.schedule('20 */5 * * * *', async () => { if (await claimSlot('talon_autotrade|*/5')) return talonAutoTrade.tick().catch((e) => console.error('talon auto-trade cron failed:', e.message)); });
   console.log('T.A.L.O.N. auto-trade cron scheduled (every 5m, scans on each auto_trade_interval_min candle close)');
   // Nightly trading recap from A.R.A. on Telegram. TRADE_RECAP=off to stop.
   if (process.env.TRADE_RECAP !== 'off') {

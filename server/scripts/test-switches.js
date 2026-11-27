@@ -57,7 +57,7 @@ ts._setDeps({ ...fake, cancelQuickLimits: async () => { cancelled++; return 2; }
   await ts.on();
   assert.deepStrictEqual(ts.marketsIn('stop trading bitcoin'), ['BTCUSD']);
   assert.deepStrictEqual(ts.marketsIn('gold and nasdaq'), ['XAUUSD', 'NAS100']);
-  assert.match(await ts.tag('TRADING_OFF', 'ara', { asked: 'have talon stop trading bitcoin', arg: 'bitcoin' }), /OFF on Bitcoin only[\s\S]*gold and Nasdaq still trade/);
+  assert.match(await ts.tag('TRADING_OFF', 'ara', { asked: 'have talon stop trading bitcoin', arg: 'bitcoin' }), /OFF on Bitcoin only[\s\S]*gold, Nasdaq, EUR\/USD, GBP\/USD and USD\/JPY still trade/);
   assert.strictEqual(await ts.isHalted(), false, 'one market off is not all trading off');
   assert.strictEqual(await ts.marketHalted('BTCUSD'), true);
   assert.strictEqual(await ts.marketHalted('XAUUSD'), false);

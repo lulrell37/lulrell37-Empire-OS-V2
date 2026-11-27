@@ -22,7 +22,7 @@ const { getSetting, setSetting, saveMemory } = require('./syncStore');
 const { tlHistory, tlSnapshot, tlPlaceOrder, MAX_QTY } = require('./tradeLocker');
 const { guardStop, tradeContext } = require('./talonBrain');
 const { allTrades, recordTradeOpen, sharedTargets, TRADER_ID } = require('./tradeJournal');
-const { closedBars } = require('./marketStructure');
+const { closedBars, roundPrice } = require('./marketStructure');
 const alerts = require('./talonAlerts');
 
 const REENTRY_WINDOW_MS = 4 * 3600e3;
@@ -41,7 +41,7 @@ const groupKey = (t) => t.setup_id || t.pair_id || t.sync_id;
 // A closed trade of his that its stop took out.
 function stoppedOut(t) {
   if (!t || !t.auto || t.status !== 'closed' || t.outcome !== 'loss') return false;
-  if (SKIP_SETUPS.has(t.setup) || String(t.setup_id || '').endsWith(':re') || t.closed_by === 'owner') return false;
+  if (SKIP_SETUPS.has(t.setup) || /^strat:/.test(String(t.setup || '')) || String(t.setup_id || '').endsWith(':re') || t.closed_by === 'owner') return false;
   const entry = num(t.entry_fill) ?? num(t.entry_ref), stop = num(t.stop_loss), exit = num(t.exit_price);
   if (num(t.r_multiple) != null) return Number(t.r_multiple) <= STOPPED_R;
   if (entry == null || stop == null || exit == null) return false;
@@ -98,7 +98,7 @@ function reentryCheck({ watch: w, bars, snap, price, now = Date.now() }) {
   if (!isFinite(px) || (px - w.stop) * dir <= 0) return { wait: `price ${price} isn't back past ${w.stop}` };
   const { h4, against4H } = tradeContext({ side: w.side, snap });
   if (against4H) return { end: 'trend', why: `the 4H trend is ${h4} now — against a ${w.side}` };
-  const rawStop = +(sweep - dir * STOP_BUFFER_ATR * atr).toFixed(2);
+  const rawStop = roundPrice(sweep - dir * STOP_BUFFER_ATR * atr);
   const lv = guardStop({ symbol: w.symbol, side: w.side, entry: px, stopLoss: rawStop, takeProfit: w.takeProfit, swingTakeProfit: w.swingTakeProfit, snap, pullIn: false }); // the journal's targets are already pulled in
   if (lv.skip) return { end: 'skipped', why: lv.skip };
   const risk = Math.abs(px - lv.stopLoss);

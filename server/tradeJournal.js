@@ -432,6 +432,8 @@ async function tradeStats({ symbol = 'XAUUSD', days = 30 } = {}) {
 const SHARE_TP = {
   XAUUSD: () => Number(process.env.TALON_SHARE_TP_GOLD ?? 3),
   BTCUSD: (px) => px * Number(process.env.TALON_SHARE_TP_BTC ?? 0.003),
+  // Forex: 5 pips (2026-11-27).
+  EURUSD: (px) => px * 0.0005, GBPUSD: (px) => px * 0.0005, USDJPY: (px) => px * 0.0005,
 };
 function snapTarget({ symbol, side, entry, takeProfit, targets }) {
   const sym = String(symbol).toUpperCase(), px = Number(entry), tp = Number(takeProfit);

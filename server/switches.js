@@ -16,6 +16,9 @@ const SWITCHES = {
   gold: ['T.A.L.O.N.\'s gold trading (XAUUSD only)', 'gold xau xauusd trading'],
   bitcoin: ['T.A.L.O.N.\'s Bitcoin trading (BTCUSD only)', 'bitcoin btc btcusd crypto trading'],
   nasdaq: ['T.A.L.O.N.\'s Nasdaq trading (NAS100 only)', 'nasdaq nas100 us100 index trading'],
+  eurusd: ['T.A.L.O.N.\'s EUR/USD trading', 'eurusd eur/usd euro fiber trading'],
+  gbpusd: ['T.A.L.O.N.\'s GBP/USD trading', 'gbpusd gbp/usd pound cable sterling trading'],
+  usdjpy: ['T.A.L.O.N.\'s USD/JPY trading', 'usdjpy usd/jpy yen trading'],
   talon_updates: ['T.A.L.O.N.\'s market updates (9:30, 12:30, 3:30, 6:30)', 'market updates talon updates'],
   trade_recap: ['the 9 PM trading recap', 'recap trade recap nightly recap'],
   news_wire: ['W.I.R.E.\'s news briefs', 'wire news briefs news desk'],
@@ -55,7 +58,7 @@ let deps = null;
 const d = () => deps || { getSetting, setSetting };
 
 // One market of T.A.L.O.N.'s (server/talonSwitch.js talon_halt_markets).
-const MARKET_KEYS = { gold: 'XAUUSD', bitcoin: 'BTCUSD', nasdaq: 'NAS100' };
+const MARKET_KEYS = { gold: 'XAUUSD', bitcoin: 'BTCUSD', nasdaq: 'NAS100', eurusd: 'EURUSD', gbpusd: 'GBPUSD', usdjpy: 'USDJPY' };
 async function isOn(key) {
   if (key === 'trading') return !(await require('./talonSwitch').isHalted());
   if (MARKET_KEYS[key]) return !(await require('./talonSwitch').marketHalted(MARKET_KEYS[key]));

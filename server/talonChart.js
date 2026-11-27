@@ -8,7 +8,7 @@ const { closedBars, analyzeStructure, keyLevels, chartModel, formatTimeframe } =
 const { allTrades } = require('./tradeJournal');
 
 const TFS = { '5M': '5m', '15M': '15m', '1H': '1H', '4H': '4H', '1D': '1D', D: '1D', H1: '1H', H4: '4H', M15: '15m', M5: '5m' };
-const ALIAS = { GOLD: 'XAUUSD', XAU: 'XAUUSD', BTC: 'BTCUSD', BITCOIN: 'BTCUSD', XBT: 'BTCUSD' };
+const ALIAS = { GOLD: 'XAUUSD', XAU: 'XAUUSD', BTC: 'BTCUSD', BITCOIN: 'BTCUSD', XBT: 'BTCUSD', NASDAQ: 'NAS100', NAS: 'NAS100', US100: 'NAS100', EUR: 'EURUSD', EURO: 'EURUSD', GBP: 'GBPUSD', POUND: 'GBPUSD', CABLE: 'GBPUSD', YEN: 'USDJPY', JPY: 'USDJPY' };
 
 function parseArg(arg) {
   const parts = String(arg || '').split(/[|,\s]+/).map((s) => s.trim().toUpperCase()).filter(Boolean);

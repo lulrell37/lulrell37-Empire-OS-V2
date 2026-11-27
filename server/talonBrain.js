@@ -10,7 +10,7 @@ async function accountWords() {
   const env = await tlActiveEnv().catch(() => null);
   return env === 'live' ? 'a LIVE trading account (real money)' : env === 'demo' ? 'a DEMO trading account' : 'a trading account';
 }
-const { TRADING_KNOWLEDGE, zoneStop } = require('./marketStructure');
+const { TRADING_KNOWLEDGE, zoneStop, roundPrice } = require('./marketStructure');
 
 function parseJsonBlock(raw) {
   const m = String(raw || '').match(/\{[\s\S]*\}/);
@@ -21,7 +21,20 @@ function parseJsonBlock(raw) {
 // T.A.L.O.N.'s playbook. Fixed in code on purpose: he trades gold, Bitcoin and
 // (owner, 2026-11-26) the Nasdaq 100 on the same playbook, by these rules — the "Winning Strategy" note and the app's custom
 // persona prompt are never read into his decisions.
-const SYMBOLS = ['XAUUSD', 'BTCUSD', 'NAS100'];
+// Forex added 2026-11-27 (owner: "open up beyond gold, Bitcoin and Nasdaq, use the ones
+// she found"): S.A.G.E.'s research picks EUR/USD, GBP/USD and USD/JPY, the deepest and
+// cheapest pairs to trade.
+const FOREX = ['EURUSD', 'GBPUSD', 'USDJPY'];
+const SYMBOLS = ['XAUUSD', 'BTCUSD', 'NAS100', ...FOREX];
+// Fresh forex setups only London open through the London-New York overlap, 3 AM-12 PM ET
+// weekdays (her research: ~70% of FX volume is in the overlap; Asia hours are thin).
+function fxHours(now = new Date()) {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false })
+    .formatToParts(now).map((x) => [x.type, x.value]));
+  if (['Sat', 'Sun'].includes(p.weekday)) return false;
+  const h = parseInt(p.hour, 10) % 24;
+  return h >= 3 && h < 12;
+}
 // Fresh Nasdaq setups only in the cash session's liquid hours, 9:45 AM-3:30 PM ET
 // weekdays (the index CFD trades nearly all day, but the moves this playbook reads
 // come in the cash session; the first 15 minutes are noise).
@@ -41,9 +54,9 @@ const TP_PULL_IN = Math.min(0.5, Math.max(0, Number(process.env.TALON_TP_PULL_IN
 function pullInTarget(entry, tp, frac = TP_PULL_IN) {
   const px = Number(entry), t = Number(tp);
   if (!isFinite(px) || !isFinite(t) || !frac) return tp;
-  return +(t - (t - px) * frac).toFixed(2);
+  return roundPrice(t - (t - px) * frac);
 }
-const STRATEGY = `GOLD + BITCOIN + NASDAQ PLAYBOOK. You trade exactly three markets: XAUUSD (gold), BTCUSD (Bitcoin) and NAS100 (the Nasdaq 100 index). Nothing else, ever.
+const STRATEGY = `GOLD + BITCOIN + NASDAQ + FOREX PLAYBOOK. You trade exactly six markets: XAUUSD (gold), BTCUSD (Bitcoin), NAS100 (the Nasdaq 100 index) and three forex majors, EURUSD, GBPUSD and USDJPY. Nothing else, ever.
 
 1. DIRECTION, TOP DOWN. Read every timeframe every time: the 1D for the bigger picture, the 4H for the overall trend, the 1H and 15m for where price is going right now. You can buy or sell in any of them. No timeframe forbids a direction: what decides a trade is whether the ENTRY makes sense (rules 2-3) and the EXIT makes sense (rules 4-5). The timeframes tell you what kind of trade it is. With the 4H: the full setup. Against the 4H: a counter-trend trade — it needs a sharp trigger at a real level (a sweep that's holding, or a 15m CHoCH your way, at a 4H or 1D level), goes in as a scalp only with no swing (code enforces this), and its target stops short of the next level the 4H trend would defend. A market with no clear level to enter at or nothing to aim at is "none". A setup that runs straight into a major daily level inside its targets needs that level respected (target short of it).
 2. LOCATION (1H). Never chase an extended candle. Enter on a pullback into value on the 1H: a retest of the 1H SMA20, a prior broken high/low, the edge of the recent 1H range, or a trend line zone (rising support to buy, falling resistance to sell; price bounces in that area, not on the exact line) — in the direction of the trade. This is checked in code against the price you'd actually get: an entry more than half a 1H ATR14 away from every value level (these, plus the rule 11 zones) is refused as a chase, so if price has already left the zone, the answer is "none" — wait for the next pullback.
@@ -54,6 +67,7 @@ const STRATEGY = `GOLD + BITCOIN + NASDAQ PLAYBOOK. You trade exactly three mark
 7. GOLD SPECIFICS. Gold moves inverse to the dollar and with risk-off fear: read the cross-market quotes (EURUSD up / USDJPY down = weaker dollar = tailwind for gold buys). The cleanest moves come in the London open and New York morning (about 3 AM-12 PM ET); avoid fresh entries in the 5-6 PM ET rollover.
 8. BITCOIN SPECIFICS. Bitcoin trades 24/7 and spikes on thin weekend liquidity — on weekends require a cleaner trigger and keep stops at the wider end. Round numbers (every $1,000, especially $5,000s) act as magnets and walls: don't buy just under one or sell just above one.
 8b. NASDAQ SPECIFICS. NAS100 is the Nasdaq 100 index CFD. Fresh setups only 9:45 AM-3:30 PM ET on weekdays (code enforces it): the cash open's first 15 minutes are noise and the close is thin. It runs on risk appetite and rates: rising yields and a stronger dollar weigh on it, big-tech earnings and CPI / jobs / Fed days move it hard, so around 8:30 AM and 2 PM Fed releases wait for the candle after. Round numbers every 100 points (especially the 500s) act as magnets and walls.
+8c. FOREX SPECIFICS. EURUSD, GBPUSD and USDJPY. Fresh setups only 3 AM-12 PM ET on weekdays (code enforces it): London open through the London-New York overlap, where most of the day's volume is; Asia hours are thin, so nothing new then. Prices move in pips: 0.0001 on EURUSD and GBPUSD (1.08350 to 1.08550 is 20 pips), 0.01 on USDJPY (156.20 to 156.45 is 25 pips). Write every price with its full decimals (5 for EURUSD/GBPUSD, 3 for USDJPY). Stops sit at least 0.15% from entry (about 16 pips on EURUSD) and 1.2x the 1H ATR, past the zone like every market; round numbers every 50 pips (USDJPY every 0.50) are where stops get hunted. The dollar drives all three: a stronger dollar = EURUSD and GBPUSD down, USDJPY up (and gold down). Rate decisions and US data (8:30 AM CPI / jobs, 2 PM Fed) move them hard; wait for the candle after. GBPUSD runs wider than EURUSD; USDJPY also moves on the BOJ and the US-Japan rate gap. Size is done in code (to lose at most $40 at the stop): never think in lots.
 9. DISCIPLINE. If two of your trades lose in one day (all markets together, a scalp + swing pair counts once), you're done for the day: code stops every new trade until tomorrow. After two losses in a row on a market, the next setup there has to be A-grade (all of 1-5 clean) before you take it. Trades tagged "quick" in your record and open positions they hold belong to your separate 5m quick-scalp desk, which runs itself — they don't count toward this, and leave them out of breakevenIds. Your trade record is feedback on how well you're executing THIS playbook — use it to tighten execution, never to drift to other markets or other styles.
 10. PULLBACK OR REVERSAL — read the 1D every time. When your trade points the same way as the 1D trend, the setup is WITH the daily ("with"). When it points against the 1D, decide what you're looking at: a PULLBACK — a counter-move inside the daily trend that is likely to roll back over (the 1D is still making its higher highs / lower lows, price hasn't closed a day through the prior daily swing or the 1D SMA20, the move is coming into a daily level, momentum is fading) — or a REVERSAL — the daily trend has actually broken (a daily close through the last daily swing high/low and the 1D SMA20, the 4H holding beyond it). A pullback can be traded only as a quick scalp with no swing (2R, target short of the daily level it's running into); a reversal can take the full scalp + swing pair. When you can't tell, it's a pullback. Name what you saw in the rationale.
 11. LIQUIDITY AND STRUCTURE — your snapshot's SMART-MONEY READ is computed from closed candles on the 1D, 4H, 1H and 15m. Use it inside rules 1-5 with real prices from it. It sharpens them; it never overrides the stop minimums (rule 4).
@@ -117,12 +131,12 @@ function guardStop({ symbol, side, entry, stopLoss, takeProfit, swingTakeProfit,
   const minDist = minStopDist(symbol, px, atr);
   let dist = Math.abs(px - sl);
   let stop = sl, widened = false;
-  if (dist < minDist) { dist = minDist; stop = +(px - dir * minDist).toFixed(2); widened = true; }
+  if (dist < minDist) { dist = minDist; stop = roundPrice(px - dir * minDist); widened = true; }
   // And clear of the danger zone, not just far enough away on paper.
   const zone = zoneStop({ symbol, side, entry: px, sma20: snap?.candles?.['1H']?.sma20, atr, swings: snap?.structure?.['1H']?.swings });
   if (zone && (stop - zone.stop) * dir > 0) {
     if (zone.tooWide) return { skip: `clearing the ${zone.level} at ${zone.boundary} needs a ${zone.dist.toFixed(2)} stop, past the ceiling; the location is wrong` };
-    stop = +zone.stop.toFixed(2); dist = Math.abs(px - stop); widened = true;
+    stop = roundPrice(zone.stop); dist = Math.abs(px - stop); widened = true;
   }
   // The swing half of a pair: past the scalp target and at least 3R off the
   // final stop, or it's dropped and the setup goes in as a scalp only.
@@ -135,15 +149,15 @@ function guardStop({ symbol, side, entry, stopLoss, takeProfit, swingTakeProfit,
   // No position may lose more than its market's limit ($40) at its stop, even at the
   // smallest size (gold, Bitcoin, Nasdaq; Nasdaq's check waits for its contract size).
   {
-    const { riskLots, tooWideText, isIndex, INDEX_MAX_QTY, MAX_QTY } = require('./tradeLocker');
-    if (riskLots(symbol, dist, isIndex(symbol) ? INDEX_MAX_QTY : MAX_QTY) === 0) return { skip: tooWideText(symbol, dist) };
+    const { riskLots, tooWideText, isIndex, isFx, FX_MAX_QTY, INDEX_MAX_QTY, MAX_QTY } = require('./tradeLocker');
+    if (riskLots(symbol, dist, isIndex(symbol) ? INDEX_MAX_QTY : isFx(symbol) ? FX_MAX_QTY : MAX_QTY, undefined, px) === 0) return { skip: tooWideText(symbol, dist) };
   }
   // Scalp (15m target) needs 1R beside a swing; alone it has to pay 2R.
   const minR = swing != null ? 1 : 2;
   if (Math.abs(tp - px) < minR * dist) return { skip: `stop needs ${dist.toFixed(2)} of room (1H ATR ${atr.toFixed(2)}) and scalp target ${tp} pays under ${minR}R${swing == null ? ' with no valid swing' : ''}` };
   const pull = pullIn ? TP_PULL_IN : 0;
   return { stopLoss: stop, takeProfit: pullInTarget(px, tp, pull), swingTakeProfit: swing == null ? null : pullInTarget(px, swing, pull), widened, swingNote,
-    note: widened ? `stop widened ${sl} → ${stop} (min ${minDist.toFixed(2)} from entry${zone && Math.abs(stop - +zone.stop.toFixed(2)) < 1e-9 ? `, past the ${zone.level} at ${zone.boundary}` : ''})` : '' };
+    note: widened ? `stop widened ${sl} → ${stop} (min ${minDist.toFixed(2)} from entry${zone && Math.abs(stop - roundPrice(zone.stop)) < 1e-9 ? `, past the ${zone.level} at ${zone.boundary}` : ''})` : '' };
 }
 
 // Rule 2 (LOCATION) enforced in code, whatever the model wrote: the price he'd
@@ -192,4 +206,4 @@ function entryLocation({ side, entry, snap }) {
   return { skip: `entry ${+px.toFixed(2)} isn't at 1H value — nearest is the ${where(best)}, ${gap(best).toFixed(2)} away (allowed ${tol.toFixed(2)} = ${LOCATION_ATR}× 1H ATR); that's a chase, not a pullback` };
 }
 
-module.exports = { SYMBOLS, nasHours, STRATEGY, TP_PULL_IN, pullInTarget, autoTradeDecision, newsTradeLevels, guardStop, entryLocation, tradeContext, LOCATION_ATR };
+module.exports = { FOREX, fxHours, SYMBOLS, nasHours, STRATEGY, TP_PULL_IN, pullInTarget, autoTradeDecision, newsTradeLevels, guardStop, entryLocation, tradeContext, LOCATION_ATR };

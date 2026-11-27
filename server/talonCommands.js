@@ -19,14 +19,18 @@ const { syncedRows, upsertSyncRow, getSetting, setSetting, newId } = require('./
 const tl = require('./tradeLocker');
 const { recordTradeOpen, parkOpenTrades } = require('./tradeJournal');
 
-const SYMS = ['XAUUSD', 'BTCUSD'];
-const NAME = { XAUUSD: 'gold', BTCUSD: 'Bitcoin' };
+const SYMS = require('./talonBrain').SYMBOLS; // all six of his markets (2026-11-27; Nasdaq was missing here)
+const NAME = { XAUUSD: 'gold', BTCUSD: 'Bitcoin', NAS100: 'Nasdaq', EURUSD: 'EUR/USD', GBPUSD: 'GBP/USD', USDJPY: 'USD/JPY' };
 const num = (v) => { const n = Number(String(v ?? '').replace(/[$,\s]/g, '')); return Number.isFinite(n) ? n : null; };
 const parts = (arg) => String(arg || '').split('|').map((s) => s.trim());
 const symOf = (s) => {
   const t = String(s || '').toUpperCase().replace(/[^A-Z]/g, '');
   if (/^(XAU|XAUUSD|GOLD)$/.test(t)) return 'XAUUSD';
   if (/^(BTC|BTCUSD|BITCOIN|XBT)$/.test(t)) return 'BTCUSD';
+  if (/^(NAS|NAS100|NASDAQ|US100|USTEC|NQ|NDX)$/.test(t)) return 'NAS100';
+  if (/^(EURUSD|EUR|EURO|FIBER)$/.test(t)) return 'EURUSD';
+  if (/^(GBPUSD|GBP|POUND|CABLE|STERLING)$/.test(t)) return 'GBPUSD';
+  if (/^(USDJPY|JPY|YEN)$/.test(t)) return 'USDJPY';
   return null;
 };
 
@@ -200,11 +204,11 @@ async function writeTag({ name, arg }) {
       const side = /^(buy|long)$/i.test(p[1]) ? 'buy' : /^(sell|short)$/i.test(p[1]) ? 'sell' : null;
       const stop = num(p[2]);
       const target = num(p[3]);
-      if (!symbol) return { warn: `TRADE_ENTER: "${p[0]}" — T.A.L.O.N. only trades gold (XAUUSD) and Bitcoin (BTCUSD)` };
+      if (!symbol) return { warn: `TRADE_ENTER: "${p[0]}" — T.A.L.O.N. trades XAUUSD, BTCUSD, NAS100, EURUSD, GBPUSD and USDJPY only` };
       if (!side) return { warn: 'TRADE_ENTER: needs buy or sell' };
       if (stop == null) return { warn: 'TRADE_ENTER: every trade needs a stop — nothing placed' };
       const label = `T.A.L.O.N.: ${side.toUpperCase()} ${NAME[symbol]} on the LIVE account`;
-      return act('enter', label, `${String(symbol).toUpperCase() === 'XAUUSD' ? 'sized to the stop ($40 max loss)' : '0.02'} · stop ${stop}${target != null ? ` · target ${target}` : ''}`, { symbol, side, stop, target });
+      return act('enter', label, `${'sized to the stop ($40 max loss)'} · stop ${stop}${target != null ? ` · target ${target}` : ''}`, { symbol, side, stop, target });
     }
     if (name === 'TRADE_CLOSE') {
       const list = await pick(p[0]);

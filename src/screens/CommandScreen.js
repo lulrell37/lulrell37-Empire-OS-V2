@@ -1753,7 +1753,11 @@ export default function CommandScreen({navigation,route}){
           catch(e){injections.push('EXPENSE SUMMARY: failed — '+e.message);}
         }
         const sw=allMatches(response,/\[SEARCH_WEB:\s*([^\]]+)\]/gi).map(x=>x[1].trim()).filter(Boolean);
-        if(sw.length&&!myAbort.signal.aborted){
+        // S.A.G.E. researches deep every time (owner, 2026-11-27): her lookup starts the deep research job.
+        if(sw.length&&pid==='sage'&&!myAbort.signal.aborted&&!/\[DEEP_RESEARCH:/i.test(response)){
+          startDeepResearch(sw[0],pid);
+          injections.push(`DEEP RESEARCH STARTED — "${sw[0]}": you always research deep, so this runs as a full deep research job (several minutes). The brief lands in this chat and is saved as a Note. Tell him it's running; don't answer the research question from memory.`);
+        }else if(sw.length&&!myAbort.signal.aborted){
           toolLabel='◇ searching…';
           for(const q of sw.slice(0,2)){
             try{injections.push(`WEB SEARCH — "${q}":\n${await webSearch(pid,q,myAbort.signal)}`);}

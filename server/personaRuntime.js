@@ -364,7 +364,7 @@ ${SHARED_OPS}
  - [TALON_RUN] — make him scan gold and Bitcoin right now instead of waiting for his next cycle. He decides and, if the setup is there, places the trade himself; you get back what he decided (or why he couldn't) before you answer. Use it when Mr. Burrus says "have T.A.L.O.N. trade", "is he trading?", "run a scan" and the like.
 ${require('./talonSwitch').SWITCH_TOOLS}
  - T.A.L.O.N.'S ACCOUNT — [TRADE_ACCOUNT: demo] takes him off live yourself, at once and with no Confirm; [TRADE_ACCOUNT: live] puts him on real money and waits for Mr. Burrus's Confirm tap. Emit the tag rather than relaying this, and report its receipt word for word, including any positions left open on live. It hasn't happened unless the tag ran.
- - ORDERS FOR T.A.L.O.N. — enter a trade, close one or all, move a stop (or to break-even), move a target: pass it to him with [RELAY_TO: talon | the exact order with every number Mr. Burrus gave]. He executes it (on the live account Mr. Burrus gets a Confirm button), and you report his receipts. [TRADE_POSITIONS] shows you the open positions yourself; [TRADE_STATS: XAUUSD | 30] breaks his closed trades down (by kind, side, session, daily trend, exit) so you can see where a market loses; [QUICK_LOG] shows his 5m quick-scalp desk (what it's seeing, every time it fired and why it did or didn't trade); Nasdaq (NAS100) trades on the same playbook as gold and Bitcoin now (the old 1m Nasdaq desk is retired). Two losing trades in one day and he's done until tomorrow, by code. [TRADE_CHART: XAUUSD, BTCUSD or NAS100 | 1H] sends him T.A.L.O.N.'s marked-up chart (5m, 15m, 1H, 4H or 1D); to explain what's on it, relay to T.A.L.O.N.
+ - ORDERS FOR T.A.L.O.N. — enter a trade, close one or all, move a stop (or to break-even), move a target: pass it to him with [RELAY_TO: talon | the exact order with every number Mr. Burrus gave]. He executes it (on the live account Mr. Burrus gets a Confirm button), and you report his receipts. [TRADE_POSITIONS] shows you the open positions yourself; [TRADE_STATS: XAUUSD | 30] breaks his closed trades down (by kind, side, session, daily trend, exit) so you can see where a market loses; [QUICK_LOG] shows his 5m quick-scalp desk (what it's seeing, every time it fired and why it did or didn't trade); Nasdaq (NAS100) trades on the same playbook as gold and Bitcoin now (the old 1m Nasdaq desk is retired). Two losing trades in one day and he's done until tomorrow, by code. [TRADE_CHART: XAUUSD, BTCUSD, NAS100, EURUSD, GBPUSD or USDJPY | 1H] sends him T.A.L.O.N.'s marked-up chart (5m, 15m, 1H, 4H or 1D); to explain what's on it, relay to T.A.L.O.N.
  - [TALON_UPDATE] — ask him for a market update right now: his read on gold and Bitcoin, where he predicts each goes next, and how our open positions look. Use it when Mr. Burrus asks "how's the market", "how are our trades", "what's T.A.L.O.N. think" and the like. He also sends you one on his own a few times a day — those show up in this chat as "T.A.L.O.N. → A.R.A.".
  - If auto-trade is OFF or something's broken (no TradeLocker login, an error), say exactly what the TRADING line says and how to fix it.
 
@@ -423,11 +423,14 @@ PERSONA_EXTRA_TOOLS.jarvis += '\n' + require('./siteDesk').SITE_TOOLS + '\n' + r
 PERSONA_EXTRA_TOOLS.rogue += '\n' + require('./jobProgress').JOB_TOOLS + '\n' + require('./transcribeUsage').USAGE_TOOLS;
 PERSONA_EXTRA_TOOLS.ara = (PERSONA_EXTRA_TOOLS.ara ? PERSONA_EXTRA_TOOLS.ara + '\n' : '') + require('./jobProgress').JOB_TOOLS;
 PERSONA_EXTRA_TOOLS.scout = (PERSONA_EXTRA_TOOLS.scout ? PERSONA_EXTRA_TOOLS.scout + '\n' : '') + require('./siteDesk').SITE_TOOLS;
+// S.A.G.E. researches deep every time (owner, 2026-11-27). Overrides the general
+// "[DEEP_RESEARCH] only when he asks for a deep dive" line for her.
+PERSONA_EXTRA_TOOLS.sage = (PERSONA_EXTRA_TOOLS.sage ? PERSONA_EXTRA_TOOLS.sage + '\n' : '') + ` - YOU ALWAYS RESEARCH DEEP (his standing order, 2026-11-27): every time you research anything, it's a full deep research run, never a quick lookup. Emit [SEARCH_WEB: the question, in full]: from you it runs deep research (about a dozen searches, several minutes), the cited brief comes back into this turn before you answer, and it's saved as a Note. Answer from that brief. This overrides "[DEEP_RESEARCH] only when he asks": for you there is no quick lookup.`;
 
 PERSONA_EXTRA_TOOLS.scribe = ` - [MONDAY_SCRIPTS] — write this week's 7 video scripts now, and file them; A.R.A. tells him they came in. They go out on their own Mondays at 8 AM ET; only use this when he asks for them again or early.`;
 
 PERSONA_EXTRA_TOOLS.talon = ` ${TRADING_KNOWLEDGE}
- - [TRADE_CHART: XAUUSD, BTCUSD or NAS100 | 5m, 15m, 1H, 4H or 1D] — send Mr. Burrus the chart marked up with what you see: trend lines, the current high and low, swing highs and lows, FVGs, order blocks, liquidity, sweeps, BOS/CHoCH, key levels and our open positions. Send it whenever he asks to see a chart or asks you to show him a level, and explain it from the [TRADE_SCAN] read, not from memory. To call a level, [TRADE_SCAN] first: its SMART-MONEY READ has the real prices.
+ - [TRADE_CHART: XAUUSD, BTCUSD, NAS100, EURUSD, GBPUSD or USDJPY | 5m, 15m, 1H, 4H or 1D] — send Mr. Burrus the chart marked up with what you see: trend lines, the current high and low, swing highs and lows, FVGs, order blocks, liquidity, sweeps, BOS/CHoCH, key levels and our open positions. Send it whenever he asks to see a chart or asks you to show him a level, and explain it from the [TRADE_SCAN] read, not from memory. To call a level, [TRADE_SCAN] first: its SMART-MONEY READ has the real prices.
  - [TALON_RUN] — run your scan of gold and Bitcoin right now; you place the trade yourself if the setup is there, and get back what you decided.
  - [TALON_UPDATE] — your market update right now: your read, prediction and how the open positions look.
  - [TRADE_SCAN: XAUUSD, BTCUSD] — a live market snapshot plus your trade record.
@@ -437,12 +440,14 @@ PERSONA_EXTRA_TOOLS.talon = ` ${TRADING_KNOWLEDGE}
  ON MR. BURRUS'S ORDERS — he's the boss of the desk; when he (or A.R.A. for him) tells you to do one of these, do it, even if your playbook wouldn't (say so in a line if you disagree):
  - ON / OFF: only A.R.A. and J.A.R.V.I.S. switch you on or off. If Mr. Burrus tells you to stop or start trading, pass it on with [RELAY_TO: ara | Mr. Burrus says: <his exact words>] and say you've handed it to her — never claim you've stopped yourself.
  - [TRADE_POSITIONS] — every open position with its id, stop, target and P/L. Read it first when he refers to "the gold trade", "the swing", "everything".
- - [TRADE_ENTER: XAUUSD, BTCUSD or NAS100 | buy or sell | stop price | target price] — a market order, sized so it can't lose more than $40 at its stop (gold and Bitcoin 0.02, less on a wide stop: gold 0.01 for a $20-$40 stop; Nasdaq sized up to the $40; a stop too wide even for the smallest size is refused). A stop is required; the main stop rule's minimum (gold $10 / Bitcoin 0.8% / Nasdaq 0.4% and 1.2× the 1H ATR) still applies and widens a tighter one. If he gave no stop or target, [TRADE_SCAN] first and set them off structure.
+ - [TRADE_ENTER: XAUUSD, BTCUSD, NAS100, EURUSD, GBPUSD or USDJPY | buy or sell | stop price | target price] — a market order, sized so it can't lose more than $40 at its stop (gold and Bitcoin 0.02, less on a wide stop: gold 0.01 for a $20-$40 stop; Nasdaq sized up to the $40; a stop too wide even for the smallest size is refused). A stop is required; the main stop rule's minimum (gold $10 / Bitcoin 0.8% / Nasdaq 0.4% and 1.2× the 1H ATR) still applies and widens a tighter one. If he gave no stop or target, [TRADE_SCAN] first and set them off structure.
  - [TRADE_CLOSE: position id, or XAUUSD / BTCUSD (add buy/sell/scalp/swing to narrow it), or all]
  - [MOVE_STOP: position id / market / all | new price, or breakeven] — stops can be moved, never removed.
  - [MOVE_TP: position id / market / all | new price]
  - [TRADE_ACCOUNT: live] / [TRADE_ACCOUNT: demo] — which TradeLocker account you trade on (auto-trade, news trades and his orders). Live = real money.
  On the demo account these run right away, and so does switching to demo from either account. On the LIVE account — and switching to live — he gets a Confirm button first: tell him it's waiting on his tap, not that it's done. Only gold and Bitcoin.`;
+PERSONA_EXTRA_TOOLS.talon += '\n' + require('./talonStrategies').TOOLS;
+PERSONA_EXTRA_TOOLS.ara = (PERSONA_EXTRA_TOOLS.ara ? PERSONA_EXTRA_TOOLS.ara + '\n' : '') + require('./talonStrategies').TOOLS.replace('Only on his own message.', 'Only on his own message; you can set it yourself or pass it to T.A.L.O.N.');
 
 function genericTools(personaId) {
   const extra = PERSONA_EXTRA_TOOLS[personaId] ? '\n' + PERSONA_EXTRA_TOOLS[personaId] : '';
@@ -499,7 +504,9 @@ function faithBlock(personaId) {
 // for rogue, ara, jarvis) have to be in her prompt or she says she can't.
 function araTools() {
   return ARA_TOOLS + '\n' + require('./browserAgent').BROWSE_TOOLS + '\n' + require('./transcribe').TRANSCRIBE_TOOLS
-    + '\n' + require('./autoClip').AUTO_CLIP_TOOLS + '\n' + require('./rawEdit').RAW_EDIT_TOOLS + '\n' + NEWS_NOW_TOOL;
+    + '\n' + require('./autoClip').AUTO_CLIP_TOOLS + '\n' + require('./rawEdit').RAW_EDIT_TOOLS + '\n' + NEWS_NOW_TOOL
+    // Her extra tools (jobs, T.A.L.O.N.'s strategies), which this prompt didn't carry before.
+    + (PERSONA_EXTRA_TOOLS.ara ? `\n${PERSONA_EXTRA_TOOLS.ara}` : '');
 }
 const NEWS_NOW_TOOL = ` - [NEWS_NOW] — have W.I.R.E. pull a fresh news brief right now (a few minutes; it goes to him in full on its own, so you add one line at most).
  - [BREAKING_NOW] — when he asks about breaking news ("anything breaking?", "what's happening right now", "is something going on in DC?"): W.I.R.E. checks X and the web live (Grok) for anything in the last hour. Use it only when he asks; the automatic watch runs on its own every 30 min.`;
@@ -633,6 +640,12 @@ async function runInjections(text, persona = 'ara', { convo = '', depth = 0, sin
     try {
       if (name === 'TRADE_SCAN') return await tradeScan(arg);
       if (name === 'WEATHER') return `WEATHER${arg ? ` "${arg}"` : ''}:\n${await require('./morningBrief').weatherSection(arg || undefined)}`;
+      if (name === 'SEARCH_WEB' && arg && persona === 'sage') {
+        try {
+          const { brief, title } = await deepResearchNow(arg, 'sage');
+          return `DEEP RESEARCH "${arg}" (you always research deep; saved as the Note "${title}"):\n${String(brief).slice(0, 24000)}`;
+        } catch (e) { return `DEEP RESEARCH "${arg}" failed: ${e.message}. Say so plainly; don't answer from memory.`; }
+      }
       if (name === 'SEARCH_WEB' && arg) return `SEARCH_WEB "${arg}":\n${(await webResearch(arg)) || '(nothing found)'}`;
       if (ARA_ONLY_READS.has(name) && persona !== 'ara') return `${name}: not yours — calendar and email are A.R.A.'s. Hand it to her: [RELAY_TO: ara | what he wants].`;
       if (tools.READ_TAGS.has(name)) {
@@ -771,6 +784,7 @@ async function runInjections(text, persona = 'ara', { convo = '', depth = 0, sin
         const r = await require('./scribeMonday').runMondayScripts({ force: true });
         return `MONDAY SCRIPTS: ${r.count} written and filed, and he's been told they came in (don't paste or read them): ${(r.titles || []).join(' | ')}`;
       }
+      if ((name === 'TALON_STRATEGY' || name === 'TALON_STRATEGIES') && (persona === 'talon' || persona === 'ara')) return await require('./talonStrategies').tag(name, arg, { asked: /^\[SENT ON YOUR OWN/.test(String(asked || '')) ? '' : asked });
       if (require('./memoryStore').MEMORY_TAGS.has(name) && (persona === 'jarvis' || (persona === 'ara' && name === 'MEMORY_CHECK'))) return `${name}: ${await require('./memoryStore').memoryTag(name, arg, depth === 0 ? asked : '')}`;
       if (require('./stephanieQuiz').QUIZ_TAGS.has(name) && persona === 'stephanie') return `${name}: ${await require('./stephanieQuiz').quizTag(name, arg, depth === 0 ? asked : '')}`;
       if (name === 'BREAKING_NOW' && ['ara', 'wire'].includes(persona)) {
@@ -1311,11 +1325,33 @@ async function convokeCouncil(deliver) {
   }
 }
 
-async function runDeepResearch(topic, deliver, persona = 'ara') {
-  const DR_SYSTEM = `You are a research analyst. Produce a thorough, well-structured, cited brief on the topic given.
+const DR_SYSTEM = `You are a research analyst. Produce a thorough, well-structured, cited brief on the topic given.
 - Use web_search aggressively: several distinct angles, follow leads past the first page, verify load-bearing figures against a second source.
 - Structure: a 2-4 sentence executive summary; findings grouped by theme with the specific numbers, dates, names and quotes; then a short "what this means / what to do".
 - Cite sources inline by outlet. End with a numbered Sources list. No preamble.`;
+
+// S.A.G.E. researches deep every time (owner, 2026-11-27: "I need Sage to do deep
+// research every time she researches something"): her [SEARCH_WEB] runs this, waits
+// for the brief and brings it back into her turn (relays and the new-venture order use
+// it at once), saved as a Note like any deep research, shown as a live job.
+async function deepResearchNow(topic, persona = 'sage') {
+  const jobs = require('./jobProgress');
+  return jobs.run(persona, `Deep research: ${String(topic).slice(0, 50)}`, ['Search the web and write the brief', 'Save the note'], async (job) => {
+    job.step('Search the web and write the brief');
+    const brief = await claudeText(DR_SYSTEM, `Research this thoroughly:\n\n${String(topic).slice(0, 4000)}`, {
+      maxTokens: 16000,
+      tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 12 }],
+    });
+    job.step('Save the note');
+    const title = `Research — ${String(topic).slice(0, 60)}`;
+    try { await saveDriveNote(title, brief); } catch {
+      await upsertSyncRow('notes', newId(), { title, content: brief, persona, created_at: Date.now(), updated_at: Date.now() });
+    }
+    return { brief, title };
+  });
+}
+
+async function runDeepResearch(topic, deliver, persona = 'ara') {
   const say = deliver.voiced || deliver;
   // Live progress (server/jobProgress.js): the research call is one long step.
   const jobs = require('./jobProgress');

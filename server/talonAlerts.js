@@ -11,7 +11,7 @@
 const { query } = require('./db');
 const { syncedRows, todayET } = require('./syncStore');
 
-const NAMES = { XAUUSD: 'Gold', BTCUSD: 'Bitcoin', NAS100: 'Nasdaq 100' };
+const NAMES = { XAUUSD: 'Gold', BTCUSD: 'Bitcoin', NAS100: 'Nasdaq 100', EURUSD: 'EUR/USD', GBPUSD: 'GBP/USD', USDJPY: 'USD/JPY' };
 const nameOf = (sym) => NAMES[sym] ? `${NAMES[sym]} (${sym})` : sym;
 const money = (n) => (n == null ? '—' : `${n < 0 ? '-' : '+'}$${Math.abs(Number(n)).toFixed(2)}`);
 const px = (n) => (n == null || n === '' ? '—' : String(n));

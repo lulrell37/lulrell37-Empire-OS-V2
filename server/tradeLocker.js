@@ -24,7 +24,7 @@ const entryCopies = (sym) => COPIES_BY_SYMBOL[String(sym).toUpperCase()] ?? ENTR
 // The main stop rule's minimum, applied to every order except quick scalps and
 // add-ons (his setups, W.I.R.E.'s news trades, anything else): the stop sits at least gold $10 /
 // Bitcoin 0.8% (anything else 0.4%) and 1.2x the 1H ATR14 from entry.
-const STOP_FLOOR = { XAUUSD: () => 10, BTCUSD: (px) => px * 0.008, NAS100: (px) => px * 0.004 };
+const STOP_FLOOR = { XAUUSD: () => 10, BTCUSD: (px) => px * 0.008, NAS100: (px) => px * 0.004, EURUSD: (px) => px * 0.0015, GBPUSD: (px) => px * 0.0015, USDJPY: (px) => px * 0.0015 };
 // Every market is sized to its stop (owner, 2026-11-18 for gold; Bitcoin and Nasdaq,
 // 2026-11-26: "the same thing we did for gold to lose less, apply that to Bitcoin and
 // Nasdaq"): no position may lose more than its market's MAX_LOSS dollars at its stop.
@@ -35,7 +35,17 @@ const STOP_FLOOR = { XAUUSD: () => 10, BTCUSD: (px) => px * 0.008, NAS100: (px) 
 // limit (up to INDEX_MAX_QTY). Every order: setups, swings, re-entries, news trades,
 // quick scalps, add-ons, his own.
 const GOLD_MAX_LOSS = Number(process.env.GOLD_MAX_LOSS) || 40;
-const MAX_LOSS = { XAUUSD: GOLD_MAX_LOSS, BTCUSD: Number(process.env.BTC_MAX_LOSS) || 40, NAS100: Number(process.env.NAS_MAX_LOSS) || 40 };
+const FX_MAX_LOSS = Number(process.env.FX_MAX_LOSS) || 40;
+const MAX_LOSS = { XAUUSD: GOLD_MAX_LOSS, BTCUSD: Number(process.env.BTC_MAX_LOSS) || 40, NAS100: Number(process.env.NAS_MAX_LOSS) || 40, EURUSD: FX_MAX_LOSS, GBPUSD: FX_MAX_LOSS, USDJPY: FX_MAX_LOSS };
+// Forex (owner, 2026-11-27: "open up beyond gold, Bitcoin and Nasdaq, use the ones she
+// found"): EUR/USD, GBP/USD, USD/JPY. A lot is FX_CONTRACT_SIZE units (100,000 unless
+// the instrument says otherwise). Sized UP to the $40 limit like the Nasdaq (0.02 lots of
+// EUR/USD would risk about $4), never past FX_MAX_QTY. USD/JPY moves in yen, so its
+// dollars per 1.0 move per lot are the contract ÷ the price.
+const FX = new Set(['EURUSD', 'GBPUSD', 'USDJPY']);
+const isFx = (symbol) => FX.has(String(symbol || '').toUpperCase());
+const usdBase = (symbol) => /^USD/.test(String(symbol || '').toUpperCase());
+const FX_MAX_QTY = Number(process.env.FX_MAX_QTY || 1);
 const GOLD_OZ_PER_LOT = 100;
 const isIndex = (symbol) => /^(NAS|US100|USTEC|NDX|NQ)/i.test(String(symbol || ''));
 const INDEX_MAX_QTY = Number(process.env.INDEX_MAX_QTY || 10);
@@ -43,24 +53,25 @@ const isGold = (symbol) => String(symbol || '').toUpperCase() === 'XAUUSD';
 const isBtc = (symbol) => /^BTC/i.test(String(symbol || ''));
 // The account may call the Nasdaq 100 NAS100, US100, USTEC…: T.A.L.O.N. always says NAS100.
 const canonical = (name) => (isIndex(name) && /100|USTEC/i.test(String(name)) ? 'NAS100' : String(name || '').toUpperCase());
-const MARKET_NAME = { XAUUSD: 'gold', BTCUSD: 'Bitcoin', NAS100: 'Nasdaq' };
+const MARKET_NAME = { XAUUSD: 'gold', BTCUSD: 'Bitcoin', NAS100: 'Nasdaq', EURUSD: 'EUR/USD', GBPUSD: 'GBP/USD', USDJPY: 'USD/JPY' };
 const maxLossFor = (symbol) => MAX_LOSS[canonical(symbol)] ?? GOLD_MAX_LOSS;
-const sizedMarket = (symbol) => isGold(symbol) || isBtc(symbol) || isIndex(symbol);
+const sizedMarket = (symbol) => isGold(symbol) || isBtc(symbol) || isIndex(symbol) || isFx(symbol);
 // $ per 1.0 price move per 1.0 lot. Gold is fixed; Bitcoin / Nasdaq come from the
 // instrument (BTC_CONTRACT_SIZE / NAS_CONTRACT_SIZE override). Bitcoin falls back to
 // 1 (one coin a lot), Nasdaq has no fallback: unknown → no trade, and it says so.
 const contractCache = {};
-const CONTRACT_SANE = { BTCUSD: [0.001, 10], NAS100: [0.01, 100] };
+const CONTRACT_SANE = { BTCUSD: [0.001, 10], NAS100: [0.01, 100], EURUSD: [1000, 1000000], GBPUSD: [1000, 1000000], USDJPY: [1000, 1000000] };
+const contractEnv = (sym) => Number(process.env[sym === 'BTCUSD' ? 'BTC_CONTRACT_SIZE' : isFx(sym) ? 'FX_CONTRACT_SIZE' : 'NAS_CONTRACT_SIZE']);
 function contractKnown(symbol) {
   const sym = canonical(symbol);
   if (sym === 'XAUUSD') return GOLD_OZ_PER_LOT;
-  const env = Number(process.env[sym === 'BTCUSD' ? 'BTC_CONTRACT_SIZE' : 'NAS_CONTRACT_SIZE']);
+  const env = contractEnv(sym);
   if (env > 0) return env;
-  return contractCache[sym] || (sym === 'BTCUSD' ? 1 : 0);
+  return contractCache[sym] || (sym === 'BTCUSD' ? 1 : isFx(sym) ? 100000 : 0);
 }
 async function tlContractSize(symbol) {
   const sym = canonical(symbol);
-  if (sym === 'XAUUSD' || contractCache[sym] || Number(process.env[sym === 'BTCUSD' ? 'BTC_CONTRACT_SIZE' : 'NAS_CONTRACT_SIZE']) > 0) return contractKnown(sym);
+  if (sym === 'XAUUSD' || contractCache[sym] || contractEnv(sym) > 0) return contractKnown(sym);
   const d = await tlInstrumentDetails(symbol).catch(() => null);
   const n = Number(d && (d.contractSize ?? d.lotSize ?? d.contractMultiplier));
   const [lo, hi] = CONTRACT_SANE[sym] || [0, Infinity];
@@ -70,7 +81,9 @@ async function tlContractSize(symbol) {
 }
 // Lots that lose at most the market's limit at this stop, capped at `cap`.
 // null = the contract size isn't known (no check possible yet).
-function riskLots(symbol, stopDist, cap = MAX_QTY, contract = contractKnown(symbol)) {
+// `price` (forex): USD/JPY's contract is in yen per 1.0 move, so it's turned into dollars here.
+function riskLots(symbol, stopDist, cap = MAX_QTY, contract = contractKnown(symbol), price = null) {
+  if (isFx(symbol) && usdBase(symbol) && Number(price) > 0 && contract > 0) contract = contract / Number(price);
   const d = Math.abs(Number(stopDist));
   if (!(d > 0)) return 0;
   if (!(contract > 0)) return null;
@@ -391,7 +404,7 @@ async function tlPlaceOrder({ symbol = 'XAUUSD', side, qty = MAX_QTY, stopLoss, 
   if (side !== 'buy' && side !== 'sell') throw new Error('side must be buy or sell');
   // MAX_QTY caps every gold/Bitcoin order. Only an index (the Nasdaq desk, sized to
   // its own $ risk at the stop) may pass a larger maxQty, never over INDEX_MAX_QTY.
-  const cap = maxQty != null && isIndex(symbol) ? Math.min(Number(maxQty) || 0, INDEX_MAX_QTY) : MAX_QTY;
+  const cap = maxQty != null && isIndex(symbol) ? Math.min(Number(maxQty) || 0, INDEX_MAX_QTY) : isFx(symbol) ? FX_MAX_QTY : MAX_QTY;
   const q = Math.min(Math.max(Number(qty) || 0, 0), cap);
   if (!q) throw new Error('qty must be > 0');
   // Never a trade without a stop — same refusal as the app's tlPlaceOrder.
@@ -435,8 +448,9 @@ async function tlPlaceOrder({ symbol = 'XAUUSD', side, qty = MAX_QTY, stopLoss, 
     if (!(isFinite(entry) && entry)) throw new Error(`no ${MARKET_NAME[canonical(symbol)] || symbol} price to size the order against, so no order was placed`);
     const dist = entry - Number(stopLoss);
     const contract = await tlContractSize(symbol);
-    const idx = isIndex(symbol);
-    const lots = riskLots(symbol, dist, idx ? Math.min(maxQty != null ? Number(maxQty) || INDEX_MAX_QTY : INDEX_MAX_QTY, INDEX_MAX_QTY) : q, contract);
+    const idx = isIndex(symbol), fx = isFx(symbol);
+    // Dollars per 1.0 move per lot: USD/JPY's moves are in yen.
+    const lots = riskLots(symbol, dist, idx ? Math.min(maxQty != null ? Number(maxQty) || INDEX_MAX_QTY : INDEX_MAX_QTY, INDEX_MAX_QTY) : fx ? FX_MAX_QTY : q, contract, entry);
     if (lots == null) throw new Error(`couldn't read ${symbol}'s contract size, so it can't be sized to the $${maxLossFor(symbol)} limit and no order was placed (NAS_CONTRACT_SIZE sets it)`);
     if (!lots) throw Object.assign(new Error(tooWideText(symbol, dist)), { goldTooWide: true, tooWide: true });
     if (lots !== q) { sizedFrom = q; body.qty = lots; }
@@ -521,7 +535,7 @@ function tlReset() {
 
 // --- Analysis snapshot: everything T.A.L.O.N. needs to form a view on a pair ---
 
-const { closedBars, analyzeStructure, keyLevels, formatMarketRead, zoneStop } = require('./marketStructure');
+const { closedBars, analyzeStructure, keyLevels, formatMarketRead, zoneStop, roundPrice } = require('./marketStructure');
 
 const CONTEXT_SYMBOLS = ['DXY', 'EURUSD', 'USDJPY', 'XAUUSD'];
 
@@ -532,7 +546,7 @@ function summarizeBars(bars) {
   const smaN = Math.min(20, c.length);
   const sma = c.slice(-smaN).reduce((a, x) => a + x, 0) / smaN;
   const hi = Math.max(...bars.map((b) => b.h)), lo = Math.min(...bars.map((b) => b.l));
-  const px = (n) => +n.toFixed(2);
+  const px = (n) => roundPrice(n);
   // ATR14 — the bar's normal swing, so stops sit past the noise, not inside it.
   const tr = bars.slice(1).map((b, i) => Math.max(b.h - b.l, Math.abs(b.h - bars[i].c), Math.abs(b.l - bars[i].c)));
   const atrN = tr.slice(-14);
@@ -599,7 +613,7 @@ function tlFormatSnapshot(snap) {
   return L.join('\n');
 }
 
-module.exports = { tlInstrumentDetails, isIndex, isBtc, canonical, goldLots, goldTooWide, riskLots, tooWideText, maxLossFor, tlContractSize, contractKnown, MAX_LOSS, MARKET_NAME, INDEX_MAX_QTY, GOLD_MAX_LOSS,
+module.exports = { isFx, FX, FX_MAX_QTY, tlInstrumentDetails, isIndex, isBtc, canonical, goldLots, goldTooWide, riskLots, tooWideText, maxLossFor, tlContractSize, contractKnown, MAX_LOSS, MARKET_NAME, INDEX_MAX_QTY, GOLD_MAX_LOSS,
   MAX_QTY, ENTRY_COPIES, entryCopies, minStopDist, tlAtr1H,
   tlConnect, tlStatus, tlAccountState, tlListInstruments, tlInstrumentsById, tlInstrument,
   tlQuote, tlHistory, tlPositions, tlOrdersHistory, tlPlaceOrder, tlClosePosition, tlModifyPosition, tlOrders, tlCancelOrder, tlOrderState,

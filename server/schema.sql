@@ -158,3 +158,11 @@ ALTER TABLE memory_inputs ADD COLUMN IF NOT EXISTS tries int;
 CREATE INDEX IF NOT EXISTS memory_inputs_todo_idx ON memory_inputs (id) WHERE extracted_at IS NULL;
 -- The thread is read in message-time order (old app chats are imported with their own times).
 CREATE INDEX IF NOT EXISTS tg_messages_persona_ts_idx ON tg_messages (persona, ts DESC);
+
+-- One run per scheduled slot (index.js `schedule`): a job claims '<name>|<spec>|<minute>'
+-- before it runs, so two server processes, or one stalled process catching up, can't
+-- run the same slot twice (2026-11-27: two quiz sets at once, repeated alerts).
+CREATE TABLE IF NOT EXISTS cron_claims (
+  key text PRIMARY KEY,
+  at  bigint NOT NULL
+);

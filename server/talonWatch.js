@@ -20,13 +20,13 @@ const { allTrades } = require('./tradeJournal');
 const { SYMBOLS } = require('./talonBrain');
 const { araNote } = require('./talonAlerts');
 
-const NAMES = { XAUUSD: 'Gold', BTCUSD: 'Bitcoin' };
+const NAMES = { XAUUSD: 'Gold', BTCUSD: 'Bitcoin', NAS100: 'Nasdaq 100', EURUSD: 'EUR/USD', GBPUSD: 'GBP/USD', USDJPY: 'USD/JPY' };
 const nameOf = (sym) => NAMES[sym] || sym;
 const CRYPTO = /^(BTC|ETH|SOL|XRP|LTC|DOGE|ADA|BNB)/;
 const NEAR_STOP = 0.75; // share of the way from entry to stop
 const SPIKE_ATR = 2; // 15m candle range vs. the 15m ATR14
 const BAR_MS = 15 * 60e3;
-const fmt = (n) => (n == null || !isFinite(n) ? '—' : String(+Number(n).toFixed(2)));
+const fmt = (n) => (n == null || !isFinite(n) ? '—' : String(require('./marketStructure').roundPrice(n)));
 
 const sent = new Set(); // keys of alerts already relayed
 function once(key) {

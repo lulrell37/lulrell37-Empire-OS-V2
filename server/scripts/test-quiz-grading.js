@@ -1,7 +1,8 @@
 // node server/scripts/test-quiz-grading.js — S.T.E.P.H.A.N.I.E. grades in code and goes over every miss.
 const assert = require('assert');
 const store = {};
-require('../syncStore').getSetting = async (k, dflt) => (k in store ? store[k] : dflt);
+let dbDown = false;
+require('../syncStore').getSetting = async (k, dflt) => { if (dbDown) throw new Error('db timeout'); return k in store ? store[k] : dflt; };
 require('../syncStore').setSetting = async (k, v) => { store[k] = v; };
 const q = require('../stephanieQuiz');
 const qs = [{ a: 7, b: 23, answer: 161 }, { a: 8, b: 47, answer: 376 }, { a: 12, b: 14, answer: 168 }, { a: 6, b: 38, answer: 228 }, { a: 15, b: 26, answer: 390 }];
@@ -34,5 +35,12 @@ assert.strictEqual(q.breakdown(8, 47), '8 × 47 = 8 × 40 + 8 × 7 = 320 + 56 = 
   // All right.
   store.steph_quiz = JSON.stringify({ at: Date.now(), level: 1, questions: qs, graded: null });
   assert(/All right/.test(await q.quizBlock('161 376 168 228 390')));
+  // Database not answering: no fresh set on top of the waiting one (2026-11-27).
+  const sends = [];
+  q._setDeps({ send: async (t) => { sends.push(t); } });
+  dbDown = true;
+  await assert.rejects(() => q.tick({ force: false, now: new Date('2026-11-27T15:00:00Z') }), /db timeout/);
+  assert.strictEqual(sends.length, 0, 'nothing sent when the state cannot be read');
+  dbDown = false;
   console.log('quiz grading ok');
 })().catch((e) => { console.error(e); process.exit(1); });

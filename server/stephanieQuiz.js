@@ -64,8 +64,12 @@ function quizText(qs) {
   return `🧮 **5 quick ones, Mr. Burrus** — no calculator.\n\n${qs.map((q, i) => `${i + 1}. ${q.a} × ${q.b} = ?`).join('\n')}\n\nReply with your answers (just the numbers, in order) and I'll grade them.`;
 }
 
+// A database that doesn't answer throws here (the tick then sends nothing and logs
+// it), instead of looking like "no set waiting" and sending a fresh one on top of the
+// unanswered set (2026-11-27). Only unreadable JSON counts as no set.
 async function load() {
-  try { return JSON.parse(await getSetting('steph_quiz', '{}')) || {}; } catch { return {}; }
+  const raw = await getSetting('steph_quiz', '{}');
+  try { return JSON.parse(raw) || {}; } catch { return {}; }
 }
 
 const REMIND_MAX = Math.max(1, Number(process.env.STEPH_QUIZ_REMINDERS) || 3);

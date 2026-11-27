@@ -61,11 +61,18 @@ const MARKETS = {
   XAUUSD: ['gold', /\b(gold|xau(usd)?)\b/i],
   BTCUSD: ['Bitcoin', /\b(bitcoin|btc(usd)?|crypto)\b/i],
   NAS100: ['Nasdaq', /\b(nasdaq|nas ?100|us ?100|ustec|nq|ndx|the index)\b/i],
+  EURUSD: ['EUR/USD', /\b(eur ?\/? ?usd|euro dollar|euro|fiber)\b/i],
+  GBPUSD: ['GBP/USD', /\b(gbp ?\/? ?usd|pound|cable|sterling)\b/i],
+  USDJPY: ['USD/JPY', /\b(usd ?\/? ?jpy|dollar[- ]yen|yen)\b/i],
 };
+const FOREX = /\b(forex|fx|currenc(y|ies)|currency pairs?)\b/i;
 const marketName = (sym) => (MARKETS[sym] ? MARKETS[sym][0] : sym);
 function marketsIn(text) {
   const t = String(text || '');
-  return Object.keys(MARKETS).filter((k) => MARKETS[k][1].test(t));
+  const hit = Object.keys(MARKETS).filter((k) => MARKETS[k][1].test(t));
+  // "forex" / "currencies" means all three pairs.
+  if (FOREX.test(t)) for (const k of ['EURUSD', 'GBPUSD', 'USDJPY']) if (!hit.includes(k)) hit.push(k);
+  return hit;
 }
 async function haltedMarkets() {
   try { return JSON.parse(await d().getSetting('talon_halt_markets', '{}')) || {}; } catch { return {}; }
@@ -79,7 +86,7 @@ async function marketOff(syms, { by = '', why = '' } = {}) {
   const n = await d().cancelQuickLimits(syms).catch((e) => { console.error(`talon switch failed: ${e.message}`); return 0; });
   const names = syms.map(marketName).join(' and ');
   const still = Object.keys(MARKETS).filter((k) => !h[k]).map(marketName);
-  return `TRADING_OFF: ✓ T.A.L.O.N. is switched OFF on ${names} only, and stays off there until Mr. Burrus says start. ${still.length ? `${still.join(' and ')} still trade${still.length === 1 ? 's' : ''}.` : 'That is every market now.'}${n ? ` ${n} resting limit order${n === 1 ? '' : 's'} there cancelled.` : ''} Open ${names} positions keep their stops and targets.`;
+  return `TRADING_OFF: ✓ T.A.L.O.N. is switched OFF on ${names} only, and stays off there until Mr. Burrus says start. ${still.length ? `${still.length > 2 ? `${still.slice(0, -1).join(', ')} and ${still[still.length - 1]}` : still.join(' and ')} still trade${still.length === 1 ? 's' : ''}.` : 'That is every market now.'}${n ? ` ${n} resting limit order${n === 1 ? '' : 's'} there cancelled.` : ''} Open ${names} positions keep their stops and targets.`;
 }
 async function marketOn(syms) {
   const h = await haltedMarkets();

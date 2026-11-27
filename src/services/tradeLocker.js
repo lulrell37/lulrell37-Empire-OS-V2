@@ -318,7 +318,7 @@ export async function tlOrdersHistory(){
 // The main stop rule's minimum, on every order the app sends (chat trades and
 // the no-backend loops) — same as server/tradeLocker.js: at least gold $10 /
 // Bitcoin 0.8% (anything else 0.4%) and 1.2x the 1H ATR14 from entry.
-const STOP_FLOOR={XAUUSD:()=>10,BTCUSD:p=>p*0.008};
+const STOP_FLOOR={XAUUSD:()=>10,BTCUSD:p=>p*0.008,NAS100:p=>p*0.004,EURUSD:p=>p*0.0015,GBPUSD:p=>p*0.0015,USDJPY:p=>p*0.0015};
 export function minStopDist(symbol,px,atr1h=0){return Math.max((STOP_FLOOR[String(symbol).toUpperCase()]||(p=>p*0.004))(Number(px)),1.2*(Number(atr1h)||0));}
 async function atr1H(symbol){
   const b=await tlHistory(String(symbol).toUpperCase(),'1H',60);

@@ -19,7 +19,7 @@ const SWING_K = 2;        // a swing = higher/lower than the 2 bars each side
 const EQUAL_TOL = 0.15;   // equal highs/lows: within this × ATR
 const MIN_GAP = 0.1;      // an FVG smaller than this × ATR is noise
 const DISPLACEMENT = 1.5; // a displacement candle's body, × ATR
-const ROUND = { XAUUSD: [10, 50], BTCUSD: [1000, 5000] };
+const ROUND = { XAUUSD: [10, 50], BTCUSD: [1000, 5000], EURUSD: [0.0025, 0.01], GBPUSD: [0.0025, 0.01], USDJPY: [0.5, 1] };
 const SESSIONS = [ // ET minutes — the ICT kill zones
   { name: 'Asia', from: 20 * 60, to: 24 * 60 },
   { name: 'London', from: 2 * 60, to: 5 * 60 },
@@ -27,7 +27,10 @@ const SESSIONS = [ // ET minutes — the ICT kill zones
   { name: 'NY PM', from: 13.5 * 60, to: 16 * 60 },
 ];
 
-const px = (n) => +Number(n).toFixed(2);
+// Prices keep the decimals their size needs: 2 for gold, Bitcoin, the Nasdaq and USD/JPY
+// (100 and up, exactly as before), 5 for EUR/USD-sized prices (forex, 2026-11-27).
+const roundPrice = (n) => { const v = Number(n); return Math.abs(v) >= 100 ? +v.toFixed(2) : Math.abs(v) >= 10 ? +v.toFixed(3) : +v.toFixed(5); };
+const px = (n) => roundPrice(n);
 
 function closedBars(bars, tf, now = Date.now()) {
   const ms = TF_MS[tf];
@@ -361,9 +364,9 @@ function keyLevels({ symbol, daily = [], m15 = [], price, now = Date.now() }) {
 
 // --- the stop's danger zone ------------------------------------------------------
 
-const ZONE_ROUND = { XAUUSD: 50, BTCUSD: 500, NAS100: 100 };
+const ZONE_ROUND = { XAUUSD: 50, BTCUSD: 500, NAS100: 100, EURUSD: 0.005, GBPUSD: 0.005, USDJPY: 0.5 };
 const ZONE_BUFFER = 0.2; // × 1H ATR past the zone's far side
-const STOP_CEILING = { XAUUSD: () => 35, BTCUSD: (px) => px * 0.03, NAS100: (px) => px * 0.015 };
+const STOP_CEILING = { XAUUSD: () => 35, BTCUSD: (px) => px * 0.03, NAS100: (px) => px * 0.015, EURUSD: (px) => px * 0.006, GBPUSD: (px) => px * 0.006, USDJPY: (px) => px * 0.006 };
 
 // Where a main-rule stop has to be to clear the danger zone: the furthest of the 1H
 // SMA20, the round number nearest entry and the last 1H swing, whichever of them are
@@ -582,5 +585,6 @@ function chartModel({ symbol, tf, bars, structure: st, levels = [], positions = 
 }
 
 module.exports = {
+  roundPrice,
   TF_MS, closedBars, analyzeStructure, zoneStop, keyLevels, killZone, formatTimeframe, formatMarketRead, chartModel, TRADING_KNOWLEDGE,
 };
