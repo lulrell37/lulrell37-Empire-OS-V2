@@ -934,8 +934,11 @@ export async function textToSpeech(text,voiceId,personaName,opts={}){
   const withCues=(isAra?noWhisper:(x)=>x)(speakNames(cuedFor(text))).replace(/\[[A-Z][A-Z0-9_]*(?::[^\]]*)?\]/g,'').replace(/[*#`]/g,'').trim().substring(0,opts.maxChars||2000);
   if(!stripCues(withCues))return null;
   const flat=isFlat(personaName);
-  const tiers=TTS_LADDER.filter((t,i)=>i===TTS_LADDER.length-1||!ttsRejected.has(t.model))
-    .map(t=>flat?{...t,cues:false,settings:FLAT_SETTINGS}:/^a\.?r\.?a\.?$/i.test(String(personaName||''))?{...t,settings:ARA_SETTINGS[t.model]||t.settings}:t);
+  // opts.live (GO LIVE): the fast model with stitching only, steadier, so pieces of one
+  // answer sound like one continuous speaker instead of separate reads.
+  const ladder=opts.live?[{model:'eleven_flash_v2_5',cues:false,stitch:true,settings:{stability:0.5,similarity_boost:0.8,style:0.35,use_speaker_boost:true},live:true}]:TTS_LADDER;
+  const tiers=ladder.filter((t,i)=>i===ladder.length-1||!ttsRejected.has(t.model))
+    .map(t=>flat?{...t,cues:false,settings:FLAT_SETTINGS}:t.live?t:/^a\.?r\.?a\.?$/i.test(String(personaName||''))?{...t,settings:ARA_SETTINGS[t.model]||t.settings}:t);
   for(const tier of tiers){
     const body={
       text:tier.cues?withCues:stripCues(withCues),

@@ -29,6 +29,9 @@ import{loadKeys}from './keyStore';
 import{personaSystemPrompt,queryMemory,fixNames,textToSpeech,getLastTtsFailReason}from './aiService';
 import{getPersona}from '../personas/personas';
 import{getSetting}from './database';
+// Her voice through Android's call audio path, so the phone's echo canceller removes
+// it from the mic (modules/call-audio). null on iOS / an APK without it: expo-av.
+import callAudio from '../../modules/call-audio';
 import{ARA_VOICE}from './voiceCues';
 import{getHudState}from './database';
 
@@ -68,6 +71,33 @@ let listening=false;
 let lastHeard='';     // his last words on the call: the gate for writes that need his own message
 let liveTimers=[];    // live pass-offs and mood while the call runs
 
+// Echo gate (owner, 2026-11-27: "it cuts her off when I haven't said anything yet"):
+// her own voice from the speaker leaks back into the mic, Grok hears it as him, and
+// cancels her answer. While she's talking, a mic chunk quieter than BARGE_RMS (her echo)
+// goes up as silence; his voice up close is far louder, so he can still talk over her.
+const BARGE_RMS=0.06; // of full scale
+function rmsOf(b64){
+  try{
+    const bin=atob(b64);const n=bin.length>>1;if(!n)return 0;
+    let sum=0;
+    for(let i=0;i<n;i++){let v=bin.charCodeAt(2*i)|(bin.charCodeAt(2*i+1)<<8);if(v>=32768)v-=65536;sum+=v*v;}
+    return Math.sqrt(sum/n)/32768;
+  }catch{return 1;}
+}
+let silenceCache={len:0,b64:''};
+function silenceLike(b64){
+  if(silenceCache.len!==b64.length){const bytes=Math.floor(b64.length*3/4);silenceCache={len:b64.length,b64:btoa('\0'.repeat(bytes))};}
+  return silenceCache.b64;
+}
+// With the call-mode player the phone cancels her echo itself, so the gate only
+// catches what's left (a much lower bar, so a quiet "wait" still cuts her off).
+const BARGE_RMS_CALL=0.02;
+function gateEcho(chunk){
+  const herTurn=!!sound||playing||nativePlaying;
+  if(!herTurn)return chunk;
+  return rmsOf(chunk)<(callAudio?BARGE_RMS_CALL:BARGE_RMS)?silenceLike(chunk):chunk;
+}
+
 // Her ElevenLabs voice on the live call (owner, 2026-11-27: "option 1"): Grok still
 // listens, thinks and decides when she talks; its words go to ElevenLabs a sentence at
 // a time as they come and play back to back, so she sounds like her voice notes and
@@ -87,48 +117,68 @@ let ttsAbort=null;
 const SENTENCE=/^[\s\S]*?[.!?…]+["')\]]*(?=\s)/;
 
 function resetAnswer(){
-  sentBuf='';spokenSoFar='';queue=[];answerDone=false;elevenFailed=false;playedAny=false;
+  pending='';sentBuf='';spokenSoFar='';queue=[];answerDone=false;elevenFailed=false;playedAny=false;
 }
 function cancelAll(){
   gen++;
-  for(const q of queue)if(q.soundP)q.soundP.then(sn=>sn&&sn.unloadAsync().catch(()=>{}));
+  for(const q of queue)if(q.soundP)q.soundP.then(unload);
+  if(callAudio){callAudio.stopAll().catch(()=>{});nativePlaying=false;}
   try{ttsAbort?.abort();}catch{}
   ttsAbort=new AbortController();
   resetAnswer();
 }
-function enqueue(text,onStateChange){
+function enqueue(text,onStateChange,nextText=''){
   const t=String(text||'').trim();
   if(!t)return;
   const my=gen;
   const prev=spokenSoFar;
   spokenSoFar+=(spokenSoFar?' ':'')+t;
   const signal=ttsAbort?.signal;
-  const uriP=textToSpeech(t,getPersona('ara').elevenlabsVoiceId,'A.R.A.',{signal,previousText:prev}).catch(()=>null);
+  const uriP=textToSpeech(t,getPersona('ara').elevenlabsVoiceId,'A.R.A.',{signal,previousText:prev,nextText,live:true}).catch(()=>null);
   queue.push({gen:my,uriP});
   pump(onStateChange);
 }
-// Pull whole sentences off the transcript as it streams in.
+// Pieces, not single sentences (one clip per sentence sounded read out, each with its
+// own intonation): the first sentence alone so she starts fast, then whole sentences
+// gathered to PIECE_CHARS before they go, the rest when the answer ends.
+const PIECE_CHARS=220;
+let pending='';
 function feed(delta,onStateChange){
   sentBuf+=delta||'';
   let m;
   while((m=SENTENCE.exec(sentBuf))&&m[0].trim().length>=2){
-    enqueue(m[0],onStateChange);
+    pending+=m[0];
     sentBuf=sentBuf.slice(m[0].length);
+    if(!spokenSoFar||pending.trim().length>=PIECE_CHARS){enqueue(pending,onStateChange,sentBuf);pending='';}
   }
 }
 // Loaded ahead (not playing) so the next sentence starts the moment this one ends:
 // creating each clip only after the last one finished left an audible gap.
 function preload(item){
-  if(!item.soundP)item.soundP=item.uriP.then(uri=>uri?Audio.Sound.createAsync({uri},playOpts({shouldPlay:false})).then(r=>r.sound).catch(()=>null):null);
+  // Natural speed on a call: the voice-speed setting's time-stretch made short clips stutter.
+  if(!item.soundP)item.soundP=item.uriP.then(uri=>!uri?null
+    :callAudio?callAudio.prepare(uri).then(id=>({native:id})).catch(()=>null)
+    :Audio.Sound.createAsync({uri},{shouldPlay:false,rate:1,shouldCorrectPitch:false}).then(r=>r.sound).catch(()=>null));
   return item.soundP;
 }
+const unload=(h)=>{if(!h)return;if(h.native!=null)callAudio?.release(h.native).catch(()=>{});else h.unloadAsync?.().catch(()=>{});};
+let nativePlaying=false;
 async function playUri(item,onStateChange,my){
-  await Audio.setAudioModeAsync({playsInSilentModeIOS:true,allowsRecordingIOS:true});
+  // expo-av's audio mode resets Android to MODE_NORMAL (AVManager), which would undo call
+  // mode and the echo cancelling with it: only for the expo-av fallback.
+  if(!callAudio)await Audio.setAudioModeAsync({playsInSilentModeIOS:true,allowsRecordingIOS:true});
   if(my!==gen)return;
   const snd=await preload(item);
   if(!snd)return;
-  if(my!==gen){try{await snd.unloadAsync();}catch{}return;}
+  if(my!==gen){unload(snd);return;}
   if(queue[0])preload(queue[0]); // the next one loads while this one plays
+  if(snd.native!=null){
+    nativePlaying=true;playedAny=true;
+    onStateChange?.('speaking');
+    try{await callAudio.play(snd.native);}catch{}
+    nativePlaying=false;
+    return;
+  }
   try{await snd.playAsync();}catch{}
   sound=snd;playedAny=true;
   onStateChange?.('speaking');
@@ -146,7 +196,7 @@ async function pump(onStateChange){
     while(queue.length){
       const item=queue[0];
       const uri=await item.uriP;
-      if(item.gen!==gen){queue.shift();preload(item).then(s=>s&&s.unloadAsync().catch(()=>{}));continue;}
+      if(item.gen!==gen){queue.shift();preload(item).then(unload);continue;}
       queue.shift();
       if(!uri){elevenFailed=true;continue;}
       await playUri(item,onStateChange,item.gen);
@@ -195,6 +245,7 @@ async function playResponseAudio(chunks,onStateChange,onDone){
 }
 
 async function stopPlayback(){
+  if(callAudio){callAudio.stopAll().catch(()=>{});nativePlaying=false;}
   const snd=sound;sound=null;
   if(!snd)return;
   try{snd.setOnPlaybackStatusUpdate(null);}catch{}
@@ -229,6 +280,7 @@ export async function startAraLive(opts={}){
   if(!keys?.grok)throw new Error('Grok API key needed for A.R.A. LIVE. Add one in Settings.');
   onState?.('connecting');
   eleven=true; // her ElevenLabs voice only (2026-11-27): Grok's audio is never played
+  if(callAudio)await callAudio.setCallMode(true).catch(()=>{});
   cancelAll();
   let mood='';try{const{araMoodLine}=await import('./sharedDesk');mood=await araMoodLine();}catch{}
   const baseInstructions=ARA_VOICE+'\n\n'+(await personaSystemPrompt('ara'))
@@ -248,7 +300,7 @@ export async function startAraLive(opts={}){
         session:{
           voice:'ara',
           instructions,
-          turn_detection:{type:'server_vad',threshold:0.6,silence_duration_ms:1500,prefix_padding_ms:300},
+          turn_detection:{type:'server_vad',threshold:0.7,silence_duration_ms:1500,prefix_padding_ms:300},
           tools:TOOLS,
           audio:{
             input:{format:{type:'audio/pcm',rate:SAMPLE_RATE}},
@@ -268,7 +320,7 @@ export async function startAraLive(opts={}){
               LiveAudioStream.init(LIVE_AUDIO_OPTS);
               LiveAudioStream.on('data',chunk=>{
                 if(ws===socket&&socket.readyState===WebSocket.OPEN){
-                  socket.send(JSON.stringify({type:'input_audio_buffer.append',audio:chunk}));
+                  socket.send(JSON.stringify({type:'input_audio_buffer.append',audio:gateEcho(chunk)}));
                 }
               });
               LiveAudioStream.start();
@@ -327,8 +379,8 @@ export async function startAraLive(opts={}){
             // The rest of the last sentence, then wait for the queue; Grok's own audio
             // only if ElevenLabs gave nothing for this answer.
             const my=gen;
-            if(sentBuf.trim())enqueue(sentBuf,onState);
-            sentBuf='';answerDone=true;
+            if((pending+sentBuf).trim())enqueue(pending+sentBuf,onState);
+            pending='';sentBuf='';answerDone=true;
             await Promise.all(queue.map(q=>q.uriP)).catch(()=>{});
             while(playing&&my===gen)await new Promise(r=>setTimeout(r,100));
             if(my===gen&&!playedAny&&elevenFailed){onError?.(new Error(`Her ElevenLabs voice didn't come through for that answer (${getLastTtsFailReason()||'no audio'})`));onState?.('listening');}
@@ -391,6 +443,7 @@ export async function stopAraLive(){
   audioChunks=[];respTranscript='';listening=false;
   if(socket){try{socket.close();}catch{}}
   try{await Audio.setAudioModeAsync({playsInSilentModeIOS:true,allowsRecordingIOS:false});}catch{}
+  if(callAudio)await callAudio.setCallMode(false).catch(()=>{});
 }
 
 export function isAraLiveActive(){return!!ws;}
