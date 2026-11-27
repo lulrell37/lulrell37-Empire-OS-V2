@@ -62,14 +62,18 @@ class CallAudioModule : Module() {
       true
     }.runOnQueue(Queues.MAIN)
 
-    // A clip (file:// uri) loaded on the call path, not playing yet -> its id.
-    AsyncFunction("prepare") { uri: String, promise: Promise ->
+    // A clip (file:// uri) loaded, not playing yet -> its id. usage "voice": played as
+    // call audio (the phone's echo canceller has it, but some phones put it through call
+    // processing and it sounds robotic). "media": played as normal media while the phone
+    // stays in call mode (owner, 2026-11-27: "try the other one"): her natural voice, and
+    // on many phones the echo canceller still covers it.
+    AsyncFunction("prepare") { uri: String, usage: String, promise: Promise ->
       val id = nextId++
       val mp = MediaPlayer()
       try {
         mp.setAudioAttributes(
           AudioAttributes.Builder()
-            .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+            .setUsage(if (usage == "media") AudioAttributes.USAGE_MEDIA else AudioAttributes.USAGE_VOICE_COMMUNICATION)
             .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
             .build()
         )

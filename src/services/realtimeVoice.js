@@ -36,6 +36,7 @@ import callAudioModule from '../../modules/call-audio';
 // live_audio = 'call'): the call path cancels echo but can sound processed on some
 // phones. Default 'clear': the media path, with the echo gate.
 let callAudio=null;
+let callUsage='voice'; // 'voice' (call audio) | 'media' (call mode, natural voice)
 import{ARA_VOICE}from './voiceCues';
 import{getHudState}from './database';
 
@@ -234,7 +235,7 @@ function feed(delta,onStateChange){
 function preload(item){
   // Natural speed on a call: the voice-speed setting's time-stretch made short clips stutter.
   if(!item.soundP)item.soundP=item.uriP.then(uri=>!uri?null
-    :callAudio?callAudio.prepare(uri).then(id=>({native:id})).catch(()=>null)
+    :callAudio?callAudio.prepare(uri,callUsage).then(id=>({native:id})).catch(()=>null)
     :Audio.Sound.createAsync({uri},{shouldPlay:false,rate:1,shouldCorrectPitch:false}).then(r=>r.sound).catch(()=>null));
   return item.soundP;
 }
@@ -357,7 +358,11 @@ export async function startAraLive(opts={}){
   if(!keys?.grok)throw new Error('Grok API key needed for A.R.A. LIVE. Add one in Settings.');
   onState?.('connecting');
   eleven=true; // her ElevenLabs voice only (2026-11-27): Grok's audio is never played
-  callAudio=callAudioModule&&(await getSetting('live_audio','clear').catch(()=>'clear'))==='call'?callAudioModule:null;
+  // live_audio: 'clear' (media path, default) | 'call' (call audio) | 'call_natural' (call
+  // mode for the echo canceller, her voice played as media).
+  const liveAudio=await getSetting('live_audio','call_natural').catch(()=>'call_natural');
+  callAudio=callAudioModule&&(liveAudio==='call'||liveAudio==='call_natural')?callAudioModule:null;
+  callUsage=liveAudio==='call_natural'?'media':'voice';
   if(callAudio)await callAudio.setCallMode(true).catch(()=>{});
   cancelAll();
   let mood='';try{const{araMoodLine}=await import('./sharedDesk');mood=await araMoodLine();}catch{}
