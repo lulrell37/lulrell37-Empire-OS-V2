@@ -31,7 +31,11 @@ import{getPersona}from '../personas/personas';
 import{getSetting}from './database';
 // Her voice through Android's call audio path, so the phone's echo canceller removes
 // it from the mic (modules/call-audio). null on iOS / an APK without it: expo-av.
-import callAudio from '../../modules/call-audio';
+import callAudioModule from '../../modules/call-audio';
+// Used only when Settings › A.R.A.'s Voice › GO LIVE sound = call mode (app_settings
+// live_audio = 'call'): the call path cancels echo but can sound processed on some
+// phones. Default 'clear': the media path, with the echo gate.
+let callAudio=null;
 import{ARA_VOICE}from './voiceCues';
 import{getHudState}from './database';
 
@@ -280,6 +284,7 @@ export async function startAraLive(opts={}){
   if(!keys?.grok)throw new Error('Grok API key needed for A.R.A. LIVE. Add one in Settings.');
   onState?.('connecting');
   eleven=true; // her ElevenLabs voice only (2026-11-27): Grok's audio is never played
+  callAudio=callAudioModule&&(await getSetting('live_audio','clear').catch(()=>'clear'))==='call'?callAudioModule:null;
   if(callAudio)await callAudio.setCallMode(true).catch(()=>{});
   cancelAll();
   let mood='';try{const{araMoodLine}=await import('./sharedDesk');mood=await araMoodLine();}catch{}

@@ -24,6 +24,7 @@ import{syncGoogleTokenToBackend,clearGoogleTokenOnBackend,resetNotesFolderCache}
 import useEmpireStore from '../store/useEmpireStore';
 const TABS=['KEYS','GOOGLE','TRADING','OUTREACH','NEWS','DEV','BACKEND','AI','PROFILES','PROMPTS','USAGE','DIAGNOSTICS'];
 export default function SettingsScreen({navigation}){
+  const[liveCall,setLiveCall]=useState(false);
   const[tab,setTab]=useState('KEYS');
   const[claude,setClaude]=useState('');const[grok,setGrok]=useState('');const[openai,setOpenai]=useState('');const[gemini,setGemini]=useState('');const[elevenlabs,setElevenlabs]=useState('');const[meshy,setMeshy]=useState('');const[mem0,setMem0]=useState('');
   const[backfill,setBackfill]=useState(null); // {done,total} while importing memories into Mem0
@@ -104,6 +105,7 @@ export default function SettingsScreen({navigation}){
     setAtlasEvery(await getSetting('auto_atlas_interval_hours','24'));
     setNewsWire((await getSetting('news_wire','1'))==='1');
     setNewsTrades((await getSetting('news_wire_trades','1'))==='1');
+    setLiveCall((await getSetting('live_audio','clear'))==='call');
     setLeadsSheetId(await getSetting('leads_sheet_id',''));
     const gt=await loadGitHubToken();if(gt){setGhToken(gt);ghVerify().then(setGhStatus);}
     const be=await loadBackend();if(be){setBeUrl(be.url);setBeToken(be.token);setBeConfigured(true);}
@@ -227,6 +229,12 @@ export default function SettingsScreen({navigation}){
     setNewsWire(nv);
     await setSetting('news_wire',nv?'1':'0');
     await refreshNewsWire().catch(()=>{});
+  }
+  // GO LIVE: clear (media path + echo gate) or no-echo call mode (modules/call-audio).
+  async function toggleLiveCall(){
+    const nv=!liveCall;
+    setLiveCall(nv);
+    await setSetting('live_audio',nv?'call':'clear');
   }
   async function toggleNewsTrades(){
     const nv=!newsTrades;
@@ -623,7 +631,14 @@ export default function SettingsScreen({navigation}){
                 onDone={()=>runSync().catch(()=>{})}/>
             </View>
             <Text style={s.secTitle}>A.R.A.'S VOICE</Text>
-            <Text style={[s.secSub,{marginBottom:24}]}>Her ElevenLabs voice, everywhere: replies, voice notes, pass-offs and GO LIVE.</Text>
+            <Text style={s.secSub}>Her ElevenLabs voice, everywhere: replies, voice notes, pass-offs and GO LIVE.</Text>
+            <TouchableOpacity style={[s.toggleRow,{marginBottom:24}]} onPress={toggleLiveCall} activeOpacity={0.7}>
+              <View style={{flex:1,paddingRight:12}}>
+                <Text style={s.toggleLabel}>{liveCall?'GO LIVE SOUND: NO-ECHO CALL MODE':'GO LIVE SOUND: CLEAR'}</Text>
+                <Text style={s.toggleSub}>{liveCall?'Plays her like a phone call so the phone cancels her echo. Can sound processed on some phones. Volume = call volume.':'Her normal, clear voice. If she cuts herself off on calls, try call mode.'}</Text>
+              </View>
+              <View style={[s.switch,liveCall&&s.switchOn]}><View style={[s.knob,liveCall&&s.knobOn]}/></View>
+            </TouchableOpacity>
             <Text style={s.secTitle}>AI BEHAVIOR</Text>
             <Text style={s.secSub}>Controls for the memory and research subsystems. Calls bill to your own API keys.</Text>
             <TouchableOpacity style={s.toggleRow} onPress={toggleMemoryRecall} activeOpacity={0.7}>

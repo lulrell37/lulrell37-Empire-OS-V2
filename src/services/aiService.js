@@ -936,7 +936,9 @@ export async function textToSpeech(text,voiceId,personaName,opts={}){
   const flat=isFlat(personaName);
   // opts.live (GO LIVE): the fast model with stitching only, steadier, so pieces of one
   // answer sound like one continuous speaker instead of separate reads.
-  const ladder=opts.live?[{model:'eleven_flash_v2_5',cues:false,stitch:true,settings:{stability:0.5,similarity_boost:0.8,style:0.35,use_speaker_boost:true},live:true}]:TTS_LADDER;
+  // (GO LIVE used the fast model with steadier settings: it sounded robotic, 2026-11-27.
+  // Calls now use her normal ladder and voice settings, like her voice notes.)
+  const ladder=TTS_LADDER;
   const tiers=ladder.filter((t,i)=>i===ladder.length-1||!ttsRejected.has(t.model))
     .map(t=>flat?{...t,cues:false,settings:FLAT_SETTINGS}:t.live?t:/^a\.?r\.?a\.?$/i.test(String(personaName||''))?{...t,settings:ARA_SETTINGS[t.model]||t.settings}:t);
   for(const tier of tiers){
