@@ -44,6 +44,8 @@ const headers = (k) => ({ Authorization: `Token ${k}`, 'content-type': 'applicat
 async function mem0Remember(personaId, text, meta = {}) {
   const k = key();
   const t = String(text || '').trim();
+  // The server's own copy first (server/memoryStore.js), so nothing exists only at Mem0.
+  require('./memoryStore').recordInput(personaId, t, meta);
   if (!k || !personaId || !t) return;
   try {
     const r = await fetch(`${BASE}/v3/memories/add/`, {

@@ -122,3 +122,28 @@ CREATE TABLE IF NOT EXISTS demo_sites (
   created_at bigint NOT NULL,
   updated_at bigint NOT NULL
 );
+
+-- The server's own copy of memory, alongside Mem0 (server/memoryStore.js).
+-- memory_inputs: everything handed to Mem0 to remember, word for word.
+-- memories: Mem0's extracted facts per persona, mirrored every 6 h, with a
+-- 512-number search vector (step 2 searches it).
+CREATE TABLE IF NOT EXISTS memory_inputs (
+  id      bigserial PRIMARY KEY,
+  persona text   NOT NULL,
+  text    text   NOT NULL,
+  meta    jsonb,
+  ts      bigint NOT NULL
+);
+CREATE INDEX IF NOT EXISTS memory_inputs_persona_idx ON memory_inputs (persona, id DESC);
+CREATE TABLE IF NOT EXISTS memories (
+  id         bigserial PRIMARY KEY,
+  persona    text   NOT NULL,
+  mem0_id    text   UNIQUE,
+  memory     text   NOT NULL,
+  date       text,
+  meta       jsonb,
+  embedding  real[],
+  created_at bigint NOT NULL,
+  updated_at bigint NOT NULL
+);
+CREATE INDEX IF NOT EXISTS memories_persona_idx ON memories (persona, id DESC);

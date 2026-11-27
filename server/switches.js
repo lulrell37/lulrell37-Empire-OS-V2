@@ -38,6 +38,7 @@ const SWITCHES = {
   morning_brief: ['A.R.A.\'s morning brief', 'morning brief'],
   daily_briefing: ['the 5:10 AM daily briefing', 'daily briefing'],
   council: ['the morning council meeting', 'council meeting'],
+  memory_mirror: ['the server\'s copy of every memory (from Mem0)', 'memory copy memory mirror memory backup'],
   chat_backup: ['the nightly conversation backup to Drive', 'backup conversation backup chat backup'],
   day_nudge: ['A.R.A.\'s day nudges (11, 3, 7)', 'day nudges nudge'],
   nudges: ['the 30-minute nudges', 'nudges reminders nudge cycle'],

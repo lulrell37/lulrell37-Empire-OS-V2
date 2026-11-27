@@ -161,6 +161,7 @@ db.init()
     startOpenThreadsCron();
     startOwnerProfileCron();
     startChatBackupCron();
+    startMemoryMirrorCron();
     startDayNudgeCron();
     startMoneyWatchCron();
     startScoutOutreachCron();
@@ -203,6 +204,17 @@ function startOpenThreadsCron() {
   const ot = require('./openThreads');
   schedule('open_threads', '15 */3 * * *', () => ot.tick().catch((e) => console.error('open threads failed:', e.message)));
   console.log('open threads cron scheduled (every 3h)');
+}
+
+// The server's own copy of every Mem0 memory (server/memoryStore.js).
+function startMemoryMirrorCron() {
+  if (String(process.env.MEMORY_MIRROR || '').toLowerCase() === 'off') return console.log('memory mirror cron disabled (MEMORY_MIRROR=off)');
+  const ms = require('./memoryStore');
+  const run = () => ms.tick().then((r) => (r.added || r.changed || r.embedded) && console.log('memory mirror:', JSON.stringify(r))).catch((e) => console.error('memory mirror failed:', e.message));
+  schedule('memory_mirror', '20 */6 * * *', run);
+  // First copy soon after boot, so it doesn't wait up to 6 h.
+  setTimeout(() => require('./switches').isOn('memory_mirror').then((on) => on && run()).catch(() => {}), 5 * 60 * 1000).unref();
+  console.log('memory mirror cron scheduled (every 6h)');
 }
 
 // Every conversation, backed up to his Drive nightly (server/chatBackup.js).
