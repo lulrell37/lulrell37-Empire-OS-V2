@@ -106,7 +106,7 @@ const BARGE_WAIT_MS=2500;
 let suspect=false,bargeTimer=null,ignoreNext=false,ignoreResp=null;
 function herSpeaking(){return !!sound||nativePlaying||(playing&&queue.length>0);}
 // Noise vs him on a call mode: paused, then resumed if no real words arrive.
-const NOISE_WAIT_MS=1500;
+const SUSTAIN_MS=700; // speech still going after this is him, not a blip
 let pausedForNoise=false,noiseTimer=null;
 // Real words, not a cough / "mm" / a transcription of noise ("[noise]", "…").
 const realWords=(t)=>wordsOf(String(t||'').replace(/\[[^\]]*\]|\([^)]*\)/g,' ')).filter(w=>w.length>1&&!/^(mm+|hm+|uh+|um+|ah+|oh+|eh+)$/.test(w)).length>=1;
@@ -431,13 +431,15 @@ export async function startAraLive(opts={}){
         // within BARGE_WAIT_MS = noise, she carries on. When she's quiet, it's him.
         case'input_audio_buffer.speech_started':
           stateCb=onState;
-          // Call modes: she PAUSES; his words stop her for real, nothing within
-          // NOISE_WAIT_MS (noise, a cough, the TV) and she picks up where she was.
+          // Call modes: she PAUSES first.
+          // Grok only sends his words after he stops, so length decides: still talking
+          // after SUSTAIN_MS = him (she stops); stopped sooner = a blip (she resumes, on
+          // speech_stopped). Owner, 2026-11-27: "it thinks me talking is noise".
           if(herSpeaking()&&callAudio){
             pausedForNoise=true;
             callAudio.pauseAll().catch(()=>{});
             clearTimeout(noiseTimer);
-            noiseTimer=setTimeout(()=>{if(pausedForNoise){pausedForNoise=false;callAudio?.resumeAll().catch(()=>{});}},NOISE_WAIT_MS);
+            noiseTimer=setTimeout(()=>{if(pausedForNoise){pausedForNoise=false;confirmBarge(onState);}},SUSTAIN_MS);
             break;
           }
           // Soft barge-in on Clear (no phone echo canceller).
@@ -450,6 +452,9 @@ export async function startAraLive(opts={}){
           listening=true;onState?.('listening');
           cancelAll();
           stopPlayback();
+          break;
+        case'input_audio_buffer.speech_stopped':
+          if(pausedForNoise){pausedForNoise=false;clearTimeout(noiseTimer);callAudio?.resumeAll().catch(()=>{});}
           break;
         case'conversation.item.input_audio_transcription.updated':{
           const t=event.content?.[0]?.transcript||event.transcript;
@@ -489,8 +494,9 @@ export async function startAraLive(opts={}){
             if(pausedForNoise){pausedForNoise=false;clearTimeout(noiseTimer);callAudio?.resumeAll().catch(()=>{});}
             break;
           }
-          if(pausedForNoise){pausedForNoise=false;clearTimeout(noiseTimer);confirmBarge(onState);}
-          if(t&&suspect)confirmBarge(onState);
+          // His words, whenever they land: if she's still talking, she stops.
+          if(pausedForNoise){pausedForNoise=false;clearTimeout(noiseTimer);}
+          if(suspect||herSpeaking())confirmBarge(onState);
           if(t){onUserText?.(fixNames(t),true);lastHeard=fixNames(t);}
           break;
         }
