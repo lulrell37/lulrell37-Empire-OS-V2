@@ -15,7 +15,15 @@ assert.ok(T.ownLine('x'.repeat(9000)).endsWith('x'.repeat(9000)), 'long ones kep
 const src = (f) => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
 assert.ok(/deliver\(tail \? `\$\{reply\}\\n\\n\$\{tail\}` : reply, \{ log: false \}\)/.test(src('routes/telegram.js')), 'turn reply not double-saved');
 assert.ok(!/sendFile\(chatId, [^\n]*\{ (?!log: false)/.test(src('telegramMedia.js')), 'turn media not double-saved');
-for (const f of ['talonAlerts.js', 'morningBrief.js', 'buildAgent.js', 'seleneTrends.js']) assert.ok(!/INSERT INTO tg_messages/.test(src(f)), `${f} doesn't save a second copy`);
+for (const f of ['morningBrief.js', 'buildAgent.js', 'seleneTrends.js']) assert.ok(!/INSERT INTO tg_messages/.test(src(f)), `${f} doesn't save a second copy`);
+// talonAlerts.js saves one copy on purpose, into the SENDING persona's own history
+// (passedOn, owner 2026-11-26), never a second copy into A.R.A.'s.
+{
+  const a = src('talonAlerts.js');
+  assert.strictEqual((a.match(/INSERT INTO tg_messages/g) || []).length, 1, 'talonAlerts.js saves only the pass-on copy');
+  const fn = a.slice(a.indexOf('async function passedOn'), a.indexOf('async function sendFromAra'));
+  assert.ok(/INSERT INTO tg_messages/.test(fn) && /if \(!id\) return;/.test(fn), "that copy is passedOn's, for another persona");
+}
 assert.ok(src('personaRuntime.js').includes('[SENT ON YOUR OWN'), 'her prompt knows the mark');
 // The meaningful ones also go to Mem0, labeled as the persona's, never his.
 const m = T.mem0Line('ara', 'auto clip failed');

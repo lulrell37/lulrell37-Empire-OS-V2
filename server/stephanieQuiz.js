@@ -93,13 +93,35 @@ const d = () => ({
     await bot.sendMessage(require('./telegram').OWNER_ID, text);
   },
   // A.R.A. tells him, angry, in her own words and voice. Falls back to a plain text from her bot.
+  // A.R.A. writes the telling-off herself (angry, her voice), then it goes out as a
+  // pass-off like every other (owner, 2026-11-27: "Stephanie send to Ara" was missing):
+  // voice + text from her bot, in her activity tab with ▶ in the app, into her memory
+  // and S.T.E.P.H.A.N.I.E.'s, and into S.T.E.P.H.A.N.I.E.'s own chat history.
   escalate: async (text, plain) => {
     require('./groupChat').relayAsked('stephanie', 'ara', plain.replace(/^.*?→ A\.R\.A\.:\s*/, '')).catch(() => {});
-    const ok = await require('./routes/telegram').personaOutOfBand('ara', text).catch((e) => { console.error(`stephanie quiz failed: A.R.A. turn: ${e.message}`); return false; });
-    if (ok === false) await require('./loud').tellAra('steph-quiz-ignored', `😤 ${plain}`);
+    // It gets to her: angry, and it lingers and fades (server/araMood.js).
+    await require('./araMood').bump('angry', 7, 'he ignored his multiplication drill three times and Stephanie had to come to me').catch(() => {});
+    let words = '';
+    try { words = await araScold(text); } catch (e) { console.error(`stephanie quiz failed: A.R.A.'s words: ${e.message}`); }
+    const sent = words
+      ? await require('./talonAlerts').sendFromAra(`😤 **A.R.A. — S.T.E.P.H.A.N.I.E. came to me about your drill**\n\n${words}`, words, { from: 'stephanie', ownVoice: true })
+        .catch((e) => { console.error(`stephanie quiz failed: A.R.A. send: ${e.message}`); return false; })
+      : false;
+    if (!sent) await require('./loud').tellAra('steph-quiz-ignored', `😤 ${plain}`);
   },
   ...(deps || {}),
 });
+
+// A.R.A.'s telling-off, in her own words: her voice direction plus Stephanie's brief.
+async function araScold(brief) {
+  const { ARA_VOICE } = require('./araVoice');
+  const sys = `${ARA_VOICE}\n\nYou are A.R.A., Mr. Burrus's personal assistant, writing him a short Telegram message (under 120 words). Plain text, no command tags, no lists except the five questions.\n\n${await require('./araMood').moodLine().catch(() => '')}`;
+  const prompt = String(brief).replace(/^\[SENT ON YOUR OWN — /, '[').slice(0, 3000);
+  const llm = require('./llm');
+  const out = await llm.chatAs('xai', 'grok-4', sys, [{ role: 'user', content: prompt }], { maxTokens: 500, fallback: true })
+    .catch(() => llm.claudeText(sys, prompt, { maxTokens: 500 }));
+  return String(out || '').replace(/\[[A-Z][A-Z0-9_]*(?::[^\]]*)?\]/g, '').trim();
+}
 
 async function isOn() { return (await getSetting('steph_quiz_on', '1').catch(() => '1')) !== '0'; }
 

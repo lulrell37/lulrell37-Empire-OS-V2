@@ -473,7 +473,7 @@ async function runMorningBrief({ force = false } = {}) {
   const text = await buildBrief();
   // Voice note first, then the full text — same order as her normal replies.
   // A voice failure never holds up the text.
-  const past = await briefMemory(text).catch(() => '');
+  const past = [await briefMemory(text).catch(() => ''), await require('./araMood').moodLine().catch(() => '')].filter(Boolean).join('\n\n');
   const script = await spokenScript(text, past).catch((e) => { console.error('morning brief script failed:', e.message); return ''; });
   const voiced = await sendVoice(ara, telegram.OWNER_ID, script || fallbackScript(text), 'Give me my morning brief.', !!script);
   await ara.sendMessage(telegram.OWNER_ID, text, { plain: true, remember: true });

@@ -42,16 +42,35 @@ async function sendFromAra(text, spoken = text, opts = {}) {
   const telegram = require('./telegram');
   const ara = telegram.botFor('ara');
   if (!ara || !ara.isConfigured()) return false;
-  const { from, ...sendOpts } = opts || {};
+  // ownVoice: her own words (not a teammate's to relay), so no "Stephanie says…" script.
+  const { from, ownVoice, ...sendOpts } = opts || {};
   opts = sendOpts;
   const owner = passedFrom(text, from);
   // Same as a reply to him: she says it, then the text (with the exact numbers).
-  const { ogg } = await require('./personaVoice').voiceNote('ara', String(spoken).replace(/\*\*/g, ''), { relay: true })
+  const { ogg } = await require('./personaVoice').voiceNote('ara', String(spoken).replace(/\*\*/g, ''), { relay: !ownVoice })
     .catch((e) => { console.error('trade alert voice failed:', e.message); return { ogg: null }; });
   if (ogg) await ara.sendVoice(telegram.OWNER_ID, ogg).catch((e) => console.error('trade alert sendVoice failed:', e.message));
   await ara.sendMessage(telegram.OWNER_ID, text, opts);
   await passedOn(owner, text);
+  rememberPassed(owner, text, opts);
   return true;
+}
+
+// Everything passed through A.R.A. goes into her long-term memory, and the owning
+// persona's (owner, 2026-11-27: "she should also have memory of what was passed to
+// her"; before this, routine traffic like trade alerts and news stayed out of Mem0,
+// his 2026-11-21 call). Labeled as whose it is and never his words. A message the
+// sender already asked to remember ({ remember: true }) isn't saved twice for her.
+function rememberPassed(owner, text, opts = {}) {
+  try {
+    const { mem0Remember } = require('./mem0');
+    const day = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+    const who = owner ? ((require('./personas').ROSTER[owner] || {}).name || owner) : null;
+    const body = String(text || '').replace(/\*\*/g, '').trim();
+    if (!body) return;
+    if (!opts.remember) mem0Remember('ara', `[${who ? `${who}'s message, passed on by you (A.R.A.) to Mr. Burrus` : 'Sent by you (A.R.A.) to Mr. Burrus on your own'}, ${day} — NOT his words, not something he said or decided]\n${body}`, { source: 'passoff', from: owner || 'ara' });
+    if (owner) mem0Remember(owner, `[Your message, passed on to Mr. Burrus through A.R.A., ${day} — yours, NOT his words]\n${body}`, { source: 'passoff' });
+  } catch (e) { console.error('passoff memory failed:', e.message); }
 }
 
 // Flags every alert on a live account, so a real-money trade never reads like a demo one.
@@ -153,4 +172,4 @@ async function runDailyRecap() {
   return { sent, opened: opened.length, closed: closed.length, open: open.length };
 }
 
-module.exports = { sendFromAra, passedFrom, passedOn, araNote: notify, tradeOpened, limitPlaced, limitEnded, addedOn, tradeClosed, tradeLost, orderRejected, runDailyRecap };
+module.exports = { rememberPassed, sendFromAra, passedFrom, passedOn, araNote: notify, tradeOpened, limitPlaced, limitEnded, addedOn, tradeClosed, tradeLost, orderRejected, runDailyRecap };

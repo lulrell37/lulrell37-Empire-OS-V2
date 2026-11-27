@@ -894,7 +894,9 @@ export async function araSpokenScript(text,{userText='',convo=''}={},signal=null
     // Who's who: a report she's passing on belongs to whoever it opens with.
     const team=PERSONA_LIST.filter(x=>x.id!=='ara').map(x=>` - ${x.name} (${x.id}) — ${x.role}${pronounsOf(x.id)?` · ${pronounsOf(x.id)}`:''}`).join('\n');
     const sys=`${ARA_VOICE}\n\n${base}\n\n[THE TEAM, for who's who and their pronouns:\n${team}\n]\n\n${ARA_SCRIPT}`;
-    const user=(convo?`Recent conversation:\n${convo}\n\n`:'')+(userText?`Mr. Burrus just said: "${userText}"\n\n`:'')+araLongHint(text)+`What you want to get across (notes, not a script):\n${cuedFor(text)}`;
+    // Her mood, faded to now (server/araMood.js): it colors her voice too.
+    let mood='';try{const{araMoodLine}=await import('./sharedDesk');mood=await araMoodLine();}catch{}
+    const user=(mood?`${mood}\n\n`:'')+(convo?`Recent conversation:\n${convo}\n\n`:'')+(userText?`Mr. Burrus just said: "${userText}"\n\n`:'')+araLongHint(text)+`What you want to get across (notes, not a script):\n${cuedFor(text)}`;
     const out=await withGrokRoutes(k?.grok,async({base:url,auth})=>{
       const res=await fetch(url+'/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json',...auth},signal,
         body:JSON.stringify({model:'grok-4',max_tokens:String(text||'').length>ARA_LONG_CHARS?2200:1200,messages:[{role:'system',content:sys},{role:'user',content:user}]})});

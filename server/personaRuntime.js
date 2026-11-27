@@ -784,6 +784,7 @@ async function runInjections(text, persona = 'ara', { convo = '', depth = 0, sin
         const r = await require('./scribeMonday').runMondayScripts({ force: true });
         return `MONDAY SCRIPTS: ${r.count} written and filed, and he's been told they came in (don't paste or read them): ${(r.titles || []).join(' | ')}`;
       }
+      if (name === 'MOOD' && persona === 'ara' && depth === 0) return await require('./araMood').moodTag(arg);
       if ((name === 'TALON_STRATEGY' || name === 'TALON_STRATEGIES') && (persona === 'talon' || persona === 'ara')) return await require('./talonStrategies').tag(name, arg, { asked: /^\[SENT ON YOUR OWN/.test(String(asked || '')) ? '' : asked });
       if (require('./memoryStore').MEMORY_TAGS.has(name) && (persona === 'jarvis' || (persona === 'ara' && name === 'MEMORY_CHECK'))) return `${name}: ${await require('./memoryStore').memoryTag(name, arg, depth === 0 ? asked : '')}`;
       if (require('./stephanieQuiz').QUIZ_TAGS.has(name) && persona === 'stephanie') return `${name}: ${await require('./stephanieQuiz').quizTag(name, arg, depth === 0 ? asked : '')}`;
@@ -1534,6 +1535,8 @@ async function runPersonaTurn(personaId, userText, deliver, { reply: given, resu
   if (persona === 'ara' && gs && gs.ok) sys = `${sys}\n\n${await calendarBlock()}`;
   if (persona === 'ara') sys = `${sys}\n\n${await weatherBlock()}`;
   if (persona === 'ara') sys = `${sys}\n\n${await newsBlock()}`;
+  // Her mood, faded to now (server/araMood.js): it colors how she talks to him.
+  if (persona === 'ara') sys = `${sys}\n\n${await require('./araMood').moodLine()}`;
   const history = await loadHistory(persona);
   const messages = [...history, { role: 'user', content: `[${momentET()}] ${group ? `${require('./groupChat').GROUP_FRAME}\n\n` : ''}${userText}` }];
   const convo = convoLines(history, userText, persona);

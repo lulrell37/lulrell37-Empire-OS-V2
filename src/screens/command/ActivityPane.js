@@ -36,7 +36,7 @@ function ago(ms){
   return`${Math.floor(h/24)}d`;
 }
 
-export default function ActivityPane({persona,activity=[],active,project,build={}}){
+export default function ActivityPane({persona,activity=[],active,project,build={},onPlay,onStop}){
   const id=persona?.id;
   const col=persona?.color||'#E8C98A';
   const liveRows=activity.filter(a=>a&&a.persona===id);
@@ -58,6 +58,15 @@ export default function ActivityPane({persona,activity=[],active,project,build={
   const[alerts,setAlerts]=useState(null);
   const[showAlerts,setShowAlerts]=useState(true);
   const[openAlert,setOpenAlert]=useState(null);
+  // ▶ / ■ on a pass-off: one plays at a time; tap again to stop.
+  const[playing,setPlaying]=useState(null);
+  const togglePlay=async(a)=>{
+    if(!onPlay)return;
+    if(playing===a.id){setPlaying(null);onStop?.();return;}
+    setPlaying(a.id);
+    try{await onPlay(a.content,id);}finally{setPlaying(p=>(p===a.id?null:p));}
+  };
+  useEffect(()=>()=>{onStop?.();},[]);// eslint-disable-line react-hooks/exhaustive-deps
   const loadAlerts=useCallback(()=>{
     if(!id)return;
     fetchAlerts(id,30).then(a=>{if(a)setAlerts(a);}).catch(()=>{});
@@ -122,7 +131,14 @@ export default function ActivityPane({persona,activity=[],active,project,build={
                     {a.from?<Text style={[s.recentSub,{color:col,marginTop:0}]}>{a.from.toUpperCase()}</Text>:null}
                     <Text style={s.recentT} numberOfLines={open?undefined:2}>{plain}</Text>
                   </View>
-                  <Text style={s.recentAgo}>{ago(a.ts)}</Text>
+                  <View style={{alignItems:'flex-end',gap:4}}>
+                    <Text style={s.recentAgo}>{ago(a.ts)}</Text>
+                    {onPlay?(
+                      <TouchableOpacity onPress={()=>togglePlay(a)} hitSlop={{top:8,bottom:8,left:8,right:8}} activeOpacity={0.6}>
+                        <Text style={[s.play,{color:col,borderColor:col+'66'}]}>{playing===a.id?'■':'▶'}</Text>
+                      </TouchableOpacity>
+                    ):null}
+                  </View>
                 </TouchableOpacity>
               );
             })}
@@ -173,4 +189,5 @@ const s=StyleSheet.create({
   recentT:{fontFamily:'monospace',fontSize:9,letterSpacing:0.2,color:'#B9B0A0'},
   recentSub:{fontFamily:'monospace',fontSize:7.5,letterSpacing:0.3,color:'#6A6458',marginTop:1},
   recentAgo:{fontFamily:'monospace',fontSize:7.5,color:'#4A4A4A'},
+  play:{fontSize:10,borderWidth:1,borderRadius:10,width:22,height:22,textAlign:'center',lineHeight:20,overflow:'hidden'},
 });

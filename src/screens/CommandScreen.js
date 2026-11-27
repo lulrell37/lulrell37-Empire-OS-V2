@@ -1,5 +1,5 @@
 import React,{useState,useEffect,useRef,useCallback,useMemo}from 'react';
-import{View,Text,StyleSheet,TextInput,TouchableOpacity,FlatList,KeyboardAvoidingView,Platform,ActivityIndicator,ScrollView,Modal,Image,Alert,Keyboard,BackHandler}from 'react-native';
+import{View,Text,StyleSheet,TextInput,TouchableOpacity,FlatList,KeyboardAvoidingView,Platform,ActivityIndicator,ScrollView,Modal,Image,Alert,Keyboard,BackHandler,AppState}from 'react-native';
 import{SafeAreaView}from 'react-native-safe-area-context';
 import{Audio}from 'expo-av';
 import*as Speech from 'expo-speech';
@@ -236,6 +236,7 @@ export default function CommandScreen({navigation,route}){
   const araChunksRef=useRef([]);
   const handsFreeRef=useRef(false);
   const loadingRef=useRef(false);
+  const passoffDoneRef=useRef(null); // releases a ▶ pass-off that was stopped
   const voicePausedRef=useRef(false);
   const silenceTimerRef=useRef(null);
   const hasVoicedRef=useRef(false);
@@ -510,6 +511,34 @@ export default function CommandScreen({navigation,route}){
       });
     }catch{}
   }
+  // Live thread (owner, 2026-11-27: "I see the Telegram coming in but nothing on the app
+  // for a while"): while a direct chat is open, the shared thread is checked every 15 s
+  // and when the app comes back to the front. Skipped while a reply is in flight; only
+  // redrawn when the server has something new; his messages not on the server yet stay.
+  async function refreshThread(){
+    if(modeRef.current!=='direct'||loadingRef.current)return;
+    const pid=activePersonaRef.current;
+    try{
+      const{fetchThread}=await import('../services/sharedChat');
+      const t=await fetchThread(pid,40);
+      if(!t||!t.length||activePersonaRef.current!==pid||loadingRef.current||modeRef.current!=='direct')return;
+      const server=t.map(m=>({id:'s'+m.id,role:m.role,content:m.content,persona:pid}));
+      setMessages(prev=>{
+        const lastS=[...prev].reverse().find(m=>String(m.id).startsWith('s'));
+        if(lastS&&lastS.id===server[server.length-1].id&&prev[prev.length-1]?.id===lastS.id)return prev; // nothing new
+        const known=new Set(server.map(m=>m.role+'|'+m.content));
+        const pending=prev.slice(-4).filter(m=>!String(m.id).startsWith('s')&&typeof m.content==='string'&&!known.has(m.role+'|'+m.content));
+        return [...server,...pending];
+      });
+    }catch{}
+  }
+  useEffect(()=>{
+    if(!isFocused||mode!=='direct')return;
+    const t=setInterval(refreshThread,15000);
+    const sub=AppState.addEventListener('change',st=>{if(st==='active')refreshThread();});
+    return()=>{clearInterval(t);sub.remove();};
+  },[isFocused,mode,activePersona]);// eslint-disable-line react-hooks/exhaustive-deps
+
   // Is Mr. Burrus actually looking at this persona face-to-face right now? If
   // not — he backed out to the office overview, switched to a different desk,
   // or left for the city — the reply about to be saved should queue unread
@@ -759,6 +788,37 @@ export default function CommandScreen({navigation,route}){
     await audioModeForPlayback();
     const{sound}=await Audio.Sound.createAsync({uri},playOpts({shouldPlay:true}));
     return{sound,transcript:script,timeline:null};
+  }
+
+  // ▶ on a pass-off in the activity tab (owner, 2026-11-27: "make it so I can listen to
+  // it from the activity section"): A.R.A. catches him up on it in her own voice, like
+  // her Telegram voice note (her script pass, then ElevenLabs; Grok when that's her
+  // voice); any other persona reads its own in its voice. Tapping again stops it.
+  // Resolves when it's done or stopped.
+  async function playPassoff(text,pid){
+    speakCancelRef.current?.();
+    await clearSound();
+    if(!text)return;
+    try{
+      await audioModeForPlayback();
+      const araGrok=pid==='ara'&&(await getSetting('ara_voice','elevenlabs').catch(()=>'elevenlabs'))==='grok';
+      if(pid==='ara'&&!araGrok){
+        const{sound}=await araElevenVoice(text,{userText:'Catch me up on this one.'});
+        soundRef.current=sound;
+        await new Promise(res=>{passoffDoneRef.current=res;sound.setOnPlaybackStatusUpdate(st=>{if(!st.isLoaded||st.didJustFinish)res();});});
+        passoffDoneRef.current=null;
+        if(soundRef.current===sound)await clearSound();
+        return;
+      }
+      const{speakAs}=await import('../services/labVoice');
+      await speakAs(pid,text);
+    }catch(e){pushSystemMsg?.(`🔇 Couldn't play it: ${e.message}`);}
+  }
+  async function stopPassoff(){
+    const done=passoffDoneRef.current;passoffDoneRef.current=null;
+    await clearSound();
+    done?.();
+    try{const{stopSpeaking}=await import('../services/labVoice');await stopSpeaking();}catch{}
   }
 
   async function speakResponse(text,persona){
@@ -2788,6 +2848,8 @@ export default function CommandScreen({navigation,route}){
             onMerge:confirmBuildMerge,onCancel:confirmBuildCancel,onDelete:confirmBuildDelete,
             jarvisFilter:jarvisBuildFilter,firmFilter:firmBuildFilter,
           }}
+          onPlay={playPassoff}
+          onStop={stopPassoff}
         />
       ):(
         <FlatList ref={flatRef} data={displayMessages} keyExtractor={i=>i.id} renderItem={renderMsg} contentContainerStyle={s.msgList} style={{flex:1}}

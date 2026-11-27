@@ -10,8 +10,8 @@
 //   SHARED_TAG_RE                    -> for stripCommands
 import{loadBackend}from './keyStore';
 
-export const SHARED_TAG_RE=/\[(SWITCH_OFF|SWITCH_ON|SWITCHES|TRADING_OFF|TRADING_ON|TRADING_STATUS|BREAKING_NOW|NEWS_NOW|QUIZ_SCORE|QUIZ_OFF|QUIZ_ON|QUIZ_NOW)(?::\s*([^\]]*))?\]/gi;
-const HAS_TAG=/\[(SWITCH_OFF|SWITCH_ON|SWITCHES|TRADING_OFF|TRADING_ON|TRADING_STATUS|BREAKING_NOW|NEWS_NOW|QUIZ_SCORE|QUIZ_OFF|QUIZ_ON|QUIZ_NOW)\b/i;
+export const SHARED_TAG_RE=/\[(MOOD|SWITCH_OFF|SWITCH_ON|SWITCHES|TRADING_OFF|TRADING_ON|TRADING_STATUS|BREAKING_NOW|NEWS_NOW|QUIZ_SCORE|QUIZ_OFF|QUIZ_ON|QUIZ_NOW)(?::\s*([^\]]*))?\]/gi;
+const HAS_TAG=/\[(MOOD|SWITCH_OFF|SWITCH_ON|SWITCHES|TRADING_OFF|TRADING_ON|TRADING_STATUS|BREAKING_NOW|NEWS_NOW|QUIZ_SCORE|QUIZ_OFF|QUIZ_ON|QUIZ_NOW)\b/i;
 
 async function call(path,{method='GET',body,timeoutMs=45000}={}){
   const be=await loadBackend();
@@ -32,6 +32,17 @@ async function call(path,{method='GET',body,timeoutMs=45000}={}){
 }
 
 // `asked`: his message this turn (S.T.E.P.H.A.N.I.E.'s drill grades his answers from it).
+// GO LIVE's run_command: her command tag(s), run on the server like a Telegram turn.
+export async function liveCommand(command,asked){
+  try{const{result}=await call('/shared/run',{method:'POST',body:{persona:'ara',command,asked},timeoutMs:300000});return result||'Nothing came back.';}
+  catch(e){return `That didn't run: ${e.message}`;}
+}
+
+// A.R.A.'s mood right now (server/araMood.js), for her voice script. '' when unreachable.
+export async function araMoodLine(){
+  try{const{line}=await call('/shared/mood',{timeoutMs:5000});return line||'';}catch{return '';}
+}
+
 export async function sharedContext(pid,asked=''){
   try{const{block}=await call('/shared/context?persona='+encodeURIComponent(pid)+(asked?'&asked='+encodeURIComponent(String(asked).slice(0,1500)):''),{timeoutMs:15000});return block?`\n\n${block}`:'';}
   catch(e){return `\n\n[The on/off switches and shared desk tools are unavailable right now (${e.message}). If he asks to switch something on or off, tell him it couldn't be reached — never say it's done.]`;}
