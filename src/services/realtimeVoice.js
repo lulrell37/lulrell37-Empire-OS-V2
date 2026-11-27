@@ -97,15 +97,16 @@ function isOwnEcho(heard){
   const mine=new Set();
   for(const h of herRecent)if(now-h.at<20000)for(const x of h.pairs)mine.add(x);
   if(!mine.size)return false;
-  return p.filter(x=>mine.has(x)).length/p.length>=0.6;
+  return p.filter(x=>mine.has(x)).length/p.length>=0.8;
 }
 
 // Soft barge-in state (see speech_started).
 const BARGE_WAIT_MS=2500;
 let suspect=false,bargeTimer=null,ignoreNext=false,ignoreResp=null;
 function herSpeaking(){return !!sound||nativePlaying||(playing&&queue.length>0);}
+let bargedAt=0; // a barge-in just confirmed: the transcript that follows is his, echo or not
 function confirmBarge(onState){
-  suspect=false;clearTimeout(bargeTimer);
+  suspect=false;clearTimeout(bargeTimer);bargedAt=Date.now();
   listening=true;onState?.('listening');
   cancelAll();stopPlayback();
 }
@@ -150,10 +151,24 @@ let heardAt=0;
 // not silence, so a soft first syllable ("um, wait") isn't lost. -> chunks to send now.
 const LOOKBACK=3;
 let held=[];
+// How loud her echo usually is at the mic while she talks (owner, 2026-11-27: "I can't
+// interrupt at all now"): his voice on top of it is clearly louder, her echo alone isn't.
+// Used for the gate (so a quieter voice gets through where her echo is quiet) and to
+// confirm a barge-in fast, without waiting for words (which mix with her echo).
+let echoLevel=0;      // running average of the mic while she talks and nobody barged
+let loudRun=0;        // chunks in a row clearly over it during a suspected barge-in
+let stateCb=null;     // onState, for a barge-in confirmed from here
+const overEcho=(r)=>r>Math.max(echoLevel*2.5,echoLevel+0.02,0.015);
 function gateEcho(chunk){
   const herAudio=!!sound||nativePlaying;
+  const r=rmsOf(chunk);
+  if(herAudio){
+    if(!suspect)echoLevel=echoLevel?echoLevel*0.9+r*0.1:r;
+    else{loudRun=overEcho(r)?loudRun+1:Math.max(0,loudRun-1);if(loudRun>=3){loudRun=0;confirmBarge(stateCb);}}
+  }else loudRun=0;
+  const bar=Math.min(callAudio?BARGE_RMS_CALL:BARGE_RMS,Math.max(echoLevel*2.5,0.015));
   const open=!herAudio||Date.now()-heardAt<HANGOVER_MS;
-  if(!open&&rmsOf(chunk)>=(callAudio?BARGE_RMS_CALL:BARGE_RMS))heardAt=Date.now();
+  if(!open&&r>=bar)heardAt=Date.now();
   if(open||Date.now()-heardAt<HANGOVER_MS){const out=[...held,chunk];held=[];return out;} // his voice: the held ones go up real
   held.push(chunk);
   if(held.length>LOOKBACK)return [silenceLike(held.shift())]; // oldest leaves as silence, in order
@@ -401,8 +416,9 @@ export async function startAraLive(opts={}){
         // 2026-11-27: "we still hit a listen in the middle of her talking"); not him
         // within BARGE_WAIT_MS = noise, she carries on. When she's quiet, it's him.
         case'input_audio_buffer.speech_started':
+          stateCb=onState;
           if(herSpeaking()){
-            suspect=true;
+            suspect=true;loudRun=0;
             clearTimeout(bargeTimer);
             bargeTimer=setTimeout(()=>{suspect=false;},BARGE_WAIT_MS);
             break;
@@ -415,7 +431,7 @@ export async function startAraLive(opts={}){
           const t=event.content?.[0]?.transcript||event.transcript;
           if(!t)break;
           if(suspect){
-            if(echoRatio(t)>=0.6)break;          // her own words: she carries on
+            if(echoRatio(t)>=0.8)break;          // nothing but her own words: she carries on
             if(wordsOf(t).length>=2)confirmBarge(onState);
             else break;
           }
@@ -426,7 +442,7 @@ export async function startAraLive(opts={}){
           const t=event.content?.[0]?.transcript||event.transcript;
           // Her own words coming back through the mic: not him. Drop it, cancel any
           // answer Grok started to it, and keep it out of the conversation.
-          if(t&&isOwnEcho(t)){
+          if(t&&Date.now()-bargedAt>10000&&isOwnEcho(t)){
             // Her echo: any answer Grok starts to it is cancelled and its words dropped;
             // what she's saying now keeps playing.
             if(socket.readyState===WebSocket.OPEN){
@@ -535,7 +551,7 @@ function startLiveUpdates(socket,callStart,mood0,withMood){
 export async function stopAraLive(){
   for(const t of liveTimers)clearInterval(t);
   liveTimers=[];lastHeard='';
-  suspect=false;ignoreNext=false;ignoreResp=null;clearTimeout(bargeTimer);herRecent=[];held=[];heardAt=0;
+  suspect=false;ignoreNext=false;ignoreResp=null;clearTimeout(bargeTimer);herRecent=[];held=[];heardAt=0;echoLevel=0;loudRun=0;
   const socket=ws;ws=null;
   if(streamStarted){try{LiveAudioStream.stop();}catch{}streamStarted=false;}
   try{LiveAudioStream.removeAllListeners?.('data');}catch{}
