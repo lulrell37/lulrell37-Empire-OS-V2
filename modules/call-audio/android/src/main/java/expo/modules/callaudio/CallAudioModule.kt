@@ -109,6 +109,18 @@ class CallAudioModule : Module() {
 
     AsyncFunction("release") { id: Int -> release(id); true }.runOnQueue(Queues.MAIN)
 
+    // Pause / resume every playing clip: a possible barge-in pauses her, and she picks
+    // up where she was if it turns out to be noise (owner, 2026-11-27: "what about
+    // noise and not me talking").
+    AsyncFunction("pauseAll") {
+      for (mp in players.values) try { if (mp.isPlaying) mp.pause() } catch (_: Throwable) {}
+      true
+    }.runOnQueue(Queues.MAIN)
+    AsyncFunction("resumeAll") {
+      for (mp in players.values) try { if (!mp.isPlaying && mp.currentPosition > 0) mp.start() } catch (_: Throwable) {}
+      true
+    }.runOnQueue(Queues.MAIN)
+
     // Barge-in / hang-up: every clip stops at once.
     AsyncFunction("stopAll") {
       for (id in players.keys.toList()) release(id)

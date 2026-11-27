@@ -105,6 +105,11 @@ function isOwnEcho(heard){
 const BARGE_WAIT_MS=2500;
 let suspect=false,bargeTimer=null,ignoreNext=false,ignoreResp=null;
 function herSpeaking(){return !!sound||nativePlaying||(playing&&queue.length>0);}
+// Noise vs him on a call mode: paused, then resumed if no real words arrive.
+const NOISE_WAIT_MS=1500;
+let pausedForNoise=false,noiseTimer=null;
+// Real words, not a cough / "mm" / a transcription of noise ("[noise]", "…").
+const realWords=(t)=>wordsOf(String(t||'').replace(/\[[^\]]*\]|\([^)]*\)/g,' ')).filter(w=>w.length>1&&!/^(mm+|hm+|uh+|um+|ah+|oh+|eh+)$/.test(w)).length>=1;
 let bargedAt=0; // a barge-in just confirmed: the transcript that follows is his, echo or not
 function confirmBarge(onState){
   suspect=false;clearTimeout(bargeTimer);bargedAt=Date.now();
@@ -161,6 +166,10 @@ let loudRun=0;        // chunks in a row clearly over it during a suspected barg
 let stateCb=null;     // onState, for a barge-in confirmed from here
 const overEcho=(r)=>r>Math.max(echoLevel*2.5,echoLevel+0.02,0.015);
 function gateEcho(chunk){
+  // Call modes: the phone's own echo canceller is on, and it already turns his voice
+  // down while she plays; a gate on top kept Grok from hearing him at all (owner,
+  // 2026-11-27: "I can't interrupt now at all again"). His mic goes up untouched.
+  if(callAudio){const out=[...held,chunk];held=[];return out;}
   const herAudio=!!sound||nativePlaying;
   const r=rmsOf(chunk);
   if(herAudio){
@@ -422,7 +431,17 @@ export async function startAraLive(opts={}){
         // within BARGE_WAIT_MS = noise, she carries on. When she's quiet, it's him.
         case'input_audio_buffer.speech_started':
           stateCb=onState;
-          if(herSpeaking()){
+          // Call modes: she PAUSES; his words stop her for real, nothing within
+          // NOISE_WAIT_MS (noise, a cough, the TV) and she picks up where she was.
+          if(herSpeaking()&&callAudio){
+            pausedForNoise=true;
+            callAudio.pauseAll().catch(()=>{});
+            clearTimeout(noiseTimer);
+            noiseTimer=setTimeout(()=>{if(pausedForNoise){pausedForNoise=false;callAudio?.resumeAll().catch(()=>{});}},NOISE_WAIT_MS);
+            break;
+          }
+          // Soft barge-in on Clear (no phone echo canceller).
+          if(herSpeaking()&&!callAudio){
             suspect=true;loudRun=0;
             clearTimeout(bargeTimer);
             bargeTimer=setTimeout(()=>{suspect=false;},BARGE_WAIT_MS);
@@ -435,6 +454,7 @@ export async function startAraLive(opts={}){
         case'conversation.item.input_audio_transcription.updated':{
           const t=event.content?.[0]?.transcript||event.transcript;
           if(!t)break;
+          if(pausedForNoise&&realWords(t)){pausedForNoise=false;clearTimeout(noiseTimer);confirmBarge(onState);}
           if(suspect){
             if(echoRatio(t)>=0.8)break;          // nothing but her own words: she carries on
             if(wordsOf(t).length>=2)confirmBarge(onState);
@@ -458,6 +478,18 @@ export async function startAraLive(opts={}){
             if(!herSpeaking())onState?.('listening');
             break;
           }
+          // A "turn" with no real words was noise: cancel any reply to it; if she was
+          // paused for it, she carries on.
+          if(!realWords(t)){
+            if(socket.readyState===WebSocket.OPEN){
+              socket.send(JSON.stringify({type:'response.cancel'}));
+              if(event.item_id)socket.send(JSON.stringify({type:'conversation.item.delete',item_id:event.item_id}));
+            }
+            ignoreNext=true;
+            if(pausedForNoise){pausedForNoise=false;clearTimeout(noiseTimer);callAudio?.resumeAll().catch(()=>{});}
+            break;
+          }
+          if(pausedForNoise){pausedForNoise=false;clearTimeout(noiseTimer);confirmBarge(onState);}
           if(t&&suspect)confirmBarge(onState);
           if(t){onUserText?.(fixNames(t),true);lastHeard=fixNames(t);}
           break;
@@ -556,7 +588,7 @@ function startLiveUpdates(socket,callStart,mood0,withMood){
 export async function stopAraLive(){
   for(const t of liveTimers)clearInterval(t);
   liveTimers=[];lastHeard='';
-  suspect=false;ignoreNext=false;ignoreResp=null;clearTimeout(bargeTimer);herRecent=[];held=[];heardAt=0;echoLevel=0;loudRun=0;
+  suspect=false;ignoreNext=false;ignoreResp=null;clearTimeout(bargeTimer);herRecent=[];held=[];heardAt=0;echoLevel=0;loudRun=0;pausedForNoise=false;clearTimeout(noiseTimer);
   const socket=ws;ws=null;
   if(streamStarted){try{LiveAudioStream.stop();}catch{}streamStarted=false;}
   try{LiveAudioStream.removeAllListeners?.('data');}catch{}
