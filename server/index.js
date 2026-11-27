@@ -215,8 +215,10 @@ function startMemoryMirrorCron() {
   schedule('memory_mirror', '20 */6 * * *', run);
   // With the server's memory on: pull facts out of new exchanges (also kicked on each add).
   schedule('server_memory', '*/2 * * * *', () => ms.extractTick().then((r) => (r.done || r.failed) && console.log('server memory:', JSON.stringify(r))).catch((e) => console.error('server memory failed:', e.message)));
-  // First copy soon after boot, so it doesn't wait up to 6 h.
-  setTimeout(() => require('./switches').isOn('memory_mirror').then((on) => on && run()).catch(() => {}), 5 * 60 * 1000).unref();
+  // First copy 20 min after boot (not in the busy first minutes), unless a copy was
+  // running when the server last went down: then it's switched off and he's told.
+  const checked = new Promise((res) => setTimeout(() => ms.bootCheck().then(res, (e) => { console.error('memory mirror failed:', e.message); res({ paused: true }); }), 60 * 1000).unref());
+  setTimeout(() => checked.then((b) => !b.paused && require('./switches').isOn('memory_mirror').then((on) => on && run())).catch((e) => console.error('memory mirror failed:', e.message)), 20 * 60 * 1000).unref();
   console.log('memory mirror cron scheduled (every 6h)');
 }
 

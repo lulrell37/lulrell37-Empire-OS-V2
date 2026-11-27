@@ -115,11 +115,12 @@ async function apiSearch(personaId, query, { topK = 16, threshold = 0.05 } = {})
 // Every memory Mem0 holds for this persona, newest first by the date it was
 // made — the whole history, for recall questions a top-k search can't answer
 // ("what did we talk about in August", "when did I …"). Capped at `max`.
-// The server's memory copy passes max: Infinity to take everything (memoryStore.js).
-async function apiAll(personaId, { max = 2000 } = {}) {
+// The server's memory copy passes max: Infinity with onPage to take everything a page at a time (memoryStore.js).
+async function apiAll(personaId, { max = 2000, onPage } = {}) {
   const k = key();
   if (!k || !personaId) return [];
   const out = [];
+  let lastFirst = null;
   try {
     for (let page = 1; out.length < max && page <= Math.min(1000, Math.max(40, Math.ceil(max / 100))); page++) {
       const r = await fetch(`${BASE}/v2/memories/`, {
@@ -135,7 +136,12 @@ async function apiAll(personaId, { max = 2000 } = {}) {
       note(true);
       const d = await r.json();
       const batch = Array.isArray(d) ? d : (d && d.results) || [];
-      out.push(...batch);
+      // Mem0 handing back the same page again (paging ignored) would never end: stop.
+      const firstId = batch[0] && batch[0].id;
+      if (firstId && firstId === lastFirst) { console.warn(`mem0: list for ${personaId} repeated page ${page}; stopped there`); break; }
+      lastFirst = firstId;
+      // onPage: hand each page over and keep nothing, so a huge history never sits in RAM.
+      if (onPage) await onPage(batch); else out.push(...batch);
       if (batch.length < 100 || (d && !Array.isArray(d) && !d.next)) break;
     }
   } catch (e) {

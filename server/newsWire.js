@@ -79,7 +79,8 @@ function parseBrief(text) {
 }
 
 // --- Tier 2: full brief ---
-async function refreshNewsBrief({ force = false, trigger = 'break', breaking = '' } = {}) {
+// `after`: a send that must reach him before this brief does (the 🚨 breaking alert).
+async function refreshNewsBrief({ force = false, trigger = 'break', breaking = '', after = null } = {}) {
   if (busy && !force) return { skipped: 'busy' };
   if ((await getSetting('news_wire', '1')) !== '1' && !force) return { skipped: 'off' };
   busy = true;
@@ -162,7 +163,13 @@ MONEY|<YYYY-MM-DD>|<one line>
     console.log('newswire: brief in —', lead.slice(0, 120));
     // Every brief W.I.R.E. writes reaches him on Telegram from A.R.A. (and goes
     // into her Telegram history, so he can reply about it).
-    araNote(`📰 **W.I.R.E. — ${trigger === 'manual' ? 'news brief' : 'breaking news'}**, Mr. Burrus.\n\n${brief}`);
+    // W.I.R.E.'s brief always reaches him first (owner, 2026-11-27: "make sure Wire's
+    // news always comes before the other personas that dissect from it"): the desks
+    // below start only once his brief (voice note + text) has gone out. Not awaited
+    // here, so [NEWS_NOW] gets the brief back without waiting on the send. If the send
+    // fails, the desks still run (logged for the sentinel).
+    const sentBrief = Promise.resolve(after).catch(() => {}).then(() => require('./talonAlerts').sendFromAra(`📰 **W.I.R.E. — ${trigger === 'manual' ? 'news brief' : 'breaking news'}**, Mr. Burrus.\n\n${brief}`))
+      .catch((e) => console.error('newswire failed: sending the brief:', e.message));
     if (trigger !== 'manual') {
       await pushAlert(`newswire:${todayET()}-${pollSlot()}`, 'W.I.R.E. — news brief', lead.slice(0, 160), { kind: 'news' }).catch(() => {});
     }
@@ -170,7 +177,7 @@ MONEY|<YYYY-MM-DD>|<one line>
     // A.T.L.A.S. reads every brief for her stock desk (throttled in there).
     // Each reader runs only while he has it switched on (server/switches.js).
     const sw = require('./switches');
-    const ifOn = (key, fn) => sw.isOn(key).catch(() => true).then((on) => on && fn());
+    const ifOn = (key, fn) => sentBrief.then(() => sw.isOn(key).catch(() => true)).then((on) => on && fn());
     ifOn('stock_desk', () => require('./atlasInvest').onWireBrief(brief)).catch((e) => console.error('newswire->atlas failed', e.message));
     // W.O.K.E. reads it for what's behind it.
     ifOn('woke_read', () => require('./wokeRead').onWireBrief(brief)).catch((e) => console.error('newswire->woke failed', e.message));
@@ -279,11 +286,12 @@ Reply ONLY with JSON: {"breaking": true|false, "key": "short story slug", "headl
   await setSetting('breaking_seen', JSON.stringify([v.key, fingerprint(v.headline), ...seen.filter((x) => x !== v.key)].slice(0, 60)));
   await rememberHeadlines([v.headline]);
   console.log('newswire: BREAKING —', v.headline.slice(0, 140));
-  araNote(`🚨 **W.I.R.E. — BREAKING**${v.dmv ? ' (DMV)' : ''}, Mr. Burrus.\n\n**${v.headline}**\n${v.detail}${v.source ? `\n_Source: ${v.source}_` : ''}\n\nFull brief coming as more is confirmed.`,
-    `Breaking from Wire: ${v.headline}. ${v.detail}`);
+  // The alert first, then the full brief (which waits for it: `after`).
+  const alertSent = require('./talonAlerts').sendFromAra(`🚨 **W.I.R.E. — BREAKING**${v.dmv ? ' (DMV)' : ''}, Mr. Burrus.\n\n**${v.headline}**\n${v.detail}${v.source ? `\n_Source: ${v.source}_` : ''}\n\nFull brief coming as more is confirmed.`,
+    `Breaking from Wire: ${v.headline}. ${v.detail}`).catch((e) => console.error(`breaking watch failed: sending the alert: ${e.message}`));
   await pushAlert(`breaking:${v.key}`, 'W.I.R.E. — BREAKING', v.headline.slice(0, 160), { kind: 'news' }).catch(() => {});
   // The full brief, led by it (fans out to W.O.K.E., A.T.L.A.S., H.A.V.E.N.).
-  refreshNewsBrief({ force: true, trigger: 'poll', breaking: `${v.headline} — ${v.detail}` })
+  refreshNewsBrief({ force: true, trigger: 'poll', breaking: `${v.headline} — ${v.detail}`, after: alertSent })
     .then((r) => { if (r && r.error) console.error(`breaking watch failed: full brief: ${r.error}`); })
     .catch((e) => console.error(`breaking watch failed: full brief: ${e.message}`));
   return { sent: true, headline: v.headline, detail: v.detail, source: v.source, via: hasX ? 'grok' : 'claude' };

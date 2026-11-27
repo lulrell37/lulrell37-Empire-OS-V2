@@ -18,7 +18,7 @@ const sent = [];
 const telegram = require('../telegram');
 telegram.botFor = (id) => ({ isConfigured: () => true, sendMessage: async (chat, text) => { sent.push({ bot: id, text }); } });
 const alerts = require('../talonAlerts');
-alerts.sendFromAra = async (text) => { sent.push({ bot: 'ara', text }); return true; };
+alerts.sendFromAra = async (text, spoken) => { sent.push({ bot: 'ara', text, spoken }); return true; };
 alerts.araNote = (text) => { sent.push({ bot: 'ara', text }); };
 require('../pushSender').pushAlert = async () => {};
 // newsWire destructures these at require time; the full brief after a break gets nothing back.
@@ -111,6 +111,7 @@ llm.chatAs = async () => '';
   const a1 = await aisha.onWireBrief('…senate…', { ask: async () => pol });
   assert.ok(a1.sent);
   assert.ok(/A\.I\.S\.H\.A\. → A\.R\.A\./.test(sent[0].text) && /shutdown/.test(sent[0].text));
+  assert.strictEqual(sent[0].spoken, sent[0].text, 'A.R.A. gets the whole breakdown to voice, not a one-liner');
   assert.ok((await aisha.onWireBrief('…senate…', { ask: async () => pol })).repeat);
   assert.strictEqual(sent.length, 1);
   // Whatever a persona passes through A.R.A. lands in its own chat history.
@@ -174,3 +175,17 @@ llm.chatAs = async () => '';
   llm.xSearch = realX; llm.keyFor = realKey;
   console.log('✓ scheduled breaking watch is Claude-only, Grok on request');
 })().catch((e) => { console.error(e); process.exit(1); });
+
+// W.I.R.E. first (owner, 2026-11-27): the desks start only after his brief has gone
+// out, and a breaking alert goes out before the full brief that follows it.
+{
+  const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'newsWire.js'), 'utf8');
+  const assert = require('assert');
+  assert(/const ifOn = \(key, fn\) => sentBrief\.then\(/.test(src), 'desks wait for the brief');
+  assert(/sentBrief = Promise\.resolve\(after\)/.test(src), 'the brief waits for the breaking alert');
+  assert(/after: alertSent/.test(src), 'breaking passes its alert');
+  for (const desk of ['atlasInvest', 'wokeRead', 'havenHealth', 'aishaPolitics']) {
+    assert(new RegExp(`ifOn\\('[a-z_]+', \\(\\) => require\\('\\./${desk}'\\)\\.onWireBrief`).test(src), `${desk} goes through ifOn`);
+  }
+  console.log('✓ W.I.R.E. reaches him before the desks');
+}

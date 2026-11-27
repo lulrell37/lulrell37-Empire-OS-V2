@@ -65,25 +65,43 @@ const factDate = (f) => {
 // The app's direct adds (an older APK) still come over.
 async function mirrorPersona(persona) {
   // Everything, no cap: the copy has to be complete before step 2 can rely on it.
-  const facts = await d().mem0.apiAll(persona, { max: Infinity });
   const serverOn = await useServer();
-  let added = 0, changed = 0;
-  for (const f of facts) {
-    const memory = String((f && f.memory) || '').trim();
-    if (!f || !f.id || !memory) continue;
-    if (serverOn && f.metadata && f.metadata.via === 'server') continue;
-    const { rows } = await d().db.query(
-      `INSERT INTO memories (persona, mem0_id, memory, date, meta, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $6)
-       ON CONFLICT (mem0_id) DO ${serverOn ? 'NOTHING' : `UPDATE SET memory = EXCLUDED.memory, date = EXCLUDED.date, meta = EXCLUDED.meta, updated_at = EXCLUDED.updated_at,
-         embedding = CASE WHEN memories.memory = EXCLUDED.memory THEN memories.embedding ELSE NULL END
-       WHERE memories.memory IS DISTINCT FROM EXCLUDED.memory OR memories.date IS DISTINCT FROM EXCLUDED.date`}
-       RETURNING (xmax = 0) AS inserted`,
-      [persona, String(f.id), memory, factDate(f), JSON.stringify({ categories: f.categories || [], metadata: f.metadata || {} }), Date.now()],
-    );
-    if (rows[0]) rows[0].inserted ? added++ : changed++;
-  }
-  return { seen: facts.length, added, changed };
+  let added = 0, changed = 0, seen = 0;
+  // One page at a time: holding every fact of every persona at once ran the VM out
+  // of memory 5 min after boot (2026-11-27 9:45 AM ET).
+  const take = async (facts) => {
+    memoryRoom(); // throws when the server is short of memory: the copy stops, resumes next run
+    seen += facts.length;
+    for (const f of facts) {
+      const memory = String((f && f.memory) || '').trim();
+      if (!f || !f.id || !memory) continue;
+      if (serverOn && f.metadata && f.metadata.via === 'server') continue;
+      const { rows } = await d().db.query(
+        `INSERT INTO memories (persona, mem0_id, memory, date, meta, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $6)
+         ON CONFLICT (mem0_id) DO ${serverOn ? 'NOTHING' : `UPDATE SET memory = EXCLUDED.memory, date = EXCLUDED.date, meta = EXCLUDED.meta, updated_at = EXCLUDED.updated_at,
+           embedding = CASE WHEN memories.memory = EXCLUDED.memory THEN memories.embedding ELSE NULL END
+         WHERE memories.memory IS DISTINCT FROM EXCLUDED.memory OR memories.date IS DISTINCT FROM EXCLUDED.date`}
+         RETURNING (xmax = 0) AS inserted`,
+        [persona, String(f.id), memory, factDate(f), JSON.stringify({ categories: f.categories || [], metadata: f.metadata || {} }), Date.now()],
+      );
+      if (rows[0]) rows[0].inserted ? added++ : changed++;
+    }
+  };
+  const rest = await d().mem0.apiAll(persona, { max: Infinity, onPage: take });
+  if (rest && rest.length) await take(rest);
+  return { seen, added, changed };
+}
+
+// The copy never runs the server out of memory (2026-11-27: the VM went down 5 min
+// after boot, during the first copy). Under MEMORY_MIRROR_MIN_FREE_MB (400) free, or
+// the process past MEMORY_MIRROR_MAX_RSS_MB (900), the copy stops where it is; facts
+// are upserted, so the next run carries on.
+function memoryRoom() {
+  const os = require('os');
+  const freeMb = Math.round(os.freemem() / 1048576), rssMb = Math.round(process.memoryUsage().rss / 1048576);
+  const minFree = Number(process.env.MEMORY_MIRROR_MIN_FREE_MB) || 400, maxRss = Number(process.env.MEMORY_MIRROR_MAX_RSS_MB) || 900;
+  if (freeMb < minFree || rssMb > maxRss) throw new Error(`stopped to protect the server: ${freeMb} MB free, process at ${rssMb} MB`);
 }
 
 // Vectors for every fact that has none yet. -> count embedded
@@ -96,6 +114,7 @@ async function embedMissing({ max = 2000 } = {}) {
     const vecs = await embed(rows.map((r) => r.memory));
     if (!vecs || vecs.length !== rows.length) throw new Error('embeddings came back short');
     for (let i = 0; i < rows.length; i++) await setVector(rows[i].id, vecs[i]);
+    memoryRoom();
     done += rows.length;
   }
   return done;
@@ -105,6 +124,10 @@ async function tick() {
   if (String(process.env.MEMORY_MIRROR || '').toLowerCase() === 'off') return { skipped: 'MEMORY_MIRROR=off' };
   if (!d().mem0.mem0Enabled()) return { skipped: 'no MEM0_API_KEY: only the inputs are being saved' };
   const out = { personas: 0, seen: 0, added: 0, changed: 0, embedded: 0, failed: [] };
+  // Crash-loop breaker: marked while a copy runs, cleared when it ends. A mark left by
+  // a server that went down mid-copy is found at the next boot (bootCheck).
+  await d().setSetting('memory_mirror_running', String(Date.now())).catch(() => {});
+  try {
   for (const id of Object.keys(d().roster)) {
     try {
       const r = await mirrorPersona(id);
@@ -114,6 +137,7 @@ async function tick() {
   // A fact whose text changed lost its vector above; clear its indexed copy too.
   if (await vectorReady()) await d().db.query('UPDATE memories SET vec = NULL WHERE embedding IS NULL AND vec IS NOT NULL').catch(() => {});
   try { out.embedded = await embedMissing(); } catch (e) { out.failed.push(`vectors: ${e.message}`); }
+  } finally { await d().setSetting('memory_mirror_running', '').catch(() => {}); }
   if (out.failed.length) console.error(`memory mirror failed: ${out.failed.join('; ').slice(0, 400)}`);
   if (!d().embedKey()) out.note = 'no OPENAI_API_KEY: facts copied, search vectors wait';
   return out;
@@ -324,7 +348,12 @@ async function check() {
   let ok = true;
   for (const id of Object.keys(d().roster)) {
     let m0 = null;
-    try { m0 = (await d().mem0.apiAll(id, { max: Infinity })).filter((f) => f && f.id && String(f.memory || '').trim()); }
+    try {
+      m0 = [];
+      const keep = (fs) => { memoryRoom(); for (const f of fs) if (f && f.id && String(f.memory || '').trim()) m0.push({ id: f.id }); };
+      const rest = await d().mem0.apiAll(id, { max: Infinity, onPage: keep });
+      if (rest && rest.length) keep(rest);
+    }
     catch (e) { lines.push(`${id}: couldn't read Mem0 (${e.message})`); ok = false; continue; }
     const { rows } = await d().db.query("SELECT mem0_id, embedding IS NOT NULL AS v FROM memories WHERE persona = $1 AND origin = 'mem0'", [id]);
     const have = new Set(rows.map((r) => r.mem0_id));
@@ -358,7 +387,23 @@ async function memoryTag(name, arg, asked = '') {
 }
 const MEMORY_TAGS = new Set(['MEMORY_CHECK', 'MEMORY_ENGINE']);
 
+// At boot: a copy that was running when the server went down is the likely cause, so
+// the copy is switched off (his spoken switch `memory_mirror`, so he turns it back on
+// the usual way) and A.R.A. tells him. Never runs it again on its own.
+async function bootCheck() {
+  const mark = Number(await d().getSetting('memory_mirror_running').catch(() => 0)) || 0;
+  if (!mark) return { ok: true };
+  await d().setSetting('memory_mirror_running', '').catch(() => {});
+  await d().setSetting('switch_memory_mirror', 'off').catch(() => {});
+  const when = new Date(mark).toLocaleString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit' });
+  const msg = `⚠️ The server went down while it was copying memory from Mem0 (copy started ${when} ET), so I've switched the memory copy off to keep it from happening again. Mem0 is untouched and every persona's memory works as before. Say "turn the memory copy back on" once J.A.R.V.I.S. has looked at it.`;
+  console.error(`memory mirror failed: the server went down during a copy started ${when} ET; copy switched off`);
+  require('./loud').tellAra('memory-mirror-crash', msg).catch(() => {});
+  return { paused: true };
+}
+
 module.exports = {
+  bootCheck, memoryRoom,
   recordInput, embed, mirrorPersona, embedMissing, tick, status, EMBED_DIMS,
   engine, useServer, setEngine, search, all, extractOne, extractTick, kick, check, parseOps,
   MEMORY_TOOLS, MEMORY_TAGS, memoryTag, EXTRACT_SYSTEM,

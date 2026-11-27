@@ -53,7 +53,11 @@ async function onWireBrief(brief, { ask = null, send = null } = {}) {
     const fresh = got.stories.filter((s) => !before.includes(fp(s)));
     if (got.stories.length && !fresh.length) return { quiet: true, repeat: true };
     const text = `⚖️ **A.I.S.H.A. → A.R.A. — the politics, made simple**, Mr. Burrus.\n\n${got.body}`;
-    const spoken = `Aisha broke down the politics in the news: ${got.stories.slice(0, 3).join('; ') || 'one story'}. The full breakdown's in the chat.`;
+    // A.R.A. voices the whole breakdown like W.I.R.E.'s brief (owner, 2026-11-27: "she
+    // kinda just says here it is. it should be like the others"): her script pass gets
+    // the full text, sees it's A.I.S.H.A.'s, and catches him up on every story in her own
+    // words ("Aisha says…"), the numbers and names checked in code. The text is the same.
+    const spoken = text;
     const deliver = send || ((t, s) => require('./talonAlerts').sendFromAra(t, s, { from: 'aisha' }));
     await deliver(text, spoken);
     await setSetting('aisha_politics_seen', JSON.stringify([...new Set([...got.stories.map(fp), ...before])].slice(0, SEEN_MAX))).catch(() => {});
