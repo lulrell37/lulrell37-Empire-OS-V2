@@ -110,6 +110,8 @@ const SUSTAIN_MS=700; // speech still going after this is him, not a blip
 let pausedForNoise=false,noiseTimer=null;
 // Real words, not a cough / "mm" / a transcription of noise ("[noise]", "…").
 const realWords=(t)=>wordsOf(String(t||'').replace(/\[[^\]]*\]|\([^)]*\)/g,' ')).filter(w=>w.length>1&&!/^(mm+|hm+|uh+|um+|ah+|oh+|eh+)$/.test(w)).length>=1;
+let respSeq=0;      // answers started this call
+let overResp=null;  // the answer playing when he started talking
 let bargedAt=0; // a barge-in just confirmed: the transcript that follows is his, echo or not
 function confirmBarge(onState){
   suspect=false;clearTimeout(bargeTimer);bargedAt=Date.now();
@@ -435,6 +437,7 @@ export async function startAraLive(opts={}){
           // Grok only sends his words after he stops, so length decides: still talking
           // after SUSTAIN_MS = him (she stops); stopped sooner = a blip (she resumes, on
           // speech_stopped). Owner, 2026-11-27: "it thinks me talking is noise".
+          if(herSpeaking())overResp=respSeq; // the answer he talked over
           if(herSpeaking()&&callAudio){
             pausedForNoise=true;
             callAudio.pauseAll().catch(()=>{});
@@ -483,6 +486,7 @@ export async function startAraLive(opts={}){
             if(!herSpeaking())onState?.('listening');
             break;
           }
+          if(!t)break; // no transcript text: nothing to judge, nothing cancelled
           // A "turn" with no real words was noise: cancel any reply to it; if she was
           // paused for it, she carries on.
           if(!realWords(t)){
@@ -494,9 +498,11 @@ export async function startAraLive(opts={}){
             if(pausedForNoise){pausedForNoise=false;clearTimeout(noiseTimer);callAudio?.resumeAll().catch(()=>{});}
             break;
           }
-          // His words, whenever they land: if she's still talking, she stops.
+          // His words, whenever they land, stop the answer he talked over: only that one
+          // (a new answer to him has often started by now and must not be cut).
           if(pausedForNoise){pausedForNoise=false;clearTimeout(noiseTimer);}
-          if(suspect||herSpeaking())confirmBarge(onState);
+          if(suspect||(overResp!=null&&overResp===respSeq&&herSpeaking()))confirmBarge(onState);
+          overResp=null;
           if(t){onUserText?.(fixNames(t),true);lastHeard=fixNames(t);}
           break;
         }
@@ -510,7 +516,11 @@ export async function startAraLive(opts={}){
           }catch{}
           break;
         case'response.created':
-          if(ignoreNext){ignoreResp=event.response?.id||'?';ignoreNext=false;}
+          if(ignoreNext){ignoreResp=event.response?.id||'?';ignoreNext=false;break;}
+          respSeq++;
+          // A new answer: whatever's still playing of the last one stops, the new one plays.
+          if(herSpeaking()){cancelAll();stopPlayback();pausedForNoise=false;clearTimeout(noiseTimer);}
+          respTranscript='';
           break;
         case'response.output_audio_transcript.delta':
           if(ignoreResp&&(event.response_id===ignoreResp||ignoreResp==='?'))break; // an answer to her own echo
@@ -594,7 +604,7 @@ function startLiveUpdates(socket,callStart,mood0,withMood){
 export async function stopAraLive(){
   for(const t of liveTimers)clearInterval(t);
   liveTimers=[];lastHeard='';
-  suspect=false;ignoreNext=false;ignoreResp=null;clearTimeout(bargeTimer);herRecent=[];held=[];heardAt=0;echoLevel=0;loudRun=0;pausedForNoise=false;clearTimeout(noiseTimer);
+  suspect=false;ignoreNext=false;ignoreResp=null;clearTimeout(bargeTimer);herRecent=[];held=[];heardAt=0;echoLevel=0;loudRun=0;pausedForNoise=false;clearTimeout(noiseTimer);overResp=null;
   const socket=ws;ws=null;
   if(streamStarted){try{LiveAudioStream.stop();}catch{}streamStarted=false;}
   try{LiveAudioStream.removeAllListeners?.('data');}catch{}
