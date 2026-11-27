@@ -99,8 +99,11 @@ function authQuery(sender) {
 
 // Newest email only: poll Gmail until one from the site, sent after `since`, holds a code or link.
 // deps.list(q) -> [ids newest first]; deps.read(id) -> { id, from, subject, text, urls, internalDate }.
-async function waitForEmailAuth({ sender, since = Date.now(), timeoutMs = WAIT_MS, pollMs = POLL_MS, deps, signal = null, sleep = (ms) => new Promise((r) => { const t = setTimeout(done, ms); function done() { clearTimeout(t); if (signal) signal.removeEventListener('abort', done); r(); } if (signal) signal.addEventListener('abort', done, { once: true }); }), now = Date.now } = {}) {
+// exclude(url): a link already opened (spent) is skipped and the wait goes on for a newer email.
+async function waitForEmailAuth({ sender, since = Date.now(), timeoutMs = WAIT_MS, pollMs = POLL_MS, deps, signal = null, exclude = null, sleep = (ms) => new Promise((r) => { const t = setTimeout(done, ms); function done() { clearTimeout(t); if (signal) signal.removeEventListener('abort', done); r(); } if (signal) signal.addEventListener('abort', done, { once: true }); }), now = Date.now } = {}) {
   const g = deps || defaultDeps();
+  // Default: skip any one-time link a browser already opened (browserAgent's spent list).
+  if (!exclude && !deps) exclude = (u) => { try { return require('./browserAgent').spent(u); } catch { return false; } };
   const start = now();
   const after = Math.max(0, Math.floor(since / 1000) - 5);
   const q = `${authQuery(sender)} after:${after}`;
@@ -114,7 +117,8 @@ async function waitForEmailAuth({ sender, since = Date.now(), timeoutMs = WAIT_M
       if (m && (!m.internalDate || m.internalDate >= since - 5000)) {
         const url = pickAuthLink(m.urls || extractLinks(m.text));
         const code = extractCode(`${m.subject || ''}\n${m.text || ''}`, { strict: !!url });
-        if (code || url) return { ok: true, code, url, id: m.id || id, from: m.from, subject: m.subject };
+        if (url && exclude && exclude(url)) { tried.add(id); } // the spent link: wait for the new one
+        else if (code || url) return { ok: true, code, url, id: m.id || id, from: m.from, subject: m.subject };
         tried.add(id); // read it, nothing usable; wait for a newer one
       }
     }
