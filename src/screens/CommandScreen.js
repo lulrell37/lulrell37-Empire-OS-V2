@@ -492,9 +492,23 @@ export default function CommandScreen({navigation,route}){
 
   async function loadPics(){try{const pics=await getAllPersonaPics();setPersonaPics(pics);}catch{}}
 
+  // The shared thread first (server/routes/chat.js: the same conversation Telegram
+  // has, app and Telegram turns together); the phone's own copy only when no server
+  // answers. One source at a time, so nothing shows twice.
   async function loadHistory(persona){
     const h=await getMessages(persona,40);
-    setMessages(h.reverse().map(m=>({id:m.id.toString(),role:m.role,content:m.content,persona:m.persona})));
+    const local=h.reverse().map(m=>({id:m.id.toString(),role:m.role,content:m.content,persona:m.persona}));
+    setMessages(local);
+    try{
+      const{fetchThread}=await import('../services/sharedChat');
+      const t=await fetchThread(persona,40);
+      if(!t||!t.length||activePersonaRef.current!==persona)return;
+      setMessages(prev=>{
+        // A message he sent while this loaded isn't on the server yet: keep it.
+        const pending=prev.slice(local.length);
+        return [...t.map(m=>({id:'s'+m.id,role:m.role,content:m.content,persona})),...pending];
+      });
+    }catch{}
   }
   // Is Mr. Burrus actually looking at this persona face-to-face right now? If
   // not — he backed out to the office overview, switched to a different desk,

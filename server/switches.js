@@ -38,6 +38,7 @@ const SWITCHES = {
   morning_brief: ['A.R.A.\'s morning brief', 'morning brief'],
   daily_briefing: ['the 5:10 AM daily briefing', 'daily briefing'],
   council: ['the morning council meeting', 'council meeting'],
+  chat_backup: ['the nightly conversation backup to Drive', 'backup conversation backup chat backup'],
   day_nudge: ['A.R.A.\'s day nudges (11, 3, 7)', 'day nudges nudge'],
   nudges: ['the 30-minute nudges', 'nudges reminders nudge cycle'],
   word_reminder: ['the word / verse reminders', 'word of the day verse word reminder'],

@@ -260,8 +260,9 @@ ${personaId==='ara'?` EMAIL: [READ_EMAIL] | [SEND_EMAIL: to | subject | body] (M
   if(personaId==='stephanie'){
     try{const{courseContext}=await import('./stephanieCourse');sys+=await courseContext();}catch{}
   }
-  const lastUser=[...convo].reverse().find(m=>m?.role==='user'&&m?.content);
-  const memQuery=lastUser?.content||'';
+  // Look before talking: his last few messages, so a short follow-up ("what about
+  // that?") still searches on the topic it follows (owner, 2026-11-27).
+  const memQuery=[...convo].reverse().filter(m=>m?.role==='user'&&typeof m?.content==='string'&&m.content).slice(0,3).reverse().map(m=>m.content.slice(0,600)).join('\n');
   // Semantic recall from Mem0 — a short list of the facts relevant to what
   // Mr. Burrus just said (Mem0 extracts + dedupes server-side). When Mem0 has
   // hits, the local table only needs to top up pinned notes + the last few

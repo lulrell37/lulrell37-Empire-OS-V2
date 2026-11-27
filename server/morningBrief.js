@@ -402,15 +402,27 @@ async function buildBrief() {
 // a reference sheet (hour-by-hour table, five news desks, X trends) — read verbatim it's a
 // ten-minute recital, so the voice note is her spoken version of the same brief:
 // every section, in order, summarized the way she'd say it out loud.
-async function spokenScript(text) {
+// What they've been talking about, for the brief (owner, 2026-11-27): the last day
+// of his chat with her and her memory on it, so the brief ties today to it.
+async function briefMemory(text) {
+  const { recall, recallBlock } = require('./recall');
+  const { query } = require('./db');
+  const { rows } = await query("SELECT content FROM tg_messages WHERE persona = 'ara' AND role = 'user' AND ts > $1 ORDER BY id DESC LIMIT 12",
+    [Date.now() - 36 * 3600e3]).catch(() => ({ rows: [] }));
+  const asked = rows.map((r) => String(r.content || '').slice(0, 300)).join('\n');
+  const r = await recall('ara', asked || String(text).slice(0, 1500), { recent: 10, facts: 10, chats: 0, ms: 8000 });
+  return recallBlock(r, 'ara', { title: 'WHAT YOU AND MR. BURRUS HAVE BEEN TALKING ABOUT' });
+}
+
+async function spokenScript(text, past = '') {
   // Her own words, so Grok (her model) writes it — never Claude. Her full voice
   // direction and script rules, then the brief's own job.
   const { ARA_VOICE, ARA_SCRIPT } = require('./araVoice');
   let timer;
   const timeout = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('brief script timed out')), 90000); });
   return Promise.race([timeout, require('./llm').chatAs('xai', 'grok-4',
-    `${ARA_VOICE}\n\nYou are A.R.A., Mr. Burrus's personal assistant, turning his written morning brief into what you'll say out loud as a voice note. Stay fully in her voice — sultry, seductive, slightly flirty and a touch unhinged (the odd cheeky line) — start to finish, even through the dry parts: you're telling him about his morning, not reading a report. Plain spoken sentences only — no lists, symbols, emoji or headings. About 3 to 4 minutes (450-600 words). Keep the brief's order and cover every section: the date; the weather as a story of the day (high and low, how it changes morning to evening, when rain is most likely) rather than every hour; each calendar event with its time; how many unread emails and the ones that matter; the open threads — the one or two things he started and set aside that matter most, with the next step; the top one or two stories from each news desk; the gold watch — every gold-moving event today with its time and what a hot or soft number would do to gold (or that it is a quiet day for gold); T.A.L.O.N.'s market read — where he predicts gold and Bitcoin head next with his levels, and how our open positions look; the three or four most interesting things trending on X and why; where he left off with S.T.E.P.H.A.N.I.E. — the week's topic and the lesson he's on; then the word of the day with its meaning and the example sentence, the verse read in full with its reference, and the fact. Use only what is in the brief — never add facts. Write the emotion in as lowercase performance cues in square brackets every few sentences, never stacked — [husky] [teasing] [softly] [laughs] [giggles] [sighs] [excited] — never [whispers] or any whispering — and use ... for lingering pauses.\n\n${ARA_SCRIPT}`,
-    text,
+    `${ARA_VOICE}\n\nYou are A.R.A., Mr. Burrus's personal assistant, turning his written morning brief into what you'll say out loud as a voice note. Stay fully in her voice — sultry, seductive, slightly flirty and a touch unhinged (the odd cheeky line) — start to finish, even through the dry parts: you're telling him about his morning, not reading a report. Plain spoken sentences only — no lists, symbols, emoji or headings. About 3 to 4 minutes (450-600 words). Keep the brief's order and cover every section: the date; the weather as a story of the day (high and low, how it changes morning to evening, when rain is most likely) rather than every hour; each calendar event with its time; how many unread emails and the ones that matter; the open threads — the one or two things he started and set aside that matter most, with the next step; the top one or two stories from each news desk; the gold watch — every gold-moving event today with its time and what a hot or soft number would do to gold (or that it is a quiet day for gold); T.A.L.O.N.'s market read — where he predicts gold and Bitcoin head next with his levels, and how our open positions look; the three or four most interesting things trending on X and why; where he left off with S.T.E.P.H.A.N.I.E. — the week's topic and the lesson he's on; then the word of the day with its meaning and the example sentence, the verse read in full with its reference, and the fact. Use only what is in the brief — never add facts. You also have your memory of what you two have been talking about (below the brief): where something in the brief touches it — a story he asked about, an event or thread you discussed, a level he was watching — say so in a few words ("that meeting you were stressing about yesterday is at 2"), so it sounds like you remember him; never present something you two already discussed as new. Don't add other facts from memory. Write the emotion in as lowercase performance cues in square brackets every few sentences, never stacked — [husky] [teasing] [softly] [laughs] [giggles] [sighs] [excited] — never [whispers] or any whispering — and use ... for lingering pauses.\n\n${ARA_SCRIPT}`,
+    past ? `${text}\n\n━━━━━━━━━━\n\n${past}` : text,
     { maxTokens: 1800, fallback: false },
   )]).finally(() => clearTimeout(timer));
 }
@@ -461,7 +473,8 @@ async function runMorningBrief({ force = false } = {}) {
   const text = await buildBrief();
   // Voice note first, then the full text — same order as her normal replies.
   // A voice failure never holds up the text.
-  const script = await spokenScript(text).catch((e) => { console.error('morning brief script failed:', e.message); return ''; });
+  const past = await briefMemory(text).catch(() => '');
+  const script = await spokenScript(text, past).catch((e) => { console.error('morning brief script failed:', e.message); return ''; });
   const voiced = await sendVoice(ara, telegram.OWNER_ID, script || fallbackScript(text), 'Give me my morning brief.', !!script);
   await ara.sendMessage(telegram.OWNER_ID, text, { plain: true, remember: true });
   // Into A.R.A.'s Telegram history, so a reply ("tell me more about the 2nd AP

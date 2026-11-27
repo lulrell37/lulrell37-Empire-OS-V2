@@ -55,6 +55,7 @@ app.use('/trade', auth, json, require('./routes/trade'));
 app.use('/council', auth, json, require('./routes/council'));
 app.use('/stephanie', auth, json, require('./routes/stephanie'));
 app.use('/shared', auth, json, require('./routes/shared')); // the app's copy of Telegram's switches, news, quiz and follow-through
+app.use('/chat', auth, json, require('./routes/chat')); // one thread per persona, app + Telegram; desk alerts split out for the activity tab
 app.use('/jarvis', auth, json, require('./routes/jarvis'));
 app.use('/clips', auth, json, require('./routes/clips'));
 app.use('/browse', auth, json, require('./routes/browse'));
@@ -159,6 +160,7 @@ db.init()
     startSiteDeskCron();
     startOpenThreadsCron();
     startOwnerProfileCron();
+    startChatBackupCron();
     startDayNudgeCron();
     startMoneyWatchCron();
     startScoutOutreachCron();
@@ -201,6 +203,14 @@ function startOpenThreadsCron() {
   const ot = require('./openThreads');
   schedule('open_threads', '15 */3 * * *', () => ot.tick().catch((e) => console.error('open threads failed:', e.message)));
   console.log('open threads cron scheduled (every 3h)');
+}
+
+// Every conversation, backed up to his Drive nightly (server/chatBackup.js).
+function startChatBackupCron() {
+  if (String(process.env.CHAT_BACKUP || '').toLowerCase() === 'off') return console.log('chat backup cron disabled (CHAT_BACKUP=off)');
+  const cb = require('./chatBackup');
+  schedule('chat_backup', '10 3 * * *', () => cb.tick().then((r) => r.backedUp && console.log('chat backup:', JSON.stringify(r))).catch((e) => console.error('chat backup failed:', e.message)), { timezone: 'America/New_York' });
+  console.log('chat backup cron scheduled (3:10 AM ET)');
 }
 
 // How Mr. Burrus works: preferences and corrections learned for every persona.

@@ -26,7 +26,7 @@ const LOOP_WINDOW_MS = 30 * 60e3;
 // Jobs that run hourly or less often: one failure means the run is lost until the
 // next one hours later, so it is never a blip to wait out (owner, 2026-11-22:
 // nothing we build breaks quietly). Names as their cron logs them in index.js.
-const SCHEDULED = new Set(['open threads', 'owner profile', 'day nudge', 'money watch', 'daily briefing', 'morning brief', 'word reminder', 'council meeting', 'trade recap', 'talon market update', 'econ desk', 'stock desk', 'instagram watch', 'woke x stories', 'monday scripts', 'haven health', 'aisha politics']);
+const SCHEDULED = new Set(['open threads', 'owner profile', 'day nudge', 'money watch', 'daily briefing', 'morning brief', 'word reminder', 'council meeting', 'trade recap', 'talon market update', 'econ desk', 'stock desk', 'instagram watch', 'woke x stories', 'monday scripts', 'haven health', 'aisha politics', 'chat backup']);
 const PROFILE_WARN = 150;
 let lastRun = 0;
 

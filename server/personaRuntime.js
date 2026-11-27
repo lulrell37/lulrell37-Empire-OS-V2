@@ -243,12 +243,16 @@ function contextBlock(ctx, { trading = false } = {}) {
 // ([REMEMBER], in the app or here) and his recent conversations with her in the
 // app — the app's own chat isn't synced, but every exchange there lands in
 // persona_memory, so this is how "what we talked about earlier" carries over.
-async function memoryBlock(persona, userText = '') {
+async function memoryBlock(persona, userText = '', { also = [], skipNewest = HISTORY_TURNS, recent: lastDay = 0, followUp = true } = {}) {
   const now = Date.now();
-  // Mem0's extracted facts relevant to what he just said — the same store the
-  // app reads, so anything learned in either place shows up here.
-  const facts = (await mem0Search(persona, userText, { topK: 18 }))
-    .filter((f) => String(f.memory || '').trim().length > 2).map(mem0Line);
+  // Look before talking (server/recall.js): Mem0's facts on what he just said (and
+  // what it follows, so a short "what about that?" still finds the topic), plus his
+  // older Telegram messages with this persona on the same thing, beyond the history
+  // the turn loads.
+  const { recall, recallBlock } = require('./recall');
+  const r = await recall(persona, userText, { also, skipNewest, recent: lastDay, followUp, facts: 18, chats: 6 });
+  const facts = r.facts.filter((f) => f.who === persona).map((f) => f.line);
+  const looked = recallBlock({ facts: r.facts.filter((f) => f.who !== persona), chats: r.chats, recent: r.recent }, persona);
   const rows = (await syncedRows('persona_memory').catch(() => []))
     .filter((r) => r.persona === persona)
     .sort((a, b) => (Number(b.created_at) || 0) - (Number(a.created_at) || 0));
@@ -270,6 +274,7 @@ ${pinned.map((r) => `  • ${String(r.content).replace(/^PINNED:\s*/, '').replac
   if (recent.length) {
     L.push(`[RECENT CONVERSATIONS WITH HIM IN THE APP (oldest first) — the same you, just a different screen. If he refers to something not in this Telegram thread, it's probably here; [MEMORY_QUERY] reaches further back:\n${recent.map((r) => `  (${r.created_at ? shortMomentET(Number(r.created_at)) : r.date || ''}) ${String(r.content || '').replace(/\s+/g, ' ').slice(0, 600)}`).join('\n')}\n]`);
   }
+  if (looked) L.push(looked);
   return L.join('\n\n');
 }
 
@@ -1057,9 +1062,13 @@ function talkingTo(id, from, message = '') {
 
 async function relayToPersona(id, message, { from = 'ara', convo = '', depth = 1, sink = null, asked = '', chain = [] } = {}) {
   const p = ROSTER[id];
-  const [ctx, gs] = await Promise.all([
+  // A hand-off looks at memory too (owner, 2026-11-27): what this persona and he
+  // already said on it, the sender's memory of it, and the last day of their chat,
+  // so something they've talked about isn't treated as new.
+  const [ctx, gs, mem] = await Promise.all([
     gatherContext().catch(() => null),
     googleStatus().catch((e) => ({ ok: false, error: e.message })),
+    memoryBlock(id, `${asked ? `${asked}\n` : ''}${message}`, { also: [from], skipNewest: 0, recent: 8, followUp: false }).catch(() => ''),
   ]);
   const sys = [
     await relaySystem(id, from),
@@ -1075,6 +1084,7 @@ async function relayToPersona(id, message, { from = 'ara', convo = '', depth = 1
     googleLine(gs),
     accountFact(id, ctx),
     ctx ? `[EMPIRE CONTEXT:\n${contextBlock(ctx, { trading: id === 'ara' })}\n]` : '',
+    mem,
     convo ? `[THE CONVERSATION YOU'RE BEING PULLED INTO — Mr. Burrus and ${(ROSTER[from] && ROSTER[from].name) || from}, most recent last:\n${convo}\n]` : '',
     `[THE CURRENT MOMENT — ${momentET()} (America/New_York).]`,
     require('./holidays').holidayLine(),

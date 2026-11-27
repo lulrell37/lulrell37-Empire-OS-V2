@@ -4,11 +4,15 @@
 //            shows: queue jobs, auto-agent cycles, relays, deep research)
 //   board  — the persona's own panel, if it has one: T.A.L.O.N. trades,
 //            S.C.O.U.T. pipeline, R.O.G.U.E. clips, J.A.R.V.I.S. / Firm builds
+//   DESK ALERTS — everything a desk or teammate sent him through this persona on
+//            Telegram (trade alerts, W.I.R.E., H.A.V.E.N., briefs…), from the server's
+//            shared thread (sharedChat.js); kept out of the chat itself. Tap to open.
 //   RECENT — a rolled-up log of this persona's finished work (deep research,
 //            watch jobs, saved notes) from the last few days
 // These boards used to stack on top of the chat; they live here instead.
 import React,{useState,useEffect,useCallback}from 'react';
-import{View,Text,StyleSheet,ScrollView}from 'react-native';
+import{View,Text,StyleSheet,ScrollView,TouchableOpacity}from 'react-native';
+import{fetchAlerts}from '../../services/sharedChat';
 import{TRADER_ID}from '../../services/tradeJournal';
 import{getPersonaActivity}from '../../services/database';
 import TradePanel from './TradePanel';
@@ -50,6 +54,22 @@ export default function ActivityPane({persona,activity=[],active,project,build={
     return()=>clearInterval(t);
   },[load,active]);
 
+  // null = no server reachable; [] = none yet.
+  const[alerts,setAlerts]=useState(null);
+  const[showAlerts,setShowAlerts]=useState(true);
+  const[openAlert,setOpenAlert]=useState(null);
+  const loadAlerts=useCallback(()=>{
+    if(!id)return;
+    fetchAlerts(id,30).then(a=>{if(a)setAlerts(a);}).catch(()=>{});
+  },[id]);
+  useEffect(()=>{
+    setAlerts(null);setOpenAlert(null);
+    loadAlerts();
+    if(!active)return;
+    const t=setInterval(loadAlerts,30000);
+    return()=>clearInterval(t);
+  },[loadAlerts,active]);
+
   return(
     <ScrollView style={{flex:1}} contentContainerStyle={s.pad} showsVerticalScrollIndicator={false}>
       <Text style={[s.hdr,{color:col}]}>{(persona?.name||'').replace(/\./g,'')} · ACTIVITY</Text>
@@ -83,6 +103,34 @@ export default function ActivityPane({persona,activity=[],active,project,build={
       {id==='jarvis'&&<BuildPanel active={active} onMerge={build.onMerge} onCancel={build.onCancel} onDelete={build.onDelete} filter={build.jarvisFilter}/>}
       {id==='ara'&&project&&<BuildPanel active={active} title="FIRM BUILD" accent="#00CED1" onMerge={build.onMerge} onCancel={build.onCancel} onDelete={build.onDelete} filter={build.firmFilter}/>}
       <WatchPanel active={active}/>
+
+      {(alerts?.length>0||id==='ara')&&<>
+        <TouchableOpacity onPress={()=>setShowAlerts(v=>!v)} activeOpacity={0.7}>
+          <Text style={[s.section,{marginTop:14}]}>DESK ALERTS{alerts?.length?` · ${alerts.length}`:''}  {showAlerts?'▾ hide':'▸ show'}</Text>
+        </TouchableOpacity>
+        {showAlerts&&(alerts==null?(
+          <Text style={s.idle}>Server not reachable — alerts show here once it is.</Text>
+        ):alerts.length>0?(
+          <View style={s.list}>
+            {alerts.map(a=>{
+              const open=openAlert===a.id;
+              const plain=String(a.content).replace(/\*\*/g,'').replace(/<[^>]+>/g,'');
+              return(
+                <TouchableOpacity key={a.id} activeOpacity={0.75} onPress={()=>setOpenAlert(open?null:a.id)} style={s.recentRow}>
+                  <Text style={s.recentIcon}>{a.from?'↪':'•'}</Text>
+                  <View style={{flex:1}}>
+                    {a.from?<Text style={[s.recentSub,{color:col,marginTop:0}]}>{a.from.toUpperCase()}</Text>:null}
+                    <Text style={s.recentT} numberOfLines={open?undefined:2}>{plain}</Text>
+                  </View>
+                  <Text style={s.recentAgo}>{ago(a.ts)}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        ):(
+          <Text style={s.idle}>No desk alerts yet.</Text>
+        ))}
+      </>}
 
       <Text style={[s.section,{marginTop:14}]}>RECENT</Text>
       {recent.length>0?(

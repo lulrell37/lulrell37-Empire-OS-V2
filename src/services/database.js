@@ -314,7 +314,13 @@ async function ensureBusinessTargets(){
     await db.runAsync('INSERT OR IGNORE INTO business_targets(business,target,week_goal,sort_order) VALUES(?,?,?,?)',[b.name,b.target,b.weekGoal,i]);
   }
 }
-export async function saveMessage(persona,role,content,mode='direct',unread=0){await db.runAsync('INSERT INTO messages(persona,role,content,mode,timestamp,unread) VALUES(?,?,?,?,?,?)',[persona,role,content,mode,Date.now(),unread?1:0]);}
+// Direct-chat messages also go into the server's shared thread (sharedChat.js), the
+// one Telegram reads, so both places hold one conversation. The phone keeps its copy
+// for the unread badge and for when no server is reachable.
+export async function saveMessage(persona,role,content,mode='direct',unread=0){
+  await db.runAsync('INSERT INTO messages(persona,role,content,mode,timestamp,unread) VALUES(?,?,?,?,?,?)',[persona,role,content,mode,Date.now(),unread?1:0]);
+  if(mode==='direct'&&typeof content==='string')import('./sharedChat').then(m=>m.pushMessage(persona,role,content)).catch(()=>{});
+}
 export async function getMessages(persona,limit=50){return await db.getAllAsync('SELECT * FROM messages WHERE persona=? ORDER BY timestamp DESC LIMIT ?',[persona,limit]);}
 // A reply that landed while Mr. Burrus had already left that persona's orb —
 // zoomed out, switched to another orb, or gone back to the city — is saved

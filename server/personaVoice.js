@@ -223,8 +223,20 @@ async function araScript(text, userText, { relay = false } = {}) {
   // Capped: Telegram sends her text after the voice note, so a slow script
   // mustn't hold the reply up — past 25s (45s for a long message) she voices
   // the reply as written.
+  // Something passed to her (a desk alert, a teammate's message): she looks at her
+  // memory first, so a topic they've already talked about is picked up, not
+  // announced as new (owner, 2026-11-27). Her own replies already looked.
+  let past = '';
+  if (relay || who) {
+    const { recall, recallBlock } = require('./recall');
+    const { resolvePersonaId } = require('./personas');
+    const from = who ? resolvePersonaId(who) : null;
+    const r = await recall('ara', text, { also: from ? [from] : [], recent: 6, facts: 8, chats: 4, ms: 5000 });
+    past = recallBlock(r, 'ara', { title: 'YOUR MEMORY — WHAT YOU AND MR. BURRUS ALREADY SAID THAT TOUCHES THIS' });
+    if (past) past = `${past}\n(Use that only to connect it to what you two talked about, in a few words; the facts you say come from the message.)\n\n`;
+  }
   const write = (api, model) => timed(require('./llm').chatAs(api, model, system,
-    [{ role: 'user', content: `${userText ? `Mr. Burrus just said: "${String(userText).slice(0, 1500)}"\n\n` : ''}${relayHint(text, relay)}${araLongHint(text)}What you want to get across (notes, not a script):\n${text}` }],
+    [{ role: 'user', content: `${userText ? `Mr. Burrus just said: "${String(userText).slice(0, 1500)}"\n\n` : ''}${past}${relayHint(text, relay)}${araLongHint(text)}What you want to get across (notes, not a script):\n${text}` }],
     { maxTokens: long ? 2200 : 1200, fallback: false }), Math.min(long ? 45000 : 25000, left()));
   const clean = (out) => String(out || '').replace(/\[[A-Z][A-Z0-9_]*(?::[^\]]*)?\]/g, '').replace(/[*#`_]/g, '').trim();
   // Her own reply can be voiced as written. A relay can't, so it gets a second writer.
