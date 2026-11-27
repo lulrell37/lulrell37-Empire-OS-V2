@@ -40,6 +40,21 @@ function mem0Line(f) {
 
 const headers = (k) => ({ Authorization: `Token ${k}`, 'content-type': 'application/json', accept: 'application/json' });
 
+const MEM0_PIECE = 12000;
+function splitForMem0(t, max = MEM0_PIECE) {
+  const out = [];
+  let rest = String(t);
+  while (rest.length > max) {
+    const win = rest.slice(0, max);
+    let cut = Math.max(win.lastIndexOf('\n'), win.lastIndexOf('. '));
+    if (cut < max * 0.5) cut = max - 1;
+    out.push(rest.slice(0, cut + 1).trim());
+    rest = rest.slice(cut + 1);
+  }
+  if (rest.trim()) out.push(rest.trim());
+  return out;
+}
+
 // Store one exchange. Fire-and-forget, never throws.
 async function mem0Remember(personaId, text, meta = {}) {
   const k = key();
@@ -47,15 +62,21 @@ async function mem0Remember(personaId, text, meta = {}) {
   // The server's own copy first (server/memoryStore.js), so nothing exists only at Mem0.
   require('./memoryStore').recordInput(personaId, t, meta);
   if (!k || !personaId || !t) return;
-  try {
-    const r = await fetch(`${BASE}/v3/memories/add/`, {
-      method: 'POST',
-      headers: headers(k),
-      body: JSON.stringify({ user_id: personaId, messages: [{ role: 'user', content: t.slice(0, 12000) }], metadata: { app: 'empire-os', date: today(), ...meta } }),
-    });
-    if (!r.ok) console.warn(`mem0: add ${r.status}: ${(await r.text()).slice(0, 160)}`);
-  } catch (e) {
-    console.warn(`mem0: add failed: ${e.message}`);
+  // Long text goes in as several adds, never cut (owner, 2026-11-27: "I don't want
+  // anything left out"): pieces of up to 12,000 characters, split at a line or
+  // sentence end, each marked part i of n.
+  const parts = splitForMem0(t);
+  for (let i = 0; i < parts.length; i++) {
+    try {
+      const r = await fetch(`${BASE}/v3/memories/add/`, {
+        method: 'POST',
+        headers: headers(k),
+        body: JSON.stringify({ user_id: personaId, messages: [{ role: 'user', content: parts.length > 1 ? `(part ${i + 1} of ${parts.length})\n${parts[i]}` : parts[i] }], metadata: { app: 'empire-os', date: today(), ...meta, ...(parts.length > 1 ? { part: i + 1, parts: parts.length } : {}) } }),
+      });
+      if (!r.ok) console.warn(`mem0: add ${r.status}: ${(await r.text()).slice(0, 160)}`);
+    } catch (e) {
+      console.warn(`mem0: add failed: ${e.message}`);
+    }
   }
 }
 
@@ -120,4 +141,4 @@ async function mem0All(personaId, { max = 2000 } = {}) {
   return out.slice(0, max).sort((a, b) => when(b).localeCompare(when(a)));
 }
 
-module.exports = { mem0Enabled, mem0Remember, mem0Search, mem0All, mem0Line, mem0Health };
+module.exports = { splitForMem0, mem0Enabled, mem0Remember, mem0Search, mem0All, mem0Line, mem0Health };

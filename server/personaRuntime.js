@@ -1243,6 +1243,29 @@ async function tgMatches(persona, question) {
   return `TELEGRAM MESSAGES MATCHING THE QUESTION (newest first, full text):\n${rows.map((r) => `[${shortMomentET(Number(r.ts))}] ${r.role === 'user' ? 'Mr. Burrus' : who}: ${String(r.content).slice(0, 2500)}`).join('\n\n')}`;
 }
 
+// A persona's whole Mem0 history for a recall question, fitted to `budget` characters
+// without losing the old ones that matter: facts from the dates or months the
+// question names and facts sharing its words go in first, then the rest newest
+// first. When all of it fits, all of it goes in.
+function factsFor(everything, question, days = [], budget = 60000) {
+  const lines = everything.map((h) => `- ${mem0Line(h)}`);
+  if (lines.join('\n').length <= budget) return lines.join('\n');
+  const q = String(question || '').toLowerCase();
+  const months = MONTHS.map((m, i) => (q.includes(m) ? String(i + 1).padStart(2, '0') : null)).filter(Boolean);
+  const words = [...new Set(q.match(/[a-z0-9]{4,}/g) || [])].filter((w) => !RECALL_STOP.has(w) && !MONTHS.includes(w));
+  const score = (line) => {
+    const date = (line.match(/^- \((\d{4}-\d{2}-\d{2})\)/) || [])[1] || '';
+    const l = line.toLowerCase();
+    return (days.includes(date) ? 10 : 0) + (months.includes(date.slice(5, 7)) ? 5 : 0) + words.filter((w) => l.includes(w)).length;
+  };
+  const order = lines.map((l, i) => ({ l, i, s: score(l) })).sort((a, b) => b.s - a.s || a.i - b.i);
+  const keep = new Set();
+  let used = 0;
+  for (const o of order) { if (used + o.l.length + 1 > budget) continue; keep.add(o.i); used += o.l.length + 1; }
+  const left = lines.length - keep.size;
+  return `${lines.filter((_, i) => keep.has(i)).join('\n')}${left ? `\n(${left} older facts not related to the question left out of this view for length; they are still stored, ask about them by date or topic)` : ''}`;
+}
+
 async function memoryQuery(question, persona = 'ara') {
   const all = (await syncedRows('persona_memory').catch(() => []))
     .filter((r) => r.persona === persona)
@@ -1253,7 +1276,7 @@ async function memoryQuery(question, persona = 'ara') {
   const days = recallDays(question);
   const [hits, everything, day, tgHits] = await Promise.all([
     mem0Search(persona, question, { topK: 60, threshold: 0.01 }),
-    mem0All(persona),
+    mem0All(persona, { max: Infinity }), // every fact, oldest included
     dayTranscript(persona, days, all),
     days.length ? '' : tgMatches(persona, question),
   ]);
@@ -1261,7 +1284,7 @@ async function memoryQuery(question, persona = 'ara') {
   if (!rows.length && !hits.length && !everything.length && !day && !tgHits) return 'No stored memories yet.';
   const m0 = hits.map((h) => `- ${mem0Line(h)}`).join('\n');
   const span = (xs) => (xs.length ? `${mem0Line(xs[xs.length - 1]).slice(1, 11)} → ${mem0Line(xs[0]).slice(1, 11)}` : 'none');
-  const history = everything.map((h) => `- ${mem0Line(h)}`).join('\n');
+  const history = factsFor(everything, question, days, 60000);
   const corpus = ((day ? `${day}\n\n` : '') + (tgHits ? `${tgHits.slice(0, 30000)}\n\n` : '') + (m0 ? `MEM0 — BEST MATCHES FOR THE QUESTION (dated):\n${m0}\n\n` : '')
     + (history ? `MEM0 — EVERYTHING YOU KNOW, newest first (${everything.length} memories, ${span(everything)}):\n${history.slice(0, 60000)}\n\n` : '')
     + (rows.length ? `RAW EXCHANGES (synced from the app):\n` + rows.map((r) => `[${r.created_at ? shortMomentET(Number(r.created_at)) : r.date || ''}${r.category ? ' · ' + r.category : ''}]\n${r.content}`).join('\n\n') : '')).slice(0, 140000);
@@ -1466,7 +1489,7 @@ async function runPersonaTurn(personaId, userText, deliver, { reply: given, resu
   if (persona === 'stephanie') {
     const course = await require('./stephanieCourse').statusText().catch((e) => `(couldn't read it: ${e.message})`);
     sys = `${sys}\n\n[YOUR COURSE — live from Drive this turn:\n${course}\n]`;
-    const quiz = await require('./stephanieQuiz').quizBlock().catch(() => '');
+    const quiz = await require('./stephanieQuiz').quizBlock(/^\[SENT ON YOUR OWN/.test(userText) ? '' : userText).catch(() => '');
     if (quiz) sys = `${sys}\n\n${quiz}`;
   }
   // A.R.A. always has his calendar in front of her (owner's call, 2026-11-21: "what
@@ -1645,4 +1668,4 @@ const runAraTurn = (userText, deliver) => runPersonaTurn('ara', userText, delive
 
 module.exports = {
   weatherBlock, newsBlock, araTools, systemPrompt,
-  recallDays, runPersonaTurn, runAraTurn, gatherContext, contextBlock, applyEffects, runInjections, findTags, relayToPersona };
+  factsFor, recallDays, runPersonaTurn, runAraTurn, gatherContext, contextBlock, applyEffects, runInjections, findTags, relayToPersona };

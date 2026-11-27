@@ -31,8 +31,9 @@ async function call(path,{method='GET',body,timeoutMs=45000}={}){
   }finally{clearTimeout(timer);}
 }
 
-export async function sharedContext(pid){
-  try{const{block}=await call('/shared/context?persona='+encodeURIComponent(pid),{timeoutMs:15000});return block?`\n\n${block}`:'';}
+// `asked`: his message this turn (S.T.E.P.H.A.N.I.E.'s drill grades his answers from it).
+export async function sharedContext(pid,asked=''){
+  try{const{block}=await call('/shared/context?persona='+encodeURIComponent(pid)+(asked?'&asked='+encodeURIComponent(String(asked).slice(0,1500)):''),{timeoutMs:15000});return block?`\n\n${block}`:'';}
   catch(e){return `\n\n[The on/off switches and shared desk tools are unavailable right now (${e.message}). If he asks to switch something on or off, tell him it couldn't be reached — never say it's done.]`;}
 }
 

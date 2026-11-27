@@ -45,7 +45,7 @@ async function alerts(persona, limit = 30) {
 // is the app retrying, not a new message, so it's stored once.
 async function add(persona, role, content) {
   const r = role === 'user' ? 'user' : 'assistant';
-  const text = String(content || '').trim().slice(0, 20000);
+  const text = String(content || '').trim(); // whole, never cut
   if (!text) return { ok: false, error: 'empty message' };
   const { rows } = await q('SELECT id FROM tg_messages WHERE persona = $1 AND role = $2 AND content = $3 AND ts > $4 LIMIT 1',
     [persona, r, text, Date.now() - DUP_MS]);

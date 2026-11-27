@@ -24,3 +24,17 @@ assert(/require\('\.\/recall'\)/.test(src('personaRuntime.js')) && /memoryBlock\
 assert(/require\('\.\/recall'\)/.test(src('personaVoice.js')), 'passed-on messages look at memory');
 assert(/briefMemory/.test(src('morningBrief.js')), 'the brief looks at memory');
 console.log('recall ok');
+
+// Recall questions keep the old facts that matter when the history is long.
+{
+  const { factsFor } = require('../personaRuntime');
+  const many = Array.from({ length: 3000 }, (_, i) => ({ memory: `filler fact number ${i} about nothing much at all here`, metadata: { date: '2026-11-20' } }));
+  many.push({ memory: 'He planned the Atlanta trip for his birthday', metadata: { date: '2026-08-14' } });
+  const out = factsFor(many, 'what did we plan in August?', [], 60000);
+  assert(out.length <= 61000);
+  assert(/Atlanta trip/.test(out), 'an August fact survives when he asks about August');
+  assert(/still stored/.test(out));
+  const small = factsFor(many.slice(0, 5), 'anything', [], 60000);
+  assert(!/left out/.test(small), 'all of it when it fits');
+  console.log('recall facts ok');
+}

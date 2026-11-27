@@ -8,7 +8,7 @@ const T = require('../telegram');
 const line = T.ownLine('🎬 R.O.G.U.E.\'s auto clip didn\'t work: yt-dlp blocked', Date.parse('2026-11-21T12:25:00Z'));
 assert.ok(line.startsWith(`${T.OWN_MARK}, Sat 7:25 AM ET — not a reply to him]\n`), line);
 assert.ok(line.endsWith("didn't work: yt-dlp blocked"));
-assert.ok(T.ownLine('x'.repeat(9000)).length < 6200, 'long ones trimmed');
+assert.ok(T.ownLine('x'.repeat(9000)).endsWith('x'.repeat(9000)), 'long ones kept whole (owner, 2026-11-27: nothing left out)');
 
 // Turn replies are saved by the turn, so they must not be saved twice; the
 // senders that used to save their own copy now rely on the bot.

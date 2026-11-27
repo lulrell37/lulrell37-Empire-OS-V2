@@ -34,7 +34,7 @@ async function passedOn(id, text) {
   if (!id) return;
   const when = new Date().toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'short', hour: 'numeric', minute: '2-digit' });
   await require('./db').query('INSERT INTO tg_messages (persona, role, content, ts) VALUES ($1, $2, $3, $4)',
-    [id, 'assistant', `[YOU SENT THIS TO MR. BURRUS THROUGH A.R.A., ${when} ET — it's yours, not a reply to him here; if he brings it up in this chat, carry on from it]\n${String(text).slice(0, 6000)}`, Date.now()])
+    [id, 'assistant', `[YOU SENT THIS TO MR. BURRUS THROUGH A.R.A., ${when} ET — it's yours, not a reply to him here; if he brings it up in this chat, carry on from it]\n${String(text)}`, Date.now()])
     .catch((e) => console.error(`tg ${id} history save failed:`, e.message));
 }
 

@@ -133,13 +133,100 @@ async function tick({ force = false, now = new Date() } = {}) {
   return { sent: true, level };
 }
 
-// For her prompt every turn: the last set and its answer key.
-async function quizBlock() {
+// Grading in code (owner, 2026-11-27: "stephanie is not going over the ones i get
+// wrong"). His reply -> the numbers he gave, in question order. "7 x 23 = 161" lines
+// are matched by their factors; otherwise the numbers in order, list numbers
+// ("1." / "2)") dropped. null when the message isn't answers.
+function readAnswers(questions, text) {
+  const t = String(text || '').replace(/(\d),(\d{3})\b/g, '$1$2');
+  const out = Array(questions.length).fill(null);
+  let eq = 0;
+  for (const m of t.matchAll(/(\d+)\s*(?:x|×|\*|times)\s*(\d+)\s*(?:=|is|equals|:)?\s*(\d+)/gi)) {
+    const [a, b, n] = [Number(m[1]), Number(m[2]), Number(m[3])];
+    const i = questions.findIndex((q, k) => out[k] == null && ((q.a === a && q.b === b) || (q.a === b && q.b === a)));
+    if (i >= 0) { out[i] = n; eq++; }
+  }
+  if (eq) return out;
+  const cleaned = t.replace(/(^|\s)[1-5][.)](?=\s)/g, ' ');
+  const nums = (cleaned.match(/\d+/g) || []).map(Number);
+  const words = (cleaned.replace(/\d+/g, ' ').match(/[a-z]{2,}/gi) || []).length;
+  // Answers, not a message that happens to have numbers in it.
+  if (!nums.length || nums.length > questions.length || (nums.length < 3 && words > 3)) return null;
+  nums.forEach((n, i) => { out[i] = n; });
+  return out;
+}
+
+// How to work one out, for her to walk him through: split the bigger number.
+function breakdown(a, b) {
+  const [x, y] = a >= b ? [b, a] : [a, b]; // y is the one to split
+  if (y < 10) return `${x} × ${y} = ${x * y}`;
+  const tens = Math.floor(y / 10) * 10, ones = y % 10;
+  if (x < 10) return `${x} × ${y} = ${x} × ${tens} + ${x} × ${ones} = ${x * tens} + ${x * ones} = ${x * y}`;
+  const xt = Math.floor(x / 10) * 10, xo = x % 10;
+  return `${x} × ${y} = ${x} × ${tens} + ${x} × ${ones} = ${x * tens} + ${x * ones} = ${x * y}  (and ${x} × ${tens} = ${xt} × ${tens} + ${xo} × ${tens} = ${xt * tens} + ${xo * tens})`;
+}
+
+// Where a wrong answer probably went wrong, in a few words.
+function slip(right, said) {
+  const diff = Math.abs(right - said);
+  if (diff && diff % 100 === 0) return 'off by hundreds: a carry into the hundreds slipped';
+  if (diff && diff % 10 === 0) return 'off by tens: a carry slipped';
+  if (String(right).split('').sort().join('') === String(said).split('').sort().join('')) return 'right digits, swapped around';
+  if (diff < 10) return 'off in the ones place';
+  return '';
+}
+
+function grade(questions, answers) {
+  return questions.map((q, i) => {
+    const said = answers[i];
+    const right = said != null && Number(said) === q.answer;
+    return { n: i + 1, a: q.a, b: q.b, answer: q.answer, said, right, how: right || said == null ? '' : breakdown(q.a, q.b), slip: right || said == null ? '' : slip(q.answer, Number(said)) };
+  });
+}
+
+// His answers this turn (from his own message) -> graded and saved, so the misses
+// are on record for "go over the ones I got wrong" later. null when it isn't answers.
+async function gradeTurn(text) {
+  const q = await load();
+  if (!q.questions || !q.questions.length || q.graded != null) return null;
+  const answers = readAnswers(q.questions, text);
+  if (!answers) return null;
+  const results = grade(q.questions, answers);
+  const answered = results.filter((r) => r.said != null);
+  const score = answered.filter((r) => r.right).length;
+  const next = { ...q, answers, results, graded: answered.length === q.questions.length ? score : q.graded, gradedAt: Date.now(), unanswered: 0 };
+  if (results.some((r) => r.said != null && !r.right)) {
+    const day = dayET(Date.now());
+    const prior = (q.missedDay === day && Array.isArray(q.missedToday)) ? q.missedToday : [];
+    next.missedDay = day;
+    next.missedToday = [...prior, ...results.filter((r) => r.said != null && !r.right).map((r) => ({ a: r.a, b: r.b, answer: r.answer, said: r.said }))].slice(-30);
+  }
+  await setSetting('steph_quiz', JSON.stringify(next));
+  return { results, score, answered: answered.length, total: q.questions.length };
+}
+
+function gradedLines(results) {
+  return results.map((r) => (r.said == null ? `${r.n}. ${r.a} × ${r.b}: not answered`
+    : r.right ? `${r.n}. ${r.a} × ${r.b}: he said ${r.said} ✓`
+      : `${r.n}. ${r.a} × ${r.b}: he said ${r.said} ✗ (right answer ${r.answer}; work it: ${r.how}${r.slip ? `; likely slip: ${r.slip}` : ''})`)).join('\n');
+}
+
+// For her prompt every turn: the last set and its answer key. With `asked` (his
+// message this turn) answers to the open set are graded in code first.
+async function quizBlock(asked = '') {
+  const g = asked ? await gradeTurn(asked).catch((e) => { console.error(`stephanie quiz failed: grading: ${e.message}`); return null; }) : null;
   const q = await load();
   if (!q.questions || !q.questions.length) return '';
+  if (g) {
+    const misses = g.results.filter((r) => r.said != null && !r.right).length;
+    return `[HIS ANSWERS TO YOUR DRILL, GRADED IN CODE just now — use this, not your own arithmetic:\n${gradedLines(g.results)}\nScore: ${g.score}/${g.answered}${g.answered < g.total ? ` (he answered ${g.answered} of ${g.total})` : ''}.\n${misses ? `GO OVER EVERY ✗ — this is the point of the drill, never skip it or just give the score: for each one, the right answer, then walk him through working it out step by step (use the "work it" line above, in your own words), the trick that makes that kind easy (split the bigger number, round and adjust, double and halve…), and where his answer likely went wrong. Then give him one similar problem to try right now. ` : 'All right: tell him so, short and glad. '}${g.answered === g.total ? `Emit [QUIZ_SCORE: ${g.score}].` : 'Ask him for the ones he skipped.'}]`;
+  }
   const key = q.questions.map((x, i) => `${i + 1}. ${x.a} × ${x.b} = ${x.answer}`).join('\n');
+  const misses = q.missedDay === dayET(Date.now()) && Array.isArray(q.missedToday) && q.missedToday.length
+    ? `\nTHE ONES HE GOT WRONG TODAY (he may ask you to go over them; walk each through step by step):\n${q.missedToday.map((m) => `  ${m.a} × ${m.b} = ${m.answer} (he said ${m.said}; ${breakdown(m.a, m.b)})`).join('\n')}` : '';
+  const last = q.results && q.graded != null ? `\nHIS ANSWERS TO THIS SET:\n${gradedLines(q.results)}` : '';
   const state = q.graded != null ? `already graded: ${q.graded}/5` : `NOT answered yet${q.reminders ? `; you've reminded him ${q.reminders} time${q.reminders === 1 ? '' : 's'}${q.escalated ? ' and handed it to A.R.A., who told him off' : ''}, so when he answers, be glad he's back, grade them, and let it go` : ''}`;
-  return `[YOUR MULTIPLICATION DRILL — you sent him this set at ${timeET(q.at)} ET (${state}). ANSWER KEY (never show it before he answers):\n${key}\nWhen his message is his answers to it (numbers, in order), grade each one against the key: right ✓, wrong ✗ with the right answer and a one-line trick for it (break it apart, round and adjust…). Then the score, and emit [QUIZ_SCORE: n] with how many he got right (it sets the next set's difficulty). If he only answered some, grade those. Answers to an older set: say this is the newest one. [QUIZ_OFF] pauses the drill and [QUIZ_ON] resumes it, only when he asks.]`;
+  return `[YOUR MULTIPLICATION DRILL — you sent him this set at ${timeET(q.at)} ET (${state}). ANSWER KEY (never show it before he answers):\n${key}\n${last}${misses}\nWhen his message is his answers to it (numbers, in order), grade each one against the key: right ✓; for each wrong ✗, go over it: the right answer, walk it through step by step (split the bigger number), the trick, where he likely slipped, then one similar problem to try. Never just give the score. Then the score, and emit [QUIZ_SCORE: n] with how many he got right (it sets the next set's difficulty). If he only answered some, grade those. Answers to an older set: say this is the newest one. [QUIZ_OFF] pauses the drill and [QUIZ_ON] resumes it, only when he asks.]`;
 }
 
 // [QUIZ_SCORE: n] / [QUIZ_OFF] / [QUIZ_ON] / [QUIZ_NOW]
@@ -162,4 +249,4 @@ async function quizTag(name, arg, asked = '') {
 const QUIZ_TAGS = new Set(['QUIZ_SCORE', 'QUIZ_OFF', 'QUIZ_ON', 'QUIZ_NOW']);
 const QUIZ_TOOLS = ` - MULTIPLICATION DRILL — you send him 5 multiplication questions every 30 min, 8 AM-10 PM ET, on your own. If he hasn't answered a set, the next turns remind him of it instead of sending new ones (${REMIND_MAX} reminders), then you hand it to A.R.A. and she tells him; after that you wait for his answers. [QUIZ_SCORE: n] records how many he got right after you grade a set. [QUIZ_NOW] sends a new set now; [QUIZ_OFF] / [QUIZ_ON] pause and resume the drill — only when he asks.`;
 
-module.exports = { REMIND_MAX, reminderText, _setDeps: (x) => { deps = x; }, makeQuiz, quizText, tick, quizBlock, quizTag, QUIZ_TAGS, QUIZ_TOOLS, inWindow, LEVELS, enabled };
+module.exports = { readAnswers, grade, breakdown, gradeTurn, REMIND_MAX, reminderText, _setDeps: (x) => { deps = x; }, makeQuiz, quizText, tick, quizBlock, quizTag, QUIZ_TAGS, QUIZ_TOOLS, inWindow, LEVELS, enabled };

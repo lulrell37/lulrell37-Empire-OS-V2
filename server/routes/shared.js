@@ -20,7 +20,7 @@ const FOLLOW_RULES = '[FOLLOW-THROUGH (his rules, 2026-11-26): if you say you\'l
 let deps = null;
 const d = () => deps || { runtime: require('../personaRuntime'), ft: require('../followThrough') };
 
-async function context(persona) {
+async function context(persona, asked = '') {
   const parts = [];
   const sw = require('../switches');
   const ts = require('../talonSwitch');
@@ -32,7 +32,7 @@ async function context(persona) {
   }
   if (persona === 'stephanie') {
     const q = require('../stephanieQuiz');
-    parts.push(q.QUIZ_TOOLS, await q.quizBlock().catch(() => ''));
+    parts.push(q.QUIZ_TOOLS, await q.quizBlock(asked).catch(() => ''));
   }
   parts.push(FOLLOW_RULES);
   return parts.filter(Boolean).join('\n');
@@ -58,7 +58,7 @@ function follow(persona, reply, asked, final = false) {
 
 const r = express.Router();
 r.get('/context', async (req, res) => {
-  try { res.json({ block: await context(String(req.query.persona || '')) }); }
+  try { res.json({ block: await context(String(req.query.persona || ''), String(req.query.asked || '').slice(0, 1500)) }); }
   catch (e) { console.error(`shared route failed: context: ${e.message}`); res.status(500).json({ error: e.message }); }
 });
 r.post('/tags', async (req, res) => {

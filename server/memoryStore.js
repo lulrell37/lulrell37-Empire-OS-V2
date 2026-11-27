@@ -31,7 +31,7 @@ async function recordInput(persona, text, meta = {}) {
   if (!persona || !t) return;
   try {
     await d().db.query('INSERT INTO memory_inputs (persona, text, meta, ts) VALUES ($1, $2, $3, $4)',
-      [persona, t.slice(0, 12000), JSON.stringify({ date: today(), ...meta }), Date.now()]);
+      [persona, t, JSON.stringify({ date: today(), ...meta }), Date.now()]);
   } catch (e) { console.error('memory mirror failed: saving an input:', e.message); }
 }
 

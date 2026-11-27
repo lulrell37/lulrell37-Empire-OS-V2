@@ -37,13 +37,13 @@ const OWN_MARK = '[SENT ON YOUR OWN';
 function ownLine(text, ts = Date.now()) {
   const when = new Date(ts).toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'short', hour: 'numeric', minute: '2-digit' });
   const t = String(text || '').trim();
-  return `${OWN_MARK}, ${when} ET — not a reply to him]\n${t.length > 6000 ? `${t.slice(0, 6000)}…` : t}`;
+  return `${OWN_MARK}, ${when} ET — not a reply to him]\n${t}`; // whole, never cut (owner, 2026-11-27: "I don't want anything left out")
 }
 // remember: the meaningful ones (clip results, failures, recaps, reports) also go
 // to Mem0, labeled as this persona's message so it's never taken for his words.
 // Routine traffic (trade alerts, watch alerts, news, reminders) stays out of it.
 function mem0Line(personaId, text) {
-  return `[Sent by the Empire OS persona "${personaId}" to Mr. Burrus automatically, ${new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' })} — NOT his words, not something he said or decided]\n${String(text).slice(0, 4000)}`;
+  return `[Sent by the Empire OS persona "${personaId}" to Mr. Burrus automatically, ${new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' })} — NOT his words, not something he said or decided]\n${String(text)}`;
 }
 async function logOwn(personaId, chatId, text, { remember } = {}) {
   if (!isOwner(chatId) || !String(text || '').trim()) return;

@@ -121,7 +121,7 @@ function groupLine(from, to, message, answer, ts = Date.now(), inGroup = true) {
   const when = new Date(ts).toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'short', hour: 'numeric', minute: '2-digit' });
   const fromName = (ROSTER[from] && ROSTER[from].name) || from;
   const where = inGroup ? `IN THE EMPIRE GROUP CHAT, ${when} ET — ${fromName} asked you this in front of Mr. Burrus` : `A HAND-OFF, ${when} ET — ${fromName} asked you this for Mr. Burrus`;
-  return `[${where}, not in this chat]\n${fromName}: ${String(message).slice(0, 3000)}\nYou answered: ${String(answer).slice(0, 5000)}`;
+  return `[${where}, not in this chat]\n${fromName}: ${String(message)}\nYou answered: ${String(answer)}`;
 }
 // Saved with or without the group (owner, 2026-11-26: "whatever a persona passes they
 // should have memory of it if I wanted to continue with them 1 on 1").
