@@ -282,11 +282,6 @@ async function voiceNote(personaId, replyText, { userText = '', scripted = false
   let text = speakNames(String(replyText || '').trim()); // "J.A.R.V.I.S." is said "Jarvis"
   if (!text) return { ogg: null };
   if (personaId === 'ara') {
-    // The old voice, exactly as it was — one try, no backup voice.
-    if ((await require('./syncStore').getSetting('ara_voice', 'elevenlabs').catch(() => 'elevenlabs')) === 'grok') {
-      const ogg = await synthesizeAraVoice(noWhisper(text), { userText });
-      return ogg ? { ogg } : { ogg: null, error: 'grok voice failed' };
-    }
     if (!scripted) text = speakNames(await araScript(text, userText, { relay })).replace(/\[(?:breathy|breathily)\]\s*/gi, ''); // not in her voice, though the shared EMOTION block offers it
     text = noWhisper(text); // she never whispers (owner, 2026-11-26)
   }
@@ -298,11 +293,10 @@ async function voiceNote(personaId, replyText, { userText = '', scripted = false
     error = e.message;
     console.error(`${personaId} voice failed:`, e.message);
   }
-  // A.R.A. still sounds like herself if ElevenLabs is down: her Grok voice is next.
-  if (personaId === 'ara') {
-    const ogg = await synthesizeAraVoice(text, { userText }).catch(() => null);
-    if (ogg) return { ogg, error, fallback: true };
-  }
+  // A.R.A. speaks only in her ElevenLabs voice (owner, 2026-11-27: "remove Ara's Grok
+  // voice from everything and only use her ElevenLabs voice"): no Grok and no OpenAI
+  // stand-in. The text still goes and says why there's no voice note.
+  if (personaId === 'ara') return { ogg: null, error: error || 'ElevenLabs gave no audio' };
   try {
     return { ogg: await openaiOgg(personaId, text), error, fallback: true };
   } catch (e) {

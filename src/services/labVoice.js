@@ -165,13 +165,12 @@ export async function speakAs(personaId,text,{signal}={}){
   const p=getPersona(personaId);
   let uri=null;
   try{
-    let araGrok=false;
-    if(personaId==='ara'){try{araGrok=(await getSetting('ara_voice','elevenlabs'))==='grok';}catch{}}
-    if(araGrok)uri=await grokVoiceUri(clean,signal);
-    else if(p?.elevenlabsVoiceId)uri=await textToSpeech(clean,p.elevenlabsVoiceId,p.name,{signal});
+    // A.R.A.: ElevenLabs only (2026-11-27), never her old Grok voice.
+    if(p?.elevenlabsVoiceId)uri=await textToSpeech(clean,p.elevenlabsVoiceId,p.name,{signal});
   }catch{}
   if(signal?.aborted)return;
   if(uri)return playUri(uri,signal);
+  if(personaId==='ara')return; // her ElevenLabs voice only: no phone-voice stand-in
   return new Promise((resolve)=>{
     signal?.addEventListener?.('abort',()=>{try{Speech.stop();}catch{}resolve();});
     try{Speech.speak(clean.slice(0,900),{language:'en-US',rate:speechRate(0.95),onDone:resolve,onStopped:resolve,onError:resolve});}

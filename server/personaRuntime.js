@@ -396,7 +396,6 @@ const PERSONA_EXTRA_TOOLS = {
  - When a PR is ready you'll both hear about it here. Say what it does; only on his yes, [BUILD_MERGE: #issue] — he confirms with a tap and it's merged into main. What that sets off depends on what the PR touched, and the merge receipt says which: app files start the APK build on their own (EAS — the new APK reaches his phone when it finishes); server-only changes build no APK and go live only on a [REDEPLOY]; a PR touching both needs both. Tell him which it is from the receipt.
  - [REDEPLOY] — restart the backend onto the latest merged main (he confirms with a tap; ~1-2 min; bots and T.A.L.O.N. pause then come back; a version that won't start falls back to the current one; A.R.A. tells him when it's live and what changed). Offer it after merging anything that touches the server, or whenever he asks to redeploy / ship the server. Never claim it's live yourself — A.R.A.'s message is the confirmation.
  - [BUILD_CANCEL: #issue] — drop a build he no longer wants.
- - [ARA_VOICE_ENGINE: elevenlabs|grok] — switch which voice A.R.A. uses, only when Mr. Burrus tells you to himself. Say it's done only from the receipt.
  - Be honest about the loop: not instant, you're the messenger between Mr. Burrus and Claude Code, and every run bills his Anthropic key.`,
 };
 
@@ -1009,10 +1008,8 @@ async function applyEffects(text, deliver, persona = 'ara', { full = false, owne
         }), 45000).unref();
         notes.push('Redeploying in under a minute — A.R.A. confirms when the server is live');
       } else if (name === 'ARA_VOICE_ENGINE') {
-        const v = arg.trim().toLowerCase().replace(/\s+/g, '');
-        if (!voiceToggleAllowed(persona, ownerText)) warnings.push('ARA_VOICE_ENGINE not run — only Mr. Burrus can order that, directly to J.A.R.V.I.S.');
-        else if (v !== 'elevenlabs' && v !== 'grok') warnings.push('ARA_VOICE_ENGINE needs elevenlabs or grok');
-        else { await setSetting('ara_voice', v); notes.push(`A.R.A.'s voice is now ${v === 'grok' ? 'Grok' : 'ElevenLabs'}`); }
+        // Her Grok voice is gone (owner, 2026-11-27): ElevenLabs only.
+        notes.push('A.R.A. only uses her ElevenLabs voice now — there is no Grok voice to switch to');
       } else if (ARA_ONLY_WRITES.has(name) && persona !== 'ara') {
         warnings.push(`${name} not run — calendar and email are A.R.A.'s (hand it to her)`);
       } else if (TALON_WRITES.has(name)) {

@@ -26,7 +26,7 @@ import{playOpts,speechRate}from './voiceSpeed';
 import{Audio}from 'expo-av';
 import*as FileSystem from 'expo-file-system';
 import{loadKeys}from './keyStore';
-import{personaSystemPrompt,queryMemory,fixNames,textToSpeech}from './aiService';
+import{personaSystemPrompt,queryMemory,fixNames,textToSpeech,getLastTtsFailReason}from './aiService';
 import{getPersona}from '../personas/personas';
 import{getSetting}from './database';
 import{ARA_VOICE}from './voiceCues';
@@ -91,6 +91,7 @@ function resetAnswer(){
 }
 function cancelAll(){
   gen++;
+  for(const q of queue)if(q.soundP)q.soundP.then(sn=>sn&&sn.unloadAsync().catch(()=>{}));
   try{ttsAbort?.abort();}catch{}
   ttsAbort=new AbortController();
   resetAnswer();
@@ -115,11 +116,20 @@ function feed(delta,onStateChange){
     sentBuf=sentBuf.slice(m[0].length);
   }
 }
-async function playUri(uri,onStateChange,my){
+// Loaded ahead (not playing) so the next sentence starts the moment this one ends:
+// creating each clip only after the last one finished left an audible gap.
+function preload(item){
+  if(!item.soundP)item.soundP=item.uriP.then(uri=>uri?Audio.Sound.createAsync({uri},playOpts({shouldPlay:false})).then(r=>r.sound).catch(()=>null):null);
+  return item.soundP;
+}
+async function playUri(item,onStateChange,my){
   await Audio.setAudioModeAsync({playsInSilentModeIOS:true,allowsRecordingIOS:true});
   if(my!==gen)return;
-  const{sound:snd}=await Audio.Sound.createAsync({uri},playOpts({shouldPlay:true}));
+  const snd=await preload(item);
+  if(!snd)return;
   if(my!==gen){try{await snd.unloadAsync();}catch{}return;}
+  if(queue[0])preload(queue[0]); // the next one loads while this one plays
+  try{await snd.playAsync();}catch{}
   sound=snd;playedAny=true;
   onStateChange?.('speaking');
   await new Promise(res=>{
@@ -136,10 +146,10 @@ async function pump(onStateChange){
     while(queue.length){
       const item=queue[0];
       const uri=await item.uriP;
-      if(item.gen!==gen){queue.shift();continue;}
+      if(item.gen!==gen){queue.shift();preload(item).then(s=>s&&s.unloadAsync().catch(()=>{}));continue;}
       queue.shift();
       if(!uri){elevenFailed=true;continue;}
-      await playUri(uri,onStateChange,item.gen);
+      await playUri(item,onStateChange,item.gen);
     }
   }finally{playing=false;}
   if(answerDone&&!queue.length)onStateChange?.('listening');
@@ -218,7 +228,7 @@ export async function startAraLive(opts={}){
   const keys=await loadKeys();
   if(!keys?.grok)throw new Error('Grok API key needed for A.R.A. LIVE. Add one in Settings.');
   onState?.('connecting');
-  eleven=(await getSetting('ara_voice','elevenlabs').catch(()=>'elevenlabs'))!=='grok'&&!!getPersona('ara')?.elevenlabsVoiceId;
+  eleven=true; // her ElevenLabs voice only (2026-11-27): Grok's audio is never played
   cancelAll();
   let mood='';try{const{araMoodLine}=await import('./sharedDesk');mood=await araMoodLine();}catch{}
   const baseInstructions=ARA_VOICE+'\n\n'+(await personaSystemPrompt('ara'))
@@ -321,11 +331,10 @@ export async function startAraLive(opts={}){
             sentBuf='';answerDone=true;
             await Promise.all(queue.map(q=>q.uriP)).catch(()=>{});
             while(playing&&my===gen)await new Promise(r=>setTimeout(r,100));
-            if(my===gen&&!playedAny&&elevenFailed&&chunks.length)await playResponseAudio(chunks,onState,()=>{});
+            if(my===gen&&!playedAny&&elevenFailed){onError?.(new Error(`Her ElevenLabs voice didn't come through for that answer (${getLastTtsFailReason()||'no audio'})`));onState?.('listening');}
             else if(my===gen&&!playing)onState?.('listening');
             if(my===gen)resetAnswer();
-          }else if(chunks.length)await playResponseAudio(chunks,onState,()=>{});
-          else onState?.('listening');
+          }else onState?.('listening');
           break;
         }
         case'error':

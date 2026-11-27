@@ -684,12 +684,10 @@ export default function CommandScreen({navigation,route}){
     return{turns,userText};
   }
 
-  // A.R.A.'s voice. Settings › Voice switch (app_settings `ara_voice`, synced so
-  // Telegram follows): 'elevenlabs' (default) or 'grok' — the old voice.
+  // A.R.A.'s voice: ElevenLabs only (owner, 2026-11-27: "remove Ara's Grok voice from
+  // everything"). The name stays for its callers.
   async function araGrokVoice(text,ctx){
-    let engine='elevenlabs';
-    try{engine=await getSetting('ara_voice','elevenlabs');}catch{}
-    return engine==='grok'?araGrokRealtimeVoice(text,ctx):araElevenVoice(text,ctx);
+    return araElevenVoice(text,ctx);
   }
 
   // The old voice, kept whole: Grok's realtime "ara" voice delivers the reply
@@ -801,8 +799,7 @@ export default function CommandScreen({navigation,route}){
     if(!text)return;
     try{
       await audioModeForPlayback();
-      const araGrok=pid==='ara'&&(await getSetting('ara_voice','elevenlabs').catch(()=>'elevenlabs'))==='grok';
-      if(pid==='ara'&&!araGrok){
+      if(pid==='ara'){
         const{sound}=await araElevenVoice(text,{userText:'Catch me up on this one.'});
         soundRef.current=sound;
         await new Promise(res=>{passoffDoneRef.current=res;sound.setOnPlaybackStatusUpdate(st=>{if(!st.isLoaded||st.didJustFinish)res();});});
@@ -851,6 +848,8 @@ export default function CommandScreen({navigation,route}){
     }catch(err){
       try{voiceWarnRef.current=null;}catch{}
       warnVoiceFallback();
+      // A.R.A. speaks only in her ElevenLabs voice (2026-11-27): no phone-voice stand-in.
+      if(persona.id==='ara'){maybeAutoListen();return;}
       Speech.speak(text.substring(0,500),{language:'en-US',rate:speechRate(0.95),onDone:()=>maybeAutoListen(),onStopped:()=>maybeAutoListen()});
     }
   }
@@ -957,6 +956,8 @@ export default function CommandScreen({navigation,route}){
       };
       const nativeFallback=()=>{
         warnVoiceFallback();
+        // A.R.A. speaks only in her ElevenLabs voice (2026-11-27): the reply shows in full, no phone voice.
+        if(persona?.id==='ara'){done(true);return;}
         try{Speech.speak(fullText.slice(0,700),{language:'en-US',rate:speechRate(0.95),onDone:()=>done(true),onStopped:()=>{if(!nativePaused)done(false);}});}catch{done(false);return;}
         safety=setTimeout(()=>done(true),Math.min(60000,(fullText.length/11)*1000+4000));
         nativeRevealTimer();

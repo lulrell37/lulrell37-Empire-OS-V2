@@ -142,30 +142,24 @@ const { ARA_SCRIPT, ARA_VOICE } = require('../araVoice');
     assert.match(mb, /\$\{ARA_VOICE\}[\s\S]*\$\{ARA_SCRIPT\}/);
   }
 
-  // ElevenLabs down: she falls to her own Grok voice; other personas don't.
+  // ElevenLabs down: A.R.A. has no other voice now (owner, 2026-11-27: ElevenLabs only):
+  // no Grok, no OpenAI stand-in; the error says why. Other personas still have their backup.
   {
     const { voiceNote } = require('../personaVoice');
     const store = require('../syncStore');
     const realSetting = store.getSetting, realFetch = global.fetch, realEl = process.env.ELEVENLABS_API_KEY, realAi = process.env.OPENAI_API_KEY;
     const grokCalls = [];
     try {
-      store.getSetting = async (k, d) => d;
+      store.getSetting = async (k, d) => (k === 'ara_voice' ? 'grok' : d); // even with the old switch set
       llm.chatAs = async () => 'Your 3pm moved to 4.';
       process.env.ELEVENLABS_API_KEY = 'test';
       delete process.env.OPENAI_API_KEY;
       global.fetch = async () => { throw new Error('elevenlabs down'); };
       grokVoice = async (t) => { grokCalls.push(t); return Buffer.from('grok'); };
       const ara = await voiceNote('ara', 'Your 3pm moved to 4.');
-      assert.strictEqual(String(ara.ogg), 'grok');
-      assert.strictEqual(ara.fallback, true);
-      assert.deepStrictEqual(grokCalls, ['Your 3pm moved to 4.']);
-      grokCalls.length = 0;
-      const atlas = await voiceNote('atlas', 'Hello.');
-      assert.strictEqual(atlas.ogg, null);
-      assert.strictEqual(grokCalls.length, 0, 'only A.R.A. has the Grok backup');
-      // Grok down too: on to the last resort, not a crash.
-      grokVoice = async () => { throw new Error('grok down'); };
-      assert.strictEqual((await voiceNote('ara', 'Your 3pm moved to 4.')).ogg, null);
+      assert.strictEqual(ara.ogg, null, 'no voice but hers');
+      assert.ok(ara.error, 'and it says why');
+      assert.strictEqual(grokCalls.length, 0, 'never her Grok voice');
     } finally {
       store.getSetting = realSetting; llm.chatAs = real; global.fetch = realFetch;
       if (realEl === undefined) delete process.env.ELEVENLABS_API_KEY; else process.env.ELEVENLABS_API_KEY = realEl;

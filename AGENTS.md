@@ -104,7 +104,7 @@ before trusting it hands-free with speaker output.
 Toggled per-persona ("GO LIVE" in A.R.A.'s direct chat) — every other persona
 still uses the turn-based loop.
 
-**Her ElevenLabs voice on the call** (owner, 2026-11-27): Grok still listens, thinks and runs the VAD; its transcript is cut into sentences as it streams (`feed`, a sentence ends at `.!?…` followed by a space, so "3,568.11" never splits) and each goes to `textToSpeech` (her voice, stitched with `previousText`) and plays back to back (`queue` / `pump`), so she starts after her first sentence. Barge-in (`speech_started`) bumps `gen`, aborts pending TTS and clears the queue. If ElevenLabs gave nothing for an answer, Grok's own audio for it plays. `ara_voice` = grok keeps the call on Grok's voice. Her mood line (`/shared/mood`) is in the call's instructions.
+**Her ElevenLabs voice on the call** (owner, 2026-11-27): Grok still listens, thinks and runs the VAD; its transcript is cut into sentences as it streams (`feed`, a sentence ends at `.!?…` followed by a space, so "3,568.11" never splits) and each goes to `textToSpeech` (her voice, stitched with `previousText`) and plays back to back (`queue` / `pump`), so she starts after her first sentence. Barge-in (`speech_started`) bumps `gen`, aborts pending TTS and clears the queue. Clips are preloaded one ahead (`preload`) so there's no gap between sentences. If ElevenLabs gave nothing for an answer, the call raises an error; Grok's audio is never played. Her mood line (`/shared/mood`) is in the call's instructions.
 
 **Everything she can do, live** (owner, 2026-11-27: "if I'm on call with Ara she needs to be able to do things I tell her in real time like a real person"): the `run_command` tool takes the exact command tag(s) she'd write in chat and `POST /shared/run` (`runLive`, `routes/shared.js`) runs them like her Telegram turn: lookups come back as results, writes run with receipts, Confirm cards and media go to his Telegram; `asked` is his last words on the call (`lastHeard`), so the own-message gates hold. She says a quick "on it" first, then reports from the result, never claiming what didn't run. **Live updates:** every 20 s new pass-offs (`/chat/ara/alerts` since the call began) come in as system notes (`conversation.item.create`, no response forced); every 30 s a changed mood (mood or a whole level) updates her instructions (`session.update`). `node server/scripts/test-live-commands.js`.
 
@@ -130,11 +130,13 @@ with `ARA_VOICE` (sultry, seductive, slightly flirty and a touch unhinged) + `AR
 rewrites the reply as what she'd say out loud with lowercase emotion cues, and
 ElevenLabs performs that (`araSpokenScript` in `src/services/aiService.js`,
 `araScript` in `server/personaVoice.js`; the morning brief's own spoken script
-skips it). GO LIVE still uses Grok's realtime `ara` voice with `ARA_VOICE`. The old
-Grok-voice path is kept whole and one switch away: Settings › AI › A.R.A.'s
-Voice writes `app_settings.ara_voice` = `grok` (synced), which puts the app
-(`araGrokRealtimeVoice` in `CommandScreen.js`, `grokVoiceUri` in `labVoice.js`)
-and Telegram (`synthesizeAraVoice` in `server/araVoice.js`) back on it. Keep
+skips it). **ElevenLabs only, everywhere** (owner, 2026-11-27: "remove Ara's Grok voice
+from everything and only use her ElevenLabs voice"): Telegram voice notes, the app's
+replies, ▶ on pass-offs and GO LIVE (Grok there only listens and thinks; its audio is
+never played). `app_settings.ara_voice` is ignored, the Settings switch is gone, and
+there is no stand-in voice for her: when ElevenLabs fails she has no voice note
+(Telegram says why under the text), the app shows the reply in full with the voice
+warning, and a GO LIVE answer raises an error. Other personas keep their backups. Keep
 `ARA_VOICE` / `ARA_SCRIPT` in sync between `src/services/voiceCues.js` and
 `server/araVoice.js`.
 
@@ -142,7 +144,7 @@ and Telegram (`synthesizeAraVoice` in `server/araVoice.js`) back on it. Keep
 
 **A.R.A. never whispers** (owner, 2026-11-26: "the voice cues she has still has whisper, remove it"): `[whispers]` is gone from `ARA_SCRIPT` (both copies) and the morning brief's script, which now say never whisper; `noWhisper` (`server/araVoice.js`, mirrored in `src/services/voiceCues.js`) strips any whispering cue from her text right before her voice is made (`voiceNote`, her Grok voice, the app's `textToSpeech` and `grokVoiceUri`). Other personas keep the cue.
 
-**Owner's voice switch:** `[ARA_VOICE_ENGINE: elevenlabs|grok]` writes the same synced `app_settings.ara_voice` as Settings › AI › A.R.A.'s Voice. `voiceToggleAllowed` (`server/personas.js`, `src/personas/personas.js`, keep in sync) lets it through only for J.A.R.V.I.S., on a message Mr. Burrus sent him directly that mentions her voice: only the owner's own turn passes `ownerText`, so relays, the council and the loops can't.
+**No voice switch:** `[ARA_VOICE_ENGINE]` only answers that she's on her ElevenLabs voice (server and app); the J.A.R.V.I.S. tool line is gone.
 
 ## Backend (`server/`)
 
@@ -176,7 +178,7 @@ persona can send media (`server/telegramMedia.js`): `[SEND_PHOTO]`,
 `[CHART]` (Chart.js via QuickChart), `[SEND_FILE]`/`[SEND_VIDEO]`/`[SEND_AUDIO]`,
 `[SEND_LOCATION]`; `[WEATHER]` is a keyless Open-Meteo read. ElevenLabs voice
 notes retry, fall back to OpenAI TTS, and say so in the chat when none went out
-(A.R.A. tries her Grok voice before OpenAI; `voiceNote()` in `server/personaVoice.js`). Still app-only: opening apps on
+(A.R.A. has no backup voice: ElevenLabs only; `voiceNote()` in `server/personaVoice.js`). Still app-only: opening apps on
 the phone, 3D Lab, HUD panel layout, the Canvas, hand-placed trades and
 clips/video watch. J.A.R.V.I.S. (and A.R.A.) run the Claude Code build loop
 from Telegram too (`server/buildAgent.js`, needs `GITHUB_TOKEN` — the same PAT

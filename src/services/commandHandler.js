@@ -66,14 +66,8 @@ export async function handleCommands(response,personaId,callbacks={}){
       }else callbacks.onNotes?.(['⚠️ Not switched: going live needs the Confirm tap, so tell A.R.A. on Telegram.']);
     }
   }catch(e){try{require('./crashLog').logCrash('handleCommands:trade',String(e&&e.message||e));}catch{}}
-  // [ARA_VOICE_ENGINE: elevenlabs|grok] — only a direct order from Mr. Burrus to J.A.R.V.I.S.
-  // Only his own send() passes ownerText; relays and the council never do.
-  for(const m of allMatches(response,/\[ARA_VOICE_ENGINE:\s*([^\]]*)\]/gi)){
-    const v=m[1].trim().toLowerCase().replace(/\s+/g,'');
-    if(!voiceToggleAllowed(personaId,callbacks.ownerText))callbacks.onNotes?.(['⚠️ Voice not changed: only Mr. Burrus can order that, directly to J.A.R.V.I.S.']);
-    else if(v!=='elevenlabs'&&v!=='grok')callbacks.onNotes?.(['⚠️ Voice not changed: it needs elevenlabs or grok.']);
-    else{await setSetting('ara_voice',v);scheduleSync(0);callbacks.onNotes?.([`✓ A.R.A.'s voice is now ${v==='grok'?'Grok':'ElevenLabs'}.`]);}
-  }
+  // [ARA_VOICE_ENGINE] — her Grok voice is gone (owner, 2026-11-27): ElevenLabs only.
+  if(/\[ARA_VOICE_ENGINE:/i.test(response))callbacks.onNotes?.(['A.R.A. only uses her ElevenLabs voice now — there is no Grok voice to switch to.']);
   for(const m of allMatches(response,/\[ADD_TASK:\s*([^|\]]+?)(?:\|([^|\]]+))?(?:\|([^\]]+))?\]/gi)){
     const title=m[1]?.trim();if(!title)continue;
     const id=await addTask(title,m[2]?.trim()||'',m[3]?.trim()||null);
