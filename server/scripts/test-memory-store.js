@@ -15,7 +15,8 @@ let facts = [
 let embedCalls = 0;
 ms._set({
   db, roster: { [P]: {} },
-  mem0: { mem0Enabled: () => true, mem0All: async () => facts },
+  mem0: { mem0Enabled: () => true, apiAll: async () => facts },
+  getSetting: async () => null, setSetting: async () => {},
   embedKey: () => 'k',
   fetch: async (url, o) => {
     const { input, dimensions } = JSON.parse(o.body); embedCalls += input.length;

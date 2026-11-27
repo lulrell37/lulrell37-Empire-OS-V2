@@ -60,7 +60,12 @@ async function mem0Remember(personaId, text, meta = {}) {
   const k = key();
   const t = String(text || '').trim();
   // The server's own copy first (server/memoryStore.js), so nothing exists only at Mem0.
-  require('./memoryStore').recordInput(personaId, t, meta);
+  // With the server's memory on, it also pulls the facts out itself (memoryStore.extractTick).
+  await require('./memoryStore').recordInput(personaId, t, meta);
+  require('./memoryStore').kick();
+  // Marked as the server's, so the copy doesn't import Mem0's version of the same
+  // facts once the server makes its own.
+  meta = { ...meta, via: 'server' };
   if (!k || !personaId || !t) return;
   // Long text goes in as several adds, never cut (owner, 2026-11-27: "I don't want
   // anything left out"): pieces of up to 12,000 characters, split at a line or
@@ -82,7 +87,7 @@ async function mem0Remember(personaId, text, meta = {}) {
 
 // The facts most relevant to `query` for this persona. [] on any failure.
 // Each item: { id, memory, score, categories, created_at }.
-async function mem0Search(personaId, query, { topK = 16, threshold = 0.05 } = {}) {
+async function apiSearch(personaId, query, { topK = 16, threshold = 0.05 } = {}) {
   const k = key();
   const q = String(query || '').trim();
   if (!k || !personaId || !q) return [];
@@ -111,7 +116,7 @@ async function mem0Search(personaId, query, { topK = 16, threshold = 0.05 } = {}
 // made — the whole history, for recall questions a top-k search can't answer
 // ("what did we talk about in August", "when did I …"). Capped at `max`.
 // The server's memory copy passes max: Infinity to take everything (memoryStore.js).
-async function mem0All(personaId, { max = 2000 } = {}) {
+async function apiAll(personaId, { max = 2000 } = {}) {
   const k = key();
   if (!k || !personaId) return [];
   const out = [];
@@ -141,4 +146,25 @@ async function mem0All(personaId, { max = 2000 } = {}) {
   return out.slice(0, max).sort((a, b) => when(b).localeCompare(when(a)));
 }
 
-module.exports = { splitForMem0, mem0Enabled, mem0Remember, mem0Search, mem0All, mem0Line, mem0Health };
+// The front door every persona uses (step 2, owner 2026-11-27). With
+// app_settings.memory_engine = 'server', reads come from the server's own memory
+// (memoryStore.search / all); otherwise from Mem0, as before. Writes always go to
+// both while Mem0 is the safety net.
+async function mem0Search(personaId, query, opts = {}) {
+  const ms = require('./memoryStore');
+  if (await ms.useServer()) {
+    try { return await ms.search(personaId, query, opts); }
+    catch (e) { console.error(`server memory failed: search: ${e.message}`); }
+  }
+  return apiSearch(personaId, query, opts);
+}
+async function mem0All(personaId, opts = {}) {
+  const ms = require('./memoryStore');
+  if (await ms.useServer()) {
+    try { return await ms.all(personaId, opts); }
+    catch (e) { console.error(`server memory failed: all: ${e.message}`); }
+  }
+  return apiAll(personaId, opts);
+}
+
+module.exports = { apiSearch, apiAll, splitForMem0, mem0Enabled, mem0Remember, mem0Search, mem0All, mem0Line, mem0Health };

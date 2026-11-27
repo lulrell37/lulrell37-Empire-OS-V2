@@ -147,3 +147,12 @@ CREATE TABLE IF NOT EXISTS memories (
   updated_at bigint NOT NULL
 );
 CREATE INDEX IF NOT EXISTS memories_persona_idx ON memories (persona, id DESC);
+-- Step 2: the server's own memory. origin 'mem0' = copied from Mem0, 'server' =
+-- pulled out here. A replaced fact is kept (deleted, superseded_by), never removed.
+ALTER TABLE memories ADD COLUMN IF NOT EXISTS origin text NOT NULL DEFAULT 'mem0';
+ALTER TABLE memories ADD COLUMN IF NOT EXISTS deleted boolean NOT NULL DEFAULT false;
+ALTER TABLE memories ADD COLUMN IF NOT EXISTS superseded_by bigint;
+ALTER TABLE memories ADD COLUMN IF NOT EXISTS source_input bigint;
+ALTER TABLE memory_inputs ADD COLUMN IF NOT EXISTS extracted_at bigint;
+ALTER TABLE memory_inputs ADD COLUMN IF NOT EXISTS tries int;
+CREATE INDEX IF NOT EXISTS memory_inputs_todo_idx ON memory_inputs (id) WHERE extracted_at IS NULL;

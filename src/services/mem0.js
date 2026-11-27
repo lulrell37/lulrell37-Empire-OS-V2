@@ -4,7 +4,7 @@
 // of the whole history. Everything here is best-effort: a failure returns
 // nothing / does nothing so the caller falls back to the local persona_memory
 // table. The key lives in Settings → KEYS (keyStore), never in the repo.
-import{loadKeys}from './keyStore';
+import{loadKeys,loadBackend}from './keyStore';
 import useEmpireStore from '../store/useEmpireStore';
 
 const BASE='https://api.mem0.ai';
@@ -51,32 +51,69 @@ export function mem0Line(f){
   return d?`(${d}) ${t}`:t;
 }
 
+// Step 2 (owner, 2026-11-27): when the server's own memory is on
+// (app_settings.memory_engine = 'server', asked every 5 min), every call here goes to
+// the server (server/routes/memory.js), so the app and Telegram share one memory.
+// The server still hands Mem0 every add as the safety net. Unreachable → Mem0 direct.
+let engineAt=0,engineV='mem0';
+async function serverMemory(){
+  if(Date.now()-engineAt<300000)return engineV==='server'?await loadBackend().catch(()=>null):null;
+  const be=await loadBackend().catch(()=>null);
+  engineAt=Date.now();
+  if(!be){engineV='mem0';return null;}
+  try{
+    const r=await fetch(be.url+'/memory/engine',{headers:{Authorization:'Bearer '+be.token}});
+    engineV=r.ok?((await r.json())?.engine||'mem0'):'mem0';
+  }catch{engineV='mem0';}
+  return engineV==='server'?be:null;
+}
+async function viaServer(be,path,{method='GET',body}={}){
+  const r=await fetch(be.url+path,{method,headers:{Authorization:'Bearer '+be.token,...(body?{'Content-Type':'application/json'}:{})},body:body?JSON.stringify(body):undefined});
+  if(!r.ok)throw new Error('server '+r.status);
+  return r.json();
+}
+// Long text goes to Mem0 in pieces, never cut (owner: "I don't want anything left out").
+function pieces(t,max=12000){
+  const out=[];let rest=String(t);
+  while(rest.length>max){const w=rest.slice(0,max);let c=Math.max(w.lastIndexOf('\n'),w.lastIndexOf('. '));if(c<max*0.5)c=max-1;out.push(rest.slice(0,c+1).trim());rest=rest.slice(c+1);}
+  if(rest.trim())out.push(rest.trim());
+  return out;
+}
+
 const headers=k=>({Authorization:'Token '+k,'Content-Type':'application/json',Accept:'application/json'});
 
 // Store one exchange (or any text) as a persona's memory. Mem0 does the fact
 // extraction; we just hand it the raw text. Fire-and-forget, never throws.
 export async function mem0Remember(personaId,text,meta={}){
-  const k=await key();
-  if(!k||!personaId)return;
   const t=String(text||'').trim();
-  if(!t)return;
-  try{
-    const r=await fetch(BASE+'/v3/memories/add/',{
-      method:'POST',headers:headers(k),
-      body:JSON.stringify({user_id:personaId,messages:[{role:'user',content:t.slice(0,12000)}],metadata:{app:'empire-os',date:today(),...meta}}),
-    });
-    // Only escalate the persistent, actionable failures from the write path —
-    // the read path (mem0Search, once per turn) is the reliable health signal.
-    if(r.status===401||r.status===403||r.status===429)report(false,r.status);
-  }catch{}
+  if(!personaId||!t)return;
+  const be=await serverMemory().catch(()=>null);
+  if(be){try{await viaServer(be,'/memory/add',{method:'POST',body:{persona:personaId,text:t,meta:{...meta,date:today()}}});return;}catch{}}
+  const k=await key();
+  if(!k)return;
+  const parts=pieces(t);
+  for(let i=0;i<parts.length;i++){
+    try{
+      const r=await fetch(BASE+'/v3/memories/add/',{
+        method:'POST',headers:headers(k),
+        body:JSON.stringify({user_id:personaId,messages:[{role:'user',content:parts.length>1?`(part ${i+1} of ${parts.length})\n${parts[i]}`:parts[i]}],metadata:{app:'empire-os',date:today(),...meta}}),
+      });
+      // Only escalate the persistent, actionable failures from the write path —
+      // the read path (mem0Search, once per turn) is the reliable health signal.
+      if(r.status===401||r.status===403||r.status===429)report(false,r.status);
+    }catch{}
+  }
 }
 
 // The facts most relevant to `query` for this persona. Returns [] on any
 // failure. Each item: { id, memory, score, categories, created_at }.
 export async function mem0Search(personaId,query,{topK=16,threshold=0.05}={}){
-  const k=await key();
   const q=String(query||'').trim();
-  if(!k||!personaId||!q)return[];
+  if(!personaId||!q)return[];
+  const be=await serverMemory().catch(()=>null);
+  if(be){try{const j=await viaServer(be,'/memory/search',{method:'POST',body:{persona:personaId,query:q,topK,threshold}});report(true);return Array.isArray(j?.results)?j.results:[];}catch{}}
+  const k=await key();
+  if(!k)return[];
   try{
     const r=await fetch(BASE+'/v3/memories/search/',{
       method:'POST',headers:headers(k),
@@ -93,8 +130,11 @@ export async function mem0Search(personaId,query,{topK=16,threshold=0.05}={}){
 // made — the whole history, for recall questions a top-k search can't answer
 // ("what did we talk about in August", "when did I …"). [] on failure.
 export async function mem0All(personaId,{max=2000}={}){
+  if(!personaId)return[];
+  const be=await serverMemory().catch(()=>null);
+  if(be){try{const j=await viaServer(be,'/memory/all?persona='+encodeURIComponent(personaId));return(Array.isArray(j?.results)?j.results:[]);}catch{}}
   const k=await key();
-  if(!k||!personaId)return[];
+  if(!k)return[];
   const out=[];
   try{
     for(let page=1;out.length<max&&page<=40;page++){

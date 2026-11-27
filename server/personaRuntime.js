@@ -419,7 +419,7 @@ PERSONA_EXTRA_TOOLS.stephanie = require('./stephanieCourse').COURSE_TOOLS + '\n'
 PERSONA_EXTRA_TOOLS.rogue = require('./clipScan').CLIP_TOOLS + '\n' + require('./autoClip').AUTO_CLIP_TOOLS + '\n' + require('./rawEdit').RAW_EDIT_TOOLS;
 PERSONA_EXTRA_TOOLS.jarvis += '\n' + require('./autoClip').AUTO_CLIP_TOOLS + '\n' + require('./rawEdit').RAW_EDIT_TOOLS + '\n' + require('./siteLogins').LOGIN_TOOLS;
 PERSONA_EXTRA_TOOLS.jarvis += '\n' + require('./browserAgent').BROWSE_TOOLS + '\n' + require('./workers').WORKER_TOOLS;
-PERSONA_EXTRA_TOOLS.jarvis += '\n' + require('./siteDesk').SITE_TOOLS + '\n' + require('./jobProgress').JOB_TOOLS + '\n' + require('./transcribeUsage').USAGE_TOOLS;
+PERSONA_EXTRA_TOOLS.jarvis += '\n' + require('./siteDesk').SITE_TOOLS + '\n' + require('./jobProgress').JOB_TOOLS + '\n' + require('./transcribeUsage').USAGE_TOOLS + '\n' + require('./memoryStore').MEMORY_TOOLS;
 PERSONA_EXTRA_TOOLS.rogue += '\n' + require('./jobProgress').JOB_TOOLS + '\n' + require('./transcribeUsage').USAGE_TOOLS;
 PERSONA_EXTRA_TOOLS.ara = (PERSONA_EXTRA_TOOLS.ara ? PERSONA_EXTRA_TOOLS.ara + '\n' : '') + require('./jobProgress').JOB_TOOLS;
 PERSONA_EXTRA_TOOLS.scout = (PERSONA_EXTRA_TOOLS.scout ? PERSONA_EXTRA_TOOLS.scout + '\n' : '') + require('./siteDesk').SITE_TOOLS;
@@ -514,7 +514,7 @@ function systemPrompt(ctx, gs, custom, mem) {
     CONTINUITY,
     mem,
     memoryLine(),
-    araTools() + '\n' + require('./openThreads').OPEN_THREADS_TOOLS + '\n' + require('./ownerProfile').SET_RULE_TOOLS + '\n' + require('./moneyWatch').MONEY_TOOLS + '\n' + require('./siteDesk').SITE_TOOLS + '\n' + require('./transcribeUsage').USAGE_TOOLS,
+    araTools() + '\n' + require('./openThreads').OPEN_THREADS_TOOLS + '\n' + require('./ownerProfile').SET_RULE_TOOLS + '\n' + require('./moneyWatch').MONEY_TOOLS + '\n' + require('./siteDesk').SITE_TOOLS + '\n' + require('./transcribeUsage').USAGE_TOOLS + '\n - [MEMORY_CHECK] — compares the server\'s own copy of memory with Mem0, persona by persona (switching memory engines is J.A.R.V.I.S.\'s).',
     googleLine(gs),
     `[THE EMPIRE — you run the team. When Mr. Burrus tells you to DO something that's another persona's job, send it to whoever owns it with [RELAY_TO: id | the full instruction, every detail he gave] — he never has to name them. WHO OWNS WHAT: ${ARA_ROUTE}. Everyday things you have your own tags for (notes, tasks, calendar, email, reminders, expenses, the HUD, research, images) you just do yourself. A question or an opinion you answer yourself, unless he names someone or it needs their live tools (where his trades stand → T.A.L.O.N.; how something in the app's code works → J.A.R.V.I.S.). Several jobs for several people → several RELAY_TO tags in the same reply. Report what they actually did from their receipts. This overrides any hand-off instruction elsewhere in your prompt.\n${rosterLines()}\n]`,
     faithBlock('ara'),
@@ -771,6 +771,7 @@ async function runInjections(text, persona = 'ara', { convo = '', depth = 0, sin
         const r = await require('./scribeMonday').runMondayScripts({ force: true });
         return `MONDAY SCRIPTS: ${r.count} written and filed, and he's been told they came in (don't paste or read them): ${(r.titles || []).join(' | ')}`;
       }
+      if (require('./memoryStore').MEMORY_TAGS.has(name) && (persona === 'jarvis' || (persona === 'ara' && name === 'MEMORY_CHECK'))) return `${name}: ${await require('./memoryStore').memoryTag(name, arg, depth === 0 ? asked : '')}`;
       if (require('./stephanieQuiz').QUIZ_TAGS.has(name) && persona === 'stephanie') return `${name}: ${await require('./stephanieQuiz').quizTag(name, arg, depth === 0 ? asked : '')}`;
       if (name === 'BREAKING_NOW' && ['ara', 'wire'].includes(persona)) {
         // Grok's live X + web search, only because he asked (server/newsWire.js).

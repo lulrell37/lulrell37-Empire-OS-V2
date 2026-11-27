@@ -55,6 +55,7 @@ app.use('/trade', auth, json, require('./routes/trade'));
 app.use('/council', auth, json, require('./routes/council'));
 app.use('/stephanie', auth, json, require('./routes/stephanie'));
 app.use('/shared', auth, json, require('./routes/shared')); // the app's copy of Telegram's switches, news, quiz and follow-through
+app.use('/memory', auth, json, require('./routes/memory')); // the app's way to the server's own memory (step 2)
 app.use('/chat', auth, json, require('./routes/chat')); // one thread per persona, app + Telegram; desk alerts split out for the activity tab
 app.use('/jarvis', auth, json, require('./routes/jarvis'));
 app.use('/clips', auth, json, require('./routes/clips'));
@@ -212,6 +213,8 @@ function startMemoryMirrorCron() {
   const ms = require('./memoryStore');
   const run = () => ms.tick().then((r) => (r.added || r.changed || r.embedded) && console.log('memory mirror:', JSON.stringify(r))).catch((e) => console.error('memory mirror failed:', e.message));
   schedule('memory_mirror', '20 */6 * * *', run);
+  // With the server's memory on: pull facts out of new exchanges (also kicked on each add).
+  schedule('server_memory', '*/2 * * * *', () => ms.extractTick().then((r) => (r.done || r.failed) && console.log('server memory:', JSON.stringify(r))).catch((e) => console.error('server memory failed:', e.message)));
   // First copy soon after boot, so it doesn't wait up to 6 h.
   setTimeout(() => require('./switches').isOn('memory_mirror').then((on) => on && run()).catch(() => {}), 5 * 60 * 1000).unref();
   console.log('memory mirror cron scheduled (every 6h)');
