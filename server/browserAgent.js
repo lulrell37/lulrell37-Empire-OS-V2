@@ -260,6 +260,15 @@ async function launch(persona) {
       });
     });
   }
+  // Steel: a session opened from the bare connect URL lives 5 minutes (Steel's default),
+  // and a worker waiting up to 10 min for an emailed sign-in link lost its browser
+  // mid-wait (2026-11-27, worker 92). So the session is created first with a long
+  // timeout and connected by id; it's released when the browser closes.
+  let steel = null;
+  if (/connect\.steel\.dev/i.test(wsUrl) && !/[?&]sessionId=/i.test(wsUrl)) {
+    steel = await steelSession(wsUrl).catch((e) => { console.error(`browse failed: couldn't open a long Steel session (${e.message}); using Steel's default 5 minutes`); return null; });
+    if (steel) wsUrl = `${wsUrl}&sessionId=${encodeURIComponent(steel.id)}`;
+  }
   const cdp = await Cdp.connect(wsUrl);
   await loadJar(cdp);
   // A browser that dies is dropped, so the next step relaunches it instead of
@@ -280,7 +289,7 @@ async function launch(persona) {
   // A plain desktop Chrome, not "HeadlessChrome" (some sites refuse that outright).
   const { userAgent } = await cdp.send('Browser.getVersion');
   await cdp.send('Network.setUserAgentOverride', { userAgent: userAgent.replace('HeadlessChrome', 'Chrome') }, sessionId).catch(() => {});
-  return { proc, cdp, session: sessionId, persona };
+  return { proc, cdp, session: sessionId, persona, steel };
 }
 
 function close(persona) {
@@ -290,6 +299,32 @@ function close(persona) {
   clearTimeout(b.idleTimer);
   b.cdp && b.cdp.close();
   if (b.proc) try { b.proc.kill('SIGKILL'); } catch {}
+  if (b.steel) steelRelease(b.steel).catch(() => {}); // stop it running (and billing) once we're done
+}
+
+// A Steel session with room to wait: STEEL_SESSION_MIN (45), then 15, if the plan
+// allows less. -> { id, key }.
+const STEEL_API = 'https://api.steel.dev/v1';
+async function steelSession(wsUrl) {
+  const u = new URL(wsUrl);
+  const key = u.searchParams.get('apiKey');
+  if (!key) throw new Error('no apiKey in the Steel URL');
+  const projectId = u.searchParams.get('projectId');
+  let last = '';
+  for (const min of [Number(process.env.STEEL_SESSION_MIN) || 45, 15]) {
+    const r = await fetch(`${STEEL_API}/sessions`, {
+      method: 'POST',
+      headers: { 'steel-api-key': key, 'content-type': 'application/json', ...(projectId ? { 'steel-project-id': projectId } : {}) },
+      body: JSON.stringify({ timeout: min * 60000, ...(projectId ? { projectId } : {}) }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (r.ok && j.id) { console.log(`browse: Steel session for ${min} min`); return { id: j.id, key }; }
+    last = `${r.status} ${JSON.stringify(j).slice(0, 160)}`;
+  }
+  throw new Error(last);
+}
+async function steelRelease({ id, key }) {
+  await fetch(`${STEEL_API}/sessions/${encodeURIComponent(id)}/release`, { method: 'POST', headers: { 'steel-api-key': key } });
 }
 
 async function browserFor(persona) {
@@ -901,6 +936,6 @@ const BROWSE_TOOLS = ` - [BROWSE: the task, in full] — your own computer: a re
  - [GROQ_KEY: gsk_…] — save a Groq API key on the server (checked with Groq first): all transcription then runs on Groq's free Whisper. A browse worker that ends with a gsk_ key saves it by itself.
  - [BROWSER_KEY: Steel API key or wss:// URL] — switch your browser to a hosted one (Steel) that gets past Cloudflare checks; saved on the server, no Replit secret needed.`;
 
-module.exports = { _doAction: doAction, SPENT_LINKS, spent, oneTimeLink, SPENT, settleRedirects,
+module.exports = { steelSession, steelRelease, _doAction: doAction, SPENT_LINKS, spent, oneTimeLink, SPENT, settleRedirects,
   closeBrowser: close,
   readJar, saveJar, loadJar, planTracker, AGENT_SYSTEM, browseRun, settleResult, fillSecrets, doneSuccess, emailedCode, emailedLink, needsEmailed, browserKeyTag, ensureSqlite, BROWSE_PERSONAS, runTask, browseTag, BROWSE_TOOLS, close, browserFor, snapshot, click, type, press, screenshot, unzip, chromePath, parseAction, waitGuard, MAX_IDLE_WAITS, firstJson, isCommit, approves, enabled };
