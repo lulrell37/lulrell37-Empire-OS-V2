@@ -65,25 +65,31 @@ const factDate = (f) => {
 // The app's direct adds (an older APK) still come over.
 async function mirrorPersona(persona) {
   // Everything, no cap: the copy has to be complete before step 2 can rely on it.
-  const facts = await d().mem0.apiAll(persona, { max: Infinity });
   const serverOn = await useServer();
-  let added = 0, changed = 0;
-  for (const f of facts) {
-    const memory = String((f && f.memory) || '').trim();
-    if (!f || !f.id || !memory) continue;
-    if (serverOn && f.metadata && f.metadata.via === 'server') continue;
-    const { rows } = await d().db.query(
-      `INSERT INTO memories (persona, mem0_id, memory, date, meta, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $6)
-       ON CONFLICT (mem0_id) DO ${serverOn ? 'NOTHING' : `UPDATE SET memory = EXCLUDED.memory, date = EXCLUDED.date, meta = EXCLUDED.meta, updated_at = EXCLUDED.updated_at,
-         embedding = CASE WHEN memories.memory = EXCLUDED.memory THEN memories.embedding ELSE NULL END
-       WHERE memories.memory IS DISTINCT FROM EXCLUDED.memory OR memories.date IS DISTINCT FROM EXCLUDED.date`}
-       RETURNING (xmax = 0) AS inserted`,
-      [persona, String(f.id), memory, factDate(f), JSON.stringify({ categories: f.categories || [], metadata: f.metadata || {} }), Date.now()],
-    );
-    if (rows[0]) rows[0].inserted ? added++ : changed++;
-  }
-  return { seen: facts.length, added, changed };
+  let added = 0, changed = 0, seen = 0;
+  // One page at a time: holding every fact of every persona at once ran the VM out
+  // of memory 5 min after boot (2026-11-27 9:45 AM ET).
+  const take = async (facts) => {
+    seen += facts.length;
+    for (const f of facts) {
+      const memory = String((f && f.memory) || '').trim();
+      if (!f || !f.id || !memory) continue;
+      if (serverOn && f.metadata && f.metadata.via === 'server') continue;
+      const { rows } = await d().db.query(
+        `INSERT INTO memories (persona, mem0_id, memory, date, meta, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $6)
+         ON CONFLICT (mem0_id) DO ${serverOn ? 'NOTHING' : `UPDATE SET memory = EXCLUDED.memory, date = EXCLUDED.date, meta = EXCLUDED.meta, updated_at = EXCLUDED.updated_at,
+           embedding = CASE WHEN memories.memory = EXCLUDED.memory THEN memories.embedding ELSE NULL END
+         WHERE memories.memory IS DISTINCT FROM EXCLUDED.memory OR memories.date IS DISTINCT FROM EXCLUDED.date`}
+         RETURNING (xmax = 0) AS inserted`,
+        [persona, String(f.id), memory, factDate(f), JSON.stringify({ categories: f.categories || [], metadata: f.metadata || {} }), Date.now()],
+      );
+      if (rows[0]) rows[0].inserted ? added++ : changed++;
+    }
+  };
+  const rest = await d().mem0.apiAll(persona, { max: Infinity, onPage: take });
+  if (rest && rest.length) await take(rest);
+  return { seen, added, changed };
 }
 
 // Vectors for every fact that has none yet. -> count embedded
