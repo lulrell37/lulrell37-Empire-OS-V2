@@ -89,12 +89,13 @@ async function mem0Search(personaId, query, { topK = 16, threshold = 0.05 } = {}
 // Every memory Mem0 holds for this persona, newest first by the date it was
 // made — the whole history, for recall questions a top-k search can't answer
 // ("what did we talk about in August", "when did I …"). Capped at `max`.
+// The server's memory copy passes max: Infinity to take everything (memoryStore.js).
 async function mem0All(personaId, { max = 2000 } = {}) {
   const k = key();
   if (!k || !personaId) return [];
   const out = [];
   try {
-    for (let page = 1; out.length < max && page <= 40; page++) {
+    for (let page = 1; out.length < max && page <= Math.min(1000, Math.max(40, Math.ceil(max / 100))); page++) {
       const r = await fetch(`${BASE}/v2/memories/`, {
         method: 'POST',
         headers: headers(k),

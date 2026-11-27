@@ -57,7 +57,8 @@ const factDate = (f) => {
 // One persona's Mem0 facts -> memories (new ones added, changed text updated; a
 // changed fact gets a fresh vector). -> { seen, added, changed }
 async function mirrorPersona(persona) {
-  const facts = await d().mem0.mem0All(persona);
+  // Everything, no cap: the copy has to be complete before step 2 can rely on it.
+  const facts = await d().mem0.mem0All(persona, { max: Infinity });
   let added = 0, changed = 0;
   for (const f of facts) {
     const memory = String((f && f.memory) || '').trim();
