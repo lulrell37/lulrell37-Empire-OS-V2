@@ -376,6 +376,15 @@ function exitOf(t) {
   if (sl != null && e != null && (t.side === 'buy' ? x < sl : x > sl)) return 'stop (slipped past it)';
   return 'other (moved stop / closed between)';
 }
+// A closed trade that came out at break-even: its exit is classified 'break-even' by
+// exitOf (stop at / within a tick of entry), or its own P/L is within the tolerance
+// of zero (TALON_BE_TOLERANCE, default $2). Shared with the day-stop loss count.
+const beTolerance = () => { const v = Number(process.env.TALON_BE_TOLERANCE); return Number.isFinite(v) && process.env.TALON_BE_TOLERANCE !== '' && process.env.TALON_BE_TOLERANCE != null ? Math.max(0, v) : 2; };
+function isBreakEven(t, tol = beTolerance()) {
+  if (exitOf(t) === 'break-even') return true;
+  const pl = num(t.realized_pl);
+  return pl != null && Math.abs(pl) <= tol;
+}
 function dailyOf(t) {
   const d1 = t.trend_at_entry && t.trend_at_entry.d1;
   if (!d1 || d1 === 'flat' || d1 === 'range') return d1 ? 'daily flat' : 'not recorded (older trades)';
@@ -525,4 +534,4 @@ async function fixBadFills() {
   return { fixed };
 }
 
-module.exports = { fixBadFills, dollarsPerPoint, snapTarget, sharedTarget, sharedTargets, TRADER_ID, STRATEGY_TITLE, allTrades, parkOpenTrades, getStrategy, recordTradeOpen, reconcileOpenTrades, tradeRecord, formatTradeRecord, tradeStats, statsParts: { kindOf, exitOf, sessionOf, dailyOf, bucket } };
+module.exports = { fixBadFills, dollarsPerPoint, snapTarget, sharedTarget, sharedTargets, TRADER_ID, STRATEGY_TITLE, allTrades, parkOpenTrades, getStrategy, recordTradeOpen, reconcileOpenTrades, tradeRecord, formatTradeRecord, tradeStats, isBreakEven, beTolerance, statsParts: { kindOf, exitOf, sessionOf, dailyOf, bucket } };

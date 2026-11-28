@@ -99,29 +99,39 @@ async function marketOn(syms) {
 // --- two losses, done for the day --------------------------------------------------
 const DAY_LOSSES = () => Math.max(1, Number(process.env.TALON_DAY_LOSSES) || 2);
 const etDay = (ms = Date.now()) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date(ms));
-// Losing trades closed today: each decision once (legs grouped by setup / pair).
-function lossesToday(trades, day = etDay()) {
+// Setups closed today, each decision once (legs grouped by setup / pair), split into
+// real losses and break-evens (owner, 2026-11-28: break-evens don't count as losses).
+function closedToday(trades, day = etDay()) {
   const groups = new Map();
   for (const t of trades || []) {
     if (t.status !== 'closed' || !t.closed_at || etDay(Number(t.closed_at)) !== day) continue;
     const k = t.setup_id || t.pair_id || t.sync_id || t.id;
     (groups.get(k) || groups.set(k, []).get(k)).push(t);
   }
-  const lost = [];
+  const { isBreakEven, beTolerance } = require('./tradeJournal');
+  const tol = beTolerance();
+  const lost = [], breakeven = [];
   for (const g of groups.values()) {
     const net = g.reduce((a, t) => a + (Number(t.realized_pl) || 0), 0);
-    if (g.some((t) => t.outcome === 'loss') && net < 0) lost.push({ symbol: g[0].symbol, side: g[0].side, net: +net.toFixed(2), at: Math.max(...g.map((t) => Number(t.closed_at))) });
+    if (!g.some((t) => t.outcome === 'loss') || net >= 0) continue;
+    const row = { symbol: g[0].symbol, side: g[0].side, net: +net.toFixed(2), at: Math.max(...g.map((t) => Number(t.closed_at))) };
+    // Break-even: the group's net is within the tolerance of zero, or every losing leg exited at break-even.
+    const be = Math.abs(net) <= tol || g.filter((t) => t.outcome === 'loss').every((t) => isBreakEven(t, tol));
+    (be ? breakeven : lost).push(row);
   }
-  return lost.sort((a, b) => a.at - b.at);
+  const byTime = (a, b) => a.at - b.at;
+  return { lost: lost.sort(byTime), breakeven: breakeven.sort(byTime) };
 }
+// Losing trades closed today (break-evens left out).
+const lossesToday = (trades, day) => closedToday(trades, day).lost;
 async function dayStop(now = Date.now()) {
   if (process.env.TALON_DAY_STOP === 'off') return { stopped: false };
   const day = etDay(now);
-  const lost = lossesToday(await d().trades(), day);
+  const { lost, breakeven } = closedToday(await d().trades(), day);
   let cleared = {};
   try { cleared = JSON.parse(await d().getSetting('talon_day_cleared', '{}')) || {}; } catch { cleared = {}; }
   const base = cleared.day === day ? Number(cleared.losses) || 0 : 0;
-  return { stopped: lost.length - base >= DAY_LOSSES(), day, lost, count: lost.length };
+  return { stopped: lost.length - base >= DAY_LOSSES(), day, lost, breakeven, count: lost.length };
 }
 // Called on every 5-min tick: trips it, tells him once, cancels resting limits.
 async function checkDayStop() {
@@ -131,7 +141,7 @@ async function checkDayStop() {
     await d().setSetting('talon_day_stop_told', ds.day);
     await d().cancelQuickLimits().catch(() => 0);
     const list = ds.lost.map((l) => `${marketName(canon(l.symbol))} ${l.side} ${l.net < 0 ? '-' : '+'}$${Math.abs(l.net).toFixed(2)}`).join(', ');
-    await Promise.resolve(d().tell(`🛑 T.A.L.O.N. → A.R.A.: that's ${ds.count} losses today (${list}), so I'm done trading for the day — no new trades on any market until tomorrow. Open trades keep their stops and targets. If you want me back in today, say start trading.`)).catch((e) => console.error(`talon switch failed: day stop note: ${e.message}`));
+    await Promise.resolve(d().tell(`🛑 T.A.L.O.N. → A.R.A.: that's ${ds.count} losses today (${list}), so I'm done trading for the day — no new trades on any market until tomorrow. Break-evens don't count. Open trades keep their stops and targets. If you want me back in today, say start trading.`)).catch((e) => console.error(`talon switch failed: day stop note: ${e.message}`));
   }
   return ds;
 }
@@ -201,7 +211,8 @@ async function statusText() {
   const m = await haltedMarkets();
   if (Object.keys(m).length) parts.push(`switched off on: ${Object.keys(m).map(marketName).join(', ')}`);
   const ds = await dayStop().catch(() => ({ stopped: false, count: 0 }));
-  parts.push(ds.stopped ? `DONE FOR TODAY after ${ds.count} losses (back tomorrow unless he says start)` : `${ds.count || 0} losing trade${ds.count === 1 ? '' : 's'} today (stops for the day at ${DAY_LOSSES()})`);
+  const nbe = (ds.breakeven || []).length;
+  parts.push(ds.stopped ? `DONE FOR TODAY after ${ds.count} losses (back tomorrow unless he says start)${nbe ? `; ${nbe} break-even${nbe === 1 ? '' : 's'} not counted` : ''}` : `${ds.count || 0} losing trade${ds.count === 1 ? '' : 's'} today (stops for the day at ${DAY_LOSSES()})${nbe ? `; ${nbe} break-even${nbe === 1 ? '' : 's'} today, not counted as losses` : ''}`);
   return `TRADING_STATUS: ${parts.join('; ')}.`;
 }
 
@@ -210,4 +221,4 @@ const SWITCH_TOOLS = ` - [TRADING_OFF] — switch T.A.L.O.N. OFF the moment Mr. 
  - [TRADING_ON] / [TRADING_ON: bitcoin] — switch him (or that market) back on, only when Mr. Burrus himself says start / resume / turn it back on. A plain "start trading" turns every market back on and lifts today's two-losses stop.
  - [TRADING_STATUS] — whether T.A.L.O.N. is on, which markets are off, and today's losses (two losing trades in a day and he's done until tomorrow, by code).`;
 
-module.exports = { isHalted, off, on, tag, ownerStarts, SWITCH_TOOLS, MARKETS, marketsIn, marketHalted, haltedMarkets, marketOff, marketOn, lossesToday, dayStop, checkDayStop, blocked, isBlockMessage, statusText, _setDeps: (x) => { deps = x; } };
+module.exports = { isHalted, off, on, tag, ownerStarts, SWITCH_TOOLS, MARKETS, marketsIn, marketHalted, haltedMarkets, marketOff, marketOn, lossesToday, closedToday, dayStop, checkDayStop, blocked, isBlockMessage, statusText, _setDeps: (x) => { deps = x; } };
