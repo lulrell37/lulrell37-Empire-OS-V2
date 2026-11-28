@@ -1,4 +1,5 @@
 import{rememberCued}from './voiceCues';
+import{setDailyOnServer}from './sharedDesk';
 import{voiceToggleAllowed}from '../personas/personas';
 import{addTask,updateTask,completeTask,deleteTask,saveNote,getNote,addRevenue,getTasks,getHudState,updateHudState,setRoutineDone,addRoutineItem,removeRoutineItem,renameRoutineItem,setBatmanDay,getBusinessTargets,setBusinessTarget,addBusiness,setPanelLayout,addExpense,addImportantDate,addLead,updateLead,appendLeadLog,findLead,leadHasContact,pinMemory,unpinMemory,getPinnedMemories,getSetting,setSetting,addContentItem,updateContentItem,deleteContentItem,getContentItems}from './database';
 
@@ -419,13 +420,13 @@ export async function handleCommands(response,personaId,callbacks={}){
     await setBatmanDay(m[1].trim(),m[2].trim(),m[3]!=null?m[3].trim():null);hudChanged();
   }
   for(const m of allMatches(response,/\[SET_WORD:\s*([^|\]]+)(?:\|([^|\]]*))?(?:\|([^\]]+))?\]/gi)){
-    await updateHudState({word_of_day:m[1].trim(),word_phonetic:m[2]?.trim()||'',word_def:m[3]?.trim()||''});hudChanged();
+    {const u={word_of_day:m[1].trim(),word_phonetic:m[2]?.trim()||'',word_def:m[3]?.trim()||''};await updateHudState(u);await setDailyOnServer(u);}hudChanged();
   }
   for(const m of allMatches(response,/\[SET_VERSE:\s*([^|\]]+)(?:\|([^\]]+))?\]/gi)){
-    await updateHudState({verse_of_day:m[1].trim(),verse_ref:m[2]?.trim()||''});hudChanged();
+    {const u={verse_of_day:m[1].trim(),verse_ref:m[2]?.trim()||''};await updateHudState(u);await setDailyOnServer(u);}hudChanged();
   }
   for(const m of allMatches(response,/\[SET_FACT:\s*([^\]]+)\]/gi)){
-    await updateHudState({fact_of_day:m[1].trim()});hudChanged();
+    {const u={fact_of_day:m[1].trim()};await updateHudState(u);await setDailyOnServer(u);}hudChanged();
   }
   for(const m of allMatches(response,/\[HUD_DETACH:\s*([^\]]+)\]/gi)){
     const p=resolvePanel(m[1]);

@@ -18,6 +18,11 @@ r.post('/push', async (req, res) => {
       if (!Array.isArray(rows)) continue;
       for (const row of rows) {
         if (!row || !row.sync_id) continue;
+        // The word, verse and fact of the day belong to the server (dailyBriefing.keepDaily).
+        if (table === 'hud_state' && !row.deleted) {
+          const cur = await query('SELECT data FROM sync_rows WHERE table_name = $1 AND sync_id = $2 AND deleted = false', ['hud_state', String(row.sync_id)]);
+          row.data = require('../dailyBriefing').keepDaily(row.data, cur.rows[0] ? cur.rows[0].data : null);
+        }
         await query(
           `INSERT INTO sync_rows (table_name, sync_id, data, updated_at, deleted, server_seq)
              VALUES ($1, $2, $3, $4, $5, nextval('sync_seq'))

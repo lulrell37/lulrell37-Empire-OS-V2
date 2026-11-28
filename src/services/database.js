@@ -249,9 +249,22 @@ export async function ensureHudState(){
     await db.runAsync('INSERT INTO hud_state(id,date,morning_routine,batman_template,updated_at) VALUES(1,?,?,?,?)',[today,JSON.stringify(buildDefaultRoutine()),JSON.stringify(DEFAULT_BATMAN),Date.now()]);
   }else if(ex.date!==today){
     const newStreak=ex.empire_score>=75?(ex.streak+1):0;
-    await db.runAsync(`UPDATE hud_state SET date=?,empire_score=0,batman_protocol='{}',morning_routine_done='{}',streak=?,word_of_day=NULL,word_phonetic=NULL,word_def=NULL,verse_of_day=NULL,verse_ref=NULL,fact_of_day=NULL,updated_at=? WHERE id=1`,[today,newStreak,Date.now()]);
+    // With a server linked the word / verse / fact are its copy: the rollover must not null them.
+    const linked=await backendLinked();
+    await db.runAsync(`UPDATE hud_state SET date=?,empire_score=0,batman_protocol='{}',morning_routine_done='{}',streak=?${linked?'':',word_of_day=NULL,word_phonetic=NULL,word_def=NULL,verse_of_day=NULL,verse_ref=NULL,fact_of_day=NULL'},updated_at=? WHERE id=1`,[today,newStreak,Date.now()]);
   }
   await ensureDailyContent();
+}
+async function backendLinked(){try{const{loadBackend}=require('./keyStore');return !!await loadBackend();}catch{return false;}}
+// Pull the server's word / verse / fact into the local row (the HUD reads it). Written with
+// no updated_at bump; sync never pushes these fields (server keepDaily).
+export async function applyServerDaily(){
+  const{fetchDaily}=require('./sharedDesk');
+  const d=await fetchDaily();
+  if(!d||!d.word_of_day)return false;
+  await db.runAsync('UPDATE hud_state SET word_of_day=?,word_phonetic=?,word_def=?,verse_of_day=?,verse_ref=?,fact_of_day=? WHERE id=1',
+    [d.word_of_day,d.word_phonetic||'',d.word_def||'',d.verse_of_day||'',d.verse_ref||'',d.fact_of_day||'']);
+  return true;
 }
 const HUD_WORDS=[
   {word:'Gudgeon',phon:'/ˈɡʌdʒ.ən/',def:'Someone who is easily deceived or manipulated.'},
@@ -284,6 +297,8 @@ const HUD_FACTS=[
   'The Roman Empire had a road network of over 250,000 miles, much of it still usable today.',
 ];
 async function ensureDailyContent(){
+  // Server linked: its set is the only one. Never fill from the built-in lists.
+  if(await backendLinked()){try{await applyServerDaily();}catch{}return;}
   const hud=await db.getFirstAsync('SELECT * FROM hud_state WHERE id=1');
   if(hud&&hud.word_of_day)return;
   const now=new Date();

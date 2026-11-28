@@ -59,6 +59,15 @@ async function ensureVerse(today,force){
 // Returns { generated:[...], errors:[...] } so a caller (the DAILY panel) can
 // show what actually happened instead of failing silently.
 export async function refreshDailyBriefing({force=false}={}){
+  // Server linked: it generates and owns today's set; the app only shows it.
+  try{
+    const{loadBackend}=require('./keyStore');
+    if(await loadBackend()){
+      const{applyServerDaily}=require('./database');
+      const ok=await applyServerDaily();
+      return{generated:ok?['word','fact','verse']:[],errors:ok?[]:['server has no set yet']};
+    }
+  }catch(e){return{generated:[],errors:[String(e?.message||e)]};}
   if(running)return{generated:[],errors:['already running']};
   running=true;
   const today=todayET();

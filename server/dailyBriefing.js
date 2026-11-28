@@ -119,4 +119,44 @@ async function runDailyBriefing() {
   return { today, generated: done };
 }
 
-module.exports = { runDailyBriefing };
+// ---- one source for the word, verse and fact (owner, 2026-11-28) -------------
+// The hud_state singleton here is the only copy. The app reads it through
+// GET /shared/daily and never pushes these fields (keepDaily in the sync push).
+const DAILY_FIELDS = ['word_of_day', 'word_phonetic', 'word_def', 'verse_of_day', 'verse_ref', 'fact_of_day'];
+
+function pickDaily(hud) {
+  const o = {};
+  for (const k of DAILY_FIELDS) o[k] = (hud && hud[k]) || '';
+  return o;
+}
+
+// A pushed hud_state row keeps the server's daily fields, whatever the phone says.
+function keepDaily(incoming, existing) {
+  const out = { ...(incoming || {}) };
+  for (const k of DAILY_FIELDS) {
+    if (existing && existing[k] != null && existing[k] !== '') out[k] = existing[k];
+    else if (!(existing && k in existing)) delete out[k];
+  }
+  return out;
+}
+
+// Today's set, generated first when it is missing (so the app never fills its own).
+async function readDaily({ generate = true } = {}) {
+  let generated = null;
+  if (generate) { try { generated = await runDailyBriefing(); } catch (e) { console.error('daily briefing failed:', e.message); } }
+  const hud = (await syncedRow('hud_state', 'singleton')) || {};
+  return { today: todayET(), ...pickDaily(hud), generated };
+}
+
+// [SET_WORD] / [SET_VERSE] / [SET_FACT] from the app: changes the shared row.
+async function setDaily(patch) {
+  const clean = {};
+  for (const k of DAILY_FIELDS) if (patch && typeof patch[k] === 'string') clean[k] = patch[k].trim();
+  if (!Object.keys(clean).length) return pickDaily(await syncedRow('hud_state', 'singleton'));
+  const hud = (await syncedRow('hud_state', 'singleton')) || {};
+  const next = { ...hud, ...clean, updated_at: Date.now() };
+  await upsertSyncRow('hud_state', 'singleton', next);
+  return pickDaily(next);
+}
+
+module.exports = { runDailyBriefing, DAILY_FIELDS, keepDaily, readDaily, setDaily };
