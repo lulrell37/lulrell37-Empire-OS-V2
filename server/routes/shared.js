@@ -134,6 +134,18 @@ r.post('/follow', (req, res) => {
   catch (e) { console.error(`shared route failed: follow: ${e.message}`); res.status(500).json({ error: e.message }); }
 });
 
+// The one word / verse / fact of the day (owner, 2026-11-28: "Ara brief and HUD don't show
+// matching word of day, verse or fact"). GET generates today's set if missing and returns the
+// server's hud_state values; POST changes them ([SET_WORD] etc. from the app).
+r.get('/daily', async (req, res) => {
+  try { res.json(await require('../dailyBriefing').readDaily()); }
+  catch (e) { console.error(`shared route failed: daily: ${e.message}`); res.status(500).json({ error: e.message }); }
+});
+r.post('/daily', async (req, res) => {
+  try { res.json(await require('../dailyBriefing').setDaily(req.body || {})); }
+  catch (e) { console.error(`shared route failed: daily set: ${e.message}`); res.status(500).json({ error: e.message }); }
+});
+
 module.exports = r;
 module.exports.context = context;
 module.exports.tags = tags;

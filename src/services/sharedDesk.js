@@ -62,3 +62,12 @@ export async function followFinal(pid,reply,asked){
   try{return await call('/shared/follow',{method:'POST',body:{persona:pid,reply:String(reply||''),asked:String(asked||''),final:true},timeoutMs:8000});}
   catch{return{scheduled:false};}
 }
+
+// The word, verse and fact of the day: the server's hud_state is the only copy when a
+// backend is linked (owner, 2026-11-28). Returns the values, or null with no server.
+export async function fetchDaily(){
+  try{if(!await loadBackend())return null;return await call('/shared/daily',{timeoutMs:90000});}catch{return null;}
+}
+export async function setDailyOnServer(patch){
+  try{if(!await loadBackend())return null;return await call('/shared/daily',{method:'POST',body:patch,timeoutMs:20000});}catch{return null;}
+}
