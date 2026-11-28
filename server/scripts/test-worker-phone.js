@@ -9,7 +9,7 @@ const workers = require('../workers');
   let asked = '';
   wt._setDeps({ sync, workers: { get: async () => ({ id: '9', slot: 2, title: 'Groq account', task: 'make a Groq account and get an API key' }) } });
   const out = await wt.askJarvis('9', 'which email should the account use?', { relay: async (m) => { asked = m; return 'Use his main Gmail; A.R.A. confirmed it.'; } });
-  assert.match(asked, /ONE OF YOUR OWN WORKERS — worker 2 of 3 \("Groq account"\)/);
+  assert.match(asked, /ONE OF YOUR OWN WORKERS — worker 2 of 5 \("Groq account"\)/);
   assert.match(asked, /make a Groq account/);
   assert.match(asked, /which email/);
   assert.match(out, /J\.A\.R\.V\.I\.S\. ANSWERS:\nUse his main Gmail/);

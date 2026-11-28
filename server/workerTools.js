@@ -151,7 +151,7 @@ async function askJarvis(id, question, { relay = null } = {}) {
   const q = String(question || '').trim();
   if (!q) return 'ASK_JARVIS: give the question, e.g. [ASK_JARVIS: which email should the Groq account use?]';
   const w = (await workerRow(id)) || {};
-  const who = `worker ${w.slot || '?'} of 3 ("${w.title || `#${id}`}")`;
+  const who = `worker ${w.slot || '?'} of 5 ("${w.title || `#${id}`}")`;
   const post = (from, text) => require('./groupChat').post(from, text).catch(() => {});
   post('jarvis', `🔧 ${who} → J.A.R.V.I.S.: ${q.slice(0, 400)}`);
   const msg = `[ONE OF YOUR OWN WORKERS — ${who} — IS ASKING YOU MID-JOB. You and your workers are one J.A.R.V.I.S.; answer it so it can carry on. Its task: ${String(w.task || '').slice(0, 1500)}]\n\nIts question: ${q}\n\nAnswer it directly and specifically. If the answer is in his email, notes or calendar, get it from A.R.A. with [RELAY_TO: ara | …]; if another persona owns it, ask them. Decide ordinary choices yourself (names, settings, defaults) the way he'd want. Only if it truly needs Mr. Burrus (a code texted to his phone, a phone approval, his ID or card, his OK to send / post / buy / delete) say exactly NEEDS_HIM: and what — never for anything else.`;

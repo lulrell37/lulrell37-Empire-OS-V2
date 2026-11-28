@@ -1,4 +1,4 @@
-// node server/scripts/test-workers.js — J.A.R.V.I.S.'s workers: a hard cap of 3
+// node server/scripts/test-workers.js — J.A.R.V.I.S.'s workers: a hard cap of 5
 // running (whatever WORKERS_MAX says), code workers on GitHub runners (issue +
 // dispatch + report comment), one browse at a time on the server, every result
 // straight to Mr. Burrus, ids that only count up, restarts pick code workers back
@@ -71,34 +71,34 @@ function fakeGitHub() {
     onDone: () => null,
   });
 
-  for (let i = 1; i <= 4; i++) await W.tag('WORKER_START', `code | job ${i} | do job ${i}, @claude please`);
+  for (let i = 1; i <= 6; i++) await W.tag('WORKER_START', `code | job ${i} | do job ${i}, @claude please`);
   await W.tag('WORKER_START', 'browse | Canva 1-8 | read pages | Canva pages 1-8');
   await W.tag('WORKER_START', 'browse | Canva 9-16 | read pages | Canva pages 9-16');
   await sleep(60);
   let app = await W.forApp();
-  assert.strictEqual(app.filter((x) => x.status === 'running').length, 3, 'hard cap of 3, even with WORKERS_MAX=11');
-  assert.strictEqual(gh.dispatched.length, 3, 'three runs started on GitHub');
+  assert.strictEqual(app.filter((x) => x.status === 'running').length, 5, 'hard cap of 5, even with WORKERS_MAX=11');
+  assert.strictEqual(gh.dispatched.length, 5, 'five runs started on GitHub');
   const slots = app.filter((x) => x.status === 'running').map((x) => x.slot).sort();
-  assert.deepStrictEqual(slots, [1, 2, 3], 'he sees slots 1-3, never a running count');
+  assert.deepStrictEqual(slots, [1, 2, 3, 4, 5], 'he sees slots 1-5, never a running count');
   assert.ok(app.find((x) => x.id === '1').url, 'GitHub link on the strip');
   assert.match(app.find((x) => x.id === '1').progress, /GitHub/);
 
   gh.finish(1);
   await sleep(80);
   assert.strictEqual(told.length, 1, 'result straight to him');
-  assert.match(told[0], /✅ Worker 1 of 3 finished/);
+  assert.match(told[0], /✅ Worker 1 of 5 finished/);
   assert.match(told[0], /Built it, tests pass/);
   assert.match(told[0], /Full report: https:\/\/github.com\/x\/y\/issues\/101/);
   app = await W.forApp();
-  assert.strictEqual(app.filter((x) => x.status === 'running').length, 3, 'next in line starts');
+  assert.strictEqual(app.filter((x) => x.status === 'running').length, 5, 'next in line starts');
 
   gh.finish(2, 'failed', 'FAILED\nThe tests would not run.');
   gh.finish(3);
   await sleep(80);
   app = await W.forApp();
   const run = app.filter((x) => x.status === 'running');
-  assert.ok(run.length <= 3);
-  assert.ok(told.some((t) => /❌ Worker [1-3] of 3 FAILED/.test(t)));
+  assert.ok(run.length <= 5);
+  assert.ok(told.some((t) => /❌ Worker [1-5] of 5 FAILED/.test(t)));
   // two browse workers queued: only one runs at a time
   await sleep(40);
   assert.strictEqual(maxBrowsing, 1, 'one browse at a time on the server');
@@ -108,10 +108,10 @@ function fakeGitHub() {
     await sleep(40);
   }
   assert.strictEqual(maxBrowsing, 1);
-  assert.strictEqual(told.length, 6, 'every worker reported');
-  assert.ok(told.every((t) => /Worker [1-3] of 3/.test(t)), 'every report names a slot of 1-3');
+  assert.strictEqual(told.length, 8, 'every worker reported');
+  assert.ok(told.every((t) => /Worker [1-5] of 5/.test(t)), 'every report names a slot of 1-5');
   assert.deepStrictEqual(notes.map((n) => n.title).sort(), ['Canva pages 1-8', 'Canva pages 9-16'], 'browse results saved to Drive');
-  assert.match(await W.statusText(), /0 of 3 running, 0 waiting/);
+  assert.match(await W.statusText(), /0 of 5 running, 0 waiting/);
 
   // ids only count up, even after the day's list is pruned
   const saved = JSON.parse(settings.workers);
@@ -119,8 +119,8 @@ function fakeGitHub() {
   W._setDeps({ gh: gh.call, repo: () => ({ owner: 'o', repo: 'r' }), slot: async () => () => {}, browse: null, tell: async (t) => told.push(t), saveNote: async () => {}, onDone: () => null });
   await W.tag('WORKER_START', 'code | later | another job');
   await sleep(30);
-  assert.ok(Object.keys(W._list()).includes('7'), 'the next id is 7, not 1');
-  gh.finish(7);
+  assert.ok(Object.keys(W._list()).includes('9'), 'the next id is 9, not 1');
+  gh.finish(9);
   await sleep(60);
 
   // A restart: a code worker still running on GitHub is watched again, not re-run.
@@ -171,7 +171,7 @@ function fakeGitHub() {
   assert.strictEqual(asked.length, 1, 'A.R.A. was asked first');
   assert.match(calls[1].task, /A\.R\.A\. FOUND WHAT YOU STOPPED FOR — the Canva account email/);
   assert.strictEqual(calls[1].secrets.INFO, 'him@example.com');
-  assert.match(told[before], /✅ Worker 1 of 3 finished/, 'he only hears the result');
+  assert.match(told[before], /✅ Worker 1 of 5 finished/, 'he only hears the result');
   // An emailed sign-in link: same worker-<id> browser, the URL travels as the LINK secret, never in the task text.
   settings.workers = '{}';
   const lcalls = [];
@@ -202,7 +202,7 @@ function fakeGitHub() {
     browse: async () => ({ status: 'ask', text: 'BROWSE — paused\nGoogle wants a code texted to his phone (verification).', result: '' }), find: async () => null });
   await W.tag('WORKER_START', 'browse | Drive | open drive');
   await sleep(60);
-  assert.match(told[told.length - 1], /✋ Worker 1 of 3 stopped — it needs you/);
+  assert.match(told[told.length - 1], /✋ Worker 1 of 5 stopped — it needs you/);
   // His OK to act is never fetched from email: that one goes straight to him.
   assert.strictEqual(require('../araFinds').asksForInfo('Should I send the email to the client? Approve?'), false);
   assert.strictEqual(require('../araFinds').asksForInfo('It needs the verification code emailed to him'), true);
@@ -299,7 +299,7 @@ function fakeGitHub() {
   await sleep(GAP * 2);
   assert.strictEqual(tgCalls.filter((c) => c.op === 'send').length, 1, 'one board message');
   assert.match(tgCalls[tgCalls.length - 1].text, /1 running/);
-  assert.match(tgCalls[tgCalls.length - 1].text, /🔧 Worker 1\/3 plan job · \d+ min\n\s+planning\n\s+Working on/, 'slot, title, minutes, planning, action — no running id');
+  assert.match(tgCalls[tgCalls.length - 1].text, /🔧 Worker 1\/5 plan job · \d+ min\n\s+planning\n\s+Working on/, 'slot, title, minutes, planning, action — no running id');
   assert.doesNotMatch(tgCalls[tgCalls.length - 1].text, /#\d/, 'the board names slots, not ids');
   assert.strictEqual(boardSaved().messageId, 501, 'board id saved for restarts');
   assert.strictEqual(boardLogs.length, 1); assert.ok(boardLogs[0].length < 200, 'first send logged once, as one short line');
@@ -320,7 +320,7 @@ function fakeGitHub() {
   await sleep(GAP * 3);
   const last = tgCalls[tgCalls.length - 1];
   assert.strictEqual(last.op, 'edit'); assert.strictEqual(last.id, 501, 'edited in place');
-  assert.match(last.text, /all done ✓/, 'final all-done edit'); assert.match(last.text, /✅ Worker 1\/3 plan job · done · ▓▓▓▓▓▓▓▓▓▓ 100%/, 'finished ones stay listed');
+  assert.match(last.text, /all done ✓/, 'final all-done edit'); assert.match(last.text, /✅ Worker 1\/5 plan job · done · ▓▓▓▓▓▓▓▓▓▓ 100%/, 'finished ones stay listed');
   assert.strictEqual(boardSaved(), null, 'board closed once nothing is left');
   assert.strictEqual(tgCalls.filter((c) => c.op === 'send').length, 1, 'still the same one message');
   for (let i = 1; i < tgCalls.length; i++) {
@@ -340,14 +340,14 @@ function fakeGitHub() {
   x = await me(f.id);
   assert.strictEqual(x.status, 'failed'); assert.strictEqual(x.percent, 25, 'a failed worker keeps its last percent');
   await sleep(GAP * 2);
-  assert.match(tgCalls[tgCalls.length - 1].text, /❌ Worker 1\/3 fail job · failed at 25%/);
+  assert.match(tgCalls[tgCalls.length - 1].text, /❌ Worker 1\/5 fail job · failed at 25%/);
   const st = await W.start({ kind: 'code', title: 'stop job', task: 'do it' }); await sleep(40);
   setPlan(gh, st.id, '1. [x] Read\n2. [x] Change\n3. [ ] Test\n'); await sleep(40);
   assert.match(await W.stop(String((await me(st.id)).slot)), /stopping/); await sleep(60);
   x = await me(st.id);
   assert.strictEqual(x.status, 'stopped'); assert.strictEqual(x.percent, 67, 'a stopped worker keeps its last percent');
   await sleep(GAP * 2);
-  assert.match(tgCalls[tgCalls.length - 1].text, /⏹ Worker \d\/3 stop job · stopped at 67%/);
+  assert.match(tgCalls[tgCalls.length - 1].text, /⏹ Worker \d\/5 stop job · stopped at 67%/);
 
   // Browse: the brain's plan and the plan step it's on.
   let bGo;
@@ -373,7 +373,7 @@ function fakeGitHub() {
   await W.recover(); await sleep(GAP * 4);
   assert.strictEqual(tgCalls.filter((c) => c.op === 'send').length, 0, 'a restart keeps the same board');
   assert.ok(tgCalls.length && tgCalls.every((c) => c.id === 77), 'and edits message 77');
-  assert.match(tgCalls[tgCalls.length - 1].text, /all done/); assert.match(tgCalls[tgCalls.length - 1].text, /❌ Worker 1\/3 cut off · failed at 40%/);
+  assert.match(tgCalls[tgCalls.length - 1].text, /all done/); assert.match(tgCalls[tgCalls.length - 1].text, /❌ Worker 1\/5 cut off · failed at 40%/);
   assert.strictEqual(boardSaved(), null);
 
   // The next worker opens a new board; a failed edit is logged for the sentinel.
@@ -514,7 +514,7 @@ function fakeGitHub() {
     assert.ok(spoken.length <= 600, 'at most 600 chars');
     assert.match(spoken, /Worker \d, voiced job, is done/); assert.match(spoken, /Rebuilt the report path/);
     assert.ok(!/https?:|github\.com|worker\/37|abcdef|issues\/12|#\d|server\/workers|voiceThenText|`/.test(spoken), 'no URLs, branches, ids, code: ' + spoken);
-    assert.match(text, /^✅ Worker \d of 3 finished — "voiced job" \(browse, \d+ min\)\n\n/, 'text unchanged');
+    assert.match(text, /^✅ Worker \d of 5 finished — "voiced job" \(browse, \d+ min\)\n\n/, 'text unchanged');
     assert.match(text, /worker\/37-voice-thing/, 'the text keeps its details');
     assert.strictEqual(W.spokenReport({ slot: 2, title: 'Fix thing', kind: 'code', status: 'failed', result: 'FAILED\nIt crashed: no key.' }), 'Worker 2, Fix thing, failed. It crashed: no key. Tell me if you want it tried again.');
     assert.match(W.spokenReport({ slot: 1, title: 'x', kind: 'code', status: 'done', pushed: 'pushed worker/1-x', result: 'DONE\nOk.' }), /Say push to ship it\.$/);
