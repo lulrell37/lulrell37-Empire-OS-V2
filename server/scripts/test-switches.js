@@ -109,6 +109,23 @@ ts._setDeps({ ...fake, cancelQuickLimits: async () => { cancelled++; return 2; }
   journal.push({ status: 'closed', closed_at: now, outcome: 'loss', realized_pl: -10, symbol: 'BTCUSD', side: 'buy', sync_id: 'b2' });
   assert.strictEqual((await ts.dayStop()).stopped, true);
 
+  // Break-evens don't count (owner, 2026-11-28): -$0.80 stop-out, break-even exits, and one real loss.
+  delete store.talon_day_cleared;
+  journal = [
+    { status: 'closed', closed_at: now - 3e5, outcome: 'loss', realized_pl: -0.8, symbol: 'XAUUSD', side: 'buy', sync_id: 'be1' },
+    { status: 'closed', closed_at: now - 2e5, outcome: 'loss', realized_pl: -7, entry_ref: 2000, stop_loss: 2000, take_profit: 1980, exit_price: 2000.005, side: 'sell', symbol: 'BTCUSD', sync_id: 'be2' },
+    { status: 'closed', closed_at: now - 1e5, outcome: 'loss', realized_pl: -15, symbol: 'NAS100', side: 'sell', sync_id: 'real1' },
+  ];
+  let bs = await ts.dayStop();
+  assert.strictEqual(bs.count, 1, 'two break-evens + one loss = one loss');
+  assert.strictEqual(bs.breakeven.length, 2);
+  assert.strictEqual(bs.stopped, false);
+  assert.match(await ts.tag('TRADING_STATUS', 'ara', {}), /2 break-evens today, not counted/);
+  journal.push({ status: 'closed', closed_at: now, outcome: 'loss', realized_pl: -12, symbol: 'XAUUSD', side: 'sell', sync_id: 'real2' });
+  bs = await ts.dayStop();
+  assert.strictEqual(bs.stopped, true, 'two real losses stop it');
+  assert.strictEqual(ts.lossesToday([{ status: 'closed', closed_at: now, outcome: 'loss', realized_pl: -0.8, symbol: 'XAUUSD', side: 'buy', sync_id: 'z' }]).length, 0, '-$0.80 is break-even');
+
   // Every market sized so a position loses at most $40 at its stop.
   assert.strictEqual(tl.riskLots('XAUUSD', 20, 0.02), 0.02);
   assert.strictEqual(tl.riskLots('XAUUSD', 41, 0.02), 0);
