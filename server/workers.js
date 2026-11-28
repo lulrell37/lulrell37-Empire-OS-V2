@@ -11,9 +11,9 @@
 //             (worker-<id>); one at a time, behind the memory gate
 //             (claudeSub.cliSlot 'heavy'), since each Chrome is ~400 MB.
 //
-// HARD CAP: 3 running at once, total, whatever WORKERS_MAX says (owner's order:
-// "3 and 3 only"); the rest wait in line. He sees each by its slot ("Worker 2 of
-// 3"), never the internal id, which only counts up (a "#16" read as 16 running).
+// HARD CAP: 5 running at once, total, whatever WORKERS_MAX says (owner raised it
+// to 5 on 2026-11-28; was 3, "3 and 3 only"); the rest wait in line. He sees each
+// by its slot ("Worker 2 of 5"), never the internal id, which only counts up (a "#16" read as 16 running).
 // Browse workers share every browser's logins (browserAgent's shared cookie jar);
 // one stuck on information gets it from A.R.A. (his email and notes, araFinds.js)
 // first; only what nobody can supply reaches him, from J.A.R.V.I.S. (it's his work). Every result goes straight to Mr.
@@ -30,7 +30,7 @@
 const { getSetting, setSetting } = require('./syncStore');
 
 const KEY = 'workers';
-const HARD_CAP = 3;
+const HARD_CAP = 5;
 const MAX = () => Math.min(HARD_CAP, Math.max(1, Number(process.env.WORKERS_MAX) || HARD_CAP));
 const BROWSE_MAX = 1; // Chrome on the 2 GB server: one at a time
 const POLL_MS = () => Number(process.env.WORKER_POLL_MS) || 60e3;
@@ -216,9 +216,9 @@ async function launch(w) {
   const ctrl = new AbortController();
   ctrls.set(w.id, ctrl);
   const resuming = w.kind === 'code' && w.issue; // a restart: the runner kept going, just watch it again
-  // Which of the 3 slots it holds: what he sees ("Worker 2 of 3"), not its running count.
+  // Which of the 5 slots it holds: what he sees ("Worker 2 of 5"), not its running count.
   const taken = new Set(running().filter((x) => x.id !== w.id).map((x) => x.slot));
-  w.slot = [1, 2, 3].find((n) => !taken.has(n)) || 1;
+  w.slot = Array.from({ length: HARD_CAP }, (_, i) => i + 1).find((n) => !taken.has(n)) || 1;
   update(w, { status: 'running', startedAt: w.startedAt && resuming ? w.startedAt : Date.now(), attempts: (w.attempts || 0) + (resuming ? 0 : 1), progress: resuming ? 'Watching it again after a server restart' : 'Starting' });
   let out;
   let release = () => {};
@@ -472,7 +472,7 @@ function defaultReport(w) {
     const icon = { done: '✅', needs_you: '✋', failed: '❌' }[w.status] || '•';
     const head = w.partial ? 'PARTLY DONE — needs you' : ({ done: 'finished', needs_you: 'stopped — it needs you', failed: 'FAILED' }[w.status] || w.status);
     const links = [w.pushed ? `Branch: ${w.pushed}` : (w.branch && w.kind === 'code' ? `Branch: ${w.branch} (nothing pushed)` : ''), w.issueUrl ? `Full report: ${w.issueUrl}` : ''].filter(Boolean).join('\n');
-    const text = `${icon} Worker ${w.slot || '?'} of 3 ${head} — "${w.title}" (${w.kind}, ${mins} min)\n\n${String(w.result || '(no report)').slice(0, 3000)}${links ? `\n\n${links}` : ''}${w.kind === 'code' && (w.status === 'done' || w.partial) && w.pushed && /pushed/.test(w.pushed) ? '\n\nSay "push" to J.A.R.V.I.S. to ship it.' : ''}`;
+    const text = `${icon} Worker ${w.slot || '?'} of 5 ${head} — "${w.title}" (${w.kind}, ${mins} min)\n\n${String(w.result || '(no report)').slice(0, 3000)}${links ? `\n\n${links}` : ''}${w.kind === 'code' && (w.status === 'done' || w.partial) && w.pushed && /pushed/.test(w.pushed) ? '\n\nSay "push" to J.A.R.V.I.S. to ship it.' : ''}`;
     return voiceThenText(w, text);
   }
 }
@@ -618,7 +618,7 @@ const BOARD_STATE = { done: 'done', failed: 'failed', needs_you: 'needs you', st
 function boardLine(w, now = Date.now()) {
   const mins = Math.max(0, Math.round(((w.endedAt || now) - (w.startedAt || w.createdAt)) / 60000));
   const title = String(w.title || '').slice(0, 60);
-  const who = w.slot ? `Worker ${w.slot}/3` : 'Worker';
+  const who = w.slot ? `Worker ${w.slot}/5` : 'Worker';
   if (w.status === 'running') return `🔧 ${who} ${title} · ${mins} min\n    ${progressLabel(w).slice(0, 90)}\n    ${String(w.progress || '').slice(0, 120)}`;
   if (w.status === 'queued') return `⏳ Waiting: ${title}`;
   // An ended one keeps its last number: "failed at 40%", "stopped at 60%".
@@ -716,14 +716,14 @@ async function boardTick() {
 function line(w) {
   const mins = Math.max(0, Math.round((Date.now() - (w.startedAt || w.createdAt)) / 60000));
   const now = w.percent != null ? `${w.percent}%${w.current ? ` (${w.current})` : ''}` : progressLabel(w);
-  return `${w.slot && w.status === 'running' ? `Worker ${w.slot} of 3` : w.status === 'queued' ? 'Waiting' : 'Done'} (id ${w.id}) ${w.kind} "${w.title}" — ${w.status}${w.status === 'running' ? `, ${mins} min, ${now}: ${w.progress}` : w.percent != null ? `, ${w.percent}%` : ''}${w.branch ? ` (branch ${w.branch})` : ''}${w.issueUrl ? ` ${w.issueUrl}` : ''}${['failed', 'stopped', 'needs_you'].includes(w.status) ? ` — ${w.status === 'failed' ? 'reason' : 'note'}: ${String(w.result || '').trim().slice(0, 200) || 'no reason recorded'}` : ''}`;
+  return `${w.slot && w.status === 'running' ? `Worker ${w.slot} of 5` : w.status === 'queued' ? 'Waiting' : 'Done'} (id ${w.id}) ${w.kind} "${w.title}" — ${w.status}${w.status === 'running' ? `, ${mins} min, ${now}: ${w.progress}` : w.percent != null ? `, ${w.percent}%` : ''}${w.branch ? ` (branch ${w.branch})` : ''}${w.issueUrl ? ` ${w.issueUrl}` : ''}${['failed', 'stopped', 'needs_you'].includes(w.status) ? ` — ${w.status === 'failed' ? 'reason' : 'note'}: ${String(w.result || '').trim().slice(0, 200) || 'no reason recorded'}` : ''}`;
 }
 
 async function statusText() {
   await load();
   const all = Object.values(list).sort((a, b) => a.createdAt - b.createdAt);
   if (!all.length) return 'No workers in the last day.';
-  return `${running().length} of ${MAX()} running, ${queued().length} waiting (3 at once, hard cap):\n${all.map(line).join('\n')}`;
+  return `${running().length} of ${MAX()} running, ${queued().length} waiting (5 at once, hard cap):\n${all.map(line).join('\n')}`;
 }
 
 // For the app's strip: what's working and what just finished.
@@ -792,7 +792,7 @@ async function tag(name, arg) {
   if (!task) { task = title; title = String(title || '').slice(0, 60); }
   const w = await start({ kind, title, task, note });
   const on = running().find((x) => x.id === w.id);
-  return `WORKER_START: ✓ ${on ? `worker ${on.slot} of 3` : 'a worker'} (${w.kind}) "${w.title}" ${on ? 'is working on it now' : `is in line (all 3 slots busy)`}${w.kind === 'code' ? ', on its own GitHub runner' : ''}. Its progress shows on his notification strip; its report goes straight to him on your bot when it's done (you'll see it in this chat).`;
+  return `WORKER_START: ✓ ${on ? `worker ${on.slot} of 5` : 'a worker'} (${w.kind}) "${w.title}" ${on ? 'is working on it now' : `is in line (all 5 slots busy)`}${w.kind === 'code' ? ', on its own GitHub runner' : ''}. Its progress shows on his notification strip; its report goes straight to him on your bot when it's done (you'll see it in this chat).`;
 }
 
 // No worker starts before he and J.A.R.V.I.S. agree on the problem and the plan
@@ -844,7 +844,7 @@ async function startGate(arg, { asked = '', depth = 0 } = {}) {
     text: `WORKER_START: NOT STARTED — his message wasn't a go-ahead, so no worker is running. Tell him in plain words what you think the problem is (with the evidence) and how you'd go about it, then ask if he wants a worker on it. It starts when he taps Start on the card or says go.` };
 }
 
-const WORKER_TOOLS = ` - [WORKER_START: code|browse | short title | the full task, self-contained | Drive note title (browse only, optional)] — hand a task to a worker of your own so you stay free to talk to him. code = its own Claude Code on its own GitHub runner (not the server), on a worker/ branch cut from main: it commits, the job pushes that branch only, never main; good for any general job (code, research, checks, writing), big ones included: a code worker has Chrome, ffmpeg, ImageMagick and Python, keeps large media in GitHub releases, and a job too big for one run (about 3 h) carries on in up to 3 runs on the same branch by itself. Put any Google Drive file it needs in the task as its link (drive.google.com/file/d/…, docs.google.com/…) or "drive: <id>": the worker downloads it through the server, however big. browse = a browser task on the server, its result saved to that Drive note; one browse at a time. Every browser shares the same saved logins, so a site you or A.R.A. are signed in to works for a worker too. A file in his Google Drive is read with your Drive tags ([READ_NOTE], [SEARCH_DRIVE], [READ_FILE_ID]), not a browse worker. HARD CAP: 3 workers running at once, total; the rest wait in line. Call them by their slot, "worker 1, 2 or 3", never by a running count; [WORKER_STOP: 2] stops the one in slot 2. [WORKER_MESSAGE: 2 | the message] talks to the code worker in slot 2 while it runs (a correction, an answer, a change of plan); it reads it between steps. Your workers also call you mid-job with questions: they reach you here as "ONE OF YOUR OWN WORKERS IS ASKING" — answer so they keep going. A browse worker stuck on information (a sign-in, an account email, a code) gets it from A.R.A., who searches his email and notes, and carries on; only what nobody can supply comes to him, from you. Each one's progress shows live on his notification strip, and its report goes straight to him on your bot when it ends (you'll see it in this chat), so you don't need to relay it; if he asks, read [WORKER_STATUS]. A code worker's work ships when he says push / ship / merge: [WORKER_SHIP: id] (or all, or any branch name) — the server merges it into main and redeploys if server code changed; never merge by hand. Use them for EVERY task, whatever its length (his standing order, 2026-11-22), so you are always free to talk to him — but only once you and he agree on the problem and the plan: when he reports a problem or asks why, first tell him what you think is wrong (with evidence) and how you'd fix it, and ask; [WORKER_START] on anything but his clear go becomes a Start card and starts nothing. Only straight answers and seconds-long lookups stay with you.
+const WORKER_TOOLS = ` - [WORKER_START: code|browse | short title | the full task, self-contained | Drive note title (browse only, optional)] — hand a task to a worker of your own so you stay free to talk to him. code = its own Claude Code on its own GitHub runner (not the server), on a worker/ branch cut from main: it commits, the job pushes that branch only, never main; good for any general job (code, research, checks, writing), big ones included: a code worker has Chrome, ffmpeg, ImageMagick and Python, keeps large media in GitHub releases, and a job too big for one run (about 3 h) carries on in up to 3 runs on the same branch by itself. Put any Google Drive file it needs in the task as its link (drive.google.com/file/d/…, docs.google.com/…) or "drive: <id>": the worker downloads it through the server, however big. browse = a browser task on the server, its result saved to that Drive note; one browse at a time. Every browser shares the same saved logins, so a site you or A.R.A. are signed in to works for a worker too. A file in his Google Drive is read with your Drive tags ([READ_NOTE], [SEARCH_DRIVE], [READ_FILE_ID]), not a browse worker. HARD CAP: 5 workers running at once, total; the rest wait in line. Call them by their slot, "worker 1, 2 or 3", never by a running count; [WORKER_STOP: 2] stops the one in slot 2. [WORKER_MESSAGE: 2 | the message] talks to the code worker in slot 2 while it runs (a correction, an answer, a change of plan); it reads it between steps. Your workers also call you mid-job with questions: they reach you here as "ONE OF YOUR OWN WORKERS IS ASKING" — answer so they keep going. A browse worker stuck on information (a sign-in, an account email, a code) gets it from A.R.A., who searches his email and notes, and carries on; only what nobody can supply comes to him, from you. Each one's progress shows live on his notification strip, and its report goes straight to him on your bot when it ends (you'll see it in this chat), so you don't need to relay it; if he asks, read [WORKER_STATUS]. A code worker's work ships when he says push / ship / merge: [WORKER_SHIP: id] (or all, or any branch name) — the server merges it into main and redeploys if server code changed; never merge by hand. Use them for EVERY task, whatever its length (his standing order, 2026-11-22), so you are always free to talk to him — but only once you and he agree on the problem and the plan: when he reports a problem or asks why, first tell him what you think is wrong (with evidence) and how you'd fix it, and ask; [WORKER_START] on anything but his clear go becomes a Start card and starts nothing. Only straight answers and seconds-long lookups stay with you.
  - [WORKER_STATUS] — every worker: running, waiting, done, with its current step and GitHub link. [WORKER_STOP: id] — stop one (a GitHub run is cancelled).`;
 
 // Persona jobs (jobProgress.js) share this one board: load the workers, then update it.
